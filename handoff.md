@@ -1,6 +1,6 @@
 # Second Brain / Jarvis — Handoff Document
 
-**Last updated:** 2026-07-19, by Claude Code, after an overnight autonomous session (bypass mode, Alex asleep). This document is meant to be pasted into or attached in a **new** Claude Code chat so a fresh session can pick up execution with full context. Read it, then verify anything load-bearing against the actual repo/Coolify/Supabase state before acting — status docs like this one drift.
+**Last updated:** 2026-07-19 (daytime session, same day as an earlier overnight autonomous run), by Claude. This document is meant to be pasted into or attached in a **new** Claude Code chat so a fresh session can pick up execution with full context. Read it, then verify anything load-bearing against the actual repo/Coolify/Supabase state before acting — status docs like this one drift.
 
 ---
 
@@ -26,7 +26,7 @@ Alex is building a personal AI "second brain," modeled on Jarvis from Iron Man: 
 - **Hetzner** — CPX11 server ($24/mo, 2 vCPU, 2GB RAM, 40GB SSD), Ashburn, Virginia. IP: `178.156.209.40`.
 - **Coolify** v4.1.2 — dashboard at `http://178.156.209.40:8000` (login-gated; Claude Code does not have credentials and must never be given them — Alex logs in himself; the browser session sometimes stays authenticated across sessions once he's logged in once). GitHub App connected as "second-brain1".
   - Project UUID: `xn159afo226l4480ogtcrznz`, environment UUID: `p78muchurjjfu962yg4iredu` (production).
-  - App **`second-brain-chat`** (the actual Jarvis) — UUID `h72tei3gy97z4wlqyqpvuylg`. Live at `http://h72tei3gy97z4wlqyqpvuylg.178.156.209.40.sslip.io`. **No HTTPS yet, no password enforced yet — see Immediate Next Steps.**
+  - App **`second-brain-chat`** (the actual Jarvis) — UUID `h72tei3gy97z4wlqyqpvuylg`. Live at `http://h72tei3gy97z4wlqyqpvuylg.178.156.209.40.sslip.io`, confirmed up to date with `main` (commit `3e8dd53`) as of 2026-07-19 daytime. **No HTTPS yet, no password enforced yet — see Immediate Next Steps.**
   - App **`money-clips-agent`** — UUID `dfjbnh7wz3cvxk29vf3b39vg`. A background content-idea generator, not the chat brain.
 - **GitHub** — private repo `Second-brain` under account `alex100hickey-eng`, remote `https://github.com/alex100hickey-eng/Second-brain.git`. Local working copy at `~/second-brain` on Alex's Mac.
   - Second private repo `second-brain-vault` (same account) — a git mirror of the Obsidian vault, used for syncing vault content to the server (see Vault Persistence below).
@@ -36,7 +36,7 @@ Alex is building a personal AI "second brain," modeled on Jarvis from Iron Man: 
 - **Composio** (`app.composio.dev`) — used for real-world connectors (currently just Google Calendar, read-only). `COMPOSIO_API_KEY` env var, needs to be a full-access key (a read-only-on-auth_configs key will authenticate but can't create configs). Also connected as an MCP server directly to Claude Code (separate concern from the app's own Composio usage).
 - **Obsidian vault** — named "Second brain" (lowercase b), lives on iCloud Drive at `/Users/alexhickey24/Library/Mobile Documents/com~apple~CloudDocs/Obsidian/Second brain`. Sparse contents (mostly just a `Money/` folder and daily briefs) — the vault may never have been opened in the real Obsidian app, it might just be a folder structure. Alex's actual daily routine lives in Google Calendar, not vault notes.
 - **Claude Code** — installed on Alex's Mac, Node.js + Composio + GitHub linked.
-- **Claude in Chrome** — installed, on Alex's paid plan; used for driving the Coolify dashboard.
+- **Claude in Chrome** — nominally installed, but as of 2026-07-19 daytime it would not connect (`tabs_context_mcp` reported the extension unreachable even after Alex re-signed in). Workaround that worked: Alex logged into Coolify **directly inside the sandboxed in-app Browser pane tab**, which is a separate cookie jar from Alex's real Chrome — that session then let Claude drive Coolify normally (click Redeploy, Force Start, etc.) for the rest of the session. If Claude in Chrome is still down next session, use that same workaround rather than assuming Alex's real-Chrome login helps — it won't, the two browsers don't share cookies.
 
 **Secrets policy, non-negotiable:** always env vars, never hardcoded, never pasted into chat, never entered into any web form by Claude on Alex's behalf. When a Coolify field needs a real secret, Claude sets up a placeholder (`REPLACE_ME`) and Alex pastes the real value in himself.
 
@@ -56,11 +56,11 @@ The chat brain lives at `~/second-brain/second-brain-chat/app.py` (+ `templates/
 - **PWA support** — manifest + generated icons, add-to-home-screen works on iOS/Android.
 - **Login gate — built but DORMANT.** Full flow exists (`/login`, 31-day session, brute-force delay), but only activates once a `JARVIS_PASSWORD` env var is set in Coolify. **It is not set yet — the live site is currently open to anyone with the URL.** This is the single most important thing for Alex to do next.
 
-### Voice (added 2026-07-19 daytime session)
-- Mic button (SpeechRecognition) + spoken replies (speechSynthesis) + "Voice" nav toggle in the chat UI. Spoken input auto-sends and turns spoken replies on. **Browsers only allow the mic on HTTPS or localhost** — the button hides itself elsewhere, so on the live HTTP site there's no mic until HTTPS exists (Wispr Flow covers dictation meanwhile). Spoken replies work anywhere.
+### Voice
+- Mic button (SpeechRecognition) + spoken replies (speechSynthesis) + "Voice" nav toggle in the chat UI. Spoken input auto-sends and turns spoken replies on. **Browsers only allow the mic on HTTPS or localhost** — the button hides itself elsewhere, so on the live HTTP site there's no mic until HTTPS exists (Wispr Flow covers dictation meanwhile). Spoken replies work anywhere, including the live HTTP site. Deployed and confirmed live 2026-07-19.
 
-### Background tasks (added 2026-07-19 daytime session)
-- `delegate_task(description)` queues a `jarvis_task` row; a daemon worker thread inside the app claims it **atomically** (compare-and-swap on the row JSON — duplicate worker threads/processes are harmless) and runs it through the same tool-use loop with the same approval rules. Result is written to the row, shown in a "Background Tasks" dashboard widget, and posted into the chat thread. `check_delegated_tasks` reports status. Verified end-to-end locally (real multi-tool digest task).
+### Background tasks
+- `delegate_task(description)` queues a `jarvis_task` row; a daemon worker thread inside the app claims it **atomically** (compare-and-swap on the row JSON — duplicate worker threads/processes are harmless) and runs it through the same tool-use loop with the same approval rules. Result is written to the row, shown in a "Background Tasks" dashboard widget, and posted into the chat thread. `check_delegated_tasks` reports status. Verified end-to-end locally (real multi-tool digest task) and deployed live 2026-07-19.
 
 ### Memory
 - `remember(fact)` — saves a fact to Supabase (`jarvis_memory` rows); every memory is injected into the system prompt on every request, so it's available in brand-new conversations and shared between local and deployed instances.
@@ -68,7 +68,7 @@ The chat brain lives at `~/second-brain/second-brain-chat/app.py` (+ `templates/
 
 ### Real-world connectors
 - **Google Calendar, read-only** — list/search events, list calendars, get current time. Deliberately whitelisted to exactly those Composio tool slugs; no create/update/delete slugs are reachable at all, by design (matches the autonomy model — write access needs the approval gate, see below).
-- **Gmail, read-only** (added 2026-07-19 daytime session) — six whitelisted slugs (GMAIL_FETCH_EMAILS, FETCH_MESSAGE_BY_MESSAGE_ID, FETCH_MESSAGE_BY_THREAD_ID, LIST_THREADS, LIST_LABELS, GET_PROFILE); nothing that sends/drafts/deletes/modifies is reachable. Setup script: `scripts/connect_gmail.py`. **OAuth consent click by Alex still pending** — code is deployed-ready but Gmail tools won't work until the Composio connection goes active.
+- **Gmail, read-only** — six whitelisted slugs (GMAIL_FETCH_EMAILS, FETCH_MESSAGE_BY_MESSAGE_ID, FETCH_MESSAGE_BY_THREAD_ID, LIST_THREADS, LIST_LABELS, GET_PROFILE); nothing that sends/drafts/deletes/modifies is reachable. Setup script: `scripts/connect_gmail.py`. **OAuth connected and ACTIVE** (Alex authorized it 2026-07-19) — Gmail tools are live both locally and on the deployed app.
 - Vault tools (`list_vault_notes`, `read_vault_note`, `write_vault_note`) — read/write actual Obsidian notes.
 
 ### The approval layer (the mechanism, not just one feature)
@@ -116,7 +116,7 @@ All piggyback on the one `Agent Outputs` table, filtered out of every agent-outp
 
 ## Known Gotchas Worth Remembering
 
-- **Coolify deploy queue can silently jam.** A webhook-triggered deploy sometimes sits "Queued" forever and never auto-starts; pushes alone don't guarantee a deploy happens. A stuck deploy can also block later ones in the queue (a 3+ hour zombie `money-clips-agent` build once blocked the chat-brain deploy entirely — cancel it from its own Deployment page). **Reliable trigger when this happens:** on the app's Deployments page, JS-click the hidden `wire:click="deploy"` div (visible text "Redeploy" inside the Actions dropdown) rather than fighting the dropdown UI, then click "Force Start" on the resulting deployment page. The Actions dropdown itself is flaky under browser automation — sometimes a real mouse click works, sometimes only `element.focus()` + spacebar, sometimes neither; verify with a screenshot before trusting a click landed.
+- **Coolify deploy queue can silently jam.** A webhook-triggered deploy sometimes sits "Queued" forever and never auto-starts; pushes alone don't guarantee a deploy happens. A stuck deploy can also block later ones in the queue (a 3+ hour zombie `money-clips-agent` build once blocked the chat-brain deploy entirely — cancel it from its own Deployment page). **Simplest reliable trigger, confirmed working 2026-07-19:** go to the app's **Deployments** tab (a plain nav link, not the Actions dropdown), find the newest "Queued" entry, click its row (use the accessibility-tree link that points at `/deployment/<id>`, not the commit-hash link — that one just goes to GitHub), then click the **Force Start** button on that deployment's log page. No dropdown-fighting needed. Watching the log stream confirms real progress (pip installs etc.) and ends with "Deployment is Finished".
 - **Coolify browser automation in general:** screenshots render at ~2x the CSS pixel scale used for click coordinates — use `getBoundingClientRect()` via JS to get real click targets rather than eyeballing a screenshot.
 - **Coolify's "New Environment Variable" modal** is finicky with automated clicks; the "Developer view" toggle (plain multi-line `KEY=value` textarea) is far more reliable for bulk env var edits — but it renders all existing secrets in plaintext, so treat it carefully, and re-measure cursor position before typing (a misplaced paste can corrupt an adjacent variable).
 - **Composio SDK:** install `composio` (current, `ComposioHQ/composio`), never `composio-core` (abandoned legacy package, incompatible). `composio.tools.execute()` needs `dangerously_skip_version_check=True` outside the higher-level provider path. `ConnectedAccounts.initiate()` is deprecated — use `composio.connected_accounts.link(user_id, auth_config_id)`. When Composio's docs and the installed package disagree, trust the installed package's source.
@@ -127,15 +127,16 @@ All piggyback on the one `Agent Outputs` table, filtered out of every agent-outp
 
 ## Immediate Next Steps, in priority order
 
-1. **Set `JARVIS_PASSWORD`** in Coolify env vars (Runtime only) for `second-brain-chat`, then redeploy. The login gate is fully built and waiting — until this env var exists, the live site is open to anyone with the URL.
-2. **Review branch `jarvis/tool-get_word_count`** on GitHub — merge it (completing the first real self-expansion cycle) or discard it.
-3. **HTTPS** — deliberately not attempted autonomously (Let's Encrypt on sslip.io domains is rate-limit-prone; a failed cert mid-deploy could break the live site unattended). Worth pairing with acquiring a real domain.
-4. **Gmail OAuth click** — code shipped 2026-07-19 (commit `fe2b8d7`); Alex just needs to open the Composio link (`scripts/connect_gmail.py` prints a fresh one) and approve. Also: commit `fe2b8d7` (tasks/Gmail/voice) is pushed to main but **the Coolify redeploy hasn't been triggered yet** — deploys never auto-start on this install.
-5. **Server-side persistence for `agents/` and `proposed_tools/` drafts** — currently, anything drafted via the *live* (deployed) chat brain lands in that container's ephemeral filesystem and vanishes on redeploy. Local drafts are fine. Same fix pattern as the vault (a persistent volume) hasn't been applied here yet.
-6. **Calendar edit/delete via the approval queue** — extend the same propose→approve pattern already built for event creation to event editing/deletion.
-7. **More approval-gated writes generally** (send email, etc.) once Gmail exists.
-8. Decide what to do with `agents/stock_watch_agent.py` (review, discard, or approve to run).
-9. Specialist agents (Schedule/School/Athletics) and additional money agents — explicitly low priority per Alex.
+1. **Set `JARVIS_PASSWORD`** in Coolify env vars (Runtime only) for `second-brain-chat`, then redeploy. The login gate is fully built and waiting — until this env var exists, the live site is open to anyone with the URL. **Still the single most important thing outstanding**, reconfirmed 2026-07-19 (a plain unauthenticated `curl` to the live URL still returns the full app).
+2. **Review branch `jarvis/tool-get_word_count`** on GitHub — merge it (completing the first real self-expansion cycle) or discard it. Still untouched.
+3. **HTTPS** — deliberately not attempted autonomously (Let's Encrypt on sslip.io domains is rate-limit-prone; a failed cert mid-deploy could break the live site unattended). Worth pairing with acquiring a real domain. Also now the unlock for the mic on the live site (see Voice above) and would be a prerequisite for any future push-notification work.
+4. **Server-side persistence for `agents/` and `proposed_tools/` drafts** — currently, anything drafted via the *live* (deployed) chat brain lands in that container's ephemeral filesystem and vanishes on redeploy. Local drafts are fine. Same fix pattern as the vault (a persistent volume) hasn't been applied here yet.
+5. **Calendar edit/delete via the approval queue** — extend the same propose→approve pattern already built for event creation to event editing/deletion.
+6. **More approval-gated writes generally** (send email, etc.) — Gmail is read-only by design right now; a send-email tool would need its own approval-queue wiring, same pattern as calendar events.
+7. Decide what to do with `agents/stock_watch_agent.py` (review, discard, or approve to run).
+8. Specialist agents (Schedule/School/Athletics) and additional money agents — explicitly low priority per Alex.
+
+**Direction Alex gave 2026-07-19 daytime** (worth carrying forward as a loose roadmap, not a commitment): asked what would make Jarvis feel more like Tony Stark's — he picked **voice, more "senses" (Gmail), and delegated background work** as the three to build next, all three now shipped. He explicitly deprioritized a proactive/unprompted-notification loop for this round. A reasonable next-round pitch, if he asks again: password → domain+HTTPS → push notifications + a proactive "check in on Alex periodically" background loop → deeper voice (e.g. a nicer TTS voice than the browser default) → write-capable Gmail behind the approval gate.
 
 ---
 
