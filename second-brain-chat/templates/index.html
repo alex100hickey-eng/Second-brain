@@ -67,6 +67,26 @@
     color: var(--text);
   }
 
+  header nav {
+    display: flex;
+    align-items: center;
+  }
+
+  header nav a {
+    color: var(--text-dim);
+    text-decoration: none;
+    font-size: 13px;
+    margin-left: 8px;
+    padding: 6px 12px;
+    border-radius: 6px;
+    border: 1px solid transparent;
+  }
+
+  header nav a.active {
+    color: var(--accent);
+    border-color: var(--accent-dim);
+  }
+
   main {
     flex: 1;
     overflow-y: auto;
@@ -211,7 +231,13 @@
     <div class="pulse"></div>
     <span>Second Brain</span>
   </div>
-  <div class="title" id="status">Online</div>
+  <div style="display: flex; align-items: center; gap: 4px;">
+    <div class="title" id="status">Online</div>
+    <nav>
+      <a href="/" class="active">Chat</a>
+      <a href="/dashboard">Dashboard</a>
+    </nav>
+  </div>
 </header>
 
 <main id="chat">

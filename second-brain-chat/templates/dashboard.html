@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Second Brain — Dashboard</title>
+<style>
+  :root {
+    --bg: #0a0e14;
+    --panel: #0f1520;
+    --line: #1c2534;
+    --text: #e7ecf5;
+    --text-dim: #6b7688;
+    --accent: #3fd0ff;
+    --accent-dim: #1a4a5c;
+    --warn: #ffb454;
+    --warn-dim: #4a3a1a;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    min-height: 100vh;
+  }
+
+  header {
+    padding: 18px 24px;
+    border-bottom: 1px solid var(--line);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: sticky;
+    top: 0;
+    background: var(--bg);
+    z-index: 10;
+  }
+
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-family: "SF Mono", "Courier New", monospace;
+    font-size: 13px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+  }
+
+  .pulse {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 8px var(--accent), 0 0 16px var(--accent);
+    animation: pulse 2.4s ease-in-out infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.35; }
+  }
+
+  nav a {
+    color: var(--text-dim);
+    text-decoration: none;
+    font-size: 13px;
+    margin-left: 18px;
+    padding: 6px 12px;
+    border-radius: 6px;
+    border: 1px solid transparent;
+  }
+
+  nav a.active {
+    color: var(--accent);
+    border-color: var(--accent-dim);
+  }
+
+  main {
+    padding: 24px;
+    max-width: 980px;
+    margin: 0 auto;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 16px;
+  }
+
+  .widget {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 18px 20px;
+  }
+
+  .widget.pending {
+    border-color: var(--warn-dim);
+  }
+
+  .widget h2 {
+    font-size: 12px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    margin: 0 0 14px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .widget.pending h2 { color: var(--warn); }
+
+  .count {
+    font-family: "SF Mono", "Courier New", monospace;
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+
+  .empty {
+    color: var(--text-dim);
+    font-size: 13.5px;
+    font-style: italic;
+  }
+
+  .item {
+    padding: 10px 0;
+    border-top: 1px solid var(--line);
+    font-size: 13.5px;
+    line-height: 1.5;
+  }
+
+  .item:first-child { border-top: none; padding-top: 0; }
+
+  .item-title {
+    color: var(--text);
+    font-weight: 600;
+    margin-bottom: 2px;
+  }
+
+  .item-meta {
+    color: var(--text-dim);
+    font-size: 11.5px;
+    font-family: "SF Mono", "Courier New", monospace;
+  }
+
+  .item-body {
+    color: var(--text-dim);
+    margin-top: 4px;
+    white-space: pre-wrap;
+    max-height: 4.5em;
+    overflow: hidden;
+  }
+
+  .note-path {
+    font-family: "SF Mono", "Courier New", monospace;
+    font-size: 12.5px;
+  }
+
+  .badge {
+    display: inline-block;
+    background: var(--warn-dim);
+    color: var(--warn);
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 20px;
+    margin-left: 8px;
+  }
+
+  .refresh-note {
+    grid-column: 1 / -1;
+    text-align: center;
+    color: var(--text-dim);
+    font-size: 11.5px;
+    font-family: "SF Mono", "Courier New", monospace;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <div class="pulse"></div>
+    <span>Second Brain</span>
+  </div>
+  <nav>
+    <a href="/">Chat</a>
+    <a href="/dashboard" class="active">Dashboard</a>
+  </nav>
+</header>
+
+<main id="widgets">
+  <div class="refresh-note">Loading...</div>
+</main>
+
+<script>
+  const widgets = document.getElementById('widgets');
+
+  function esc(s) {
+    const d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
+  }
+
+  function timeAgo(iso) {
+    if (!iso) return '';
+    const diffMs = Date.now() - new Date(iso).getTime();
+    const mins = Math.floor(diffMs / 60000);
+    if (mins < 1) return 'just now';
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    return `${Math.floor(hrs / 24)}d ago`;
+  }
+
+  function render(data) {
+    const sections = [];
+
+    const pendingCount = data.pending_agents.length + data.pending_tools.length;
+    const pendingItems = [
+      ...data.pending_agents.map(f => ({ label: f, kind: 'agent', path: `agents/${f}` })),
+      ...data.pending_tools.map(f => ({ label: f, kind: 'tool', path: `proposed_tools/${f}` })),
+    ];
+    sections.push(`
+      <div class="widget ${pendingCount ? 'pending' : ''}">
+        <h2>Awaiting Your Review ${pendingCount ? `<span class="badge">${pendingCount}</span>` : ''}</h2>
+        ${pendingItems.length
+          ? pendingItems.map(i => `
+            <div class="item">
+              <div class="item-title">${esc(i.label)}</div>
+              <div class="item-meta">${i.kind === 'agent' ? 'drafted agent' : 'proposed tool'} — ${esc(i.path)} — not running, not wired in</div>
+            </div>`).join('')
+          : '<div class="empty">Nothing drafted right now.</div>'}
+      </div>
+    `);
+
+    sections.push(`
+      <div class="widget">
+        <h2>Recent Agent Outputs</h2>
+        ${data.recent_outputs.length
+          ? data.recent_outputs.map(o => `
+            <div class="item">
+              <div class="item-title">${esc(o.agent_name || 'unknown')}</div>
+              <div class="item-meta">${timeAgo(o.created_at)}</div>
+              <div class="item-body">${esc(o.output_text || '')}</div>
+            </div>`).join('')
+          : '<div class="empty">No agent outputs yet.</div>'}
+      </div>
+    `);
+
+    sections.push(`
+      <div class="widget">
+        <h2>Vault Notes <span class="count">${data.vault_notes.length}</span></h2>
+        ${data.vault_notes.length
+          ? data.vault_notes.map(p => `<div class="item note-path">${esc(p)}</div>`).join('')
+          : '<div class="empty">No notes in the vault yet.</div>'}
+      </div>
+    `);
+
+    widgets.innerHTML = sections.join('');
+  }
+
+  async function load() {
+    try {
+      const res = await fetch('/api/dashboard');
+      const data = await res.json();
+      render(data);
+    } catch (err) {
+      widgets.innerHTML = '<div class="refresh-note">Could not load dashboard data — is the server running?</div>';
+    }
+  }
+
+  load();
+  setInterval(load, 30000);
+</script>
+
+</body>
+</html>

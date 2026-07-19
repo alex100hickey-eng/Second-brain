@@ -39,6 +39,9 @@ VAULT_FOLDERS = ["Schedule", "Learning", "Money", "School", "Athletics"]
 # Where drafted agent scripts get written. Sibling to this file's folder, inside
 # the main second-brain project (~/second-brain/agents/).
 AGENTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "agents")
+# Where drafted *tool* proposals for this app itself get written (self-expansion).
+# Never auto-merged into app.py — see create_new_tool.
+PROPOSED_TOOLS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "proposed_tools")
 # ----------------------------------------------------
 
 app = Flask(__name__)
@@ -77,6 +80,12 @@ You can also draft brand-new agent scripts with create_new_agent when Alex asks 
 agent. This tool only ever writes a Python file to disk for him to review — it never runs,
 imports, executes, or deploys the script it creates, and no other tool you have does either.
 Always tell him the new agent needs his review before he runs or deploys it himself.
+
+You can also propose brand-new tools/capabilities for YOURSELF with create_new_tool, when Alex
+asks you to gain some new ability. This writes a proposal file (schema + function + routing
+line) to proposed_tools/ — it does NOT add the tool to your own live toolset, does not edit
+app.py, and does not restart or redeploy anything. You cannot self-wire new capabilities into
+yourself; a human has to review and merge the proposal. Always tell him that.
 
 You have read-only access to Alex's Google Calendar (GOOGLECALENDAR_* tools) — you can list
 and search his events, and check calendars/current time, to answer questions about his
@@ -172,6 +181,32 @@ TOOLS = [
                 },
             },
             "required": ["folder", "filename", "content"],
+        },
+    },
+    {
+        "name": "create_new_tool",
+        "description": (
+            "Draft a proposal for a brand-new tool/capability for THIS chat brain itself (Jarvis) — "
+            "e.g. a new way to look something up or take a small reversible action. Saves a proposal "
+            "file to proposed_tools/ containing the tool's schema, its Python function, and the routing "
+            "line, for Alex to review and manually merge into app.py. This ONLY writes the proposal file — "
+            "it never edits app.py, never adds itself to this app's live TOOLS list, and never restarts "
+            "or redeploys anything. Use this when Alex asks Jarvis to gain a new capability for itself, "
+            "as opposed to create_new_agent which is for standalone background agents."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Short snake_case name for the tool, e.g. 'get_weather'. Used as the filename (proposed_tools/<name>.py) and the tool's name.",
+                },
+                "purpose": {
+                    "type": "string",
+                    "description": "Plain-language description of what the tool should do and what inputs it needs, e.g. 'looks up the weather for a city Alex names'.",
+                },
+            },
+            "required": ["name", "purpose"],
         },
     },
     {
@@ -329,6 +364,82 @@ def create_new_agent(name: str, purpose: str) -> str:
     )
 
 
+TOOL_PROPOSAL_PROMPT = """Draft a proposal for a new tool named "{name}" to add to a Flask app called
+Jarvis (a personal AI assistant for a guy named Alex). Its purpose: {purpose}
+
+The app's existing tools follow this exact shape — a dict in a TOOLS list (Anthropic tool-use schema:
+name, description, input_schema), a matching plain Python function of the same name, and one routing
+line in a handle_tool_call(tool_name, tool_input) function that calls it. Available already in scope
+if the tool needs them: `claude` (an Anthropic client), `supabase` (a Supabase client), `VAULT_PATH`
+(the Obsidian vault root). Don't redeclare these — assume they exist.
+
+Output ONLY the following three things, in this exact order, with no markdown fences and no extra
+commentary:
+
+1. A Python dict literal named TOOL_SCHEMA, exactly matching the Anthropic tools schema shape (name,
+   description, input_schema), for this one tool.
+2. The complete Python function implementing it (a plain, correct, defensively-written function —
+   validate any risky inputs, no destructive or external-write side effects unless the purpose
+   explicitly calls for something reversible like a database insert).
+3. A single-line Python comment showing the exact `if` block to add inside handle_tool_call to route
+   to this function, in this form:
+   # if tool_name == "{name}":
+   #     return {name}(...)"""
+
+
+def create_new_tool(name: str, purpose: str) -> str:
+    if not re.fullmatch(r"[a-z][a-z0-9_]*", name or ""):
+        return (
+            f"Invalid tool name '{name}'. Use lowercase letters, numbers, and underscores only, "
+            "starting with a letter (e.g. 'get_weather')."
+        )
+
+    os.makedirs(PROPOSED_TOOLS_DIR, exist_ok=True)
+    dest = os.path.join(PROPOSED_TOOLS_DIR, f"{name}.py")
+    if os.path.exists(dest):
+        return f"A tool proposal already exists at proposed_tools/{name}.py — pick a different name or ask Alex whether to overwrite it."
+
+    message = claude.messages.create(
+        model="claude-sonnet-5",
+        max_tokens=4096,
+        messages=[
+            {
+                "role": "user",
+                "content": TOOL_PROPOSAL_PROMPT.format(name=name, purpose=purpose),
+            }
+        ],
+    )
+    if message.stop_reason == "max_tokens":
+        return (
+            f"Proposal for '{name}' got cut off before finishing (hit the token limit) — "
+            "no file was written. Try again, maybe with a narrower purpose description."
+        )
+
+    draft = next(block.text for block in message.content if block.type == "text").strip()
+    draft = draft.replace("```python", "").replace("```", "").strip()
+
+    header = (
+        f'"""\n'
+        f"PROPOSED TOOL: {name}\n"
+        f"Drafted by Jarvis on request — purpose: {purpose}\n\n"
+        f"This is a PROPOSAL ONLY. Nothing here is wired into app.py or the live TOOLS list.\n"
+        f"To adopt it, a human (or a future Claude Code session) must manually:\n"
+        f"  1. Copy TOOL_SCHEMA below into the TOOLS list in app.py\n"
+        f"  2. Copy the {name}() function below into app.py\n"
+        f"  3. Add the routing line shown at the bottom into handle_tool_call\n"
+        f'"""\n\n'
+    )
+
+    with open(dest, "w", encoding="utf-8") as f:
+        f.write(header + draft + "\n")
+
+    return (
+        f"Drafted proposed_tools/{name}.py — a proposal only. It is NOT part of my live tools yet and "
+        "won't be until you (or a Claude Code session) review it and merge the three pieces into app.py "
+        "yourself."
+    )
+
+
 def handle_tool_call(tool_name: str, tool_input: dict) -> str:
     if tool_name == "get_recent_agent_outputs":
         return get_recent_agent_outputs(
@@ -350,6 +461,11 @@ def handle_tool_call(tool_name: str, tool_input: dict) -> str:
         )
     if tool_name == "create_new_agent":
         return create_new_agent(
+            name=tool_input["name"],
+            purpose=tool_input["purpose"],
+        )
+    if tool_name == "create_new_tool":
+        return create_new_tool(
             name=tool_input["name"],
             purpose=tool_input["purpose"],
         )
@@ -405,12 +521,61 @@ def run_chat(messages: list) -> str:
 
 
 # ============================================================
+# DASHBOARD DATA — read-only summary of system state.
+# Doubles as the review surface for self-expansion drafts (create_new_agent /
+# create_new_tool both land here as "pending" until Alex reviews them).
+# ============================================================
+
+def _list_py_files(dir_path: str) -> list:
+    if not os.path.isdir(dir_path):
+        return []
+    return sorted(f for f in os.listdir(dir_path) if f.endswith(".py"))
+
+
+def get_dashboard_data() -> dict:
+    outputs = (
+        supabase.table("Agent Outputs")
+        .select("*")
+        .order("created_at", desc=True)
+        .limit(8)
+        .execute()
+        .data
+        or []
+    )
+
+    all_notes = []
+    if os.path.isdir(VAULT_PATH):
+        for root, _, files in os.walk(VAULT_PATH):
+            for f in files:
+                if f.endswith(".md"):
+                    all_notes.append(os.path.relpath(os.path.join(root, f), VAULT_PATH))
+    all_notes.sort()
+
+    return {
+        "recent_outputs": outputs,
+        "vault_notes": all_notes,
+        "pending_agents": _list_py_files(AGENTS_DIR),
+        "pending_tools": _list_py_files(PROPOSED_TOOLS_DIR),
+    }
+
+
+# ============================================================
 # ROUTES
 # ============================================================
 
 @app.route("/")
 def index():
     return render_template("index.html")
+
+
+@app.route("/dashboard")
+def dashboard():
+    return render_template("dashboard.html")
+
+
+@app.route("/api/dashboard")
+def api_dashboard():
+    return jsonify(get_dashboard_data())
 
 
 @app.route("/chat", methods=["POST"])
