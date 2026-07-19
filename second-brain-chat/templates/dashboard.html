@@ -322,6 +322,16 @@
       </div>
     `);
 
+    const memories = data.memories || [];
+    sections.push(`
+      <div class="widget">
+        <h2>What Jarvis Remembers <span class="count">${memories.length}</span></h2>
+        ${memories.length
+          ? memories.map(m => `<div class="item">${esc(m)}</div>`).join('')
+          : '<div class="empty">Nothing saved yet — tell Jarvis something worth remembering.</div>'}
+      </div>
+    `);
+
     sections.push(`
       <div class="widget">
         <h2>Vault Notes <span class="count">${data.vault_notes.length}</span></h2>

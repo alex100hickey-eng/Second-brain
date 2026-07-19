@@ -940,6 +940,7 @@ def get_dashboard_data() -> dict:
         "pending_tools": _list_py_files(PROPOSED_TOOLS_DIR),
         "today_events": get_today_events(),
         "pending_actions": get_pending_actions(),
+        "memories": load_memories(),
     }
 
 
