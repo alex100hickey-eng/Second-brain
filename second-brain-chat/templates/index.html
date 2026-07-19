@@ -144,6 +144,33 @@
     padding-left: 14px;
   }
 
+  .tool-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 0 6px 14px;
+    color: var(--accent);
+    font-family: "SF Mono", "Courier New", monospace;
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    animation: statusPulse 1.6s ease-in-out infinite;
+  }
+
+  .tool-status::before {
+    content: "";
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 6px var(--accent);
+    flex-shrink: 0;
+  }
+
+  @keyframes statusPulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.45; }
+  }
+
   .thinking {
     display: flex;
     gap: 4px;
@@ -291,6 +318,21 @@
     if (el) el.remove();
   }
 
+  function showToolStatus(label) {
+    removeToolStatus();
+    const el = document.createElement('div');
+    el.className = 'tool-status';
+    el.id = 'tool-status';
+    el.textContent = label;
+    chat.appendChild(el);
+    chat.scrollTop = chat.scrollHeight;
+  }
+
+  function removeToolStatus() {
+    const el = document.getElementById('tool-status');
+    if (el) el.remove();
+  }
+
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     const message = input.value.trim();
@@ -302,25 +344,61 @@
     status.textContent = 'Thinking...';
     addThinking();
 
+    let bubble = null;
+    let fullText = '';
+
+    function handleEvent(ev) {
+      if (ev.type === 'text') {
+        removeThinking();
+        removeToolStatus();
+        if (!bubble) bubble = addMessage('assistant', '');
+        fullText += ev.delta;
+        bubble.textContent = fullText;
+        chat.scrollTop = chat.scrollHeight;
+      } else if (ev.type === 'status') {
+        removeThinking();
+        status.textContent = 'Working...';
+        showToolStatus(ev.label);
+      } else if (ev.type === 'error') {
+        removeThinking();
+        removeToolStatus();
+        addMessage('assistant', `Something went wrong: ${ev.message}`);
+      }
+    }
+
     try {
       const res = await fetch('/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message, history }),
       });
-      const data = await res.json();
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let nl;
+        while ((nl = buf.indexOf('\n')) >= 0) {
+          const line = buf.slice(0, nl).trim();
+          buf = buf.slice(nl + 1);
+          if (line) handleEvent(JSON.parse(line));
+        }
+      }
 
       removeThinking();
+      removeToolStatus();
 
-      if (data.error) {
-        addMessage('assistant', `Something went wrong: ${data.error}`);
-      } else {
-        addMessage('assistant', data.reply);
+      if (fullText) {
         history.push({ role: 'user', content: message });
-        history.push({ role: 'assistant', content: data.reply });
+        history.push({ role: 'assistant', content: fullText });
       }
     } catch (err) {
       removeThinking();
+      removeToolStatus();
       addMessage('assistant', 'Connection error — check that the server is running.');
     } finally {
       sendBtn.disabled = false;

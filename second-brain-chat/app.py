@@ -13,7 +13,7 @@ import os
 import re
 import json
 
-from flask import Flask, request, jsonify, render_template
+from flask import Flask, request, jsonify, render_template, Response, stream_with_context
 from anthropic import Anthropic
 from supabase import create_client
 from composio import Composio
@@ -486,21 +486,41 @@ def handle_tool_call(tool_name: str, tool_input: dict) -> str:
 # CHAT LOOP
 # ============================================================
 
-def run_chat(messages: list) -> str:
-    """Runs the Claude tool-use loop until it produces a final text answer."""
+# Human-friendly status lines shown live in the UI while each tool runs.
+TOOL_STATUS_LABELS = {
+    "get_recent_agent_outputs": "Checking what your agents have found…",
+    "log_note": "Saving that note…",
+    "list_vault_notes": "Looking through your vault…",
+    "read_vault_note": "Reading your notes…",
+    "write_vault_note": "Writing to your vault…",
+    "create_new_agent": "Drafting a new agent…",
+    "create_new_tool": "Drafting a new tool proposal…",
+    "GOOGLECALENDAR_EVENTS_LIST": "Checking your calendar…",
+    "GOOGLECALENDAR_FIND_EVENT": "Searching your calendar…",
+    "GOOGLECALENDAR_LIST_CALENDARS": "Checking your calendars…",
+    "GOOGLECALENDAR_GET_CURRENT_DATE_TIME": "Checking the time…",
+}
+
+
+def stream_chat(messages: list):
+    """Runs the Claude tool-use loop, yielding events as they happen:
+    {"type": "text", "delta": ...}    — a chunk of the reply as it's written
+    {"type": "status", "label": ...}  — what tool is being used right now
+    """
     while True:
-        response = claude.messages.create(
+        with claude.messages.stream(
             model="claude-sonnet-5",
             max_tokens=1024,
             system=SYSTEM_PROMPT,
             tools=TOOLS,
             messages=messages,
-        )
+        ) as stream:
+            for text in stream.text_stream:
+                yield {"type": "text", "delta": text}
+            response = stream.get_final_message()
 
         if response.stop_reason != "tool_use":
-            # Final answer — extract the text block
-            text_blocks = [b.text for b in response.content if b.type == "text"]
-            return "\n".join(text_blocks)
+            return
 
         # Model wants to use one or more tools
         messages.append({"role": "assistant", "content": response.content})
@@ -508,6 +528,10 @@ def run_chat(messages: list) -> str:
         tool_results = []
         for block in response.content:
             if block.type == "tool_use":
+                yield {
+                    "type": "status",
+                    "label": TOOL_STATUS_LABELS.get(block.name, "Working on it…"),
+                }
                 result = handle_tool_call(block.name, block.input)
                 tool_results.append(
                     {
@@ -585,9 +609,20 @@ def chat():
     history = data.get("history", [])  # list of {role, content} from the client
 
     messages = history + [{"role": "user", "content": user_message}]
-    reply = run_chat(messages)
 
-    return jsonify({"reply": reply})
+    def generate():
+        try:
+            for event in stream_chat(messages):
+                yield json.dumps(event) + "\n"
+        except Exception as e:
+            yield json.dumps({"type": "error", "message": str(e)}) + "\n"
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype="application/x-ndjson",
+        # Tell proxies (Coolify's traefik included) not to buffer the stream.
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 if __name__ == "__main__":
