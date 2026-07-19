@@ -15,6 +15,7 @@ import json
 import time
 import hmac
 import hashlib
+import subprocess
 import secrets as pysecrets
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -175,7 +176,12 @@ create them directly. A proposal goes into a pending-approval queue that Alex re
 dashboard — nothing touches his calendar until he clicks Approve there. When you propose an
 event, tell him it's waiting for his approval on the dashboard. This approve-first rule
 exists because calendar changes are consequential; never imply an event is booked before
-he's approved it."""
+he's approved it.
+
+You can help clean Alex's Downloads folder (only when running on his Mac): scan_downloads
+lists junk candidates (read-only), and propose_file_cleanup queues chosen files for the same
+dashboard approval. On approval files move to the macOS Trash — you never permanently delete
+anything, and nothing moves without his explicit Approve click."""
 
 
 # ============================================================
@@ -310,6 +316,48 @@ TOOLS = [
                 },
             },
             "required": ["title", "start_datetime", "end_datetime"],
+        },
+    },
+    {
+        "name": "scan_downloads",
+        "description": (
+            "Look through Alex's Downloads folder (read-only) and list cleanup candidates — old and/or "
+            "large files. Use when he asks what's cluttering his Downloads or wants to clean up files. "
+            "Only works on his Mac (the local instance); the server has no access to his files. This "
+            "tool only LOOKS — nothing is moved or deleted."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "days_old": {
+                    "type": "integer",
+                    "description": "Only list files older than this many days. Default 30.",
+                },
+                "min_size_mb": {
+                    "type": "number",
+                    "description": "Only list files at least this big in MB. Default 0 (any size).",
+                },
+            },
+        },
+    },
+    {
+        "name": "propose_file_cleanup",
+        "description": (
+            "Queue a file-cleanup for Alex's approval: the named files from his Downloads folder would "
+            "be moved to the macOS Trash (never permanently deleted) — but ONLY after he clicks Approve "
+            "on the dashboard. Use after scan_downloads, with the specific files he agrees are junk. "
+            "Always tell him it's waiting for his approval."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "filenames": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Filenames (relative to Downloads) to include, e.g. ['old-installer.dmg'].",
+                }
+            },
+            "required": ["filenames"],
         },
     },
     {
@@ -559,6 +607,87 @@ def propose_calendar_event(title: str, start_datetime: str, end_datetime: str, d
     )
 
 
+DOWNLOADS_DIR = os.path.expanduser("~/Downloads")
+
+
+def scan_downloads(days_old: int = 30, min_size_mb: float = 0) -> str:
+    if not os.path.isdir(DOWNLOADS_DIR):
+        return "No Downloads folder here — file scanning only works when I'm running on Alex's Mac."
+    now = time.time()
+    candidates = []
+    for name in os.listdir(DOWNLOADS_DIR):
+        if name.startswith("."):
+            continue
+        full = os.path.join(DOWNLOADS_DIR, name)
+        if not os.path.isfile(full):
+            continue
+        st = os.stat(full)
+        age_days = (now - st.st_mtime) / 86400
+        size_mb = st.st_size / 1_000_000
+        if age_days >= days_old and size_mb >= min_size_mb:
+            candidates.append((size_mb, age_days, name))
+    if not candidates:
+        return f"Nothing in Downloads is both older than {days_old} days and at least {min_size_mb} MB."
+    candidates.sort(reverse=True)
+    lines = [f"- {name} ({size:.1f} MB, {int(age)} days old)" for size, age, name in candidates[:40]]
+    total = sum(c[0] for c in candidates)
+    return (
+        f"{len(candidates)} cleanup candidates in Downloads ({total:.0f} MB total):\n"
+        + "\n".join(lines)
+        + "\n\nNothing has been touched — use propose_file_cleanup to queue any of these for approval."
+    )
+
+
+def propose_file_cleanup(filenames: list) -> str:
+    if not os.path.isdir(DOWNLOADS_DIR):
+        return "No Downloads folder here — file cleanup only works when I'm running on Alex's Mac."
+    valid, missing = [], []
+    for name in filenames:
+        # Confine strictly to files directly inside ~/Downloads — no traversal.
+        full = os.path.realpath(os.path.join(DOWNLOADS_DIR, os.path.basename(name)))
+        if os.path.dirname(full) == os.path.realpath(DOWNLOADS_DIR) and os.path.isfile(full):
+            valid.append(os.path.basename(name))
+        else:
+            missing.append(name)
+    if not valid:
+        return f"None of those files exist in Downloads: {', '.join(filenames)}"
+
+    total_mb = sum(os.path.getsize(os.path.join(DOWNLOADS_DIR, n)) for n in valid) / 1_000_000
+    action = {
+        "action": "clean_files",
+        "files": valid,
+        "display": f"[Mac only] Move {len(valid)} file(s) to Trash from Downloads ({total_mb:.0f} MB): "
+                   + ", ".join(valid[:5]) + ("…" if len(valid) > 5 else ""),
+        "status": "pending",
+    }
+    supabase.table("Agent Outputs").insert(
+        {"agent_name": "jarvis_pending_action", "output_text": json.dumps(action)}
+    ).execute()
+    note = f" (couldn't find: {', '.join(missing)})" if missing else ""
+    return (
+        f"Queued for approval: moving {len(valid)} file(s) to Trash{note}. "
+        "Nothing moves until Alex approves it on the dashboard. Files go to the Trash, never permanent deletion."
+    )
+
+
+def _execute_clean_files(action: dict) -> dict:
+    moved, failed = [], []
+    for name in action.get("files", []):
+        full = os.path.realpath(os.path.join(DOWNLOADS_DIR, os.path.basename(name)))
+        if os.path.dirname(full) != os.path.realpath(DOWNLOADS_DIR) or not os.path.isfile(full):
+            failed.append(name)
+            continue
+        # Finder's delete = real Trash with Put Back support.
+        script = f'tell application "Finder" to delete POSIX file "{full}"'
+        result = subprocess.run(["osascript", "-e", script], capture_output=True, timeout=30)
+        (moved if result.returncode == 0 else failed).append(name)
+    if moved and not failed:
+        return {"ok": True, "detail": f"Moved to Trash: {', '.join(moved)}"}
+    if moved:
+        return {"ok": True, "detail": f"Moved: {', '.join(moved)}; failed: {', '.join(failed)}"}
+    return {"ok": False, "error": f"Couldn't move any files (this only works on Alex's Mac): {', '.join(failed)}"}
+
+
 def get_pending_actions() -> list:
     result = (
         supabase.table("Agent Outputs")
@@ -624,6 +753,18 @@ def resolve_pending_action(row_id: int, decision: str) -> dict:
         action["status"] = "denied"
         supabase.table("Agent Outputs").update({"output_text": json.dumps(action)}).eq("id", row_id).execute()
         return {"ok": True, "status": "denied"}
+
+    # Approved — execute by action type. This is the ONLY place queued actions run.
+    if action.get("action") == "clean_files":
+        result = _execute_clean_files(action)
+        if not result["ok"]:
+            action["status"] = "failed"
+            action["error"] = result["error"][:500]
+            supabase.table("Agent Outputs").update({"output_text": json.dumps(action)}).eq("id", row_id).execute()
+            return {"ok": False, "error": result["error"]}
+        action["status"] = "approved"
+        supabase.table("Agent Outputs").update({"output_text": json.dumps(action)}).eq("id", row_id).execute()
+        return {"ok": True, "status": "approved"}
 
     resp = composio.tools.execute(
         slug=action["tool_slug"],
@@ -896,6 +1037,13 @@ def handle_tool_call(tool_name: str, tool_input: dict) -> str:
         return remember(tool_input["fact"])
     if tool_name == "forget_memory":
         return forget_memory(tool_input["matching_text"])
+    if tool_name == "scan_downloads":
+        return scan_downloads(
+            days_old=tool_input.get("days_old", 30),
+            min_size_mb=tool_input.get("min_size_mb", 0),
+        )
+    if tool_name == "propose_file_cleanup":
+        return propose_file_cleanup(tool_input["filenames"])
     if tool_name == "propose_calendar_event":
         return propose_calendar_event(
             title=tool_input["title"],
@@ -954,6 +1102,8 @@ TOOL_STATUS_LABELS = {
     "forget_memory": "Forgetting that…",
     "propose_calendar_event": "Queuing that for your approval…",
     "deliberate": "Convening the council…",
+    "scan_downloads": "Scanning your Downloads…",
+    "propose_file_cleanup": "Queuing cleanup for your approval…",
     "list_vault_notes": "Looking through your vault…",
     "read_vault_note": "Reading your notes…",
     "write_vault_note": "Writing to your vault…",
