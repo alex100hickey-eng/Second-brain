@@ -1,179 +1,143 @@
-# Second Brain Project — Handoff / Status Document
+# Second Brain / Jarvis — Handoff Document
 
-Last updated: 2026-07-19 (late night), by Claude Code. Two sessions ago: deployed `money_clips_agent`, vault persistence, read-only Calendar via Composio. This session: self-expansion (`create_new_tool`), dashboard with widgets, streaming chat, persistent memory, approval layer with first gated write (calendar event creation), server-side chat history, dormant password gate, PWA/mobile support, and fixed the vault-sync launchd job (two stacked causes: Full Disk Access regression + `.git` inside iCloud causing "Resource deadlock avoided" on commit — git dir now lives at `~/.second-brain-vault.git` via `--separate-git-dir`, vault has a `.git` pointer file).
-
-## Current Feature Set (chat brain, deployed & verified)
-
-- **Streaming chat** — `/chat` streams NDJSON (text deltas + tool-status events); UI types replies live and shows "Checking your calendar…"-style status lines. Gunicorn start command includes `--timeout 120` for this.
-- **Persistent memory** — `remember` tool; memories are `jarvis_memory` rows in Supabase `Agent Outputs`, injected into the system prompt every request. Shared by local + deployed instances.
-- **Server-side chat history** — conversation stored as `jarvis_chat` rows; all devices see the same thread (`/api/history`, clear via marker rows, `_normalize_for_api` guards alternating roles). No more localStorage.
-- **Dashboard** (`/dashboard`, `/api/dashboard`) — widgets: Today (Google Calendar, 5-min cache), Awaiting Your Approval (Approve/Deny buttons → `/api/approve`), Awaiting Your Review (drafted agents/ + proposed_tools/ files), Recent Agent Outputs, Vault Notes.
-- **Approval layer** — `propose_calendar_event` queues a `jarvis_pending_action` row; ONLY an explicit dashboard Approve executes (GOOGLECALENDAR_CREATE_EVENT, `create_meeting_room: False`). Deny + already-decided guards tested. This is the reusable pattern for all future consequential actions.
-- **Self-expansion** — `create_new_agent` (drafts to `agents/`) and `create_new_tool` (drafts schema+function+routing to `proposed_tools/`); both draft-only, never wired/run automatically; drafts surface on the dashboard for review.
-- **Password gate (DORMANT)** — full login flow exists (`/login`, 31-day session, brute-force delay) but only enforces when a `JARVIS_PASSWORD` env var is set. **Not yet set — the app is still open. First thing next session: Alex adds JARVIS_PASSWORD in Coolify env vars (Runtime only) + redeploy.** Note session cookies are signed with a key derived from the password.
-- **PWA** — manifest + icons in `static/`; add-to-home-screen works on iOS/Android, standalone dark UI.
-- Internal Supabase row types (filtered out of all agent-output views): `jarvis_memory`, `jarvis_pending_action`, `jarvis_chat`, `jarvis_chat_clear` — all piggyback on the `Agent Outputs` table so no schema changes were needed.
-
-**Coolify deploy gotcha (new):** the deployment queue can silently jam — a triggered deploy sits "Queued" forever and pushes don't auto-deploy. Fix: Deployment page → **Force Start**. The Actions dropdown is flaky under automation; reliable sequence is real mouse click on Actions → screenshot to confirm menu is open → click the item.
+**Last updated:** 2026-07-19, by Claude Code, after an overnight autonomous session (bypass mode, Alex asleep). This document is meant to be pasted into or attached in a **new** Claude Code chat so a fresh session can pick up execution with full context. Read it, then verify anything load-bearing against the actual repo/Coolify/Supabase state before acting — status docs like this one drift.
 
 ---
 
-## Vision
+## The Vision
 
-Alex is building a personal AI "second brain," modeled on Jarvis from Iron Man: a chat interface that knows his stuff, can act on his behalf, and eventually manages its own agents across his digital life.
+Alex is building a personal AI "second brain," modeled on Jarvis from Iron Man: a chat interface that knows his stuff, can act on his behalf, and — this is the distinguishing goal, not a nice-to-have — **can extend itself and eventually manage its own agents** across his digital life.
 
-The end goal: a chat interface plus an adaptable home-screen/dashboard he can add components to over time, where the AI can do almost anything he could do on his own computer — including creating and registering its own new agents on request, and eventually gaining access to new sites/services as needed.
+**What "done" looks like eventually:** a chat interface plus an adaptable home-screen dashboard Alex can keep adding components to, where the AI can do almost anything Alex could do on his own computer — including drafting and registering brand-new capabilities for itself on request, and gaining access to new sites/services as needed. Not a fixed feature set; a system that grows.
 
-The intended autonomy model:
-- **Read-only and easily-reversible actions** can run autonomously, no confirmation needed.
-- **Consequential or irreversible actions** (spending money, signing up for new accounts, sending things externally) require a confirmation gate.
-- Safeguards are being built incrementally as the system grows, not solved all upfront. As of this writing, **no confirmation-gate layer exists yet** — this is why every new capability added so far has been deliberately kept read-only or draft-only (see Guardrails section below).
+**The autonomy model — this is the single most important design constraint on everything built so far:**
+- **Read-only and easily-reversible actions run autonomously**, no confirmation needed (checking calendar, reading notes, drafting a file nobody runs yet).
+- **Consequential or irreversible actions require a confirmation gate**: spending money, signing up for new accounts, sending things externally, editing/deleting real files, actually adopting a new capability. Alex is aware of the risk of an AI acting on its own in costly ways and wants this solved incrementally as the system grows, not all upfront.
+- Concretely, this means: nothing Jarvis "writes" for itself (a new agent, a new tool, a code change) ever runs, deploys, or wires itself in automatically. Every new capability passes through a human at least once, sometimes twice (approve, then merge).
 
-Longer-term angles mentioned: a YouTube content-agent business line targeting roughly $3,000/month, plus personal-life specialist agents for Schedule, School, and Athletics. Alex has said he currently cares less about the money-agent side and more about building out the core Jarvis capabilities (the chat brain itself).
+**Priorities, per Alex directly:** he cares much less about the money/content-agent side than about building out core Jarvis capability — the self-expanding assistant itself, plus the dashboard, are the parts he wants to see get better. Specialist life-agents (Schedule, School, Athletics) and additional money agents are explicitly deprioritized for now.
 
-Roughly in priority order per Alex's stated plan, the big pieces are: (1) money agent(s) deployed and running, (2) vault/agent persistence on the server, (3) more specialist agents, (4) a dashboard/visual layer, (5) real-world action connectors (calendar, email, etc. via Composio), (6) an approval/confirmation layer for consequential actions. Items 1, 2, and the calendar half of 5 are now done — see below.
+**Longer-term angles mentioned (lower priority):** a YouTube content-agent business line targeting roughly $3,000/month (the reason `money_clips_agent` exists at all).
 
 ---
 
 ## Stack / Infrastructure
 
 - **Hetzner** — CPX11 server ($24/mo, 2 vCPU, 2GB RAM, 40GB SSD), Ashburn, Virginia. IP: `178.156.209.40`.
-- **Coolify** v4.1.2 — dashboard at `http://178.156.209.40:8000` (login-gated; Claude does not have credentials and should never be given them — Alex logs in himself; the browser session sometimes stays authenticated across a Claude Code session once he's logged in once). GitHub App connected as "second-brain1".
+- **Coolify** v4.1.2 — dashboard at `http://178.156.209.40:8000` (login-gated; Claude Code does not have credentials and must never be given them — Alex logs in himself; the browser session sometimes stays authenticated across sessions once he's logged in once). GitHub App connected as "second-brain1".
   - Project UUID: `xn159afo226l4480ogtcrznz`, environment UUID: `p78muchurjjfu962yg4iredu` (production).
-  - **`second-brain-chat`** (chat brain) app UUID: `h72tei3gy97z4wlqyqpvuylg`. Live at `http://h72tei3gy97z4wlqyqpvuylg.178.156.209.40.sslip.io`.
-  - **`money-clips-agent`** app UUID: `dfjbnh7wz3cvxk29vf3b39vg`.
-- **GitHub** — private repo `Second-brain` under account `alex100hickey-eng`, remote `https://github.com/alex100hickey-eng/Second-brain.git`. Local working copy at `~/second-brain`.
-  - New this session: private repo `second-brain-vault` (same account) — a git mirror of the Obsidian vault. See Phase 4 below.
-- **Supabase** — table `Agent Outputs` (note the space and capital letters — easy to typo). Columns: `agent_name` (text), `output_text` (text), `created_at` (timestamptz). RLS disabled.
-- **Claude API** — `CLAUDE_API_KEY` env var set in `~/.zshrc`.
-- **Composio** — Alex has an account at `app.composio.dev`. `COMPOSIO_API_KEY` env var set in `~/.zshrc` (a full-access classic-style key; the first key he generated was scoped read-only on `auth_configs` and had to be replaced — see Phase 5 gotchas). Also connected as an MCP server directly to Claude Code itself (separate from the app-embedded integration — see Phase 5 for the distinction).
+  - App **`second-brain-chat`** (the actual Jarvis) — UUID `h72tei3gy97z4wlqyqpvuylg`. Live at `http://h72tei3gy97z4wlqyqpvuylg.178.156.209.40.sslip.io`. **No HTTPS yet, no password enforced yet — see Immediate Next Steps.**
+  - App **`money-clips-agent`** — UUID `dfjbnh7wz3cvxk29vf3b39vg`. A background content-idea generator, not the chat brain.
+- **GitHub** — private repo `Second-brain` under account `alex100hickey-eng`, remote `https://github.com/alex100hickey-eng/Second-brain.git`. Local working copy at `~/second-brain` on Alex's Mac.
+  - Second private repo `second-brain-vault` (same account) — a git mirror of the Obsidian vault, used for syncing vault content to the server (see Vault Persistence below).
+  - A review branch, **`jarvis/tool-get_word_count`**, currently sits on the main repo awaiting Alex's review — the first real artifact of the self-expansion pipeline (see below). Needs a merge-or-discard decision.
+- **Supabase** — single table `Agent Outputs` (note the space and capital letters — easy to typo) does double duty as the entire app's datastore. Columns: `agent_name` (text), `output_text` (text), `created_at` (timestamptz). RLS disabled. Every internal subsystem (memory, chat history, pending approvals) piggybacks on this same table with a distinct `agent_name` tag rather than needing schema changes — see "Internal row types" below.
+- **Claude API** — `CLAUDE_API_KEY` env var, set in `~/.zshrc` locally and in Coolify env vars for the deployed app.
+- **Composio** (`app.composio.dev`) — used for real-world connectors (currently just Google Calendar, read-only). `COMPOSIO_API_KEY` env var, needs to be a full-access key (a read-only-on-auth_configs key will authenticate but can't create configs). Also connected as an MCP server directly to Claude Code (separate concern from the app's own Composio usage).
+- **Obsidian vault** — named "Second brain" (lowercase b), lives on iCloud Drive at `/Users/alexhickey24/Library/Mobile Documents/com~apple~CloudDocs/Obsidian/Second brain`. Sparse contents (mostly just a `Money/` folder and daily briefs) — the vault may never have been opened in the real Obsidian app, it might just be a folder structure. Alex's actual daily routine lives in Google Calendar, not vault notes.
 - **Claude Code** — installed on Alex's Mac, Node.js + Composio + GitHub linked.
-- **Claude in Chrome** — installed, available on Alex's paid plan.
-- **Obsidian vault** — named "Second brain" (lowercase b), lives on iCloud Drive. Full path:
-  `/Users/alexhickey24/Library/Mobile Documents/com~apple~CloudDocs/Obsidian/Second brain`
-  **Actual current contents (verified, not assumed):** only a `Money/` folder exists, containing `assistant-note.md`. There is no `.obsidian` config folder, meaning the vault may never have actually been opened in the real Obsidian app — it exists on disk but might be effectively just a folder structure the chat brain writes into. The `Schedule`, `Learning`, `School`, `Athletics` folders referenced in `VAULT_FOLDERS` in `app.py` **do not exist yet** — they get created on demand the first time something is written into them.
-  Despite the sparse vault contents, real Google Calendar data confirms Alex does have a detailed daily routine (training/school/practice blocks) — that data lives in Google Calendar, not in vault notes.
+- **Claude in Chrome** — installed, on Alex's paid plan; used for driving the Coolify dashboard.
 
-Secrets are always env vars — never hardcoded, never pasted into chat, never entered into any tool or form by Claude on Alex's behalf. When a key needs to go into Coolify, Alex pastes it in himself; Claude sets up placeholder fields (`REPLACE_ME`) and navigates the browser there for him.
+**Secrets policy, non-negotiable:** always env vars, never hardcoded, never pasted into chat, never entered into any web form by Claude on Alex's behalf. When a Coolify field needs a real secret, Claude sets up a placeholder (`REPLACE_ME`) and Alex pastes the real value in himself.
 
 ---
 
-## What's Built So Far
+## What's Built — Jarvis's Current Capabilities
 
-### Phase 1 — `money_clips_agent` (✅ complete, deployed, verified working end-to-end)
+The chat brain lives at `~/second-brain/second-brain-chat/app.py` (+ `templates/`), a Flask app with a dark HUD-style UI, calling Claude with a tool-use loop. Run locally with `python3 app.py` (port 5001 — 5000 is taken by macOS AirPlay). Deployed via Coolify with `gunicorn app:app --bind 0.0.0.0:5000 --timeout 120` (the long timeout is for streaming; **never** change this Start Command to `python3 app.py` — the local dev entrypoint has `debug=True`, which exposes Werkzeug's unauthenticated debugger, an RCE risk if it ever ran on the public server).
 
-`money_clips_agent.py` (repo root) — rotates between 3 content themes by day-of-year (oddly satisfying / did-you-know facts / nature & animal curiosities). Each run: picks a theme, asks Claude for a short-form video concept (topic, hook, 40–60 sec script, 3 caption ideas), saves the result as JSON to the Supabase `Agent Outputs` table for review before feeding into a video tool. Model: `claude-sonnet-5`.
+**The modular tool pattern this app follows for everything:** one entry in the `TOOLS` list (Anthropic tool schema), one plain Python function of the same name, one routing line in `handle_tool_call`. Nothing else needs to change when adding a capability. Preserve this shape.
 
-**Deployed to Coolify** as its own resource, `money-clips-agent`:
-- Build Pack: Nixpacks, Base Directory `/` (repo root)
-- Start Command: `sleep infinity` — this is **not** a web server, so the container just idles; the actual work happens via a Scheduled Task
-- Health check: disabled (nothing to check — no HTTP server)
-- Scheduled Task `run-money-clips-agent`, cron `0 13 * * *` (daily, 13:00 UTC / 9am ET), command: **`/opt/venv/bin/python3 money_clips_agent.py`**
-- Env vars: `CLAUDE_API_KEY`, `SUPABASE_URL`, `SUPABASE_KEY`
+### Core interface
+- **Streaming chat** (`/chat`) — replies stream in live (NDJSON: text deltas + tool-status events like "Checking your calendar…"), instead of one blocking response.
+- **Server-side chat history** — conversation stored in Supabase (`jarvis_chat` rows), so every device sees the same thread. `/api/history`, cleared via a marker row rather than deletion.
+- **Dashboard** (`/dashboard`, backed by `/api/dashboard`) — a second page, same visual language, showing real data: Today's calendar, pending approvals, decision history, drafted-agents/tools awaiting review, recent agent outputs, vault notes, and Jarvis's saved memories.
+- **Markdown rendering** in assistant replies (safe: HTML-escaped first, then formatted).
+- **PWA support** — manifest + generated icons, add-to-home-screen works on iOS/Android.
+- **Login gate — built but DORMANT.** Full flow exists (`/login`, 31-day session, brute-force delay), but only activates once a `JARVIS_PASSWORD` env var is set in Coolify. **It is not set yet — the live site is currently open to anyone with the URL.** This is the single most important thing for Alex to do next.
 
-**Gotcha worth remembering:** Nixpacks builds a Python venv at `/opt/venv` and installs `requirements.txt` into it, but does **not** set a container-wide `ENV PATH` pointing at it — that activation only happens inside the shell wrapper around the app's own Start Command. Coolify Scheduled Tasks run via `docker exec`, a separate process that does **not** inherit that activation. A bare `python3` in a Scheduled Task command will hit the system Python (no packages installed) and fail with `ModuleNotFoundError`. Fix: always call `/opt/venv/bin/python3` explicitly in Scheduled Task commands for Nixpacks Python apps.
+### Memory
+- `remember(fact)` — saves a fact to Supabase (`jarvis_memory` rows); every memory is injected into the system prompt on every request, so it's available in brand-new conversations and shared between local and deployed instances.
+- `forget_memory(matching_text)` — soft-deletes (retags to `jarvis_memory_forgotten`, never destroyed) when exactly one memory matches; otherwise lists matches so Alex/Jarvis can be more specific.
 
-Verified: manually triggered the scheduled task, it ran in ~11s, and a real generated concept ("Your Body Is Glowing Right Now") was confirmed saved in Supabase `Agent Outputs`.
+### Real-world connectors
+- **Google Calendar, read-only** — list/search events, list calendars, get current time. Deliberately whitelisted to exactly those Composio tool slugs; no create/update/delete slugs are reachable at all, by design (matches the autonomy model — write access needs the approval gate, see below).
+- Vault tools (`list_vault_notes`, `read_vault_note`, `write_vault_note`) — read/write actual Obsidian notes.
 
-### Phase 2 — Chat brain app (✅ complete, deployed live, actively extended this session)
+### The approval layer (the mechanism, not just one feature)
+A generic pattern: a tool call queues a `jarvis_pending_action` row in Supabase with status `pending`; the dashboard shows it under "Awaiting Your Approval" with Approve/Deny buttons; **only** a POST to `/api/approve` executes anything, and it is the *only* code path that does. This is reused by:
+- `propose_calendar_event` → on approval, creates the event via Composio (`create_meeting_room: False`).
+- `propose_file_cleanup` (see File cleaning below) → on approval, moves files to Trash.
+- `adopt_tool` (see Self-expansion below) → on approval, pushes a branch to GitHub.
 
-`second-brain-chat/app.py` + `templates/index.html` — a Flask web app with a dark HUD-style chat UI. Calls the Claude API with a tool-use loop, model `claude-sonnet-5`. This is "Jarvis" itself — the persistent interface, as opposed to one-shot background agents like `money_clips_agent`.
+Decided actions (approved/denied/failed) show up in a "Decision History" log on the dashboard — the gate's paper trail.
 
-- **Locally:** runs on `localhost:5001` (port 5000 taken by macOS AirPlay). Run with `python3 app.py`.
-- **Deployed:** `http://h72tei3gy97z4wlqyqpvuylg.178.156.209.40.sslip.io`. Coolify config:
-  - Build Pack: Nixpacks, Base Directory: `/second-brain-chat`
-  - Start Command: `gunicorn app:app --bind 0.0.0.0:5000` (hardcoded port — Coolify's Start Command field blocks bare `$`, so `$PORT` doesn't work there; port must just match "Ports Exposes")
-  - Ports Exposes: `5000`
-  - Persistent volume `vault-data` mounted at `/data/vault` (added this session — see Phase 4)
-  - Env vars (Runtime access unless noted): `CLAUDE_API_KEY`, `SUPABASE_URL`, `SUPABASE_KEY`, `VAULT_PATH=/data/vault`, `VAULT_GIT_TOKEN` (Runtime only, not Buildtime), `COMPOSIO_API_KEY` (Runtime only, not Buildtime)
+### Self-expansion (the flagship capability)
+Two things Jarvis can draft for itself, both gated by a two-step human review:
+- `create_new_agent(name, purpose)` — drafts a full standalone background-agent script (like `money_clips_agent.py`) to `agents/<name>.py`. Never runs it.
+- `create_new_tool(name, purpose)` — drafts a proposal (schema + function + routing line) for a new **tool for Jarvis itself** to `proposed_tools/<name>.py`. Never wires it in.
+- `adopt_tool(name)` — the next step for a tool proposal: queues it for dashboard approval; **on Approve**, it's committed (via an isolated git worktree, so Alex's checkout is never touched) to a branch `jarvis/tool-<name>` and pushed to GitHub — **not** to `main`, **not** deployed. A human must review and merge the branch.
+- **Extension loader** in `app.py` — once merged into `main` and the app restarts, any `second-brain-chat/extensions/*.py` file (containing a `TOOL_SCHEMA` dict + matching function) loads automatically as a live tool, with `claude`, `supabase`, `VAULT_PATH` injected as shared context. A broken extension logs a warning and is skipped rather than crashing the app.
 
-**Security note (unchanged, still important):** `app.py`'s local dev entrypoint runs `app.run(..., debug=True)`. Flask's `debug=True` exposes the unauthenticated Werkzeug debugger — if that path ever ran on a public server, a triggered error would let anyone execute arbitrary Python on the box. The Coolify deployment uses `gunicorn` specifically to avoid ever hitting that `if __name__ == "__main__":` block. **Do not change the Coolify Start Command to `python3 app.py`.**
+So the full loop is: **draft → adopt (approval #1) → branch on GitHub → human merge (approval #2) → restart → live.** Two human gates. Verified end-to-end overnight (drafted `get_word_count`, adopted it, branch confirmed on GitHub, simulated the merge locally to prove the loader works, then removed the simulation — the real merge decision is still Alex's). **`jarvis/tool-get_word_count` is the actual artifact sitting on GitHub right now, needing Alex's review.**
 
-The modular tool pattern in `app.py` (add one entry to `TOOLS`, one function, one line in `handle_tool_call`) is deliberately preserved — see Working Style below.
+### Decision council
+`deliberate(idea, context)` — three independent Claude calls: an **Advocate** builds the strongest honest case *for* an idea, a **Critic** independently builds the strongest case *against* it (neither sees the other's argument), and a **Judge** weighs both and rules WORTH IT / NOT WORTH IT / WORTH IT IF, with reasoning. Pure analysis, takes no action. Verified the Judge incorporates Jarvis's saved memories about Alex when relevant.
 
-### Phase 3 — Self-extending agent tool (✅ complete, tested locally; one draft awaiting review)
+### File cleaning (Mac-only, Trash-only, approval-gated)
+- `scan_downloads(days_old, min_size_mb)` — read-only scan of `~/Downloads` listing cleanup candidates. Only works when Jarvis is running locally on Alex's Mac (the deployed server has no access to his files).
+- `propose_file_cleanup(filenames)` — queues chosen files for dashboard approval. **On Approve, files move to the macOS Trash via Finder/AppleScript (Put Back works) — never permanent deletion.** Paths are confined strictly to `~/Downloads` with no traversal.
 
-`create_new_agent(name, purpose)` tool in `app.py`. Drafts a complete Python script following the `money_clips_agent.py` pattern and saves it to `agents/<name>.py`. **Hardcoded safety boundary:** only ever writes the file to disk — never runs, imports, or deploys it. The system prompt and the tool's own return message both always tell Alex it needs review.
+### Background agents (separate from the chat brain)
+- **`money_clips_agent.py`** (repo root) — rotates through 3 content themes daily, asks Claude for a short-form video concept, saves it to Supabase. Deployed on its own Coolify resource with `sleep infinity` as the start command (not a web server) plus a Scheduled Task running it daily at 9am ET. **Gotcha:** Nixpacks' venv at `/opt/venv` isn't on PATH for Scheduled Tasks (which run via `docker exec`, bypassing the shell wrapper that activates it) — always call `/opt/venv/bin/python3` explicitly.
+- **`morning_brief_agent.py`** (repo root) — runs locally via launchd daily at 7:00 AM (`com.secondbrain.morningbrief`), gathers today's calendar + last-24h agent outputs + pending approvals, asks Claude to write it up, saves as `Schedule/brief-<date>.md` in the vault. Falls back to `~/second-brain/briefs/` with a warning if it can't write into the iCloud vault path (Full Disk Access issue — see Gotchas).
+- **`agents/stock_watch_agent.py`** — a draft created early on to test `create_new_agent`. Still untracked, still needs Alex's review before it's ever run or committed. Its "market data" is really just Claude's training-knowledge recall, not a live feed — flag that if it's ever approved.
 
-`agents/stock_watch_agent.py` — a test draft (checks stock news for a hardcoded ticker watchlist using Claude's own knowledge, no live market-data API). Compiles cleanly, 139 lines. **Still untracked in git, still not reviewed or approved by Alex.** One caveat surfaced during review: since it has no real market-data feed, its "news" is really just Claude's training-knowledge recall — treat it as a rough digest, not a live data source, if it's ever approved and run.
+### Vault persistence (server can see the real vault)
+Because the deployed chat brain runs in a container with no access to Alex's Mac, a sync pipeline bridges the gap:
+1. The vault folder is its own git repo, pushed to the private `second-brain-vault` GitHub repo.
+2. `~/second-brain/scripts/vault_sync.sh`, run by launchd (`com.secondbrain.vaultsync`) every 10 minutes, commits and pushes any vault changes.
+3. On the server: a persistent Docker volume `vault-data` mounted at `/data/vault`, plus a Coolify Scheduled Task that pulls `second-brain-vault` into it every 10 minutes.
+4. `VAULT_PATH=/data/vault` env var on the deployed app — the vault tools then transparently work against real, synced content.
 
-**Known gap, not yet fixed:** drafted agents written via the *deployed* chat brain land in that container's ephemeral filesystem and vanish on redeploy — same root cause the vault had (see Phase 4) and same fix pattern would apply (a persistent volume), just not yet done for `agents/`.
+**This broke and was fixed overnight, twice-stacked root cause:** (1) macOS Full Disk Access for `/usr/bin/git` had regressed — a launchd-spawned process doesn't inherit Terminal's FDA grant, and the checkbox needed re-enabling in System Settings; (2) even with FDA restored, commits failed with `fatal: could not open '.git/COMMIT_EDITMSG': Resource deadlock avoided` — the `.git` directory living *inside* an iCloud-synced folder hit iCloud's file locking. Fixed by moving git's internal directory out of iCloud entirely: `git init --separate-git-dir=$HOME/.second-brain-vault.git` run inside the vault, leaving only a one-line `.git` pointer file in the synced folder. **Lesson: never keep a live `.git` directory inside an iCloud Drive folder.** Verified working via two automatic `launchctl kickstart` runs that committed and pushed on their own.
 
-### Phase 4 — Obsidian vault persistence (✅ complete, full round trip verified)
-
-This was the big fix this session — previously the deployed chat brain had no access to the real vault at all.
-
-**Three vault tools already existed in `app.py`** (`list_vault_notes`, `read_vault_note`, `write_vault_note`) and worked locally, but had nothing to read on the server. The fix was a full sync pipeline, not a code change:
-
-1. **New private GitHub repo `second-brain-vault`** (`alex100hickey-eng/second-brain-vault`) — a git mirror of the vault contents.
-2. **The vault folder itself is now a git repo** (`git init` was run directly inside `.../Obsidian/Second brain/`), with a `.gitignore` for `.DS_Store` and Obsidian workspace/cache files, pushed to `second-brain-vault`.
-3. **`~/second-brain/scripts/vault_sync.sh`** — a small script that `git add -A && git commit && git push`es any vault changes. Runs via a **launchd** job, `~/Library/LaunchAgents/com.secondbrain.vaultsync.plist`, every 10 minutes (`StartInterval: 600`).
-4. **Coolify side:** a persistent Docker volume `vault-data` mounted at `/data/vault` on the `second-brain-chat` resource, plus a Scheduled Task `sync-vault` (every 10 min) that clones-or-pulls `second-brain-vault` into that volume using a `VAULT_GIT_TOKEN` credential embedded in the clone URL.
-5. **`VAULT_PATH` env var** on the deployed chat brain points at `/data/vault` — so the existing vault tools now transparently work against the real (synced) content with zero code changes.
-
-**Verified end-to-end:** wrote a test line into the real vault on the Mac, confirmed the launchd job picked it up and pushed it, confirmed Coolify's scheduled pull grabbed it, and confirmed the deployed chat brain's `/chat` endpoint reported the updated content back correctly.
-
-**Gotchas worth remembering:**
-- **macOS Full Disk Access:** the launchd job initially failed with `fatal: Unable to read current working directory: Operation not permitted` when touching the iCloud Drive path — even though the exact same script ran fine when invoked from an interactive terminal. This is macOS TCC sandboxing: a `launchd`-spawned process doesn't inherit Terminal's Full Disk Access grant. Granting FDA to `/bin/bash` did **not** fix it — the actual syscall was coming from `git`, not `bash`. Fix: System Settings → Privacy & Security → Full Disk Access → add `/usr/bin/git` specifically (not bash, not Terminal).
-- **`VAULT_GIT_TOKEN` needs a classic GitHub PAT, not fine-grained.** A fine-grained token with `Contents: Read-only` on just that repo authenticated fine but returned `403: Write access to repository not granted` on clone — a known-confusing GitHub error message for fine-grained tokens with insufficient scope (it says "write" even for read operations). Switched to a classic PAT with the `repo` scope and it worked immediately.
-- **Secret in Docker build args:** the first pass accidentally left `VAULT_GIT_TOKEN` (and initially `COMPOSIO_API_KEY`) checked "Available at Buildtime" in Coolify, which Docker flagged with a `SecretsUsedInArgOrEnv` warning (risk of the secret being baked into an image layer). Neither needs buildtime access — both are only used by scheduled tasks / the running app. Fixed by unchecking Buildtime, leaving Runtime only, and redeploying.
-
-### Phase 5 — Read-only Google Calendar access via Composio (✅ complete, verified on deployed instance)
-
-The first "real-world action" capability — previously the chat brain could only touch the vault and Supabase.
-
-**Scope, deliberately limited per Alex's own stated autonomy model:** read-only only (list/search events, list calendars, get current time). No `create_event`/`update_event`/`delete_event` tools were added, and none are reachable even if Claude wanted to call them — this was enforced by explicitly whitelisting exactly 4 tool slugs (`GOOGLECALENDAR_EVENTS_LIST`, `GOOGLECALENDAR_FIND_EVENT`, `GOOGLECALENDAR_LIST_CALENDARS`, `GOOGLECALENDAR_GET_CURRENT_DATE_TIME`) when fetching schemas from Composio, rather than pulling in the whole `googlecalendar` toolkit. This matches the stated rule that consequential/external actions need a confirmation gate that doesn't exist yet.
-
-**Implementation in `app.py`:**
-- `composio = Composio(provider=AnthropicProvider(), api_key=COMPOSIO_API_KEY)`
-- `CALENDAR_TOOLS = composio.tools.get(user_id="alex", tools=CALENDAR_TOOL_SLUGS)` fetched once at import time, merged into `TOOLS`
-- In `handle_tool_call`: any tool name in `CALENDAR_TOOL_SLUGS` gets routed to `composio.tools.execute(slug=..., arguments=..., user_id="alex", dangerously_skip_version_check=True)`
-- `requirements.txt` pins `composio==0.18.0` and `composio-anthropic==0.18.0` exactly (see gotcha below)
-
-**One-time OAuth setup:** `~/second-brain/scripts/connect_google_calendar.py` — creates a Composio-managed auth config for the `googlecalendar` toolkit (no Google Cloud project needed; Composio provides shared OAuth credentials for common toolkits) and generates a connection link. Alex opened the link and authorized his Google account once; the connection is now `ACTIVE` and tied to `user_id="alex"` under Alex's Composio project — it persists regardless of which app or session calls it, as long as `COMPOSIO_API_KEY` matches the same project.
-
-**Gotchas worth remembering:**
-- **Package name confusion:** `pip install composio-core` pulls in a legacy/abandoned package line (last version `0.3.11`, homepage `SamparkAI/composio_sdk`) that is incompatible with the current `composio-anthropic` package. The real, current core package is just `composio` (currently `0.18.0`, homepage `ComposioHQ/composio`). Don't install `composio-core` — install `composio` and pin the version to match `composio-anthropic`.
-- **`ConnectedAccounts.initiate()` is deprecated and was fully retired 2026-07-03** for Composio-managed OAuth configs. Docs found via web search still describe it; the actual current SDK method is `composio.connected_accounts.link(user_id, auth_config_id)`, which returns a `ConnectionRequest` with `.redirect_url` and a `.wait_for_connection(timeout=...)` method. When web-search results and the installed package disagree, trust the installed package's source (`pip download --no-deps` + read the `.py` files directly) — it's ground truth.
-- **`composio.tools.execute()` requires `dangerously_skip_version_check=True`** when called manually outside of the higher-level `provider.handle_tool_calls()` path, or it raises `ToolVersionRequiredError`. This flag is exactly what Composio's own internal agentic-execution wrapper sets by default, so it's not actually risky for this use case (always uses the latest tool version, no manual pinning needed).
-- **Auth config permission scoping:** the first Composio API key Alex generated was scoped read-only on `auth_configs`, which let it *list* configs but not *create* one (403 `APIKey_InsufficientPermissions`). Needed a key with full/write access.
-
-Verified: asked the deployed chat brain "What do I have on my calendar today?" and got back a real, detailed, correctly-dated list of the day's actual Google Calendar events.
+### Internal Supabase row types
+All piggyback on the one `Agent Outputs` table, filtered out of every agent-output-facing view (the `INTERNAL_AGENT_NAMES` set in `app.py`): `jarvis_memory`, `jarvis_memory_forgotten`, `jarvis_pending_action`, `jarvis_chat`, `jarvis_chat_clear`.
 
 ---
 
-## Coolify Browser-Automation Notes (for whoever drives the dashboard next)
+## Known Gotchas Worth Remembering
 
-Screenshots returned by the browser tool render at roughly 2x the CSS logical pixel scale used for click/type coordinates. Visually estimating a click position from a screenshot image is unreliable and was the source of most of the friction this session (repeated failed clicks on the "New Environment Variable" dialog). The reliable pattern:
-1. Use `javascript_tool` (read-only) to call `getBoundingClientRect()` on the target element and get real CSS-pixel coordinates.
-2. Click at that CSS-pixel coordinate with the `computer` tool.
-3. Verify the click landed (e.g. check `document.activeElement`) before typing.
-
-Also: Coolify's "New Environment Variable" modal is finicky with rapid automated clicks — when in doubt, the **"Developer view"** toggle (a plain multi-line `KEY=value` textarea) is a far more reliable way to bulk-inspect or edit env vars than the per-field modal. Caution: it renders **all existing secret values in plaintext**, and editing it by moving the cursor with `Cmd+End` doesn't reliably jump to the end in this environment — always re-measure cursor/selection position before typing into it, or a paste can land mid-line and corrupt an adjacent variable's value. If that happens and nothing has been saved yet, a page reload discards the unsaved draft safely.
+- **Coolify deploy queue can silently jam.** A webhook-triggered deploy sometimes sits "Queued" forever and never auto-starts; pushes alone don't guarantee a deploy happens. A stuck deploy can also block later ones in the queue (a 3+ hour zombie `money-clips-agent` build once blocked the chat-brain deploy entirely — cancel it from its own Deployment page). **Reliable trigger when this happens:** on the app's Deployments page, JS-click the hidden `wire:click="deploy"` div (visible text "Redeploy" inside the Actions dropdown) rather than fighting the dropdown UI, then click "Force Start" on the resulting deployment page. The Actions dropdown itself is flaky under browser automation — sometimes a real mouse click works, sometimes only `element.focus()` + spacebar, sometimes neither; verify with a screenshot before trusting a click landed.
+- **Coolify browser automation in general:** screenshots render at ~2x the CSS pixel scale used for click coordinates — use `getBoundingClientRect()` via JS to get real click targets rather than eyeballing a screenshot.
+- **Coolify's "New Environment Variable" modal** is finicky with automated clicks; the "Developer view" toggle (plain multi-line `KEY=value` textarea) is far more reliable for bulk env var edits — but it renders all existing secrets in plaintext, so treat it carefully, and re-measure cursor position before typing (a misplaced paste can corrupt an adjacent variable).
+- **Composio SDK:** install `composio` (current, `ComposioHQ/composio`), never `composio-core` (abandoned legacy package, incompatible). `composio.tools.execute()` needs `dangerously_skip_version_check=True` outside the higher-level provider path. `ConnectedAccounts.initiate()` is deprecated — use `composio.connected_accounts.link(user_id, auth_config_id)`. When Composio's docs and the installed package disagree, trust the installed package's source.
+- **Nixpacks + Coolify Scheduled Tasks:** the venv at `/opt/venv` isn't on PATH for `docker exec`-based Scheduled Tasks — always call `/opt/venv/bin/python3` explicitly.
+- **A past version of this very handoff doc was wrong** — it once claimed a phase was "code complete" when the code didn't exist at all. Treat status claims (including in this document) as something to verify against live repo/Coolify/Supabase state, not as ground truth, especially after time has passed.
 
 ---
 
-## What Needs to Be Accomplished (Roadmap)
+## Immediate Next Steps, in priority order
 
-**Overnight session additions (2026-07-19, all deployed):** decision council (`deliberate`), markdown chat + approvals badge, `forget_memory` (soft-delete) + Memories widget + Decision History, morning brief agent (launchd 7am → vault `Schedule/brief-*.md`), approval-gated Downloads cleanup (Mac-only, Trash-only via Finder), and the full self-expansion pipeline (`create_new_tool` → `adopt_tool` → dashboard Approve → git branch `jarvis/tool-<name>` pushed for review → merged `extensions/*.py` load live at restart). Review branch `jarvis/tool-get_word_count` is on GitHub awaiting Alex's review as the pipeline's first artifact. Deploy trick that actually works when the queue jams: JS-click the hidden `wire:click="deploy"` div, then Force Start.
-
-1. **Activate the password gate** — Alex sets `JARVIS_PASSWORD` in Coolify env vars (Runtime only), redeploy, log in from his devices. The app is on the open internet until this happens.
-2. **HTTPS** — deliberately not attempted overnight (Let's Encrypt on sslip.io domains is rate-limit-prone and a failed cert could break the site unattended). Consider a real domain at the same time.
-3. **Gmail (read-only) via Composio** — needs Alex present for the OAuth click. Then morning-brief type features.
-4. **More approval-gated writes** — send email / edit events through the existing approval queue pattern.
-5. **More specialist agents** (Schedule, School, Athletics, Money) — Alex has deprioritized these vs. core Jarvis capability.
-6. **Server-side persistence for `agents/`+`proposed_tools/` drafts on the deployed instance** — same volume-mount pattern as the vault; currently drafts made via the live chat vanish on redeploy (local drafts are fine).
-7. `agents/stock_watch_agent.py` still needs Alex's review/approval before it's committed or ever run.
-8. ~~Dashboard~~ / ~~approval layer~~ / ~~vault persistence~~ / ~~money_clips deploy~~ — ✅ all done.
+1. **Set `JARVIS_PASSWORD`** in Coolify env vars (Runtime only) for `second-brain-chat`, then redeploy. The login gate is fully built and waiting — until this env var exists, the live site is open to anyone with the URL.
+2. **Review branch `jarvis/tool-get_word_count`** on GitHub — merge it (completing the first real self-expansion cycle) or discard it.
+3. **HTTPS** — deliberately not attempted autonomously (Let's Encrypt on sslip.io domains is rate-limit-prone; a failed cert mid-deploy could break the live site unattended). Worth pairing with acquiring a real domain.
+4. **Gmail (read-only) via Composio** — needs Alex present for the OAuth consent click, same pattern as Calendar.
+5. **Server-side persistence for `agents/` and `proposed_tools/` drafts** — currently, anything drafted via the *live* (deployed) chat brain lands in that container's ephemeral filesystem and vanishes on redeploy. Local drafts are fine. Same fix pattern as the vault (a persistent volume) hasn't been applied here yet.
+6. **Calendar edit/delete via the approval queue** — extend the same propose→approve pattern already built for event creation to event editing/deletion.
+7. **More approval-gated writes generally** (send email, etc.) once Gmail exists.
+8. Decide what to do with `agents/stock_watch_agent.py` (review, discard, or approve to run).
+9. Specialist agents (Schedule/School/Athletics) and additional money agents — explicitly low priority per Alex.
 
 ---
 
 ## Working Style / Principles to Keep
 
-- **Modular tool design:** adding a new capability to the chat brain should mean adding one function to `TOOLS` + the function itself + one line in `handle_tool_call` — nothing else in `app.py` should need to change. The Composio calendar integration followed this same shape (one block of setup + one routing branch), even though the underlying mechanism (dynamically-fetched external tool schemas) is different from the hand-written local tools.
-- **One capability at a time, local-first then deploy.** Don't jump ahead to deploying multiple untested things at once.
-- **Read-only/reversible now, write/consequential only behind a confirmation gate later.** This is why calendar access is list/search-only, and why `create_new_agent` only ever drafts, never executes. Don't add write-capable tools (send email, create calendar event, spend money, sign up for accounts) without first building the approval layer, or without explicitly confirming scope with Alex first.
-- **Secrets always via env vars** — never hardcoded, never pasted into chat, never entered into any web form by the assistant on Alex's behalf. Alex looks up values himself (`echo $VAR_NAME`) and pastes them in himself, whether that's into a shell config file or a Coolify field Claude has navigated the browser to.
-- **Narrate what's being done and why, step by step** — Alex wants to understand the system as it's built, not have it appear as a black box.
-- **Verify claims against actual files/git/service state before acting on them.** This handoff doc has drifted from reality before (an earlier version claimed a phase was "code complete" when it didn't exist at all; the vault folder list in this doc is now based on an actual `ls`, not assumption). Treat any status claim — including everything in this document — as something to double-check against the live repo/Coolify/Supabase/Composio state before relying on it, especially after time has passed.
-- **When official docs and the installed package disagree, read the package source.** This mattered concretely this session with Composio's SDK — a deprecated method was still documented online.
+- **Modular tool design** — one `TOOLS` entry + one function + one `handle_tool_call` line per capability. Don't refactor this shape away.
+- **One capability at a time, local-first then deploy.** Test locally before deploying; don't stack untested changes.
+- **Read-only/reversible now, write/consequential only behind the approval gate.** Never add a write-capable tool without routing it through the existing pending-action pattern, or without explicitly confirming scope with Alex first.
+- **Secrets always via env vars** — never hardcoded, never pasted into chat, never entered into a form by Claude on Alex's behalf.
+- **Narrate what's being done and why, step by step.** Alex wants to understand the system as it's built, not receive a black box.
+- **Verify claims against actual files/git/service state before acting on them** — this doc, and the system generally, can drift from reality.
+- **When official docs and an installed package disagree, read the package source** — it's ground truth.
