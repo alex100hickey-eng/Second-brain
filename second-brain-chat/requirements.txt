@@ -2,3 +2,5 @@ flask
 anthropic
 supabase
 gunicorn
+composio==0.18.0
+composio-anthropic==0.18.0

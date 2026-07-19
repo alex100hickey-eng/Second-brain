@@ -16,11 +16,16 @@ import json
 from flask import Flask, request, jsonify, render_template
 from anthropic import Anthropic
 from supabase import create_client
+from composio import Composio
+from composio_anthropic import AnthropicProvider
 
 # ---- CONFIG — reads from environment variables ----
 CLAUDE_API_KEY = os.environ["CLAUDE_API_KEY"]
 SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_KEY = os.environ["SUPABASE_KEY"]
+COMPOSIO_API_KEY = os.environ["COMPOSIO_API_KEY"]
+# Composio's user identifier for connected accounts — this app is single-user (Alex only).
+COMPOSIO_USER_ID = "alex"
 # Path to the Obsidian vault. Defaults to the standard iCloud location on Alex's Mac —
 # override with a VAULT_PATH env var if this ever runs somewhere else (e.g. once
 # deployed to the server with a git-synced copy of the vault).
@@ -39,6 +44,23 @@ AGENTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "age
 app = Flask(__name__)
 claude = Anthropic(api_key=CLAUDE_API_KEY)
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+composio = Composio(provider=AnthropicProvider(), api_key=COMPOSIO_API_KEY)
+
+# Read-only Google Calendar tools only — explicitly whitelisted by slug so write/mutation
+# tools in the googlecalendar toolkit (create/update/delete event) can never reach Claude.
+# Alex's stated rule: consequential/external actions need a confirmation gate, which
+# doesn't exist yet — so nothing that changes his calendar is exposed here.
+CALENDAR_TOOL_SLUGS = [
+    "GOOGLECALENDAR_EVENTS_LIST",
+    "GOOGLECALENDAR_FIND_EVENT",
+    "GOOGLECALENDAR_LIST_CALENDARS",
+    "GOOGLECALENDAR_GET_CURRENT_DATE_TIME",
+]
+try:
+    CALENDAR_TOOLS = composio.tools.get(user_id=COMPOSIO_USER_ID, tools=CALENDAR_TOOL_SLUGS)
+except Exception as e:
+    print(f"Warning: couldn't fetch Composio calendar tools at startup: {e}")
+    CALENDAR_TOOLS = []
 
 SYSTEM_PROMPT = """You are Alex's personal assistant — the brain of his "second brain" system.
 You're direct, helpful, and a little sharp/witty like a good assistant should be — think
@@ -54,7 +76,13 @@ unless asked for detail.
 You can also draft brand-new agent scripts with create_new_agent when Alex asks for a new
 agent. This tool only ever writes a Python file to disk for him to review — it never runs,
 imports, executes, or deploys the script it creates, and no other tool you have does either.
-Always tell him the new agent needs his review before he runs or deploys it himself."""
+Always tell him the new agent needs his review before he runs or deploys it himself.
+
+You have read-only access to Alex's Google Calendar (GOOGLECALENDAR_* tools) — you can list
+and search his events, and check calendars/current time, to answer questions about his
+schedule. You cannot create, edit, or delete calendar events — that capability doesn't exist
+yet. If he asks you to schedule or change something on his calendar, tell him that's not
+something you can do yet rather than attempting it."""
 
 
 # ============================================================
@@ -170,7 +198,7 @@ TOOLS = [
             "required": ["name", "purpose"],
         },
     },
-]
+] + CALENDAR_TOOLS
 
 
 def get_recent_agent_outputs(agent_name: str = None, limit: int = 5) -> str:
@@ -325,6 +353,16 @@ def handle_tool_call(tool_name: str, tool_input: dict) -> str:
             name=tool_input["name"],
             purpose=tool_input["purpose"],
         )
+    if tool_name in CALENDAR_TOOL_SLUGS:
+        result = composio.tools.execute(
+            slug=tool_name,
+            arguments=tool_input,
+            user_id=COMPOSIO_USER_ID,
+            # Always use the latest tool version — matches what Composio's own
+            # agentic execution path does internally for provider tool calls.
+            dangerously_skip_version_check=True,
+        )
+        return json.dumps(result, default=str)
     return f"Unknown tool: {tool_name}"
 
 
