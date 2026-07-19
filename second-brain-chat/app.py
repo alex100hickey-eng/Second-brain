@@ -152,10 +152,12 @@ imports, executes, or deploys the script it creates, and no other tool you have 
 Always tell him the new agent needs his review before he runs or deploys it himself.
 
 You can also propose brand-new tools/capabilities for YOURSELF with create_new_tool, when Alex
-asks you to gain some new ability. This writes a proposal file (schema + function + routing
-line) to proposed_tools/ — it does NOT add the tool to your own live toolset, does not edit
-app.py, and does not restart or redeploy anything. You cannot self-wire new capabilities into
-yourself; a human has to review and merge the proposal. Always tell him that.
+asks you to gain some new ability. This writes a proposal file to proposed_tools/ — it does
+NOT make the tool live. The full self-expansion pipeline is: create_new_tool drafts it →
+adopt_tool queues it for Alex's dashboard approval → his approval pushes it to a review
+branch on GitHub → a human merges it → it loads as a live extension on the next restart.
+Every new capability passes through Alex's hands twice before you can use it. Explain this
+honestly whenever it comes up; never imply a drafted tool is usable.
 
 You have read-only access to Alex's Google Calendar (GOOGLECALENDAR_* tools) — you can list
 and search his events, and check calendars/current time, to answer questions about his
@@ -361,6 +363,26 @@ TOOLS = [
         },
     },
     {
+        "name": "adopt_tool",
+        "description": (
+            "Start the adoption process for a tool proposal you previously drafted with create_new_tool. "
+            "Queues an approval action; when Alex approves it on the dashboard, the proposal is committed "
+            "to a git branch (jarvis/tool-<name>) and pushed to GitHub for review. It does NOT merge to "
+            "main, does NOT deploy, and the tool does NOT become live — a human must review and merge the "
+            "branch, then the extension loads on the next restart. Only works on Alex's Mac."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Name of an existing proposal in proposed_tools/, e.g. 'get_word_count'.",
+                }
+            },
+            "required": ["name"],
+        },
+    },
+    {
         "name": "forget_memory",
         "description": (
             "Remove a fact from your saved memories, when Alex asks you to forget something or a memory "
@@ -454,6 +476,34 @@ TOOLS = [
         },
     },
 ] + CALENDAR_TOOLS
+
+# ---- EXTENSIONS: tools Jarvis drafted that Alex adopted (see adopt_tool). ----
+# Each extensions/*.py defines TOOL_SCHEMA plus a function named after it.
+# Files only land here through the propose → approve → branch → merge pipeline,
+# so by the time they load they've been human-reviewed. A broken extension is
+# skipped with a warning rather than taking the app down.
+EXTENSIONS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "extensions")
+EXTENSION_FUNCS = {}
+if os.path.isdir(EXTENSIONS_DIR):
+    import importlib.util
+
+    for _fn in sorted(os.listdir(EXTENSIONS_DIR)):
+        if not _fn.endswith(".py"):
+            continue
+        try:
+            _spec = importlib.util.spec_from_file_location(f"ext_{_fn[:-3]}", os.path.join(EXTENSIONS_DIR, _fn))
+            _mod = importlib.util.module_from_spec(_spec)
+            # Shared context the proposal format is told it can assume exists.
+            _mod.__dict__.update(
+                {"claude": claude, "supabase": supabase, "VAULT_PATH": VAULT_PATH, "os": os, "json": json}
+            )
+            _spec.loader.exec_module(_mod)
+            _schema = _mod.TOOL_SCHEMA
+            EXTENSION_FUNCS[_schema["name"]] = getattr(_mod, _schema["name"])
+            TOOLS.append(_schema)
+            print(f"Loaded extension tool: {_schema['name']}")
+        except Exception as e:
+            print(f"Warning: failed to load extension {_fn}: {e}")
 
 
 def get_recent_agent_outputs(agent_name: str = None, limit: int = 5) -> str:
@@ -688,6 +738,69 @@ def _execute_clean_files(action: dict) -> dict:
     return {"ok": False, "error": f"Couldn't move any files (this only works on Alex's Mac): {', '.join(failed)}"}
 
 
+REPO_ROOT = os.path.realpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+
+
+def adopt_tool(name: str) -> str:
+    if not re.fullmatch(r"[a-z][a-z0-9_]*", name or ""):
+        return f"Invalid tool name '{name}'."
+    src = os.path.join(PROPOSED_TOOLS_DIR, f"{name}.py")
+    if not os.path.isfile(src):
+        return f"No proposal found at proposed_tools/{name}.py — draft it with create_new_tool first."
+    if not os.path.isdir(os.path.join(REPO_ROOT, ".git")):
+        return "No git repo here — tool adoption only works when I'm running on Alex's Mac."
+
+    action = {
+        "action": "adopt_tool",
+        "name": name,
+        "display": f"[Mac only] Adopt tool '{name}': commit proposal to branch jarvis/tool-{name} on GitHub for review (no merge, no deploy)",
+        "status": "pending",
+    }
+    supabase.table("Agent Outputs").insert(
+        {"agent_name": "jarvis_pending_action", "output_text": json.dumps(action)}
+    ).execute()
+    return (
+        f"Queued for approval: adopting '{name}'. If Alex approves, the proposal goes to a review branch "
+        "on GitHub — it still won't be live until a human merges it and the app restarts."
+    )
+
+
+def _execute_adopt_tool(action: dict) -> dict:
+    import tempfile, shutil
+
+    name = action["name"]
+    src = os.path.join(PROPOSED_TOOLS_DIR, f"{name}.py")
+    if not os.path.isfile(src):
+        return {"ok": False, "error": f"Proposal proposed_tools/{name}.py no longer exists."}
+    if not os.path.isdir(os.path.join(REPO_ROOT, ".git")):
+        return {"ok": False, "error": "No git repo (this only works on Alex's Mac)."}
+
+    branch = f"jarvis/tool-{name}"
+    wt = tempfile.mkdtemp(prefix="jarvis-adopt-")
+    try:
+        def git(*args, cwd=REPO_ROOT):
+            r = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, timeout=60)
+            if r.returncode != 0:
+                raise RuntimeError(f"git {' '.join(args)}: {r.stderr.strip()[:300]}")
+            return r.stdout
+
+        # Work in an isolated worktree so Alex's checkout is never disturbed.
+        git("worktree", "add", "-B", branch, wt, "main")
+        dest_dir = os.path.join(wt, "second-brain-chat", "extensions")
+        os.makedirs(dest_dir, exist_ok=True)
+        shutil.copyfile(src, os.path.join(dest_dir, f"{name}.py"))
+        git("add", "-A", cwd=wt)
+        git("commit", "-m", f"Jarvis proposes extension tool: {name}\n\nDrafted via create_new_tool, adopted via approval queue.", cwd=wt)
+        git("push", "-u", "origin", branch, cwd=wt)
+        return {"ok": True, "detail": f"Pushed branch {branch}"}
+    except (RuntimeError, subprocess.TimeoutExpired) as e:
+        return {"ok": False, "error": str(e)[:400]}
+    finally:
+        subprocess.run(["git", "worktree", "remove", "--force", wt], cwd=REPO_ROOT,
+                       capture_output=True, timeout=30)
+        shutil.rmtree(wt, ignore_errors=True)
+
+
 def get_pending_actions() -> list:
     result = (
         supabase.table("Agent Outputs")
@@ -755,6 +868,14 @@ def resolve_pending_action(row_id: int, decision: str) -> dict:
         return {"ok": True, "status": "denied"}
 
     # Approved — execute by action type. This is the ONLY place queued actions run.
+    if action.get("action") == "adopt_tool":
+        result = _execute_adopt_tool(action)
+        action["status"] = "approved" if result["ok"] else "failed"
+        if not result["ok"]:
+            action["error"] = result["error"]
+        supabase.table("Agent Outputs").update({"output_text": json.dumps(action)}).eq("id", row_id).execute()
+        return {"ok": result["ok"], "status": action["status"], **({} if result["ok"] else {"error": result["error"]})}
+
     if action.get("action") == "clean_files":
         result = _execute_clean_files(action)
         if not result["ok"]:
@@ -1077,6 +1198,13 @@ def handle_tool_call(tool_name: str, tool_input: dict) -> str:
             idea=tool_input["idea"],
             context=tool_input.get("context", ""),
         )
+    if tool_name == "adopt_tool":
+        return adopt_tool(tool_input["name"])
+    if tool_name in EXTENSION_FUNCS:
+        try:
+            return str(EXTENSION_FUNCS[tool_name](**tool_input))
+        except Exception as e:
+            return f"Extension tool '{tool_name}' failed: {e}"
     if tool_name in CALENDAR_TOOL_SLUGS:
         result = composio.tools.execute(
             slug=tool_name,
@@ -1109,6 +1237,7 @@ TOOL_STATUS_LABELS = {
     "write_vault_note": "Writing to your vault…",
     "create_new_agent": "Drafting a new agent…",
     "create_new_tool": "Drafting a new tool proposal…",
+    "adopt_tool": "Queuing tool adoption for your approval…",
     "GOOGLECALENDAR_EVENTS_LIST": "Checking your calendar…",
     "GOOGLECALENDAR_FIND_EVENT": "Searching your calendar…",
     "GOOGLECALENDAR_LIST_CALENDARS": "Checking your calendars…",
