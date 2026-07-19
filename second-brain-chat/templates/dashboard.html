@@ -329,6 +329,22 @@
       </div>
     `);
 
+    const tasks = data.background_tasks || [];
+    const statusGlyph = { queued: '⏳ queued', running: '⚡ running', done: '✓ done', failed: '⚠ failed' };
+    sections.push(`
+      <div class="widget">
+        <h2>Background Tasks <span class="count">${tasks.length}</span></h2>
+        ${tasks.length
+          ? tasks.map(t => `
+            <div class="item">
+              <div class="item-title">${esc(t.description)}</div>
+              <div class="item-meta">${statusGlyph[t.status] || esc(t.status)} — ${timeAgo(t.created_at)}</div>
+              ${t.result ? `<div class="item-body">${esc(t.result)}</div>` : ''}
+            </div>`).join('')
+          : '<div class="empty">No delegated tasks yet — ask Jarvis to work on something in the background.</div>'}
+      </div>
+    `);
+
     const memories = data.memories || [];
     sections.push(`
       <div class="widget">

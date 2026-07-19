@@ -296,6 +296,29 @@
     cursor: default;
   }
 
+  /* Voice: mic button in the input row + spoken-replies toggle in the nav */
+  .mic-btn {
+    background: transparent;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: 16px;
+    line-height: 1;
+    cursor: pointer;
+    color: var(--text-dim);
+  }
+
+  .mic-btn.listening {
+    border-color: #ff5c5c;
+    color: #ff5c5c;
+    animation: micPulse 1.2s ease-in-out infinite;
+  }
+
+  @keyframes micPulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(255, 92, 92, 0.5); }
+    50% { box-shadow: 0 0 0 6px rgba(255, 92, 92, 0); }
+  }
+
   @media (max-width: 480px) {
     .bubble { max-width: 88%; }
     header { padding: 14px 16px; }
@@ -322,6 +345,7 @@
     <nav>
       <a href="/" class="active">Chat</a>
       <a href="/dashboard">Dashboard<span class="nav-badge" id="pending-badge" style="display:none"></span></a>
+      <a href="#" id="voice-toggle" title="Toggle spoken replies">Voice</a>
       <a href="#" id="clear-chat" title="Start a fresh conversation">Clear</a>
     </nav>
   </div>
@@ -337,6 +361,7 @@
 <form id="chat-form">
   <div class="input-row">
     <input type="text" id="message-input" placeholder="Ask or tell me something..." autocomplete="off" />
+    <button type="button" class="mic-btn" id="mic-btn" title="Hold a conversation — tap and speak">&#127908;</button>
     <button type="submit" id="send-btn">Send</button>
   </div>
 </form>
@@ -522,6 +547,7 @@
 
       removeThinking();
       removeToolStatus();
+      if (voiceOn && fullText) speak(fullText);
     } catch (err) {
       removeThinking();
       removeToolStatus();
@@ -533,6 +559,99 @@
       input.focus();
     }
   });
+
+  // ===== VOICE =====
+  // Mic input via the browser's SpeechRecognition (needs HTTPS or localhost —
+  // the button hides itself anywhere the browser won't allow it), and spoken
+  // replies via speechSynthesis. Using the mic turns spoken replies on;
+  // the "Voice" nav toggle turns them on/off for typed messages too.
+  const micBtn = document.getElementById('mic-btn');
+  const voiceToggle = document.getElementById('voice-toggle');
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const canListen = !!SR && (window.isSecureContext || location.hostname === 'localhost');
+  const canSpeak = 'speechSynthesis' in window;
+  let voiceOn = canSpeak && localStorage.getItem('jarvis-voice') === 'on';
+  let listening = false;
+
+  function updateVoiceUI() {
+    voiceToggle.classList.toggle('active', voiceOn);
+    micBtn.classList.toggle('listening', listening);
+    micBtn.title = listening ? 'Listening — tap to stop' : 'Hold a conversation — tap and speak';
+  }
+
+  // Turn markdown into something worth hearing: drop code blocks, keep link
+  // text, strip formatting characters.
+  function speechText(md) {
+    return md
+      .replace(/```[\s\S]*?```/g, ' (code shown on screen) ')
+      .replace(/`([^`\n]+)`/g, '$1')
+      .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+      .replace(/^#{1,3} /gm, '')
+      .replace(/\*\*?|__?/g, '')
+      .replace(/^\s*[-*] /gm, '')
+      .trim();
+  }
+
+  function speak(md) {
+    if (!canSpeak) return;
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(speechText(md));
+    u.rate = 1.05;
+    const voice = speechSynthesis.getVoices().find(v => v.lang.startsWith('en') && v.localService)
+      || speechSynthesis.getVoices().find(v => v.lang.startsWith('en'));
+    if (voice) u.voice = voice;
+    speechSynthesis.speak(u);
+  }
+
+  if (canSpeak) speechSynthesis.getVoices(); // warm the voice list (loads async)
+
+  voiceToggle.addEventListener('click', (e) => {
+    e.preventDefault();
+    if (!canSpeak) return;
+    voiceOn = !voiceOn;
+    localStorage.setItem('jarvis-voice', voiceOn ? 'on' : 'off');
+    if (!voiceOn) speechSynthesis.cancel();
+    updateVoiceUI();
+  });
+
+  if (!canListen) {
+    micBtn.style.display = 'none'; // no mic without HTTPS/localhost — Wispr Flow still types anywhere
+  } else {
+    const rec = new SR();
+    rec.lang = 'en-US';
+    rec.interimResults = true;
+    let finalHeard = '';
+
+    rec.onresult = (e) => {
+      let text = '';
+      for (const r of e.results) text += r[0].transcript;
+      input.value = text;
+      finalHeard = Array.from(e.results).some(r => r.isFinal) ? text : finalHeard;
+    };
+    rec.onend = () => {
+      listening = false;
+      updateVoiceUI();
+      if (finalHeard.trim()) {
+        // Spoken input gets a spoken reply — that's the whole point.
+        if (canSpeak && !voiceOn) { voiceOn = true; localStorage.setItem('jarvis-voice', 'on'); }
+        finalHeard = '';
+        updateVoiceUI();
+        form.requestSubmit();
+      }
+    };
+    rec.onerror = () => { listening = false; updateVoiceUI(); };
+
+    micBtn.addEventListener('click', () => {
+      if (listening) { rec.stop(); return; }
+      speechSynthesis.cancel();
+      finalHeard = '';
+      listening = true;
+      updateVoiceUI();
+      rec.start();
+    });
+  }
+  if (!canSpeak) voiceToggle.style.display = 'none';
+  updateVoiceUI();
 
   document.getElementById('clear-chat').addEventListener('click', async (e) => {
     e.preventDefault();

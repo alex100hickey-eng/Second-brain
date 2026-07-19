@@ -15,6 +15,7 @@ import json
 import time
 import hmac
 import hashlib
+import threading
 import subprocess
 import secrets as pysecrets
 from datetime import datetime, timedelta
@@ -124,6 +125,23 @@ except Exception as e:
     print(f"Warning: couldn't fetch Composio calendar tools at startup: {e}")
     CALENDAR_TOOLS = []
 
+# Read-only Gmail tools only — same whitelist-by-slug pattern as the calendar.
+# Nothing that sends, drafts, deletes, labels, forwards, or touches settings is
+# reachable; reading mail is read-only, so it runs without the approval gate.
+GMAIL_TOOL_SLUGS = [
+    "GMAIL_FETCH_EMAILS",
+    "GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID",
+    "GMAIL_FETCH_MESSAGE_BY_THREAD_ID",
+    "GMAIL_LIST_THREADS",
+    "GMAIL_LIST_LABELS",
+    "GMAIL_GET_PROFILE",
+]
+try:
+    GMAIL_TOOLS = composio.tools.get(user_id=COMPOSIO_USER_ID, tools=GMAIL_TOOL_SLUGS)
+except Exception as e:
+    print(f"Warning: couldn't fetch Composio gmail tools at startup: {e}")
+    GMAIL_TOOLS = []
+
 # Rows in "Agent Outputs" with these agent_name values are internal storage for the
 # chat brain itself (memories, pending approvals, chat history) — not real agent
 # outputs. Keep them out of anything that lists agent activity.
@@ -133,6 +151,7 @@ INTERNAL_AGENT_NAMES = {
     "jarvis_pending_action",
     "jarvis_chat",
     "jarvis_chat_clear",
+    "jarvis_task",  # delegated background tasks (see delegate_task)
 }
 
 SYSTEM_PROMPT = """You are Alex's personal assistant — the brain of his "second brain" system.
@@ -163,6 +182,12 @@ You have read-only access to Alex's Google Calendar (GOOGLECALENDAR_* tools) —
 and search his events, and check calendars/current time, to answer questions about his
 schedule.
 
+You have read-only access to Alex's Gmail (GMAIL_* tools) — you can search his email
+(GMAIL_FETCH_EMAILS supports Gmail query syntax like from:, subject:, newer_than:2d),
+read specific messages and threads, and list labels. You cannot send, draft, delete, or
+modify anything in his mailbox — reading only. Use it to answer questions about his email,
+find things he's looking for, or summarize what needs attention.
+
 You have a persistent memory. Facts you've saved appear below under "Saved memories" — treat
 them as things you know about Alex. When he tells you something worth keeping long-term (a
 preference, a goal, a recurring commitment, a fact about his life), or asks you to remember
@@ -183,7 +208,15 @@ he's approved it.
 You can help clean Alex's Downloads folder (only when running on his Mac): scan_downloads
 lists junk candidates (read-only), and propose_file_cleanup queues chosen files for the same
 dashboard approval. On approval files move to the macOS Trash — you never permanently delete
-anything, and nothing moves without his explicit Approve click."""
+anything, and nothing moves without his explicit Approve click.
+
+You can work on things in the background with delegate_task: hand off a multi-step job
+(research, digging through notes/agents/calendar, drafting a summary) and it runs on its own
+while the conversation continues — the result lands in this chat thread and on the dashboard
+when it finishes. Use it when Alex says "get back to me", "work on this in the background",
+or the job would take a while. Background runs follow the exact same rules you do — anything
+consequential still goes through the approval queue. Use check_delegated_tasks to see how
+past tasks went. Don't delegate trivial one-tool lookups — just do those directly."""
 
 
 # ============================================================
@@ -452,6 +485,39 @@ TOOLS = [
         },
     },
     {
+        "name": "delegate_task",
+        "description": (
+            "Hand off a multi-step job to run in the background while the conversation continues. "
+            "The task runs on its own with the same tools and the same approval rules (consequential "
+            "actions still queue for Alex's approval), and its result appears in the chat thread and "
+            "on the dashboard when done. Use for research, multi-source digests, or anything Alex says "
+            "to 'work on and get back to me'. Not for trivial single lookups — do those directly."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string",
+                    "description": "A complete, self-contained description of the job — what to do, what a good result looks like, any constraints Alex gave. The background run sees ONLY this text, not the conversation.",
+                }
+            },
+            "required": ["description"],
+        },
+    },
+    {
+        "name": "check_delegated_tasks",
+        "description": "See recent background tasks and their status (queued / running / done / failed) and results. Use when Alex asks how a delegated task is going or what it found.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer",
+                    "description": "How many recent tasks to show. Default 5.",
+                }
+            },
+        },
+    },
+    {
         "name": "create_new_agent",
         "description": (
             "Draft a brand-new standalone agent script (following the money_clips_agent.py pattern: "
@@ -475,7 +541,7 @@ TOOLS = [
             "required": ["name", "purpose"],
         },
     },
-] + CALENDAR_TOOLS
+] + CALENDAR_TOOLS + GMAIL_TOOLS
 
 # ---- EXTENSIONS: tools Jarvis drafted that Alex adopted (see adopt_tool). ----
 # Each extensions/*.py defines TOOL_SCHEMA plus a function named after it.
@@ -1146,6 +1212,209 @@ def deliberate(idea: str, context: str = "") -> str:
     )
 
 
+# ============================================================
+# BACKGROUND TASKS — delegate_task queues a job as a jarvis_task row;
+# a single daemon worker thread claims queued tasks (atomically, via a
+# compare-and-swap on the row's JSON) and runs each through the same
+# tool-use loop the chat uses. Same tools, same rules: consequential
+# actions still land in the approval queue. Results are written back to
+# the row, surfaced on the dashboard, and dropped into the chat thread.
+# ============================================================
+
+# Tools a background run may NOT use: no recursive delegation (a task that
+# delegates tasks could multiply forever), and no reason to self-inspect.
+BACKGROUND_EXCLUDED_TOOLS = {"delegate_task", "check_delegated_tasks"}
+
+BACKGROUND_TASK_PROMPT_SUFFIX = """
+
+--- BACKGROUND MODE ---
+You are running as a delegated background task, not in a live conversation. Alex is not
+watching and cannot answer questions — work with what the task description gives you.
+Do the job fully, then write your final answer as a clear, self-contained report (it will
+be posted into the chat thread for Alex to read later). All the usual rules apply:
+consequential actions still go through the approval queue, and you must say so in your
+report if you queued any."""
+
+
+def delegate_task(description: str) -> str:
+    if not description or not description.strip():
+        return "Task description is empty — nothing queued."
+    task = {
+        "description": description.strip(),
+        "status": "queued",
+        "result": None,
+        "queued_at": datetime.now(ZoneInfo("America/New_York")).isoformat(),
+    }
+    supabase.table("Agent Outputs").insert(
+        {"agent_name": "jarvis_task", "output_text": json.dumps(task)}
+    ).execute()
+    return (
+        "Background task queued — it's running on its own now. The result will appear in "
+        "this chat and on the dashboard when it finishes."
+    )
+
+
+def check_delegated_tasks(limit: int = 5) -> str:
+    result = (
+        supabase.table("Agent Outputs")
+        .select("*")
+        .eq("agent_name", "jarvis_task")
+        .order("id", desc=True)
+        .limit(limit)
+        .execute()
+    )
+    rows = result.data or []
+    if not rows:
+        return "No background tasks have been delegated yet."
+    lines = []
+    for row in rows:
+        try:
+            task = json.loads(row["output_text"])
+        except (json.JSONDecodeError, TypeError):
+            continue
+        line = f"[{task.get('status', '?')}] {task.get('description', '')[:120]}"
+        if task.get("status") == "done" and task.get("result"):
+            line += f"\n  Result: {task['result'][:500]}"
+        if task.get("status") == "failed" and task.get("error"):
+            line += f"\n  Error: {task['error'][:200]}"
+        lines.append(line)
+    return "\n\n".join(lines) if lines else "No readable background tasks found."
+
+
+def get_background_tasks(limit: int = 6) -> list:
+    """Recent background tasks for the dashboard, newest first."""
+    result = (
+        supabase.table("Agent Outputs")
+        .select("*")
+        .eq("agent_name", "jarvis_task")
+        .order("id", desc=True)
+        .limit(limit)
+        .execute()
+    )
+    tasks = []
+    for row in result.data or []:
+        try:
+            task = json.loads(row["output_text"])
+        except (json.JSONDecodeError, TypeError):
+            continue
+        tasks.append(
+            {
+                "description": task.get("description", "")[:160],
+                "status": task.get("status", "?"),
+                "result": (task.get("result") or "")[:400],
+                "created_at": row.get("created_at"),
+            }
+        )
+    return tasks
+
+
+def _run_background_task(row_id: int, task: dict) -> None:
+    """Run one claimed task through a non-streaming Claude tool-use loop."""
+    tools = [t for t in TOOLS if t.get("name") not in BACKGROUND_EXCLUDED_TOOLS]
+    messages = [{"role": "user", "content": f"Background task:\n{task['description']}"}]
+    system_prompt = build_system_prompt() + BACKGROUND_TASK_PROMPT_SUFFIX
+
+    final_text = ""
+    try:
+        for _ in range(20):  # hard cap on tool rounds so a task can't loop forever
+            response = claude.messages.create(
+                model="claude-sonnet-5",
+                max_tokens=2000,
+                system=system_prompt,
+                tools=tools,
+                messages=messages,
+            )
+            final_text = "".join(b.text for b in response.content if b.type == "text").strip()
+            if response.stop_reason != "tool_use":
+                break
+            messages.append({"role": "assistant", "content": response.content})
+            tool_results = []
+            for block in response.content:
+                if block.type == "tool_use":
+                    result = handle_tool_call(block.name, block.input)
+                    tool_results.append(
+                        {"type": "tool_result", "tool_use_id": block.id, "content": result}
+                    )
+            messages.append({"role": "user", "content": tool_results})
+        else:
+            raise RuntimeError("Task hit the 20-round tool limit without finishing.")
+
+        task["status"] = "done"
+        task["result"] = final_text or "(task produced no text output)"
+    except Exception as e:
+        task["status"] = "failed"
+        task["error"] = str(e)[:500]
+
+    task["finished_at"] = datetime.now(ZoneInfo("America/New_York")).isoformat()
+    supabase.table("Agent Outputs").update({"output_text": json.dumps(task)}).eq(
+        "id", row_id
+    ).execute()
+
+    # Surface the outcome in the chat thread so Alex sees it next time he looks.
+    if task["status"] == "done":
+        chat_note = f"**Background task finished** — {task['description'][:120]}\n\n{task['result']}"
+    else:
+        chat_note = (
+            f"**Background task failed** — {task['description'][:120]}\n\n"
+            f"Error: {task['error']}"
+        )
+    try:
+        save_chat_message("assistant", chat_note)
+    except Exception as e:
+        print(f"Warning: couldn't post task result to chat: {e}")
+
+
+def _claim_task(row_id: int, original_text: str, task: dict) -> bool:
+    """Atomically flip a queued task to running. The .eq on the exact original
+    JSON makes this a compare-and-swap: if another worker (or another process)
+    claimed it first, the row text changed and this update matches nothing."""
+    task["status"] = "running"
+    task["started_at"] = datetime.now(ZoneInfo("America/New_York")).isoformat()
+    result = (
+        supabase.table("Agent Outputs")
+        .update({"output_text": json.dumps(task)})
+        .eq("id", row_id)
+        .eq("agent_name", "jarvis_task")
+        .eq("output_text", original_text)
+        .execute()
+    )
+    return bool(result.data)
+
+
+def _task_worker() -> None:
+    while True:
+        try:
+            rows = (
+                supabase.table("Agent Outputs")
+                .select("*")
+                .eq("agent_name", "jarvis_task")
+                .order("id", desc=False)
+                .limit(20)
+                .execute()
+                .data
+                or []
+            )
+            for row in rows:
+                try:
+                    task = json.loads(row["output_text"])
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                if task.get("status") != "queued":
+                    continue
+                if _claim_task(row["id"], row["output_text"], task):
+                    print(f"Background task {row['id']} started: {task['description'][:80]}")
+                    _run_background_task(row["id"], task)
+                    print(f"Background task {row['id']} finished: {task['status']}")
+        except Exception as e:
+            print(f"Warning: task worker cycle failed: {e}")
+        time.sleep(8)
+
+
+def start_task_worker() -> None:
+    t = threading.Thread(target=_task_worker, daemon=True, name="jarvis-task-worker")
+    t.start()
+
+
 def handle_tool_call(tool_name: str, tool_input: dict) -> str:
     if tool_name == "get_recent_agent_outputs":
         return get_recent_agent_outputs(
@@ -1200,12 +1469,16 @@ def handle_tool_call(tool_name: str, tool_input: dict) -> str:
         )
     if tool_name == "adopt_tool":
         return adopt_tool(tool_input["name"])
+    if tool_name == "delegate_task":
+        return delegate_task(tool_input["description"])
+    if tool_name == "check_delegated_tasks":
+        return check_delegated_tasks(limit=tool_input.get("limit", 5))
     if tool_name in EXTENSION_FUNCS:
         try:
             return str(EXTENSION_FUNCS[tool_name](**tool_input))
         except Exception as e:
             return f"Extension tool '{tool_name}' failed: {e}"
-    if tool_name in CALENDAR_TOOL_SLUGS:
+    if tool_name in CALENDAR_TOOL_SLUGS or tool_name in GMAIL_TOOL_SLUGS:
         result = composio.tools.execute(
             slug=tool_name,
             arguments=tool_input,
@@ -1238,10 +1511,18 @@ TOOL_STATUS_LABELS = {
     "create_new_agent": "Drafting a new agent…",
     "create_new_tool": "Drafting a new tool proposal…",
     "adopt_tool": "Queuing tool adoption for your approval…",
+    "delegate_task": "Handing that off to run in the background…",
+    "check_delegated_tasks": "Checking on background tasks…",
     "GOOGLECALENDAR_EVENTS_LIST": "Checking your calendar…",
     "GOOGLECALENDAR_FIND_EVENT": "Searching your calendar…",
     "GOOGLECALENDAR_LIST_CALENDARS": "Checking your calendars…",
     "GOOGLECALENDAR_GET_CURRENT_DATE_TIME": "Checking the time…",
+    "GMAIL_FETCH_EMAILS": "Searching your email…",
+    "GMAIL_FETCH_MESSAGE_BY_MESSAGE_ID": "Reading that email…",
+    "GMAIL_FETCH_MESSAGE_BY_THREAD_ID": "Reading that thread…",
+    "GMAIL_LIST_THREADS": "Looking through your inbox…",
+    "GMAIL_LIST_LABELS": "Checking your mail labels…",
+    "GMAIL_GET_PROFILE": "Checking your mail account…",
 }
 
 
@@ -1381,7 +1662,14 @@ def get_dashboard_data() -> dict:
         "pending_actions": get_pending_actions(),
         "decided_actions": get_decided_actions(),
         "memories": load_memories(),
+        "background_tasks": get_background_tasks(),
     }
+
+
+# Start the background-task worker. Under gunicorn (one worker process) this is
+# one thread; under the local dev server the reloader may import the module twice,
+# but the compare-and-swap claim in _claim_task makes duplicate workers harmless.
+start_task_worker()
 
 
 # ============================================================
