@@ -345,6 +345,23 @@
       </div>
     `);
 
+    const managed = data.managed_tasks || [];
+    const managedGlyph = { queued: '⏳ queued', running: '⚡ running', done: '✓ done', failed: '⚠ failed', killed: '⛔ killed', waiting_approval: '✋ needs your tap' };
+    sections.push(`
+      <div class="widget">
+        <h2>Managed Tasks <span class="count">${managed.length}</span></h2>
+        ${managed.length
+          ? managed.map(t => `
+            <div class="item">
+              <div class="item-title">#${t.id} ${esc(t.goal)}</div>
+              <div class="item-meta">${managedGlyph[t.status] || esc(t.status)} — ${t.steps} step${t.steps === 1 ? '' : 's'}${t.blocked ? `, ${t.blocked} blocked` : ''} — ${esc(t.runtime)} — ${timeAgo(t.created_at)}</div>
+              ${t.guardrails && t.guardrails.length ? `<div class="item-meta">Guardrails: ${t.guardrails.map(esc).join(', ')}</div>` : ''}
+              ${t.result ? `<div class="item-body">${esc(t.result)}</div>` : ''}
+            </div>`).join('')
+          : '<div class="empty">No managed tasks yet — give Jarvis a goal with guardrails.</div>'}
+      </div>
+    `);
+
     const memories = data.memories || [];
     sections.push(`
       <div class="widget">

@@ -152,6 +152,10 @@ INTERNAL_AGENT_NAMES = {
     "jarvis_chat",
     "jarvis_chat_clear",
     "jarvis_task",  # delegated background tasks (see delegate_task)
+    "jarvis_managed_task",  # Task Manager subsystem runs (see task_manager.py)
+    "jarvis_taskman_step",  # per-step audit trail for managed tasks
+    "jarvis_taskman_kill",  # kill-switch rows for managed tasks
+    "jarvis_file_undo",  # reversible-file-op undo trail for managed tasks
 }
 
 SYSTEM_PROMPT = """You are Alex's personal assistant — the brain of his "second brain" system.
@@ -216,7 +220,17 @@ while the conversation continues — the result lands in this chat thread and on
 when it finishes. Use it when Alex says "get back to me", "work on this in the background",
 or the job would take a while. Background runs follow the exact same rules you do — anything
 consequential still goes through the approval queue. Use check_delegated_tasks to see how
-past tasks went. Don't delegate trivial one-tool lookups — just do those directly."""
+past tasks went. Don't delegate trivial one-tool lookups — just do those directly.
+
+For bigger autonomous goals there's the Task Manager (run_managed_task): a Prompter extracts
+the goal and candidate guardrails, the Guardrail Council (same Advocate/Critic/Judge pattern
+as deliberate) rules on each guardrail, and a worker then pursues the goal step by step within
+those guardrails, logging every action. Choose it over delegate_task when a goal needs
+guardrails, many steps, or an audit trail (e.g. anything involving money, lots of files, or
+open-ended work). Hard limits always hold regardless of council verdicts: spending money,
+creating accounts, sending anything externally, and file deletion pause for Alex's dashboard
+approval. check_managed_tasks shows status; stop_managed_task is the kill switch. Tasks can
+target runtime 'local' (his Mac — required for anything touching his files) or 'server'."""
 
 
 # ============================================================
@@ -942,6 +956,14 @@ def resolve_pending_action(row_id: int, decision: str) -> dict:
         supabase.table("Agent Outputs").update({"output_text": json.dumps(action)}).eq("id", row_id).execute()
         return {"ok": result["ok"], "status": action["status"], **({} if result["ok"] else {"error": result["error"]})}
 
+    if action.get("action") in ("promote_tool", "shell_command"):
+        # Nothing executes HERE: the paused Task Manager run is polling this
+        # row and performs the hot-load / shell run itself, on whichever
+        # machine (Mac or server) the task actually lives on.
+        action["status"] = "approved"
+        supabase.table("Agent Outputs").update({"output_text": json.dumps(action)}).eq("id", row_id).execute()
+        return {"ok": True, "status": "approved"}
+
     if action.get("action") == "clean_files":
         result = _execute_clean_files(action)
         if not result["ok"]:
@@ -1223,7 +1245,15 @@ def deliberate(idea: str, context: str = "") -> str:
 
 # Tools a background run may NOT use: no recursive delegation (a task that
 # delegates tasks could multiply forever), and no reason to self-inspect.
-BACKGROUND_EXCLUDED_TOOLS = {"delegate_task", "check_delegated_tasks"}
+BACKGROUND_EXCLUDED_TOOLS = {
+    "delegate_task",
+    "check_delegated_tasks",
+    # A background task spawning managed tasks (or vice versa) could multiply
+    # runaway work — autonomous runs never get the task-spawning tools.
+    "run_managed_task",
+    "check_managed_tasks",
+    "stop_managed_task",
+}
 
 BACKGROUND_TASK_PROMPT_SUFFIX = """
 
@@ -1473,6 +1503,17 @@ def handle_tool_call(tool_name: str, tool_input: dict) -> str:
         return delegate_task(tool_input["description"])
     if tool_name == "check_delegated_tasks":
         return check_delegated_tasks(limit=tool_input.get("limit", 5))
+    if tool_name == "run_managed_task":
+        return task_manager.run_managed_task(
+            request=tool_input["request"],
+            runtime=tool_input.get("runtime"),
+        )
+    if tool_name == "check_managed_tasks":
+        return task_manager.check_managed_tasks(limit=tool_input.get("limit", 5))
+    if tool_name == "stop_managed_task":
+        return task_manager.stop_managed_task(task_id=tool_input.get("task_id"))
+    if tool_name == "undo_file_operations":
+        return task_manager.undo_file_operations(task_row_id=tool_input["task_row_id"])
     if tool_name in EXTENSION_FUNCS:
         try:
             return str(EXTENSION_FUNCS[tool_name](**tool_input))
@@ -1513,6 +1554,10 @@ TOOL_STATUS_LABELS = {
     "adopt_tool": "Queuing tool adoption for your approval…",
     "delegate_task": "Handing that off to run in the background…",
     "check_delegated_tasks": "Checking on background tasks…",
+    "run_managed_task": "Convening the council and planning the task…",
+    "check_managed_tasks": "Checking on managed tasks…",
+    "stop_managed_task": "Hitting the kill switch…",
+    "undo_file_operations": "Rolling those file changes back…",
     "GOOGLECALENDAR_EVENTS_LIST": "Checking your calendar…",
     "GOOGLECALENDAR_FIND_EVENT": "Searching your calendar…",
     "GOOGLECALENDAR_LIST_CALENDARS": "Checking your calendars…",
@@ -1663,6 +1708,7 @@ def get_dashboard_data() -> dict:
         "decided_actions": get_decided_actions(),
         "memories": load_memories(),
         "background_tasks": get_background_tasks(),
+        "managed_tasks": task_manager.get_managed_tasks(),
     }
 
 
@@ -1670,6 +1716,23 @@ def get_dashboard_data() -> dict:
 # one thread; under the local dev server the reloader may import the module twice,
 # but the compare-and-swap claim in _claim_task makes duplicate workers harmless.
 start_task_worker()
+
+# Task Manager subsystem (Prompter + Guardrail Council + managed worker) —
+# lives in task_manager.py, shares this app's client objects and tool loop.
+# Managed runs get the same tool exclusions as background runs (no spawning
+# more autonomous work from inside autonomous work).
+import task_manager  # noqa: E402 — needs the objects above to exist first
+
+task_manager.init(
+    claude_client=claude,
+    supabase_client=supabase,
+    tool_dispatcher=handle_tool_call,
+    system_prompt_builder=build_system_prompt,
+    tools_list=TOOLS,
+    excluded_tools=BACKGROUND_EXCLUDED_TOOLS,
+)
+TOOLS.extend(task_manager.TOOL_SCHEMAS)
+task_manager.start_managed_worker(post_to_chat=save_chat_message)
 
 
 # ============================================================
