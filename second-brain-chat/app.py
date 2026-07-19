@@ -126,7 +126,13 @@ except Exception as e:
 # Rows in "Agent Outputs" with these agent_name values are internal storage for the
 # chat brain itself (memories, pending approvals, chat history) — not real agent
 # outputs. Keep them out of anything that lists agent activity.
-INTERNAL_AGENT_NAMES = {"jarvis_memory", "jarvis_pending_action", "jarvis_chat", "jarvis_chat_clear"}
+INTERNAL_AGENT_NAMES = {
+    "jarvis_memory",
+    "jarvis_memory_forgotten",  # soft-deleted memories — kept, never shown
+    "jarvis_pending_action",
+    "jarvis_chat",
+    "jarvis_chat_clear",
+}
 
 SYSTEM_PROMPT = """You are Alex's personal assistant — the brain of his "second brain" system.
 You're direct, helpful, and a little sharp/witty like a good assistant should be — think
@@ -159,6 +165,10 @@ them as things you know about Alex. When he tells you something worth keeping lo
 preference, a goal, a recurring commitment, a fact about his life), or asks you to remember
 something, save it with the remember tool. Keep each memory to one short, self-contained
 sentence. Don't save throwaway context or things already in your memories.
+
+When Alex wants a decision analyzed or asks whether something is worth doing, you can run it
+through his decision council with the deliberate tool — an Advocate argues for it, a Critic
+independently argues against it, and a Judge rules. Present the full deliberation to him.
 
 You can propose adding events to Alex's calendar with propose_calendar_event, but you cannot
 create them directly. A proposal goes into a pending-approval queue that Alex reviews on his
@@ -303,6 +313,49 @@ TOOLS = [
         },
     },
     {
+        "name": "forget_memory",
+        "description": (
+            "Remove a fact from your saved memories, when Alex asks you to forget something or a memory "
+            "is wrong/outdated. Give a distinctive fragment of the memory's text; it only forgets when "
+            "exactly one memory matches (otherwise it lists the matches so you can be more specific). "
+            "Forgotten memories are archived, not destroyed."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "matching_text": {
+                    "type": "string",
+                    "description": "A distinctive fragment of the memory to forget, e.g. 'football practice'.",
+                }
+            },
+            "required": ["matching_text"],
+        },
+    },
+    {
+        "name": "deliberate",
+        "description": (
+            "Run an idea or decision through Alex's three-agent decision council: an Advocate builds "
+            "the strongest case FOR, a Critic independently builds the strongest case AGAINST (neither "
+            "sees the other's arguments), and a Judge weighs both and delivers a verdict with reasoning. "
+            "Use when Alex asks whether something is worth doing, wants a decision analyzed, or says to "
+            "'run it through the council'. Purely analytical — produces a recommendation, takes no action."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "idea": {
+                    "type": "string",
+                    "description": "The idea or decision to deliberate, stated plainly, e.g. 'buying a $900 camera for the YouTube channel'.",
+                },
+                "context": {
+                    "type": "string",
+                    "description": "Optional relevant context Alex gave (budget, goals, constraints).",
+                },
+            },
+            "required": ["idea"],
+        },
+    },
+    {
         "name": "create_new_tool",
         "description": (
             "Draft a proposal for a brand-new tool/capability for THIS chat brain itself (Jarvis) — "
@@ -438,6 +491,27 @@ def load_memories() -> list:
     return [row["output_text"] for row in (result.data or [])]
 
 
+def forget_memory(matching_text: str) -> str:
+    result = (
+        supabase.table("Agent Outputs")
+        .select("id, output_text")
+        .eq("agent_name", "jarvis_memory")
+        .ilike("output_text", f"%{matching_text}%")
+        .execute()
+    )
+    matches = result.data or []
+    if not matches:
+        return f"No saved memory matches '{matching_text}'."
+    if len(matches) > 1:
+        listing = "\n".join(f"- {m['output_text']}" for m in matches)
+        return f"{len(matches)} memories match — be more specific:\n{listing}"
+    # Soft-delete: retag the row so it disappears from memory loading but is recoverable.
+    supabase.table("Agent Outputs").update({"agent_name": "jarvis_memory_forgotten"}).eq(
+        "id", matches[0]["id"]
+    ).execute()
+    return f"Forgotten: {matches[0]['output_text']}"
+
+
 def build_system_prompt() -> str:
     memories = load_memories()
     if not memories:
@@ -503,6 +577,35 @@ def get_pending_actions() -> list:
         if action.get("status") == "pending":
             pending.append({"id": row["id"], "display": action.get("display", "(unknown action)"), "action": action.get("action")})
     return pending
+
+
+def get_decided_actions(limit: int = 8) -> list:
+    """Recently approved/denied/failed actions, newest first — the gate's paper trail."""
+    result = (
+        supabase.table("Agent Outputs")
+        .select("*")
+        .eq("agent_name", "jarvis_pending_action")
+        .order("id", desc=True)
+        .limit(40)
+        .execute()
+    )
+    decided = []
+    for row in result.data or []:
+        try:
+            action = json.loads(row["output_text"])
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if action.get("status") in ("approved", "denied", "failed"):
+            decided.append(
+                {
+                    "display": action.get("display", "(unknown action)"),
+                    "status": action["status"],
+                    "created_at": row.get("created_at"),
+                }
+            )
+        if len(decided) >= limit:
+            break
+    return decided
 
 
 def resolve_pending_action(row_id: int, decision: str) -> dict:
@@ -733,6 +836,54 @@ def create_new_tool(name: str, purpose: str) -> str:
     )
 
 
+# ============================================================
+# DECISION COUNCIL — three independent Claude calls: Advocate (pro),
+# Critic (con, blind to the Advocate), and a Judge who weighs both.
+# Analysis only; never takes an action.
+# ============================================================
+
+def _council_call(system: str, user: str) -> str:
+    msg = claude.messages.create(
+        model="claude-sonnet-5",
+        max_tokens=1200,
+        system=system,
+        messages=[{"role": "user", "content": user}],
+    )
+    return next((b.text for b in msg.content if b.type == "text"), "").strip()
+
+
+def deliberate(idea: str, context: str = "") -> str:
+    subject = f"Idea: {idea}" + (f"\nContext: {context}" if context else "")
+
+    pro = _council_call(
+        "You are the Advocate on a personal decision council. Build the strongest honest case FOR "
+        "the idea — concrete benefits, upside scenarios, what's lost by not doing it. Be persuasive "
+        "but truthful; don't invent facts. 4-8 tight bullet points.",
+        subject,
+    )
+    con = _council_call(
+        "You are the Critic on a personal decision council. Build the strongest honest case AGAINST "
+        "the idea — costs, risks, failure modes, better alternatives, hidden downsides. Be sharp but "
+        "truthful; don't invent facts. 4-8 tight bullet points.",
+        subject,
+    )
+    verdict = _council_call(
+        "You are the Judge on a personal decision council. You receive an idea plus an Advocate's case "
+        "for it and a Critic's case against it, prepared independently. Weigh both fairly, note which "
+        "arguments are strongest and which are weak, and rule: WORTH IT, NOT WORTH IT, or WORTH IT IF "
+        "(with the condition). Give your ruling first, then 3-6 sentences of reasoning, then one line "
+        "on what evidence would change your mind.",
+        f"{subject}\n\n--- ADVOCATE'S CASE ---\n{pro}\n\n--- CRITIC'S CASE ---\n{con}",
+    )
+
+    return (
+        f"## Council deliberation: {idea}\n\n"
+        f"### Advocate — the case for\n{pro}\n\n"
+        f"### Critic — the case against\n{con}\n\n"
+        f"### Judge's ruling\n{verdict}"
+    )
+
+
 def handle_tool_call(tool_name: str, tool_input: dict) -> str:
     if tool_name == "get_recent_agent_outputs":
         return get_recent_agent_outputs(
@@ -743,6 +894,8 @@ def handle_tool_call(tool_name: str, tool_input: dict) -> str:
         return log_note(tool_input["text"])
     if tool_name == "remember":
         return remember(tool_input["fact"])
+    if tool_name == "forget_memory":
+        return forget_memory(tool_input["matching_text"])
     if tool_name == "propose_calendar_event":
         return propose_calendar_event(
             title=tool_input["title"],
@@ -771,6 +924,11 @@ def handle_tool_call(tool_name: str, tool_input: dict) -> str:
             name=tool_input["name"],
             purpose=tool_input["purpose"],
         )
+    if tool_name == "deliberate":
+        return deliberate(
+            idea=tool_input["idea"],
+            context=tool_input.get("context", ""),
+        )
     if tool_name in CALENDAR_TOOL_SLUGS:
         result = composio.tools.execute(
             slug=tool_name,
@@ -793,7 +951,9 @@ TOOL_STATUS_LABELS = {
     "get_recent_agent_outputs": "Checking what your agents have found…",
     "log_note": "Saving that note…",
     "remember": "Committing that to memory…",
+    "forget_memory": "Forgetting that…",
     "propose_calendar_event": "Queuing that for your approval…",
+    "deliberate": "Convening the council…",
     "list_vault_notes": "Looking through your vault…",
     "read_vault_note": "Reading your notes…",
     "write_vault_note": "Writing to your vault…",
@@ -940,6 +1100,7 @@ def get_dashboard_data() -> dict:
         "pending_tools": _list_py_files(PROPOSED_TOOLS_DIR),
         "today_events": get_today_events(),
         "pending_actions": get_pending_actions(),
+        "decided_actions": get_decided_actions(),
         "memories": load_memories(),
     }
 

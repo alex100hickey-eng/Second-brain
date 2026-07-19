@@ -287,6 +287,13 @@
               </div>
             </div>`).join('')
           : '<div class="empty">No actions waiting on you.</div>'}
+        ${(data.decided_actions || []).length ? `
+          <h2 style="margin-top:18px">Decision History</h2>
+          ${data.decided_actions.map(d => `
+            <div class="item">
+              <div class="item-title">${esc(d.display)}</div>
+              <div class="item-meta">${d.status === 'approved' ? '✓ approved' : d.status === 'denied' ? '✗ denied' : '⚠ failed'} — ${timeAgo(d.created_at)}</div>
+            </div>`).join('')}` : ''}
       </div>
     `);
 

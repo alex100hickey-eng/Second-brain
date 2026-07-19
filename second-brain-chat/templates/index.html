@@ -149,6 +149,51 @@
     border-left: 2px solid var(--accent-dim);
     border-radius: 0;
     padding-left: 14px;
+    white-space: normal;
+  }
+
+  .bubble h1, .bubble h2, .bubble h3 {
+    font-size: 15px;
+    margin: 14px 0 6px;
+    color: var(--accent);
+  }
+  .bubble h1:first-child, .bubble h2:first-child, .bubble h3:first-child { margin-top: 0; }
+  .bubble p { margin: 8px 0; }
+  .bubble p:first-child { margin-top: 0; }
+  .bubble p:last-child { margin-bottom: 0; }
+  .bubble ul, .bubble ol { margin: 8px 0; padding-left: 22px; }
+  .bubble li { margin: 3px 0; }
+  .bubble code {
+    font-family: "SF Mono", "Courier New", monospace;
+    font-size: 13px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 1px 5px;
+  }
+  .bubble pre {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 12px;
+    overflow-x: auto;
+    margin: 8px 0;
+  }
+  .bubble pre code { background: none; border: none; padding: 0; }
+  .bubble a { color: var(--accent); }
+
+  .nav-badge {
+    display: inline-block;
+    min-width: 18px;
+    text-align: center;
+    background: #4a3a1a;
+    color: #ffb454;
+    font-size: 11px;
+    font-weight: 700;
+    border-radius: 20px;
+    padding: 1px 6px;
+    margin-left: 5px;
+    vertical-align: 1px;
   }
 
   .tool-status {
@@ -276,7 +321,7 @@
     <div class="title" id="status">Online</div>
     <nav>
       <a href="/" class="active">Chat</a>
-      <a href="/dashboard">Dashboard</a>
+      <a href="/dashboard">Dashboard<span class="nav-badge" id="pending-badge" style="display:none"></span></a>
       <a href="#" id="clear-chat" title="Start a fresh conversation">Clear</a>
     </nav>
   </div>
@@ -313,18 +358,82 @@
     } catch (e) { /* server unreachable — start empty */ }
   })();
 
+  // Minimal safe markdown: escape all HTML first, then apply formatting.
+  function renderMarkdown(text) {
+    let s = text
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+    // fenced code blocks first, so nothing inside them gets formatted
+    const blocks = [];
+    s = s.replace(/```(?:\w*)\n?([\s\S]*?)```/g, (_, code) => {
+      blocks.push(`<pre><code>${code}</code></pre>`);
+      return `\x00BLOCK${blocks.length - 1}\x00`;
+    });
+
+    s = s
+      .replace(/`([^`\n]+)`/g, '<code>$1</code>')
+      .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+      .replace(/^## (.+)$/gm, '<h2>$1</h2>')
+      .replace(/^# (.+)$/gm, '<h1>$1</h1>')
+      .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
+      .replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>')
+      .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+
+    // group consecutive "- " lines into lists, wrap other runs in <p>
+    const lines = s.split('\n');
+    const out = [];
+    let inList = false, para = [];
+    const flushPara = () => {
+      if (para.length) { out.push(`<p>${para.join('<br>')}</p>`); para = []; }
+    };
+    for (const line of lines) {
+      const li = line.match(/^\s*[-*] (.+)$/);
+      const isBlock = /^(<h\d|\x00BLOCK)/.test(line.trim());
+      if (li) {
+        flushPara();
+        if (!inList) { out.push('<ul>'); inList = true; }
+        out.push(`<li>${li[1]}</li>`);
+      } else {
+        if (inList) { out.push('</ul>'); inList = false; }
+        if (isBlock) { flushPara(); out.push(line.trim()); }
+        else if (line.trim() === '') flushPara();
+        else para.push(line);
+      }
+    }
+    flushPara();
+    if (inList) out.push('</ul>');
+    s = out.join('');
+
+    return s.replace(/\x00BLOCK(\d+)\x00/g, (_, i) => blocks[+i]);
+  }
+
   function addMessage(role, text) {
     if (emptyState) emptyState.remove();
     const wrap = document.createElement('div');
     wrap.className = `msg ${role}`;
     const bubble = document.createElement('div');
     bubble.className = 'bubble';
-    bubble.textContent = text;
+    if (role === 'assistant') bubble.innerHTML = renderMarkdown(text);
+    else bubble.textContent = text;
     wrap.appendChild(bubble);
     chat.appendChild(wrap);
     chat.scrollTop = chat.scrollHeight;
     return bubble;
   }
+
+  // Pending-approvals badge on the Dashboard nav link
+  async function refreshBadge() {
+    try {
+      const res = await fetch('/api/dashboard');
+      const data = await res.json();
+      const n = (data.pending_actions || []).length;
+      const badge = document.getElementById('pending-badge');
+      badge.textContent = n;
+      badge.style.display = n ? 'inline-block' : 'none';
+    } catch (e) { /* ignore */ }
+  }
+  refreshBadge();
+  setInterval(refreshBadge, 60000);
 
   function addThinking() {
     const wrap = document.createElement('div');
@@ -375,7 +484,7 @@
         removeToolStatus();
         if (!bubble) bubble = addMessage('assistant', '');
         fullText += ev.delta;
-        bubble.textContent = fullText;
+        bubble.innerHTML = renderMarkdown(fullText);
         chat.scrollTop = chat.scrollHeight;
       } else if (ev.type === 'status') {
         removeThinking();
@@ -416,7 +525,8 @@
     } catch (err) {
       removeThinking();
       removeToolStatus();
-      addMessage('assistant', 'Connection error — check that the server is running.');
+      addMessage('assistant', 'Connection error — your message was not lost, it\'s back in the box below. Hit Send to retry.');
+      input.value = message;
     } finally {
       sendBtn.disabled = false;
       status.textContent = 'Online';
