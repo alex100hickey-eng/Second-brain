@@ -2,8 +2,15 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Second Brain</title>
+<link rel="manifest" href="/static/manifest.json">
+<link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32.png">
+<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+<meta name="theme-color" content="#0a0e14">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Jarvis">
 <style>
   :root {
     --bg: #0a0e14;
@@ -193,7 +200,8 @@
   }
 
   form {
-    padding: 18px 24px 24px;
+    padding: 18px 24px;
+    padding-bottom: max(24px, env(safe-area-inset-bottom));
     max-width: 720px;
     width: 100%;
     margin: 0 auto;
@@ -247,7 +255,13 @@
     .bubble { max-width: 88%; }
     header { padding: 14px 16px; }
     main { padding: 16px; }
-    form { padding: 12px 16px 16px; }
+    form {
+      padding: 12px 16px;
+      padding-bottom: max(16px, env(safe-area-inset-bottom));
+    }
+    .title { display: none; }  /* hide "Online" text — the pulse dot says it */
+    .brand span { white-space: nowrap; }
+    header nav a { padding: 6px 8px; margin-left: 2px; }
   }
 </style>
 </head>
@@ -290,20 +304,14 @@
   const sendBtn = document.getElementById('send-btn');
   const status = document.getElementById('status');
 
-  const HISTORY_KEY = 'jarvis-chat-history';
-  let history = [];
-  try {
-    history = JSON.parse(localStorage.getItem(HISTORY_KEY)) || [];
-  } catch (e) { history = []; }
-
-  // Restore previous conversation on page load
-  for (const msg of history) {
-    if (typeof msg.content === 'string') addMessage(msg.role, msg.content);
-  }
-
-  function saveHistory() {
-    try { localStorage.setItem(HISTORY_KEY, JSON.stringify(history)); } catch (e) {}
-  }
+  // Conversation lives on the server (shared across all devices) — load it.
+  (async () => {
+    try {
+      const res = await fetch('/api/history');
+      const data = await res.json();
+      for (const msg of data.messages || []) addMessage(msg.role, msg.content);
+    } catch (e) { /* server unreachable — start empty */ }
+  })();
 
   function addMessage(role, text) {
     if (emptyState) emptyState.remove();
@@ -384,7 +392,7 @@
       const res = await fetch('/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message, history }),
+        body: JSON.stringify({ message }),
       });
 
       const reader = res.body.getReader();
@@ -405,12 +413,6 @@
 
       removeThinking();
       removeToolStatus();
-
-      if (fullText) {
-        history.push({ role: 'user', content: message });
-        history.push({ role: 'assistant', content: fullText });
-        saveHistory();
-      }
     } catch (err) {
       removeThinking();
       removeToolStatus();
@@ -422,10 +424,9 @@
     }
   });
 
-  document.getElementById('clear-chat').addEventListener('click', (e) => {
+  document.getElementById('clear-chat').addEventListener('click', async (e) => {
     e.preventDefault();
-    history = [];
-    saveHistory();
+    try { await fetch('/api/history/clear', { method: 'POST' }); } catch (err) {}
     location.reload();
   });
 

@@ -13,10 +13,22 @@ import os
 import re
 import json
 import time
+import hmac
+import hashlib
+import secrets as pysecrets
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from flask import Flask, request, jsonify, render_template, Response, stream_with_context
+from flask import (
+    Flask,
+    request,
+    jsonify,
+    render_template,
+    Response,
+    stream_with_context,
+    session,
+    redirect,
+)
 from anthropic import Anthropic
 from supabase import create_client
 from composio import Composio
@@ -47,7 +59,50 @@ AGENTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "age
 PROPOSED_TOOLS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "proposed_tools")
 # ----------------------------------------------------
 
+# Optional login gate. If JARVIS_PASSWORD is set in the environment, every page
+# and endpoint (except /login and static files) requires logging in once per
+# browser (31-day session). If it's NOT set, the app is open — same as before
+# the gate existed. Never hardcode the password; Alex sets the env var himself.
+JARVIS_PASSWORD = os.environ.get("JARVIS_PASSWORD")
+
 app = Flask(__name__)
+# Session signing key: derived from the password so sessions survive restarts,
+# random (sessions reset each restart) when no password gate is configured.
+app.secret_key = (
+    hashlib.sha256(f"jarvis-session:{JARVIS_PASSWORD}".encode()).digest()
+    if JARVIS_PASSWORD
+    else pysecrets.token_bytes(32)
+)
+app.permanent_session_lifetime = timedelta(days=31)
+
+
+@app.before_request
+def require_login():
+    if not JARVIS_PASSWORD:
+        return None  # gate disabled — open access
+    if request.endpoint in ("login", "static"):
+        return None
+    if session.get("authed"):
+        return None
+    if request.method == "POST" or request.path.startswith("/api/"):
+        return jsonify({"error": "Not logged in."}), 401
+    return redirect("/login")
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if not JARVIS_PASSWORD:
+        return redirect("/")
+    error = None
+    if request.method == "POST":
+        attempt = request.form.get("password", "")
+        if hmac.compare_digest(attempt.encode(), JARVIS_PASSWORD.encode()):
+            session.permanent = True
+            session["authed"] = True
+            return redirect("/")
+        time.sleep(0.8)  # slow down brute-force attempts
+        error = "Wrong password."
+    return render_template("login.html", error=error)
 claude = Anthropic(api_key=CLAUDE_API_KEY)
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 composio = Composio(provider=AnthropicProvider(), api_key=COMPOSIO_API_KEY)
@@ -69,9 +124,9 @@ except Exception as e:
     CALENDAR_TOOLS = []
 
 # Rows in "Agent Outputs" with these agent_name values are internal storage for the
-# chat brain itself (memories, pending approvals) — not real agent outputs. Keep them
-# out of anything that lists agent activity.
-INTERNAL_AGENT_NAMES = {"jarvis_memory", "jarvis_pending_action"}
+# chat brain itself (memories, pending approvals, chat history) — not real agent
+# outputs. Keep them out of anything that lists agent activity.
+INTERNAL_AGENT_NAMES = {"jarvis_memory", "jarvis_pending_action", "jarvis_chat", "jarvis_chat_clear"}
 
 SYSTEM_PROMPT = """You are Alex's personal assistant — the brain of his "second brain" system.
 You're direct, helpful, and a little sharp/witty like a good assistant should be — think
@@ -316,6 +371,52 @@ def get_recent_agent_outputs(agent_name: str = None, limit: int = 5) -> str:
     if not rows:
         return "No agent outputs found."
     return json.dumps(rows[:limit], indent=2, default=str)
+
+
+# ============================================================
+# CHAT HISTORY — stored server-side (Supabase) so every device sees
+# the same conversation. "Clearing" inserts a marker rather than
+# deleting anything; history loads only messages after the last marker.
+# ============================================================
+
+def save_chat_message(role: str, content: str) -> None:
+    supabase.table("Agent Outputs").insert(
+        {"agent_name": "jarvis_chat", "output_text": json.dumps({"role": role, "content": content})}
+    ).execute()
+
+
+def _last_clear_id() -> int:
+    result = (
+        supabase.table("Agent Outputs")
+        .select("id")
+        .eq("agent_name", "jarvis_chat_clear")
+        .order("id", desc=True)
+        .limit(1)
+        .execute()
+    )
+    return result.data[0]["id"] if result.data else 0
+
+
+def load_chat_history(limit: int = 40) -> list:
+    """Messages since the last clear marker, oldest first."""
+    result = (
+        supabase.table("Agent Outputs")
+        .select("*")
+        .eq("agent_name", "jarvis_chat")
+        .gt("id", _last_clear_id())
+        .order("id", desc=True)
+        .limit(limit)
+        .execute()
+    )
+    messages = []
+    for row in reversed(result.data or []):
+        try:
+            msg = json.loads(row["output_text"])
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if msg.get("role") in ("user", "assistant") and isinstance(msg.get("content"), str):
+            messages.append({"role": msg["role"], "content": msg["content"]})
+    return messages
 
 
 def remember(fact: str) -> str:
@@ -872,20 +973,42 @@ def api_approve():
     return jsonify(result), (200 if result.get("ok") else 422)
 
 
+def _normalize_for_api(messages: list) -> list:
+    """Claude requires strictly alternating roles starting with 'user'.
+    Merge consecutive same-role messages and drop a leading assistant turn
+    (can happen if a past request died between saving the two sides)."""
+    cleaned = []
+    for msg in messages:
+        if cleaned and cleaned[-1]["role"] == msg["role"]:
+            cleaned[-1] = {"role": msg["role"], "content": cleaned[-1]["content"] + "\n" + msg["content"]}
+        else:
+            cleaned.append(dict(msg))
+    while cleaned and cleaned[0]["role"] != "user":
+        cleaned.pop(0)
+    return cleaned
+
+
 @app.route("/chat", methods=["POST"])
 def chat():
     data = request.get_json()
     user_message = data.get("message", "")
-    history = data.get("history", [])  # list of {role, content} from the client
 
-    messages = history + [{"role": "user", "content": user_message}]
+    history = load_chat_history()
+    messages = _normalize_for_api(history + [{"role": "user", "content": user_message}])
+    save_chat_message("user", user_message)
 
     def generate():
+        reply_parts = []
         try:
             for event in stream_chat(messages):
+                if event.get("type") == "text":
+                    reply_parts.append(event["delta"])
                 yield json.dumps(event) + "\n"
         except Exception as e:
             yield json.dumps({"type": "error", "message": str(e)}) + "\n"
+        finally:
+            if reply_parts:
+                save_chat_message("assistant", "".join(reply_parts))
 
     return Response(
         stream_with_context(generate()),
@@ -893,6 +1016,19 @@ def chat():
         # Tell proxies (Coolify's traefik included) not to buffer the stream.
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.route("/api/history")
+def api_history():
+    return jsonify({"messages": load_chat_history(limit=80)})
+
+
+@app.route("/api/history/clear", methods=["POST"])
+def api_history_clear():
+    supabase.table("Agent Outputs").insert(
+        {"agent_name": "jarvis_chat_clear", "output_text": "cleared"}
+    ).execute()
+    return jsonify({"ok": True})
 
 
 if __name__ == "__main__":
