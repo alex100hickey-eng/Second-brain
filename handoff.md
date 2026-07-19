@@ -155,6 +155,8 @@ Also: Coolify's "New Environment Variable" modal is finicky with rapid automated
 
 ## What Needs to Be Accomplished (Roadmap)
 
+**Overnight session additions (2026-07-19, all deployed):** decision council (`deliberate`), markdown chat + approvals badge, `forget_memory` (soft-delete) + Memories widget + Decision History, morning brief agent (launchd 7am → vault `Schedule/brief-*.md`), approval-gated Downloads cleanup (Mac-only, Trash-only via Finder), and the full self-expansion pipeline (`create_new_tool` → `adopt_tool` → dashboard Approve → git branch `jarvis/tool-<name>` pushed for review → merged `extensions/*.py` load live at restart). Review branch `jarvis/tool-get_word_count` is on GitHub awaiting Alex's review as the pipeline's first artifact. Deploy trick that actually works when the queue jams: JS-click the hidden `wire:click="deploy"` div, then Force Start.
+
 1. **Activate the password gate** — Alex sets `JARVIS_PASSWORD` in Coolify env vars (Runtime only), redeploy, log in from his devices. The app is on the open internet until this happens.
 2. **HTTPS** — deliberately not attempted overnight (Let's Encrypt on sslip.io domains is rate-limit-prone and a failed cert could break the site unattended). Consider a real domain at the same time.
 3. **Gmail (read-only) via Composio** — needs Alex present for the OAuth click. Then morning-brief type features.
