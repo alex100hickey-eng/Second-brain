@@ -3,212 +3,468 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<title>Second Brain — Dashboard</title>
+<title>CLARVIS — Command Deck</title>
 <link rel="manifest" href="/static/manifest.json">
 <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32.png">
 <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
-<meta name="theme-color" content="#0a0e14">
+<meta name="theme-color" content="#040910">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="Jarvis">
+<meta name="apple-mobile-web-app-title" content="CLARVIS">
 <style>
   :root {
-    --bg: #0a0e14;
-    --panel: #0f1520;
-    --line: #1c2534;
-    --text: #e7ecf5;
-    --text-dim: #6b7688;
+    --bg: #040910;
+    --bg-2: #071120;
+    --panel: rgba(10, 22, 38, 0.72);
+    --line: #12283f;
+    --line-bright: #1e4a6e;
+    --text: #d9ecfa;
+    --text-dim: #557191;
     --accent: #3fd0ff;
-    --accent-dim: #1a4a5c;
+    --accent-soft: #9ae6ff;
+    --accent-dim: #0e3a52;
+    --accent-glow: rgba(63, 208, 255, 0.55);
     --warn: #ffb454;
     --warn-dim: #4a3a1a;
+    --good: #6ee7a0;
+    --bad: #ff7a7a;
+    --mono: "SF Mono", "Menlo", "Courier New", monospace;
   }
 
   * { box-sizing: border-box; }
+  html, body { height: 100%; }
 
   body {
     margin: 0;
-    background: var(--bg);
     color: var(--text);
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background:
+      radial-gradient(ellipse 80% 60% at 50% 38%, rgba(20, 60, 100, 0.35), transparent 70%),
+      radial-gradient(ellipse 40% 30% at 50% 42%, rgba(63, 208, 255, 0.08), transparent 70%),
+      linear-gradient(180deg, #050c16 0%, var(--bg) 55%, #030710 100%);
     min-height: 100vh;
+    overflow-x: hidden;
   }
 
+  /* faint grid + scanlines over everything */
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    background:
+      repeating-linear-gradient(0deg, rgba(63,208,255,0.025) 0 1px, transparent 1px 46px),
+      repeating-linear-gradient(90deg, rgba(63,208,255,0.025) 0 1px, transparent 1px 46px);
+    z-index: 0;
+  }
+  body::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    background: repeating-linear-gradient(0deg, rgba(0,0,0,0.12) 0 2px, transparent 2px 4px);
+    opacity: 0.35;
+    z-index: 0;
+  }
+
+  /* ============ TOP BAR ============ */
   header {
-    padding: 18px 24px;
-    border-bottom: 1px solid var(--line);
+    position: sticky;
+    top: 0;
+    z-index: 20;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    position: sticky;
-    top: 0;
-    background: var(--bg);
-    z-index: 10;
+    padding: 12px 22px;
+    background: linear-gradient(180deg, rgba(4,9,16,0.96), rgba(4,9,16,0.82));
+    border-bottom: 1px solid var(--line);
+    backdrop-filter: blur(6px);
+    font-family: var(--mono);
   }
 
   .brand {
     display: flex;
     align-items: center;
     gap: 10px;
-    font-family: "SF Mono", "Courier New", monospace;
     font-size: 13px;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    color: var(--text-dim);
+    letter-spacing: 0.28em;
+    color: var(--accent);
+    text-shadow: 0 0 12px var(--accent-glow);
   }
 
   .pulse {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
+    width: 9px; height: 9px; border-radius: 50%;
     background: var(--accent);
-    box-shadow: 0 0 8px var(--accent), 0 0 16px var(--accent);
+    box-shadow: 0 0 8px var(--accent), 0 0 18px var(--accent);
     animation: pulse 2.4s ease-in-out infinite;
   }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
 
-  @keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.35; }
+  .clock {
+    text-align: center;
+    color: var(--text-dim);
+    font-size: 11px;
+    letter-spacing: 0.14em;
+  }
+  .clock .time {
+    display: block;
+    color: var(--accent-soft);
+    font-size: 20px;
+    letter-spacing: 0.1em;
+    text-shadow: 0 0 10px var(--accent-glow);
   }
 
+  nav { display: flex; gap: 8px; }
   nav a {
     color: var(--text-dim);
     text-decoration: none;
-    font-size: 13px;
-    margin-left: 18px;
-    padding: 6px 12px;
-    border-radius: 6px;
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    padding: 6px 14px;
     border: 1px solid transparent;
+    border-radius: 2px;
   }
-
-  nav a.active {
+  nav a.active, nav a:hover {
     color: var(--accent);
-    border-color: var(--accent-dim);
+    border-color: var(--line-bright);
+    box-shadow: inset 0 0 12px rgba(63,208,255,0.08);
   }
 
-  main {
-    padding: 24px;
-    max-width: 980px;
-    margin: 0 auto;
+  /* ============ LAYOUT ============ */
+  .deck {
+    position: relative;
+    z-index: 1;
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    grid-template-columns: minmax(300px, 360px) 1fr minmax(300px, 360px);
     gap: 16px;
+    padding: 18px 18px 120px;
+    max-width: 1720px;
+    margin: 0 auto;
+    align-items: start;
   }
 
-  .widget {
+  .rail { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+  .center-col { display: flex; flex-direction: column; gap: 16px; align-items: stretch; min-width: 0; }
+
+  /* ============ PANELS ============ */
+  .panel {
+    position: relative;
     background: var(--panel);
     border: 1px solid var(--line);
-    border-radius: 12px;
-    padding: 18px 20px;
+    padding: 14px 16px;
+    backdrop-filter: blur(4px);
+    clip-path: polygon(14px 0, 100% 0, 100% calc(100% - 14px), calc(100% - 14px) 100%, 0 100%, 0 14px);
   }
-
-  .widget.pending {
-    border-color: var(--warn-dim);
+  /* corner brackets */
+  .panel::before, .panel::after {
+    content: "";
+    position: absolute;
+    width: 18px; height: 18px;
+    border-color: var(--accent);
+    border-style: solid;
+    opacity: 0.8;
+    pointer-events: none;
   }
+  .panel::before { top: 0; right: 0; border-width: 2px 2px 0 0; }
+  .panel::after { bottom: 0; left: 0; border-width: 0 0 2px 2px; }
 
-  .widget h2 {
-    font-size: 12px;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    color: var(--text-dim);
-    margin: 0 0 14px;
+  .panel.alert { border-color: var(--warn-dim); }
+  .panel.alert::before, .panel.alert::after { border-color: var(--warn); }
+
+  .panel h2 {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-  }
-
-  .widget.pending h2 { color: var(--warn); }
-
-  .count {
-    font-family: "SF Mono", "Courier New", monospace;
+    gap: 8px;
+    margin: 0 0 12px;
+    font-family: var(--mono);
     font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+  .panel.alert h2 { color: var(--warn); }
+  .panel h2 .tick {
+    width: 6px; height: 6px;
+    background: currentColor;
+    box-shadow: 0 0 8px currentColor;
+    flex: none;
+  }
+  .panel h2 .count {
+    margin-left: auto;
     color: var(--text-dim);
+    font-size: 10px;
+    letter-spacing: 0.1em;
   }
 
-  .empty {
-    color: var(--text-dim);
-    font-size: 13.5px;
-    font-style: italic;
-  }
+  .scroll { max-height: 260px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--line-bright) transparent; }
+
+  .empty { color: var(--text-dim); font-size: 12.5px; font-style: italic; }
 
   .item {
-    padding: 10px 0;
+    padding: 9px 0;
     border-top: 1px solid var(--line);
-    font-size: 13.5px;
-    line-height: 1.5;
+    font-size: 13px;
+    line-height: 1.45;
   }
-
   .item:first-child { border-top: none; padding-top: 0; }
-
-  .item-title {
-    color: var(--text);
-    font-weight: 600;
-    margin-bottom: 2px;
-  }
-
-  .item-meta {
-    color: var(--text-dim);
-    font-size: 11.5px;
-    font-family: "SF Mono", "Courier New", monospace;
-  }
-
+  .item-title { color: var(--text); font-weight: 600; margin-bottom: 2px; }
+  .item-meta { color: var(--text-dim); font-size: 11px; font-family: var(--mono); }
   .item-body {
     color: var(--text-dim);
     margin-top: 4px;
     white-space: pre-wrap;
     max-height: 4.5em;
     overflow: hidden;
-  }
-
-  .note-path {
-    font-family: "SF Mono", "Courier New", monospace;
     font-size: 12.5px;
   }
 
   .badge {
-    display: inline-block;
     background: var(--warn-dim);
     color: var(--warn);
-    font-size: 11px;
+    font-size: 10px;
     padding: 2px 8px;
-    border-radius: 20px;
-    margin-left: 8px;
+    border-radius: 2px;
+    font-family: var(--mono);
   }
 
-  .approve-row {
-    display: flex;
-    gap: 8px;
-    margin-top: 8px;
-  }
-
+  .approve-row { display: flex; gap: 8px; margin-top: 8px; }
   .approve-row button {
     border: 1px solid var(--line);
     background: transparent;
-    border-radius: 6px;
-    padding: 6px 14px;
-    font-size: 12.5px;
+    padding: 6px 16px;
+    font-size: 12px;
     font-weight: 600;
+    font-family: var(--mono);
+    letter-spacing: 0.08em;
     cursor: pointer;
+    color: var(--text);
+    clip-path: polygon(6px 0, 100% 0, 100% calc(100% - 6px), calc(100% - 6px) 100%, 0 100%, 0 6px);
   }
-
-  .btn-approve {
-    color: #6ee7a0;
-    border-color: #1d4a2e !important;
-  }
-
-  .btn-deny {
-    color: #ff7a7a;
-    border-color: #4a1d1d !important;
-  }
-
+  .btn-approve { color: var(--good); border-color: #1d4a2e !important; }
+  .btn-approve:hover { background: rgba(110,231,160,0.08); box-shadow: 0 0 14px rgba(110,231,160,0.25); }
+  .btn-deny { color: var(--bad); border-color: #4a1d1d !important; }
+  .btn-deny:hover { background: rgba(255,122,122,0.08); box-shadow: 0 0 14px rgba(255,122,122,0.25); }
   .approve-row button:disabled { opacity: 0.4; cursor: default; }
 
+  /* ============ ARC REACTOR ============ */
+  .reactor-wrap {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 8px 0 4px;
+  }
+
+  .reactor {
+    position: relative;
+    width: min(380px, 78vw);
+    aspect-ratio: 1;
+    filter: drop-shadow(0 0 30px rgba(63,208,255,0.25));
+  }
+  .reactor svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+
+  .spin-slow { animation: spin 40s linear infinite; transform-origin: 50% 50%; }
+  .spin-rev { animation: spin 26s linear infinite reverse; transform-origin: 50% 50%; }
+  .spin-fast { animation: spin 14s linear infinite; transform-origin: 50% 50%; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .reactor-core {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    text-align: center;
+  }
+  .wordmark {
+    font-family: var(--mono);
+    font-size: clamp(26px, 5.4vw, 40px);
+    font-weight: 700;
+    letter-spacing: 0.34em;
+    margin-left: 0.34em; /* optically recenter letterspaced text */
+    color: #eafaff;
+    text-shadow:
+      0 0 6px var(--accent-soft),
+      0 0 18px var(--accent),
+      0 0 42px var(--accent-glow);
+  }
+  .wordmark-sub {
+    font-family: var(--mono);
+    font-size: 9.5px;
+    letter-spacing: 0.42em;
+    margin-left: 0.42em;
+    color: var(--text-dim);
+    text-transform: uppercase;
+  }
+
+  .reactor-stats {
+    display: flex;
+    gap: 26px;
+    margin-top: 10px;
+    font-family: var(--mono);
+  }
+  .rstat { text-align: center; }
+  .rstat .val {
+    font-size: 22px;
+    color: var(--accent-soft);
+    text-shadow: 0 0 12px var(--accent-glow);
+  }
+  .rstat .val.warm { color: var(--warn); text-shadow: 0 0 12px rgba(255,180,84,0.5); }
+  .rstat .lbl {
+    font-size: 9px;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    margin-top: 2px;
+  }
+
+  /* ============ QUICK ACCESS ============ */
+  .links-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
+    gap: 10px;
+  }
+  .link-tile {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding: 12px 6px 10px;
+    border: 1px solid var(--line);
+    background: rgba(8, 18, 32, 0.6);
+    text-decoration: none;
+    color: var(--text);
+    font-size: 11px;
+    font-family: var(--mono);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    clip-path: polygon(8px 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%, 0 8px);
+    transition: border-color .15s, box-shadow .15s, transform .15s;
+  }
+  .link-tile:hover {
+    border-color: var(--accent);
+    box-shadow: 0 0 18px rgba(63,208,255,0.18), inset 0 0 18px rgba(63,208,255,0.06);
+    transform: translateY(-1px);
+  }
+  .link-tile .glyph { font-size: 20px; line-height: 1; filter: drop-shadow(0 0 6px var(--accent-glow)); }
+
+  /* ============ REVENUE ============ */
+  .rev-flex { display: flex; align-items: center; gap: 18px; }
+  .rev-ring { position: relative; width: 110px; height: 110px; flex: none; }
+  .rev-ring svg { transform: rotate(-90deg); }
+  .rev-ring .rev-center {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    font-family: var(--mono);
+  }
+  .rev-ring .pct { font-size: 18px; color: var(--accent-soft); text-shadow: 0 0 10px var(--accent-glow); }
+  .rev-ring .pct-lbl { font-size: 8px; letter-spacing: .2em; color: var(--text-dim); text-transform: uppercase; }
+  .rev-detail { font-family: var(--mono); font-size: 12px; color: var(--text-dim); line-height: 1.9; }
+  .rev-detail b { color: var(--text); font-weight: 600; }
+  .rev-edit {
+    margin-top: 4px; background: none; border: 1px solid var(--line);
+    color: var(--text-dim); font-family: var(--mono); font-size: 10px;
+    letter-spacing: .1em; padding: 4px 10px; cursor: pointer; text-transform: uppercase;
+  }
+  .rev-edit:hover { color: var(--accent); border-color: var(--line-bright); }
+
+  /* ============ CHAT DOCK ============ */
+  .chat-dock {
+    position: fixed;
+    left: 0; right: 0; bottom: 0;
+    z-index: 30;
+    background: linear-gradient(180deg, rgba(4,9,16,0.88), rgba(4,9,16,0.98));
+    border-top: 1px solid var(--line-bright);
+    backdrop-filter: blur(8px);
+    padding: 10px 18px calc(12px + env(safe-area-inset-bottom));
+  }
+  .chat-log {
+    max-width: 980px;
+    margin: 0 auto 8px;
+    max-height: 120px;
+    overflow-y: auto;
+    font-size: 13px;
+    line-height: 1.5;
+    display: none;
+  }
+  .chat-log.open { display: block; }
+  .chat-log .msg { padding: 3px 0; }
+  .chat-log .msg .who {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.18em;
+    margin-right: 8px;
+  }
+  .chat-log .msg.user .who { color: var(--text-dim); }
+  .chat-log .msg.clarvis .who { color: var(--accent); }
+  .chat-log .msg .body { color: var(--text); white-space: pre-wrap; }
+
+  .chat-row {
+    max-width: 980px;
+    margin: 0 auto;
+    display: flex;
+    gap: 10px;
+    align-items: center;
+  }
+  .chat-row .prompt-glyph {
+    font-family: var(--mono);
+    color: var(--accent);
+    text-shadow: 0 0 8px var(--accent-glow);
+    font-size: 15px;
+    flex: none;
+  }
+  #chat-input {
+    flex: 1;
+    background: rgba(8, 18, 32, 0.8);
+    border: 1px solid var(--line);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 14px;
+    padding: 11px 14px;
+    outline: none;
+    clip-path: polygon(8px 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%, 0 8px);
+  }
+  #chat-input:focus { border-color: var(--accent); box-shadow: 0 0 16px rgba(63,208,255,0.15); }
+  #chat-input::placeholder { color: var(--text-dim); }
+  #chat-send {
+    border: 1px solid var(--line-bright);
+    background: rgba(63,208,255,0.08);
+    color: var(--accent);
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.14em;
+    padding: 11px 22px;
+    cursor: pointer;
+    text-transform: uppercase;
+    clip-path: polygon(8px 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%, 0 8px);
+  }
+  #chat-send:hover { background: rgba(63,208,255,0.16); box-shadow: 0 0 18px rgba(63,208,255,0.25); }
+  #chat-send:disabled { opacity: 0.4; cursor: default; }
+
   .refresh-note {
-    grid-column: 1 / -1;
     text-align: center;
     color: var(--text-dim);
     font-size: 11.5px;
-    font-family: "SF Mono", "Courier New", monospace;
+    font-family: var(--mono);
+    padding: 30px;
+  }
+
+  /* ============ RESPONSIVE ============ */
+  @media (max-width: 1100px) {
+    .deck { grid-template-columns: 1fr 1fr; }
+    .center-col { grid-column: 1 / -1; grid-row: 1; }
+  }
+  @media (max-width: 700px) {
+    .deck { grid-template-columns: 1fr; padding-bottom: 140px; }
+    .center-col { grid-column: auto; }
+    header { padding: 10px 14px; }
+    .clock .time { font-size: 16px; }
+    .clock #clock-date { display: none; }
+    .brand { letter-spacing: 0.14em; font-size: 11px; }
   }
 </style>
 </head>
@@ -217,173 +473,292 @@
 <header>
   <div class="brand">
     <div class="pulse"></div>
-    <span>Second Brain</span>
+    <span>C.L.A.R.V.I.S.</span>
+  </div>
+  <div class="clock">
+    <span class="time" id="clock-time">--:--:--</span>
+    <span id="clock-date">—</span>
   </div>
   <nav>
     <a href="/">Chat</a>
-    <a href="/dashboard" class="active">Dashboard</a>
+    <a href="/dashboard" class="active">Deck</a>
   </nav>
 </header>
 
-<main id="widgets">
-  <div class="refresh-note">Loading...</div>
-</main>
+<div class="deck" id="deck">
+  <div class="refresh-note" style="grid-column:1/-1">Initializing command deck…</div>
+</div>
+
+<div class="chat-dock">
+  <div class="chat-log" id="chat-log"></div>
+  <div class="chat-row">
+    <span class="prompt-glyph">&gt;_</span>
+    <input id="chat-input" type="text" placeholder="Speak to CLARVIS…" autocomplete="off">
+    <button id="chat-send">Send</button>
+  </div>
+</div>
 
 <script>
-  const widgets = document.getElementById('widgets');
-
+  // ---------- helpers ----------
   function esc(s) {
     const d = document.createElement('div');
-    d.textContent = s;
+    d.textContent = s == null ? '' : s;
     return d.innerHTML;
   }
-
   function timeAgo(iso) {
     if (!iso) return '';
-    const diffMs = Date.now() - new Date(iso).getTime();
-    const mins = Math.floor(diffMs / 60000);
+    const mins = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
     if (mins < 1) return 'just now';
-    if (mins < 60) return `${mins}m ago`;
+    if (mins < 60) return mins + 'm ago';
     const hrs = Math.floor(mins / 60);
-    if (hrs < 24) return `${hrs}h ago`;
-    return `${Math.floor(hrs / 24)}d ago`;
+    if (hrs < 24) return hrs + 'h ago';
+    return Math.floor(hrs / 24) + 'd ago';
   }
-
   function fmtTime(iso) {
     if (!iso) return '';
     if (!iso.includes('T')) return 'All day';
     return new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
   }
 
-  function render(data) {
-    const sections = [];
+  // ---------- live clock ----------
+  function tickClock() {
+    const now = new Date();
+    document.getElementById('clock-time').textContent =
+      now.toLocaleTimeString([], { hour12: false });
+    document.getElementById('clock-date').textContent =
+      now.toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' }).toUpperCase();
+  }
+  tickClock();
+  setInterval(tickClock, 1000);
 
-    const events = data.today_events || [];
-    sections.push(`
-      <div class="widget">
-        <h2>Today <span class="count">${new Date().toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })}</span></h2>
-        ${events.length
-          ? events.map(ev => `
-            <div class="item">
-              <div class="item-title">${esc(ev.title)}</div>
-              <div class="item-meta">${ev.all_day ? 'All day' : `${fmtTime(ev.start)} – ${fmtTime(ev.end)}`}</div>
-            </div>`).join('')
-          : '<div class="empty">Nothing on the calendar today.</div>'}
-      </div>
-    `);
-
-    const actions = data.pending_actions || [];
-    sections.push(`
-      <div class="widget ${actions.length ? 'pending' : ''}">
-        <h2>Awaiting Your Approval ${actions.length ? `<span class="badge">${actions.length}</span>` : ''}</h2>
-        ${actions.length
-          ? actions.map(a => `
-            <div class="item">
-              <div class="item-title">${esc(a.display)}</div>
-              <div class="item-meta">${esc(a.action || '')} — will NOT run unless you approve</div>
-              <div class="approve-row">
-                <button class="btn-approve" onclick="decide(${a.id}, 'approve', this)">Approve</button>
-                <button class="btn-deny" onclick="decide(${a.id}, 'deny', this)">Deny</button>
-              </div>
-            </div>`).join('')
-          : '<div class="empty">No actions waiting on you.</div>'}
-        ${(data.decided_actions || []).length ? `
-          <h2 style="margin-top:18px">Decision History</h2>
-          ${data.decided_actions.map(d => `
-            <div class="item">
-              <div class="item-title">${esc(d.display)}</div>
-              <div class="item-meta">${d.status === 'approved' ? '✓ approved' : d.status === 'denied' ? '✗ denied' : '⚠ failed'} — ${timeAgo(d.created_at)}</div>
-            </div>`).join('')}` : ''}
-      </div>
-    `);
-
-    const pendingCount = data.pending_agents.length + data.pending_tools.length;
-    const pendingItems = [
-      ...data.pending_agents.map(f => ({ label: f, kind: 'agent', path: `agents/${f}` })),
-      ...data.pending_tools.map(f => ({ label: f, kind: 'tool', path: `proposed_tools/${f}` })),
-    ];
-    sections.push(`
-      <div class="widget ${pendingCount ? 'pending' : ''}">
-        <h2>Awaiting Your Review ${pendingCount ? `<span class="badge">${pendingCount}</span>` : ''}</h2>
-        ${pendingItems.length
-          ? pendingItems.map(i => `
-            <div class="item">
-              <div class="item-title">${esc(i.label)}</div>
-              <div class="item-meta">${i.kind === 'agent' ? 'drafted agent' : 'proposed tool'} — ${esc(i.path)} — not running, not wired in</div>
-            </div>`).join('')
-          : '<div class="empty">Nothing drafted right now.</div>'}
-      </div>
-    `);
-
-    sections.push(`
-      <div class="widget">
-        <h2>Recent Agent Outputs</h2>
-        ${data.recent_outputs.length
-          ? data.recent_outputs.map(o => `
-            <div class="item">
-              <div class="item-title">${esc(o.agent_name || 'unknown')}</div>
-              <div class="item-meta">${timeAgo(o.created_at)}</div>
-              <div class="item-body">${esc(o.output_text || '')}</div>
-            </div>`).join('')
-          : '<div class="empty">No agent outputs yet.</div>'}
-      </div>
-    `);
-
-    const tasks = data.background_tasks || [];
-    const statusGlyph = { queued: '⏳ queued', running: '⚡ running', done: '✓ done', failed: '⚠ failed' };
-    sections.push(`
-      <div class="widget">
-        <h2>Background Tasks <span class="count">${tasks.length}</span></h2>
-        ${tasks.length
-          ? tasks.map(t => `
-            <div class="item">
-              <div class="item-title">${esc(t.description)}</div>
-              <div class="item-meta">${statusGlyph[t.status] || esc(t.status)} — ${timeAgo(t.created_at)}</div>
-              ${t.result ? `<div class="item-body">${esc(t.result)}</div>` : ''}
-            </div>`).join('')
-          : '<div class="empty">No delegated tasks yet — ask Jarvis to work on something in the background.</div>'}
-      </div>
-    `);
-
-    const managed = data.managed_tasks || [];
-    const managedGlyph = { queued: '⏳ queued', running: '⚡ running', done: '✓ done', failed: '⚠ failed', killed: '⛔ killed', waiting_approval: '✋ needs your tap' };
-    sections.push(`
-      <div class="widget">
-        <h2>Managed Tasks <span class="count">${managed.length}</span></h2>
-        ${managed.length
-          ? managed.map(t => `
-            <div class="item">
-              <div class="item-title">#${t.id} ${esc(t.goal)}</div>
-              <div class="item-meta">${managedGlyph[t.status] || esc(t.status)} — ${t.steps} step${t.steps === 1 ? '' : 's'}${t.blocked ? `, ${t.blocked} blocked` : ''} — ${esc(t.runtime)} — ${timeAgo(t.created_at)}</div>
-              ${t.guardrails && t.guardrails.length ? `<div class="item-meta">Guardrails: ${t.guardrails.map(esc).join(', ')}</div>` : ''}
-              ${t.result ? `<div class="item-body">${esc(t.result)}</div>` : ''}
-            </div>`).join('')
-          : '<div class="empty">No managed tasks yet — give Jarvis a goal with guardrails.</div>'}
-      </div>
-    `);
-
-    const memories = data.memories || [];
-    sections.push(`
-      <div class="widget">
-        <h2>What Jarvis Remembers <span class="count">${memories.length}</span></h2>
-        ${memories.length
-          ? memories.map(m => `<div class="item">${esc(m)}</div>`).join('')
-          : '<div class="empty">Nothing saved yet — tell Jarvis something worth remembering.</div>'}
-      </div>
-    `);
-
-    sections.push(`
-      <div class="widget">
-        <h2>Vault Notes <span class="count">${data.vault_notes.length}</span></h2>
-        ${data.vault_notes.length
-          ? data.vault_notes.map(p => `<div class="item note-path">${esc(p)}</div>`).join('')
-          : '<div class="empty">No notes in the vault yet.</div>'}
-      </div>
-    `);
-
-    widgets.innerHTML = sections.join('');
+  // ---------- revenue (manual for now; wire a real feed later) ----------
+  const REV_GOAL = 3000;
+  function getRevenue() { return parseFloat(localStorage.getItem('clarvis_revenue') || '0') || 0; }
+  function setRevenue() {
+    const v = prompt('Current month revenue ($):', getRevenue());
+    if (v !== null && !isNaN(parseFloat(v))) {
+      localStorage.setItem('clarvis_revenue', parseFloat(v));
+      load();
+    }
   }
 
+  // ---------- arc reactor SVG ----------
+  function reactorSVG() {
+    return `
+    <div class="reactor-wrap panel" style="clip-path:none">
+      <div class="reactor">
+        <svg viewBox="0 0 400 400">
+          <defs>
+            <linearGradient id="ringGrad" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stop-color="#9ae6ff"/>
+              <stop offset="100%" stop-color="#1a7fae"/>
+            </linearGradient>
+          </defs>
+          <!-- outer tick ring -->
+          <g class="spin-slow">
+            <circle cx="200" cy="200" r="188" fill="none" stroke="#12283f" stroke-width="1"/>
+            <circle cx="200" cy="200" r="182" fill="none" stroke="url(#ringGrad)" stroke-width="3"
+              stroke-dasharray="2 6" opacity="0.7"/>
+          </g>
+          <!-- segmented arc ring -->
+          <g class="spin-rev">
+            <circle cx="200" cy="200" r="160" fill="none" stroke="#3fd0ff" stroke-width="6"
+              stroke-dasharray="70 18 24 18" stroke-linecap="butt" opacity="0.55"/>
+            <circle cx="200" cy="200" r="148" fill="none" stroke="#1e4a6e" stroke-width="1.5"/>
+          </g>
+          <!-- inner dashed ring -->
+          <g class="spin-fast">
+            <circle cx="200" cy="200" r="128" fill="none" stroke="#9ae6ff" stroke-width="2"
+              stroke-dasharray="10 14" opacity="0.8"/>
+            <circle cx="200" cy="200" r="118" fill="none" stroke="#3fd0ff" stroke-width="10"
+              stroke-dasharray="4 30" opacity="0.35"/>
+          </g>
+          <!-- static core rings -->
+          <circle cx="200" cy="200" r="100" fill="none" stroke="#1e4a6e" stroke-width="1"/>
+          <circle cx="200" cy="200" r="96" fill="rgba(63,208,255,0.045)" stroke="#3fd0ff" stroke-width="1.5" opacity="0.9"/>
+        </svg>
+        <div class="reactor-core">
+          <div class="wordmark">CLARVIS</div>
+          <div class="wordmark-sub">Command · Logic · Action</div>
+        </div>
+      </div>
+      <div class="reactor-stats" id="reactor-stats"></div>
+    </div>`;
+  }
+
+  // ---------- quick links ----------
+  const QUICK_LINKS = [
+    { label: 'Chat', glyph: '🗨', href: '/' },
+    { label: 'Claude', glyph: '✳', href: 'https://claude.ai' },
+    { label: 'GitHub', glyph: '⌥', href: 'https://github.com/alex100hickey-eng/Second-brain' },
+    { label: 'Supabase', glyph: '▦', href: 'https://supabase.com/dashboard' },
+    { label: 'Coolify', glyph: '⛭', href: 'http://178.156.209.40:8000' },
+    { label: 'Composio', glyph: '⧉', href: 'https://app.composio.dev' },
+    { label: 'Gmail', glyph: '✉', href: 'https://mail.google.com' },
+    { label: 'Calendar', glyph: '▤', href: 'https://calendar.google.com' },
+    { label: 'YT Studio', glyph: '▶', href: 'https://studio.youtube.com' },
+  ];
+
+  // ---------- render ----------
+  const deck = document.getElementById('deck');
+
+  function panel(title, inner, opts = {}) {
+    return `
+      <div class="panel ${opts.alert ? 'alert' : ''}">
+        <h2><span class="tick"></span>${title}${opts.count != null ? `<span class="count">${opts.count}</span>` : ''}${opts.badge ? `<span class="count"><span class="badge">${opts.badge}</span></span>` : ''}</h2>
+        ${opts.scroll ? `<div class="scroll">${inner}</div>` : inner}
+      </div>`;
+  }
+
+  function render(data) {
+    const events = data.today_events || [];
+    const actions = data.pending_actions || [];
+    const decided = data.decided_actions || [];
+    const managed = data.managed_tasks || [];
+    const tasks = data.background_tasks || [];
+    const memories = data.memories || [];
+    const outputs = data.recent_outputs || [];
+    const vault = data.vault_notes || [];
+    const pendingItems = [
+      ...(data.pending_agents || []).map(f => ({ label: f, kind: 'drafted agent', path: 'agents/' + f })),
+      ...(data.pending_tools || []).map(f => ({ label: f, kind: 'proposed tool', path: 'proposed_tools/' + f })),
+    ];
+
+    // ----- left rail -----
+    const left = [];
+    left.push(panel('Today', events.length
+      ? events.map(ev => `
+          <div class="item">
+            <div class="item-title">${esc(ev.title)}</div>
+            <div class="item-meta">${ev.all_day ? 'ALL DAY' : fmtTime(ev.start) + ' – ' + fmtTime(ev.end)}</div>
+          </div>`).join('')
+      : '<div class="empty">Nothing on the calendar today.</div>',
+      { count: new Date().toLocaleDateString([], { month: 'short', day: 'numeric' }).toUpperCase() }));
+
+    left.push(panel('Approvals', (actions.length
+      ? actions.map(a => `
+          <div class="item">
+            <div class="item-title">${esc(a.display)}</div>
+            <div class="item-meta">${esc(a.action || '')} — will NOT run unless you approve</div>
+            <div class="approve-row">
+              <button class="btn-approve" onclick="decide(${a.id}, 'approve', this)">Approve</button>
+              <button class="btn-deny" onclick="decide(${a.id}, 'deny', this)">Deny</button>
+            </div>
+          </div>`).join('')
+      : '<div class="empty">No actions waiting on you.</div>')
+      + (decided.length ? `
+        <div class="item" style="border-top:1px solid var(--line-bright); margin-top:6px; padding-top:10px">
+          <div class="item-meta" style="letter-spacing:.18em; text-transform:uppercase; margin-bottom:6px">Decision history</div>
+          ${decided.map(d => `
+            <div class="item">
+              <div class="item-title">${esc(d.display)}</div>
+              <div class="item-meta">${d.status === 'approved' ? '✓ APPROVED' : d.status === 'denied' ? '✗ DENIED' : '⚠ FAILED'} — ${timeAgo(d.created_at)}</div>
+            </div>`).join('')}
+        </div>` : ''),
+      { alert: !!actions.length, badge: actions.length || null, scroll: true }));
+
+    left.push(panel('Review Queue', pendingItems.length
+      ? pendingItems.map(i => `
+          <div class="item">
+            <div class="item-title">${esc(i.label)}</div>
+            <div class="item-meta">${i.kind} — ${esc(i.path)} — not running, not wired in</div>
+          </div>`).join('')
+      : '<div class="empty">Nothing drafted right now.</div>',
+      { alert: !!pendingItems.length, badge: pendingItems.length || null }));
+
+    left.push(panel('Memory Bank', memories.length
+      ? memories.map(m => `<div class="item" style="font-size:12.5px">${esc(m)}</div>`).join('')
+      : '<div class="empty">Nothing saved yet.</div>',
+      { count: memories.length, scroll: true }));
+
+    // ----- center -----
+    const center = [];
+    center.push(reactorSVG());
+    center.push(panel('Quick Access',
+      `<div class="links-grid">${QUICK_LINKS.map(l => `
+        <a class="link-tile" href="${l.href}" ${l.href.startsWith('http') ? 'target="_blank" rel="noopener"' : ''}>
+          <span class="glyph">${l.glyph}</span><span>${l.label}</span>
+        </a>`).join('')}</div>`));
+    center.push(panel('Agent Transmissions', outputs.length
+      ? outputs.map(o => `
+          <div class="item">
+            <div class="item-title">${esc(o.agent_name || 'unknown')}</div>
+            <div class="item-meta">${timeAgo(o.created_at)}</div>
+            <div class="item-body">${esc(o.output_text || '')}</div>
+          </div>`).join('')
+      : '<div class="empty">No agent outputs yet.</div>',
+      { count: outputs.length, scroll: true }));
+
+    // ----- right rail -----
+    const right = [];
+    const managedGlyph = { queued: '⏳ QUEUED', running: '⚡ RUNNING', done: '✓ DONE', failed: '⚠ FAILED', killed: '⛔ KILLED', waiting_approval: '✋ NEEDS YOUR TAP' };
+    right.push(panel('Managed Tasks', managed.length
+      ? managed.map(t => `
+          <div class="item">
+            <div class="item-title">#${t.id} ${esc(t.goal)}</div>
+            <div class="item-meta">${managedGlyph[t.status] || esc(t.status)} — ${t.steps} step${t.steps === 1 ? '' : 's'}${t.blocked ? ', ' + t.blocked + ' blocked' : ''} — ${esc(t.runtime)} — ${timeAgo(t.created_at)}</div>
+            ${t.guardrails && t.guardrails.length ? `<div class="item-meta">Guardrails: ${t.guardrails.map(esc).join(', ')}</div>` : ''}
+            ${t.result ? `<div class="item-body">${esc(t.result)}</div>` : ''}
+          </div>`).join('')
+      : '<div class="empty">No managed tasks yet — give CLARVIS a goal.</div>',
+      { count: managed.length, scroll: true }));
+
+    const statusGlyph = { queued: '⏳ QUEUED', running: '⚡ RUNNING', done: '✓ DONE', failed: '⚠ FAILED' };
+    right.push(panel('Background Ops', tasks.length
+      ? tasks.map(t => `
+          <div class="item">
+            <div class="item-title">${esc(t.description)}</div>
+            <div class="item-meta">${statusGlyph[t.status] || esc(t.status)} — ${timeAgo(t.created_at)}</div>
+            ${t.result ? `<div class="item-body">${esc(t.result)}</div>` : ''}
+          </div>`).join('')
+      : '<div class="empty">No delegated tasks yet.</div>',
+      { count: tasks.length, scroll: true }));
+
+    // revenue tracker
+    const rev = getRevenue();
+    const pct = Math.min(100, Math.round(rev / REV_GOAL * 100));
+    const circ = 2 * Math.PI * 48;
+    right.push(panel('Revenue Ops',
+      `<div class="rev-flex">
+        <div class="rev-ring">
+          <svg width="110" height="110" viewBox="0 0 110 110">
+            <circle cx="55" cy="55" r="48" fill="none" stroke="#12283f" stroke-width="7"/>
+            <circle cx="55" cy="55" r="48" fill="none" stroke="#3fd0ff" stroke-width="7"
+              stroke-linecap="round" stroke-dasharray="${circ}"
+              stroke-dashoffset="${circ * (1 - pct / 100)}"
+              style="filter: drop-shadow(0 0 6px rgba(63,208,255,.6))"/>
+          </svg>
+          <div class="rev-center"><span class="pct">${pct}%</span><span class="pct-lbl">of goal</span></div>
+        </div>
+        <div class="rev-detail">
+          MTD: <b>$${rev.toLocaleString()}</b><br>
+          GOAL: <b>$${REV_GOAL.toLocaleString()}/mo</b><br>
+          <button class="rev-edit" onclick="setRevenue()">Update</button>
+        </div>
+      </div>`));
+
+    right.push(panel('Vault Archive', vault.length
+      ? vault.map(p => `<div class="item item-meta" style="padding:6px 0">${esc(p)}</div>`).join('')
+      : '<div class="empty">No notes in the vault yet.</div>',
+      { count: vault.length, scroll: true }));
+
+    deck.innerHTML = `
+      <div class="rail">${left.join('')}</div>
+      <div class="center-col">${center.join('')}</div>
+      <div class="rail">${right.join('')}</div>`;
+
+    // reactor stats
+    const activeCount = managed.filter(t => t.status === 'running' || t.status === 'queued').length
+      + tasks.filter(t => t.status === 'running' || t.status === 'queued').length;
+    const needsTap = actions.length + managed.filter(t => t.status === 'waiting_approval').length;
+    document.getElementById('reactor-stats').innerHTML = `
+      <div class="rstat"><div class="val">${activeCount}</div><div class="lbl">Active Ops</div></div>
+      <div class="rstat"><div class="val ${needsTap ? 'warm' : ''}">${needsTap}</div><div class="lbl">Awaiting Tap</div></div>
+      <div class="rstat"><div class="val">${events.length}</div><div class="lbl">Events Today</div></div>
+      <div class="rstat"><div class="val" style="color:var(--good); text-shadow:0 0 12px rgba(110,231,160,.5)">ONLINE</div><div class="lbl">Status</div></div>`;
+  }
+
+  // ---------- approvals ----------
   async function decide(id, decision, btn) {
     btn.parentElement.querySelectorAll('button').forEach(b => b.disabled = true);
     try {
@@ -400,13 +775,79 @@
     load();
   }
 
+  // ---------- chat dock ----------
+  const chatLog = document.getElementById('chat-log');
+  const chatInput = document.getElementById('chat-input');
+  const chatSend = document.getElementById('chat-send');
+
+  function addMsg(who, cls) {
+    const div = document.createElement('div');
+    div.className = 'msg ' + cls;
+    div.innerHTML = `<span class="who">${who}</span><span class="body"></span>`;
+    chatLog.appendChild(div);
+    chatLog.classList.add('open');
+    chatLog.scrollTop = chatLog.scrollHeight;
+    return div.querySelector('.body');
+  }
+
+  async function sendChat() {
+    const text = chatInput.value.trim();
+    if (!text) return;
+    chatInput.value = '';
+    chatSend.disabled = true;
+    addMsg('YOU', 'user').textContent = text;
+    const replyBody = addMsg('CLARVIS', 'clarvis');
+    const statusEl = document.createElement('span');
+    statusEl.style.cssText = 'color:var(--text-dim);font-style:italic';
+    statusEl.textContent = 'thinking…';
+    replyBody.after(statusEl);
+    try {
+      const res = await fetch('/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: text }),
+      });
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split('\n');
+        buf = lines.pop();
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const ev = JSON.parse(line);
+            if (ev.type === 'text') { statusEl.textContent = ''; replyBody.textContent += ev.delta; }
+            else if (ev.type === 'status') statusEl.textContent = '⟐ ' + (ev.label || 'working…');
+            else if (ev.type === 'error') { statusEl.textContent = ''; replyBody.textContent += '\n[error: ' + ev.message + ']'; }
+          } catch (_) { /* partial line */ }
+          chatLog.scrollTop = chatLog.scrollHeight;
+        }
+      }
+    } catch (err) {
+      replyBody.textContent += '\n[connection lost]';
+    }
+    statusEl.remove();
+    if (!replyBody.textContent) replyBody.textContent = '[no reply — check the full chat page]';
+    chatSend.disabled = false;
+    chatInput.focus();
+    load(); // refresh panels — the message may have queued tasks/approvals
+  }
+
+  chatSend.addEventListener('click', sendChat);
+  chatInput.addEventListener('keydown', e => { if (e.key === 'Enter') sendChat(); });
+
+  // ---------- load loop ----------
   async function load() {
     try {
       const res = await fetch('/api/dashboard');
       const data = await res.json();
       render(data);
     } catch (err) {
-      widgets.innerHTML = '<div class="refresh-note">Could not load dashboard data — is the server running?</div>';
+      deck.innerHTML = '<div class="refresh-note" style="grid-column:1/-1">Could not load deck data — is the server running?</div>';
     }
   }
 
