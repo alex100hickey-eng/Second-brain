@@ -56,12 +56,19 @@ The chat brain lives at `~/second-brain/second-brain-chat/app.py` (+ `templates/
 - **PWA support** — manifest + generated icons, add-to-home-screen works on iOS/Android.
 - **Login gate — built but DORMANT.** Full flow exists (`/login`, 31-day session, brute-force delay), but only activates once a `JARVIS_PASSWORD` env var is set in Coolify. **It is not set yet — the live site is currently open to anyone with the URL.** This is the single most important thing for Alex to do next.
 
+### Voice (added 2026-07-19 daytime session)
+- Mic button (SpeechRecognition) + spoken replies (speechSynthesis) + "Voice" nav toggle in the chat UI. Spoken input auto-sends and turns spoken replies on. **Browsers only allow the mic on HTTPS or localhost** — the button hides itself elsewhere, so on the live HTTP site there's no mic until HTTPS exists (Wispr Flow covers dictation meanwhile). Spoken replies work anywhere.
+
+### Background tasks (added 2026-07-19 daytime session)
+- `delegate_task(description)` queues a `jarvis_task` row; a daemon worker thread inside the app claims it **atomically** (compare-and-swap on the row JSON — duplicate worker threads/processes are harmless) and runs it through the same tool-use loop with the same approval rules. Result is written to the row, shown in a "Background Tasks" dashboard widget, and posted into the chat thread. `check_delegated_tasks` reports status. Verified end-to-end locally (real multi-tool digest task).
+
 ### Memory
 - `remember(fact)` — saves a fact to Supabase (`jarvis_memory` rows); every memory is injected into the system prompt on every request, so it's available in brand-new conversations and shared between local and deployed instances.
 - `forget_memory(matching_text)` — soft-deletes (retags to `jarvis_memory_forgotten`, never destroyed) when exactly one memory matches; otherwise lists matches so Alex/Jarvis can be more specific.
 
 ### Real-world connectors
 - **Google Calendar, read-only** — list/search events, list calendars, get current time. Deliberately whitelisted to exactly those Composio tool slugs; no create/update/delete slugs are reachable at all, by design (matches the autonomy model — write access needs the approval gate, see below).
+- **Gmail, read-only** (added 2026-07-19 daytime session) — six whitelisted slugs (GMAIL_FETCH_EMAILS, FETCH_MESSAGE_BY_MESSAGE_ID, FETCH_MESSAGE_BY_THREAD_ID, LIST_THREADS, LIST_LABELS, GET_PROFILE); nothing that sends/drafts/deletes/modifies is reachable. Setup script: `scripts/connect_gmail.py`. **OAuth consent click by Alex still pending** — code is deployed-ready but Gmail tools won't work until the Composio connection goes active.
 - Vault tools (`list_vault_notes`, `read_vault_note`, `write_vault_note`) — read/write actual Obsidian notes.
 
 ### The approval layer (the mechanism, not just one feature)
@@ -123,7 +130,7 @@ All piggyback on the one `Agent Outputs` table, filtered out of every agent-outp
 1. **Set `JARVIS_PASSWORD`** in Coolify env vars (Runtime only) for `second-brain-chat`, then redeploy. The login gate is fully built and waiting — until this env var exists, the live site is open to anyone with the URL.
 2. **Review branch `jarvis/tool-get_word_count`** on GitHub — merge it (completing the first real self-expansion cycle) or discard it.
 3. **HTTPS** — deliberately not attempted autonomously (Let's Encrypt on sslip.io domains is rate-limit-prone; a failed cert mid-deploy could break the live site unattended). Worth pairing with acquiring a real domain.
-4. **Gmail (read-only) via Composio** — needs Alex present for the OAuth consent click, same pattern as Calendar.
+4. **Gmail OAuth click** — code shipped 2026-07-19 (commit `fe2b8d7`); Alex just needs to open the Composio link (`scripts/connect_gmail.py` prints a fresh one) and approve. Also: commit `fe2b8d7` (tasks/Gmail/voice) is pushed to main but **the Coolify redeploy hasn't been triggered yet** — deploys never auto-start on this install.
 5. **Server-side persistence for `agents/` and `proposed_tools/` drafts** — currently, anything drafted via the *live* (deployed) chat brain lands in that container's ephemeral filesystem and vanishes on redeploy. Local drafts are fine. Same fix pattern as the vault (a persistent volume) hasn't been applied here yet.
 6. **Calendar edit/delete via the approval queue** — extend the same propose→approve pattern already built for event creation to event editing/deletion.
 7. **More approval-gated writes generally** (send email, etc.) once Gmail exists.
