@@ -12,6 +12,9 @@ Run locally: python3 app.py  (then open http://localhost:5000)
 import os
 import re
 import json
+import time
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from flask import Flask, request, jsonify, render_template, Response, stream_with_context
 from anthropic import Anthropic
@@ -65,6 +68,11 @@ except Exception as e:
     print(f"Warning: couldn't fetch Composio calendar tools at startup: {e}")
     CALENDAR_TOOLS = []
 
+# Rows in "Agent Outputs" with these agent_name values are internal storage for the
+# chat brain itself (memories, pending approvals) — not real agent outputs. Keep them
+# out of anything that lists agent activity.
+INTERNAL_AGENT_NAMES = {"jarvis_memory", "jarvis_pending_action"}
+
 SYSTEM_PROMPT = """You are Alex's personal assistant — the brain of his "second brain" system.
 You're direct, helpful, and a little sharp/witty like a good assistant should be — think
 capable and efficient, not overly formal.
@@ -89,9 +97,20 @@ yourself; a human has to review and merge the proposal. Always tell him that.
 
 You have read-only access to Alex's Google Calendar (GOOGLECALENDAR_* tools) — you can list
 and search his events, and check calendars/current time, to answer questions about his
-schedule. You cannot create, edit, or delete calendar events — that capability doesn't exist
-yet. If he asks you to schedule or change something on his calendar, tell him that's not
-something you can do yet rather than attempting it."""
+schedule.
+
+You have a persistent memory. Facts you've saved appear below under "Saved memories" — treat
+them as things you know about Alex. When he tells you something worth keeping long-term (a
+preference, a goal, a recurring commitment, a fact about his life), or asks you to remember
+something, save it with the remember tool. Keep each memory to one short, self-contained
+sentence. Don't save throwaway context or things already in your memories.
+
+You can propose adding events to Alex's calendar with propose_calendar_event, but you cannot
+create them directly. A proposal goes into a pending-approval queue that Alex reviews on his
+dashboard — nothing touches his calendar until he clicks Approve there. When you propose an
+event, tell him it's waiting for his approval on the dashboard. This approve-first rule
+exists because calendar changes are consequential; never imply an event is booked before
+he's approved it."""
 
 
 # ============================================================
@@ -184,6 +203,51 @@ TOOLS = [
         },
     },
     {
+        "name": "remember",
+        "description": "Save a fact about Alex to your persistent long-term memory. It will be available to you in every future conversation. Use when he tells you something worth keeping (preferences, goals, recurring commitments, life facts) or asks you to remember something. One short sentence per memory.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "fact": {
+                    "type": "string",
+                    "description": "The fact to remember, as one short self-contained sentence, e.g. 'Alex's football practice is on Tuesday and Thursday evenings.'",
+                }
+            },
+            "required": ["fact"],
+        },
+    },
+    {
+        "name": "propose_calendar_event",
+        "description": (
+            "Propose a new Google Calendar event for Alex. This does NOT create the event — it queues "
+            "a pending action that Alex must approve on his dashboard before anything is added to his "
+            "calendar. Use when he asks to schedule, book, or add something to his calendar. Always tell "
+            "him afterwards that it's awaiting his approval on the dashboard."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "title": {
+                    "type": "string",
+                    "description": "Event title, e.g. 'Film study session'.",
+                },
+                "start_datetime": {
+                    "type": "string",
+                    "description": "Start time in ISO 8601 local time, e.g. '2026-07-20T15:00:00'. Interpreted in Alex's timezone (America/New_York).",
+                },
+                "end_datetime": {
+                    "type": "string",
+                    "description": "End time in ISO 8601 local time, e.g. '2026-07-20T16:00:00'.",
+                },
+                "description": {
+                    "type": "string",
+                    "description": "Optional event description/notes.",
+                },
+            },
+            "required": ["title", "start_datetime", "end_datetime"],
+        },
+    },
+    {
         "name": "create_new_tool",
         "description": (
             "Draft a proposal for a brand-new tool/capability for THIS chat brain itself (Jarvis) — "
@@ -237,13 +301,141 @@ TOOLS = [
 
 
 def get_recent_agent_outputs(agent_name: str = None, limit: int = 5) -> str:
-    query = supabase.table("Agent Outputs").select("*").order("created_at", desc=True).limit(limit)
+    # Over-fetch so internal rows (memories, pending approvals) can be filtered
+    # out while still returning up to `limit` real outputs.
+    query = (
+        supabase.table("Agent Outputs")
+        .select("*")
+        .order("created_at", desc=True)
+        .limit(limit + 20)
+    )
     if agent_name:
         query = query.eq("agent_name", agent_name)
     result = query.execute()
-    if not result.data:
+    rows = [r for r in (result.data or []) if r["agent_name"] not in INTERNAL_AGENT_NAMES]
+    if not rows:
         return "No agent outputs found."
-    return json.dumps(result.data, indent=2, default=str)
+    return json.dumps(rows[:limit], indent=2, default=str)
+
+
+def remember(fact: str) -> str:
+    supabase.table("Agent Outputs").insert(
+        {"agent_name": "jarvis_memory", "output_text": fact}
+    ).execute()
+    return f"Remembered: {fact}"
+
+
+def load_memories() -> list:
+    """All saved memories, oldest first, for injection into the system prompt."""
+    result = (
+        supabase.table("Agent Outputs")
+        .select("output_text")
+        .eq("agent_name", "jarvis_memory")
+        .order("created_at", desc=False)
+        .execute()
+    )
+    return [row["output_text"] for row in (result.data or [])]
+
+
+def build_system_prompt() -> str:
+    memories = load_memories()
+    if not memories:
+        return SYSTEM_PROMPT + "\n\nSaved memories: none yet."
+    lines = "\n".join(f"- {m}" for m in memories)
+    return SYSTEM_PROMPT + f"\n\nSaved memories:\n{lines}"
+
+
+# ============================================================
+# APPROVAL LAYER — consequential actions get queued here instead of
+# executing. Alex approves or denies them on the dashboard; only an
+# explicit approval (POST /api/approve) ever executes anything.
+# ============================================================
+
+def propose_calendar_event(title: str, start_datetime: str, end_datetime: str, description: str = "") -> str:
+    try:
+        start = datetime.fromisoformat(start_datetime)
+        end = datetime.fromisoformat(end_datetime)
+    except ValueError:
+        return "Invalid start or end time — use ISO 8601 format like 2026-07-20T15:00:00."
+    if end <= start:
+        return "End time must be after start time — proposal not queued."
+
+    action = {
+        "action": "create_calendar_event",
+        "tool_slug": "GOOGLECALENDAR_CREATE_EVENT",
+        "arguments": {
+            "calendar_id": "primary",
+            "summary": title,
+            "start_datetime": start_datetime,
+            "end_datetime": end_datetime,
+            "timezone": "America/New_York",
+            "description": description,
+            "create_meeting_room": False,
+        },
+        "display": f"{title} — {start.strftime('%a %b %-d, %-I:%M %p')} to {end.strftime('%-I:%M %p')}",
+        "status": "pending",
+    }
+    supabase.table("Agent Outputs").insert(
+        {"agent_name": "jarvis_pending_action", "output_text": json.dumps(action)}
+    ).execute()
+    return (
+        f"Queued for approval: '{title}' ({start_datetime} to {end_datetime}). "
+        "NOT on the calendar yet — Alex must approve it on the dashboard first."
+    )
+
+
+def get_pending_actions() -> list:
+    result = (
+        supabase.table("Agent Outputs")
+        .select("*")
+        .eq("agent_name", "jarvis_pending_action")
+        .order("created_at", desc=True)
+        .limit(30)
+        .execute()
+    )
+    pending = []
+    for row in result.data or []:
+        try:
+            action = json.loads(row["output_text"])
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if action.get("status") == "pending":
+            pending.append({"id": row["id"], "display": action.get("display", "(unknown action)"), "action": action.get("action")})
+    return pending
+
+
+def resolve_pending_action(row_id: int, decision: str) -> dict:
+    """Approve or deny one pending action. Approval is the ONLY path that executes."""
+    result = supabase.table("Agent Outputs").select("*").eq("id", row_id).execute()
+    if not result.data:
+        return {"ok": False, "error": "No such action."}
+    row = result.data[0]
+    if row["agent_name"] != "jarvis_pending_action":
+        return {"ok": False, "error": "Not an approvable action."}
+    action = json.loads(row["output_text"])
+    if action.get("status") != "pending":
+        return {"ok": False, "error": f"Already {action.get('status')}."}
+
+    if decision == "deny":
+        action["status"] = "denied"
+        supabase.table("Agent Outputs").update({"output_text": json.dumps(action)}).eq("id", row_id).execute()
+        return {"ok": True, "status": "denied"}
+
+    resp = composio.tools.execute(
+        slug=action["tool_slug"],
+        arguments=action["arguments"],
+        user_id=COMPOSIO_USER_ID,
+        dangerously_skip_version_check=True,
+    )
+    if resp.get("successful") is False:
+        action["status"] = "failed"
+        action["error"] = str(resp.get("error"))[:500]
+        supabase.table("Agent Outputs").update({"output_text": json.dumps(action)}).eq("id", row_id).execute()
+        return {"ok": False, "error": f"Execution failed: {action['error']}"}
+
+    action["status"] = "approved"
+    supabase.table("Agent Outputs").update({"output_text": json.dumps(action)}).eq("id", row_id).execute()
+    return {"ok": True, "status": "approved"}
 
 
 def log_note(text: str) -> str:
@@ -448,6 +640,15 @@ def handle_tool_call(tool_name: str, tool_input: dict) -> str:
         )
     if tool_name == "log_note":
         return log_note(tool_input["text"])
+    if tool_name == "remember":
+        return remember(tool_input["fact"])
+    if tool_name == "propose_calendar_event":
+        return propose_calendar_event(
+            title=tool_input["title"],
+            start_datetime=tool_input["start_datetime"],
+            end_datetime=tool_input["end_datetime"],
+            description=tool_input.get("description", ""),
+        )
     if tool_name == "list_vault_notes":
         return list_vault_notes(folder=tool_input.get("folder"))
     if tool_name == "read_vault_note":
@@ -490,6 +691,8 @@ def handle_tool_call(tool_name: str, tool_input: dict) -> str:
 TOOL_STATUS_LABELS = {
     "get_recent_agent_outputs": "Checking what your agents have found…",
     "log_note": "Saving that note…",
+    "remember": "Committing that to memory…",
+    "propose_calendar_event": "Queuing that for your approval…",
     "list_vault_notes": "Looking through your vault…",
     "read_vault_note": "Reading your notes…",
     "write_vault_note": "Writing to your vault…",
@@ -507,11 +710,12 @@ def stream_chat(messages: list):
     {"type": "text", "delta": ...}    — a chunk of the reply as it's written
     {"type": "status", "label": ...}  — what tool is being used right now
     """
+    system_prompt = build_system_prompt()  # fresh memories every request
     while True:
         with claude.messages.stream(
             model="claude-sonnet-5",
             max_tokens=1024,
-            system=SYSTEM_PROMPT,
+            system=system_prompt,
             tools=TOOLS,
             messages=messages,
         ) as stream:
@@ -545,6 +749,58 @@ def stream_chat(messages: list):
 
 
 # ============================================================
+# TODAY'S CALENDAR — cached read-only fetch for the dashboard.
+# Cached for 5 minutes so the dashboard's 30-second refresh loop
+# doesn't hammer the Google Calendar API.
+# ============================================================
+
+LOCAL_TZ = ZoneInfo("America/New_York")
+_calendar_cache = {"events": None, "fetched_at": 0.0}
+
+
+def get_today_events() -> list:
+    if _calendar_cache["events"] is not None and time.time() - _calendar_cache["fetched_at"] < 300:
+        return _calendar_cache["events"]
+
+    now = datetime.now(LOCAL_TZ)
+    day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    day_end = day_start + timedelta(days=1)
+
+    try:
+        resp = composio.tools.execute(
+            slug="GOOGLECALENDAR_EVENTS_LIST",
+            arguments={
+                "calendarId": "primary",
+                "timeMin": day_start.isoformat(),
+                "timeMax": day_end.isoformat(),
+                "singleEvents": True,
+                "orderBy": "startTime",
+            },
+            user_id=COMPOSIO_USER_ID,
+            dangerously_skip_version_check=True,
+        )
+        items = (resp.get("data") or {}).get("items") or []
+        events = []
+        for ev in items:
+            start = ev.get("start") or {}
+            end = ev.get("end") or {}
+            events.append(
+                {
+                    "title": ev.get("summary", "(untitled)"),
+                    "start": start.get("dateTime") or start.get("date"),
+                    "end": end.get("dateTime") or end.get("date"),
+                    "all_day": "date" in start and "dateTime" not in start,
+                }
+            )
+        _calendar_cache["events"] = events
+        _calendar_cache["fetched_at"] = time.time()
+        return events
+    except Exception as e:
+        print(f"Warning: couldn't fetch today's calendar events: {e}")
+        return _calendar_cache["events"] or []
+
+
+# ============================================================
 # DASHBOARD DATA — read-only summary of system state.
 # Doubles as the review surface for self-expansion drafts (create_new_agent /
 # create_new_tool both land here as "pending" until Alex reviews them).
@@ -561,11 +817,12 @@ def get_dashboard_data() -> dict:
         supabase.table("Agent Outputs")
         .select("*")
         .order("created_at", desc=True)
-        .limit(8)
+        .limit(28)
         .execute()
         .data
         or []
     )
+    outputs = [r for r in outputs if r["agent_name"] not in INTERNAL_AGENT_NAMES][:8]
 
     all_notes = []
     if os.path.isdir(VAULT_PATH):
@@ -580,6 +837,8 @@ def get_dashboard_data() -> dict:
         "vault_notes": all_notes,
         "pending_agents": _list_py_files(AGENTS_DIR),
         "pending_tools": _list_py_files(PROPOSED_TOOLS_DIR),
+        "today_events": get_today_events(),
+        "pending_actions": get_pending_actions(),
     }
 
 
@@ -600,6 +859,17 @@ def dashboard():
 @app.route("/api/dashboard")
 def api_dashboard():
     return jsonify(get_dashboard_data())
+
+
+@app.route("/api/approve", methods=["POST"])
+def api_approve():
+    data = request.get_json()
+    row_id = data.get("id")
+    decision = data.get("decision")
+    if decision not in ("approve", "deny") or not isinstance(row_id, int):
+        return jsonify({"ok": False, "error": "Bad request."}), 400
+    result = resolve_pending_action(row_id, decision)
+    return jsonify(result), (200 if result.get("ok") else 422)
 
 
 @app.route("/chat", methods=["POST"])

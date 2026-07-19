@@ -263,6 +263,7 @@
     <nav>
       <a href="/" class="active">Chat</a>
       <a href="/dashboard">Dashboard</a>
+      <a href="#" id="clear-chat" title="Start a fresh conversation">Clear</a>
     </nav>
   </div>
 </header>
@@ -289,7 +290,20 @@
   const sendBtn = document.getElementById('send-btn');
   const status = document.getElementById('status');
 
+  const HISTORY_KEY = 'jarvis-chat-history';
   let history = [];
+  try {
+    history = JSON.parse(localStorage.getItem(HISTORY_KEY)) || [];
+  } catch (e) { history = []; }
+
+  // Restore previous conversation on page load
+  for (const msg of history) {
+    if (typeof msg.content === 'string') addMessage(msg.role, msg.content);
+  }
+
+  function saveHistory() {
+    try { localStorage.setItem(HISTORY_KEY, JSON.stringify(history)); } catch (e) {}
+  }
 
   function addMessage(role, text) {
     if (emptyState) emptyState.remove();
@@ -395,6 +409,7 @@
       if (fullText) {
         history.push({ role: 'user', content: message });
         history.push({ role: 'assistant', content: fullText });
+        saveHistory();
       }
     } catch (err) {
       removeThinking();
@@ -405,6 +420,13 @@
       status.textContent = 'Online';
       input.focus();
     }
+  });
+
+  document.getElementById('clear-chat').addEventListener('click', (e) => {
+    e.preventDefault();
+    history = [];
+    saveHistory();
+    location.reload();
   });
 
   input.focus();

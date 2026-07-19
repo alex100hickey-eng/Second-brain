@@ -168,6 +168,34 @@
     margin-left: 8px;
   }
 
+  .approve-row {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+  }
+
+  .approve-row button {
+    border: 1px solid var(--line);
+    background: transparent;
+    border-radius: 6px;
+    padding: 6px 14px;
+    font-size: 12.5px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .btn-approve {
+    color: #6ee7a0;
+    border-color: #1d4a2e !important;
+  }
+
+  .btn-deny {
+    color: #ff7a7a;
+    border-color: #4a1d1d !important;
+  }
+
+  .approve-row button:disabled { opacity: 0.4; cursor: default; }
+
   .refresh-note {
     grid-column: 1 / -1;
     text-align: center;
@@ -214,8 +242,46 @@
     return `${Math.floor(hrs / 24)}d ago`;
   }
 
+  function fmtTime(iso) {
+    if (!iso) return '';
+    if (!iso.includes('T')) return 'All day';
+    return new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  }
+
   function render(data) {
     const sections = [];
+
+    const events = data.today_events || [];
+    sections.push(`
+      <div class="widget">
+        <h2>Today <span class="count">${new Date().toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })}</span></h2>
+        ${events.length
+          ? events.map(ev => `
+            <div class="item">
+              <div class="item-title">${esc(ev.title)}</div>
+              <div class="item-meta">${ev.all_day ? 'All day' : `${fmtTime(ev.start)} – ${fmtTime(ev.end)}`}</div>
+            </div>`).join('')
+          : '<div class="empty">Nothing on the calendar today.</div>'}
+      </div>
+    `);
+
+    const actions = data.pending_actions || [];
+    sections.push(`
+      <div class="widget ${actions.length ? 'pending' : ''}">
+        <h2>Awaiting Your Approval ${actions.length ? `<span class="badge">${actions.length}</span>` : ''}</h2>
+        ${actions.length
+          ? actions.map(a => `
+            <div class="item">
+              <div class="item-title">${esc(a.display)}</div>
+              <div class="item-meta">${esc(a.action || '')} — will NOT run unless you approve</div>
+              <div class="approve-row">
+                <button class="btn-approve" onclick="decide(${a.id}, 'approve', this)">Approve</button>
+                <button class="btn-deny" onclick="decide(${a.id}, 'deny', this)">Deny</button>
+              </div>
+            </div>`).join('')
+          : '<div class="empty">No actions waiting on you.</div>'}
+      </div>
+    `);
 
     const pendingCount = data.pending_agents.length + data.pending_tools.length;
     const pendingItems = [
@@ -259,6 +325,22 @@
     `);
 
     widgets.innerHTML = sections.join('');
+  }
+
+  async function decide(id, decision, btn) {
+    btn.parentElement.querySelectorAll('button').forEach(b => b.disabled = true);
+    try {
+      const res = await fetch('/api/approve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, decision }),
+      });
+      const data = await res.json();
+      if (!data.ok) alert(data.error || 'Something went wrong.');
+    } catch (err) {
+      alert('Could not reach the server.');
+    }
+    load();
   }
 
   async function load() {
