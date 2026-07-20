@@ -25,5 +25,24 @@ second-brain-chat/conversation_memory.db-wal
 second-brain-chat/conversation_memory.db-shm
 # Screen-watch: captured screenshots are processed then deleted; never commit any
 screenshots/
+
+# Round-5: unified semantic index (embeds vault + conversations + reports + tasks) — LOCAL, never commit
+second-brain-chat/semantic_index.db
+second-brain-chat/semantic_index.db-journal
+second-brain-chat/semantic_index.db-wal
+second-brain-chat/semantic_index.db-shm
+# Vendored local embedding model (potion-base-8M, ~31 MB) — re-downloadable via requirements
+models/potion-base-8M/
+# Local test-suite last-green-run marker (state, not source)
+.last_test_pass
+# Round-5: captured notes staging — the notes can hold pasted/personal content, so keep the
+# .md files local (private); the README explaining the folder stays tracked.
+vault_inbox/*.md
+!vault_inbox/README.md
+# Round-5: tool audit log + cost tracking DBs — LOCAL + PRIVATE, never commit
+second-brain-chat/observability.db
+second-brain-chat/observability.db-journal
+second-brain-chat/observability.db-wal
+second-brain-chat/observability.db-shm
 # run drafts are text (tracked on purpose), but the launch state index stays local
 # (kept tracked — small JSON; drafts are useful history)

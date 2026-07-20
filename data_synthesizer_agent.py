@@ -214,6 +214,19 @@ def synthesize(topic: str, raw_material: str = None, mode: str = "auto",
     material = _build_material_block(sources=sources, raw_material=raw_material)
     if not material.strip():
         material = "(No material could be gathered. Write what is reliably known about the topic, and say clearly that no live sources were retrieved.)"
+    else:
+        # Wrap fetched web pages / pasted material with the shared data-boundary framing:
+        # scraped pages are prime injection vectors. Soft import keeps the CLI standalone.
+        try:
+            import sys as _sys, os as _os
+            _cd = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "second-brain-chat")
+            if _cd not in _sys.path:
+                _sys.path.insert(0, _cd)
+            import data_boundary
+            material = data_boundary.wrap_untrusted(material, source="web sources / pasted material",
+                                                    what="research material")
+        except Exception:
+            pass
 
     src_count = len(sources)
     system = (

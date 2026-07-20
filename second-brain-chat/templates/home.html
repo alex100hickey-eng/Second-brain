@@ -166,6 +166,7 @@
     <a class="action" href="/?q=Synthesize%20a%20report%20on%3A%20"><span class="ico">&#128220;</span> Run Synthesizer</a>
     <a class="action" href="/?q=Build%20a%20website%3A%20"><span class="ico">&#127760;</span> Build Website</a>
     <a class="action" href="/?q=Create%20a%20task%3A%20"><span class="ico">&#9989;</span> New Task</a>
+    <a class="action" href="/?q=weekly%20review"><span class="ico">&#128202;</span> Weekly Review</a>
     <button class="action" id="refresh-btn"><span class="ico">&#8635;</span> Refresh</button>
   </div>
 
@@ -289,6 +290,59 @@
           <div class="r-meta">${esc(n.folder)}${n.when ? ' · ' + esc(n.when) : ''}</div>
         </div>`),
       'No notes indexed.', 'Point OBSIDIAN_VAULT_PATH at your vault (or sample_vault to demo).'));
+
+    // Captured notes staged in vault_inbox/ (drag into Obsidian)
+    panels.push(panel('Captured Notes', (d.captured||[]).length,
+      rows(d.captured||[], c => `
+        <div class="row">
+          <div class="r-title">${esc(c.title)}</div>
+          ${c.summary ? `<div class="r-sub">${esc(c.summary)}</div>` : ''}
+          <div class="r-meta">→ ${esc(c.folder||'?')}${c.tags ? ' · ' + esc(c.tags) : ''} · <span style="font-family:'SF Mono',monospace">${esc(c.filename)}</span></div>
+        </div>`),
+      'No captured notes waiting.', 'Ask Jarvis to "capture this as a note" — it stages a file in vault_inbox/ to drag into Obsidian.'));
+
+    // System health indicator
+    if (d.health && d.health.checks) {
+      const dot = {healthy:'🟢', degraded:'🟡', critical:'🔴'}[d.health.overall] || '⚪';
+      panels.push(panel('System Health ' + dot + ' ' + esc((d.health.overall||'').toUpperCase()),
+        (d.health.checks||[]).length,
+        rows(d.health.checks||[], c => {
+          const mark = c.ok===true ? '✓' : (c.ok===false ? '✗' : '•');
+          const col = c.ok===true ? '#39d98a' : (c.ok===false ? '#ff6b6b' : '#e2b93b');
+          return `<div class="row">
+            <div class="r-title"><span style="color:${col}">${mark}</span> ${esc(c.name)}: ${esc(c.status)}</div>
+            ${c.detail ? `<div class="r-meta">${esc(c.detail)}</div>` : ''}
+          </div>`;
+        }), 'No checks.', ''));
+    }
+
+    // Cost tracking
+    if (d.cost && d.cost.today) {
+      const t = d.cost.today, w = d.cost.week;
+      const feats = (d.cost.by_feature||[]).slice(0,6);
+      const featRows = feats.map(f => `<div class="row"><div class="r-title">${esc(f.feature)}</div>
+        <div class="r-meta">$${(f.cost||0).toFixed(4)} · ${f.requests} req</div></div>`).join('');
+      const body = `<div class="row"><div class="r-title">Today: $${(t.cost||0).toFixed(4)}</div>
+          <div class="r-meta">${t.requests} req · ${(t.input_tokens||0).toLocaleString()} in / ${(t.output_tokens||0).toLocaleString()} out</div></div>
+        <div class="row"><div class="r-title">This week: $${(w.cost||0).toFixed(4)}</div>
+          <div class="r-meta">${w.requests} req · estimated from pricing.json (verify)</div></div>
+        ${featRows}`;
+      panels.push(`<div class="panel"><h2>API Cost</h2>${(t.requests||w.requests) ? body :
+        `<div class="empty">No API usage recorded yet.<div class="hint">Chat with Jarvis and spend shows up here.</div></div>`}</div>`);
+    }
+
+    // Recent activity (tool audit log)
+    panels.push(panel('Recent Activity', (d.activity||[]).length,
+      rows(d.activity||[], a => {
+        const ok = a.success ? '<span style="color:#39d98a">✓</span>' : '<span style="color:#ff6b6b">✗</span>';
+        const t = (a.ts||'').replace('T',' ').slice(11,16);
+        return `<div class="row">
+          <div class="r-title">${ok} ${esc(a.tool)} <span style="opacity:.6">via ${esc(a.trigger)}</span></div>
+          ${a.input_summary ? `<div class="r-sub">${esc(a.input_summary)}</div>` : ''}
+          <div class="r-meta">${esc(t)}${a.ms ? ' · ' + a.ms + 'ms' : ''}</div>
+        </div>`;
+      }),
+      'No tool activity logged yet.', 'Every tool Jarvis runs is recorded here.'));
 
     // Synthesized reports
     panels.push(panel('Synthesized Reports', (d.reports||[]).length,

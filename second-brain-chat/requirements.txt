@@ -10,4 +10,7 @@ ddgs
 beautifulsoup4
 lxml
 Pillow
+# Round-5 unified semantic search: local torch-free embeddings
+numpy
+model2vec
 # System deps (brew, not pip): ffmpeg, whisper-cpp + models/ggml-base.en.bin — see ../requirements.txt
