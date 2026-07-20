@@ -18,7 +18,15 @@ WHAT'S COVERED
   website    — create_website idempotency guard (one request → one build)
   feasibility— feasibility judge output shape (offline) + 3-idea differentiation (--live)
   tasks      — task tracker CRUD + status flow + history (pure local storage)
-  security   — no live secrets in code, localhost-only default binding, .env gitignored
+  memory     — conversation memory: sessions, search, automatic recall, summary, delete
+  goals      — goals + progress from linked tasks; task urgency/importance ordering
+  screen     — screen-watch WATCH-ONLY: blank/permission heuristic, vision, no control code
+  drafter    — run drafter DRAFTS ONLY: verbatim safety rules, council attach, status flow
+  voice      — local whisper transcription of a generated sample + macOS `say` availability
+  briefing   — morning briefing assembles + custom shortcuts expand
+  backup     — backup script syntax/retention + jarvis-launch never invokes claude
+  security   — no live secrets in code, localhost-only, .env/memory-db/screenshots gitignored,
+               and NO mouse/keyboard control code anywhere
 
 OFFLINE DESIGN: anything that would call the Claude API or scrape the web is replaced
 with a realistic fake/stub, so the default run is deterministic and costs nothing.
@@ -30,10 +38,27 @@ never touches the real Obsidian vault, and it drives the same code paths the cha
 """
 
 import os
+import re
 import sys
 import shutil
 import tempfile
 import subprocess
+
+# Patterns that indicate ACTUAL mouse/keyboard control code — real imports or attribute
+# calls, NOT the mere mention of a library name in a docstring or safety rule (our safety
+# text legitimately says things like "no pyautogui-style control"). Screen-watch is
+# watch-only; this must never match anywhere in the project.
+_CONTROL_CODE_PATTERNS = [
+    r"^\s*import\s+pyautogui\b", r"^\s*import\s+pynput\b",
+    r"^\s*from\s+pyautogui\b", r"^\s*from\s+pynput\b",
+    r"\bpyautogui\.\w", r"\bpynput\.\w",
+    r"CGEventPost\s*\(", r"CGEventCreateMouseEvent\s*\(", r"CGEventCreateKeyboardEvent\s*\(",
+    r"subprocess\.[a-z]+\(\s*\[?\s*['\"]cliclick['\"]",  # cliclick invoked as a command
+]
+
+
+def _has_control_code(text: str) -> bool:
+    return any(re.search(p, text, re.MULTILINE) for p in _CONTROL_CODE_PATTERNS)
 
 # --- make the app + agents importable, and protect the real vault ------------
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -452,6 +477,269 @@ def suite_tasks(app, live):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def suite_memory(app, live):
+    section("conversation memory (sessions / search / recall / delete)")
+    import conversation_memory as cm
+    import sqlite3
+    tmp = tempfile.mkdtemp(prefix="sbtest_mem_")
+    db = os.path.join(tmp, "mem.db")
+    m = cm.ConversationMemory(db, summarizer=lambda msgs: ("Test Convo", "Discussed YouTube growth and stock tickers."))
+    try:
+        # Seed a first session about YouTube.
+        m.log("user", "I want to grow my YouTube channel about sprint mechanics.")
+        m.log("assistant", "Focus on consistent clip farming and a niche.")
+        m.log("user", "My best topic is sprint mechanics drills for track athletes.")
+        sid1 = m._open_session_row()["id"]
+        m.summarize_session(sid1, force=True)
+        check("a session gets a summary", bool(m.get_session(sid1)["summary"]))
+
+        # Force a session boundary by backdating + closing session 1.
+        c = sqlite3.connect(db)
+        c.execute("UPDATE sessions SET ended_at='2020-01-01T00:00:00+00:00', closed=1 WHERE id=?", (sid1,))
+        c.commit(); c.close()
+        m.log("user", "What tickers do I watch? NVDA and AAPL right?")
+        m.log("assistant", "Yes, you follow NVDA and AAPL.")
+        sid2 = m._open_session_row()["id"]
+
+        check("two distinct sessions recorded", sid2 != sid1 and len(m.list_sessions()) == 2)
+
+        r = m.search("youtube sprint channel growth")
+        check("search finds the YouTube session", any(x["session_id"] == sid1 for x in r), str([x['session_id'] for x in r]))
+        r2 = m.search("tickers stocks NVDA")
+        check("search finds the stocks session", any(x["session_id"] == sid2 for x in r2))
+        check("search returns a snippet", bool(r and r[0].get("snippet")))
+
+        # Automatic recall: a NEW youtube-relevant message should surface session 1,
+        # excluding the current session.
+        ctx = m.relevant_context("how's my youtube channel doing", exclude_session_id=sid2)
+        check("automatic recall surfaces the relevant past session",
+              "youtube" in ctx.lower() or "test convo" in ctx.lower() or "growth" in ctx.lower(), repr(ctx[:120]))
+
+        # Deletion is permanent.
+        check("delete removes the session", m.delete_session(sid1) is True and m.get_session(sid1) is None)
+        check("other session survives deletion", m.get_session(sid2) is not None)
+
+        # Heuristic summary path (no model) still produces something.
+        m2 = cm.ConversationMemory(os.path.join(tmp, "mem2.db"))
+        m2.log("user", "Let's talk about my budgeting spreadsheet and monthly spend.")
+        s = m2.summarize_session(m2._open_session_row()["id"], force=True)
+        check("heuristic summary works without a model", bool(s and s.get("summary")))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def suite_goals(app, live):
+    section("goals + task urgency/importance")
+    import task_tracker
+    tmp = tempfile.mkdtemp(prefix="sbtest_goals_")
+    db = os.path.join(tmp, "g.db")
+    tt = task_tracker.TaskTracker(db)
+    try:
+        low = tt.create("Low task", urgency=1, importance=1)
+        crit = tt.create("Critical task", urgency=5, importance=5)
+        mid = tt.create("Mid task", urgency=3, importance=2)
+        check("priority score = importance*2 + urgency", crit["priority_score"] == 15)
+        top = tt.top_by_priority(3)
+        check("default ordering is by priority (critical first)", top[0]["title"] == "Critical task")
+
+        tt.set_priority(low["id"], urgency=5, importance=5)
+        check("set_priority updates the score", tt.get(low["id"])["priority_score"] == 15)
+
+        g = tt.create_goal("Reach 10k subs", "growth", "2026-12-31")
+        check("goal starts at 0%", g["progress_pct"] == 0)
+        tt.link_task_to_goal(crit["id"], g["id"])
+        tt.link_task_to_goal(mid["id"], g["id"])
+        g = tt.get_goal(g["id"])
+        check("linked tasks counted", g["total_tasks"] == 2)
+        tt.update_status(crit["id"], "done")
+        g = tt.get_goal(g["id"])
+        check("progress derives from done tasks (1/2 = 50%)", g["progress_pct"] == 50 and g["done_tasks"] == 1)
+
+        r = tt.update_goal(g["id"], status="achieved", note="done early")
+        check("goal status updates", r["status"] == "achieved")
+        bad = tt.update_goal(g["id"], status="nonsense")
+        check("invalid goal status rejected", isinstance(bad, dict) and bad.get("error"))
+
+        check("goals_for_dashboard returns progress", tt.goals_for_dashboard()[0]["progress_pct"] == 50)
+
+        # persistence across instances
+        tt2 = task_tracker.TaskTracker(db)
+        check("goals persist across instances", tt2.get_goal(g["id"])["title"] == "Reach 10k subs")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def suite_screen(app, live):
+    section("screen-watch (WATCH-ONLY capture + vision)")
+    import screen_watch as sw
+    try:
+        from PIL import Image, ImageDraw
+    except Exception:
+        skip("screen-watch", "Pillow not installed")
+        return
+    tmp = tempfile.mkdtemp(prefix="sbtest_screen_")
+    try:
+        blank = os.path.join(tmp, "blank.png")
+        Image.new("RGB", (400, 300), (0, 0, 0)).save(blank)
+        check("near-uniform image detected as blank (no-permission signature)", sw.looks_blank(blank) is True)
+
+        content = os.path.join(tmp, "content.png")
+        im = Image.new("RGB", (800, 600), (30, 40, 60))
+        d = ImageDraw.Draw(im)
+        for i in range(0, 800, 40):
+            d.line([(i, 0), (i, 600)], fill=(200, 200, 200))
+        d.rectangle([100, 100, 400, 300], fill=(255, 120, 0))
+        d.text((120, 140), "ERROR on line 42", fill=(255, 255, 255))
+        im.save(content)
+        check("content-rich image NOT flagged as blank", sw.looks_blank(content) is False)
+
+        big = os.path.join(tmp, "big.png")
+        Image.new("RGB", (3000, 2000), (50, 50, 50)).save(big)
+        scaled = sw._downscaled_png(big, tmp, 0)
+        check("large screenshot downscaled for vision", Image.open(scaled).width <= sw.MAX_IMG_WIDTH)
+
+        # Vision pipeline with a fake client (offline) using a saved sample image.
+        fake = FakeClaude("I see an orange rectangle and an error about line 42.")
+        ans = sw.analyze_images(fake, [content], "what's on my screen?")
+        check("analyze_images returns the model's answer", "line 42" in ans and fake.messages.calls == 1)
+
+        # No control code anywhere in the module (belt-and-suspenders). Detects real
+        # imports/calls, not the docstring's mention of "no pyautogui-style control".
+        src = open(os.path.join(CHAT_DIR, "screen_watch.py"), encoding="utf-8").read()
+        check("screen_watch has NO mouse/keyboard control code", not _has_control_code(src))
+
+        if sw.screencapture_available():
+            try:
+                paths = sw.capture("main", work_dir=tmp)
+                check("live screencapture produced an image", bool(paths) and os.path.getsize(paths[0]) > 1000)
+            except sw.ScreenWatchError as e:
+                skip("live screencapture", f"capture unavailable: {e}")
+        else:
+            skip("live screencapture", "screencapture not present (non-macOS)")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def suite_drafter(app, live):
+    section("run drafter (DRAFTS ONLY — verbatim safety, council, status flow)")
+    import run_drafter as rd
+    tmp = tempfile.mkdtemp(prefix="sbtest_draft_")
+    orig_dir, orig_idx = rd.RUN_DRAFTS_DIR, rd.INDEX_PATH
+    rd.RUN_DRAFTS_DIR = tmp
+    rd.INDEX_PATH = os.path.join(tmp, "index.json")
+    try:
+        fake = FakeClaude(
+            "## PRIORITIES — COMPLETE IN THIS ORDER\n\n### Priority 1: Build the thing\n"
+            "Do it. Test it in run_tests.py.\n\n## SUCCESS CRITERIA\n- run_tests.py passes\n- security intact"
+        )
+        res = rd.create_draft("Build a notes-export feature", "context here",
+                              "**Judge**: proceed with care.", fake, title="Export Run")
+        check("draft created with an id + file", res.get("id") and res.get("file"))
+        body = rd.read_draft_body(res["id"])
+
+        # The hard safety rules must be present verbatim and unweakened.
+        for needle in ("## SYSTEM DIRECTIVE", "## HARD SAFETY RULES", "## PROJECT CONTEXT",
+                       "Obsidian vault stays strictly READ-ONLY", "The run drafter DRAFTS ONLY",
+                       "Screen-watch is WATCH-ONLY", "nothing exposed beyond 127.0.0.1"):
+            check(f"draft contains verbatim safety text: '{needle[:38]}'", needle in body)
+        check("draft includes the model-written spec", "Priority 1: Build the thing" in body)
+        check("draft includes success criteria", "SUCCESS CRITERIA" in body)
+        check("council verdict attached for review", "Decision Council Verdict" in body and "proceed with care" in body)
+
+        # The module must expose NO way to launch/execute a run.
+        src = open(os.path.join(ROOT, "run_drafter.py"), encoding="utf-8").read()
+        check("run_drafter never invokes claude/subprocess to launch",
+              "subprocess" not in src and "os.system" not in src and "Popen" not in src)
+
+        # Coverage guard: if the model omits a Success Criteria section, one is appended
+        # so every draft matches the required format.
+        fake_no_sc = FakeClaude("## PRIORITIES — COMPLETE IN THIS ORDER\n\n### Priority 1: X\nDo X.")
+        res2 = rd.create_draft("Some other goal", "", "", fake_no_sc, title="No SC Run")
+        body2 = rd.read_draft_body(res2["id"])
+        check("coverage guard appends Success Criteria when the model omits it",
+              "## SUCCESS CRITERIA" in body2)
+
+        rd.set_status(res["id"], "approved")
+        check("status flow works (→ approved)", rd.get_draft(res["id"])["status"] == "approved")
+        bad = rd.set_status(res["id"], "not-a-status")
+        check("invalid status rejected", isinstance(bad, dict) and bad.get("error"))
+        check("empty goal rejected", rd.create_draft("", "", "", fake).get("error"))
+    finally:
+        rd.RUN_DRAFTS_DIR, rd.INDEX_PATH = orig_dir, orig_idx
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def suite_voice(app, live):
+    section("voice (local whisper transcription + macOS say availability)")
+    if not _have("ffmpeg"):
+        skip("voice", "ffmpeg not installed")
+        return
+    if not _have("say"):
+        skip("say TTS", "macOS `say` not present")
+    else:
+        check("macOS `say` available for spoken replies", True)
+    if not _have("whisper-cli"):
+        skip("local transcription", "whisper-cli not installed")
+        return
+    import video_processor as vp
+    tmp = tempfile.mkdtemp(prefix="sbtest_voice_")
+    try:
+        aiff = os.path.join(tmp, "sample.aiff")
+        # Generate a real sample audio locally (no mic/permission needed).
+        subprocess.run(["say", "-o", aiff,
+                        "Remind me to edit the sprint mechanics clip tomorrow morning before practice."],
+                       check=True, capture_output=True)
+        check("sample audio generated", os.path.exists(aiff) and os.path.getsize(aiff) > 1000)
+        res = vp.transcribe_file(aiff, work_dir=tmp)
+        check("local whisper transcribes the sample",
+              bool(res["text"]) and any(w in res["text"].lower() for w in ("sprint", "clip", "remind", "edit")),
+              repr(res["text"])[:120])
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def suite_briefing(app, live):
+    section("morning briefing + shortcuts")
+    # Briefing assembles from the whole system; each section is fail-safe. Smoke-test
+    # that it returns a coherent prioritized string and never throws.
+    brief = app.build_morning_briefing()
+    check("briefing returns a non-empty string", isinstance(brief, str) and len(brief) > 20)
+    check("briefing reads like a briefing (has a greeting/header)",
+          "briefing" in brief.lower() or "morning" in brief.lower() or "plate" in brief.lower())
+
+    # Shortcuts expand a whole-message key, pass normal text through untouched.
+    check("shortcut 'brief' expands to the briefing prompt",
+          "brief" in app._expand_shortcut("brief").lower() and app._expand_shortcut("brief") != "brief")
+    check("a normal message is not treated as a shortcut",
+          app._expand_shortcut("what's the weather like today") == "what's the weather like today")
+    check("shortcut match is case-insensitive", app._expand_shortcut("BRIEF") != "BRIEF")
+
+
+def suite_backup(app, live):
+    section("backup script (snapshot + retention)")
+    script = os.path.join(ROOT, "scripts", "backup.sh")
+    check("backup.sh exists and is executable", os.path.exists(script) and os.access(script, os.X_OK))
+    # Syntax-check without running (running zips the whole project).
+    r = subprocess.run(["bash", "-n", script], capture_output=True, text=True)
+    check("backup.sh passes bash syntax check", r.returncode == 0, r.stderr[:160])
+    src = open(script, encoding="utf-8").read()
+    check("backup excludes heavy model files", "models/*" in src)
+    check("backup excludes generated media", "media_lib/*" in src and "video_work/*" in src)
+    check("backup retains the 7 most recent", "KEEP=7" in src)
+    check("backup INCLUDES the conversation DB (not excluded)", "conversation_memory" not in src)
+    # jarvis-launch.sh must never invoke claude — it only prints & copies.
+    launch = os.path.join(ROOT, "jarvis-launch.sh")
+    check("jarvis-launch.sh exists and is executable", os.path.exists(launch) and os.access(launch, os.X_OK))
+    lsrc = open(launch, encoding="utf-8").read()
+    check("jarvis-launch.sh declares it never invokes claude", "THIS SCRIPT NEVER INVOKES claude" in lsrc)
+    # The script PRINTS a launch command (inside a heredoc) for Alex to run himself — that's
+    # the spec. What it must never do is EXECUTE claude: no command substitution `$(claude`,
+    # no piping into claude, no backgrounded claude call.
+    check("jarvis-launch.sh never executes claude (no $(claude / | claude)",
+          "$(claude" not in lsrc and "| claude" not in lsrc and "|claude" not in lsrc)
+    check("jarvis-launch.sh copies the draft path (pbcopy)", "pbcopy" in lsrc)
+
+
 def suite_security(app, live):
     section("security invariants")
     # 1. no live secret VALUES hardcoded in any project .py file
@@ -487,6 +775,35 @@ def suite_security(app, live):
     ls = subprocess.run(["git", "ls-files", ".env"], cwd=ROOT, capture_output=True, text=True)
     check(".env is NOT tracked by git", ls.stdout.strip() == "")
 
+    # 4. Round-4 privacy: conversation memory DB + screenshots gitignored & untracked.
+    ci = subprocess.run(["git", "check-ignore", "second-brain-chat/conversation_memory.db"],
+                        cwd=ROOT, capture_output=True, text=True)
+    check("conversation_memory.db is gitignored", "conversation_memory.db" in ci.stdout)
+    ci = subprocess.run(["git", "check-ignore", "screenshots/test.png"],
+                        cwd=ROOT, capture_output=True, text=True)
+    check("screenshots/ is gitignored", "screenshots" in ci.stdout)
+    ls = subprocess.run(["git", "ls-files", "second-brain-chat/conversation_memory.db"],
+                        cwd=ROOT, capture_output=True, text=True)
+    check("conversation_memory.db is NOT tracked", ls.stdout.strip() == "")
+
+    # 5. NO control code anywhere — screen-watch is watch-only; nothing drives mouse/keyboard.
+    # Detects real imports/calls only (this test file names the libs in its patterns, and
+    # the safety rules mention them in prose — those must NOT count as violations).
+    offenders = []
+    for r, dirs, files in os.walk(ROOT):
+        dirs[:] = [d for d in dirs if d not in (".git", "__pycache__", "_archive", "node_modules", ".venv")]
+        for fn in files:
+            if not fn.endswith(".py") or fn == "run_tests.py":  # the scanner names the libs itself
+                continue
+            fp = os.path.join(r, fn)
+            try:
+                text = open(fp, encoding="utf-8", errors="ignore").read()
+            except OSError:
+                continue
+            if _has_control_code(text):
+                offenders.append(os.path.relpath(fp, ROOT))
+    check("no mouse/keyboard control code in any .py file", not offenders, str(offenders))
+
 
 SUITES = {
     "vault": suite_vault,
@@ -497,6 +814,13 @@ SUITES = {
     "website": suite_website,
     "feasibility": suite_feasibility,
     "tasks": suite_tasks,
+    "memory": suite_memory,
+    "goals": suite_goals,
+    "screen": suite_screen,
+    "drafter": suite_drafter,
+    "voice": suite_voice,
+    "briefing": suite_briefing,
+    "backup": suite_backup,
     "security": suite_security,
 }
 
@@ -531,7 +855,10 @@ def main():
         for f in _failures:
             print(f"    - {f}")
     print(f"{'='*60}")
-    # The app import starts background daemon threads; exit explicitly.
+    # The app import starts background daemon threads; exit explicitly. Flush first —
+    # os._exit skips buffer flushing, which loses output when stdout is redirected.
+    sys.stdout.flush()
+    sys.stderr.flush()
     os._exit(1 if _failed else 0)
 
 

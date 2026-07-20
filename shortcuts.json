@@ -1,0 +1,11 @@
+{
+  "_comment": "Custom chat shortcuts: map a short command to a longer prompt. When you type a message that is EXACTLY one of these keys (case-insensitive), Jarvis expands it to the value before answering. Edit freely — it's read fresh on every message. Keys are matched whole, so 'brief' expands but 'brief me on X' does not.",
+  "brief": "Brief me — give me my morning briefing.",
+  "briefing": "Brief me — give me my morning briefing.",
+  "goals": "List my goals and how I'm tracking toward them.",
+  "tasks": "List my open tasks, most important first.",
+  "screen": "Look at my screen and tell me what's on it.",
+  "drafts": "List my drafted overnight runs and their status.",
+  "backup": "Back up my system now.",
+  "recap": "What did we talk about last time?"
+}

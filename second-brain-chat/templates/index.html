@@ -370,6 +370,7 @@
     <nav>
       <a href="/" class="active">Chat</a>
       <a href="/dashboard">Dashboard<span class="nav-badge" id="pending-badge" style="display:none"></span></a>
+      <a href="/memory" title="Browse & search everything you've discussed">Memory</a>
       <a href="#" id="voice-toggle" title="Toggle spoken replies">Voice</a>
       <a href="#" id="clear-chat" title="Start a fresh conversation">Clear</a>
     </nav>
@@ -666,27 +667,27 @@
     }
   });
 
-  // ===== VOICE =====
-  // Mic input via the browser's SpeechRecognition (needs HTTPS or localhost —
-  // the button hides itself anywhere the browser won't allow it), and spoken
-  // replies via speechSynthesis. Using the mic turns spoken replies on;
-  // the "Voice" nav toggle turns them on/off for typed messages too.
+  // ===== VOICE (v1) =====
+  // Push-to-talk transcribes LOCALLY with whisper.cpp: the mic records audio and
+  // POSTs it to /api/transcribe, which runs the local Whisper model (no cloud) and
+  // returns text that we drop into the input box for Alex to review and send. Spoken
+  // replies use the browser's built-in voices by default (portable, works remotely);
+  // the app also exposes /api/speak for the Mac's own `say` when it's the local machine.
   const micBtn = document.getElementById('mic-btn');
   const voiceToggle = document.getElementById('voice-toggle');
-  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  const canListen = !!SR && (window.isSecureContext || location.hostname === 'localhost');
+  const canRecord = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder);
   const canSpeak = 'speechSynthesis' in window;
   let voiceOn = canSpeak && localStorage.getItem('jarvis-voice') === 'on';
-  let listening = false;
+  let recording = false;
+  let mediaRecorder = null, chunks = [], micStream = null;
 
   function updateVoiceUI() {
     voiceToggle.classList.toggle('active', voiceOn);
-    micBtn.classList.toggle('listening', listening);
-    micBtn.title = listening ? 'Listening — tap to stop' : 'Hold a conversation — tap and speak';
+    micBtn.classList.toggle('listening', recording);
+    micBtn.title = recording ? 'Recording — tap to stop & transcribe' : 'Tap and speak (local transcription)';
   }
 
-  // Turn markdown into something worth hearing: drop code blocks, keep link
-  // text, strip formatting characters.
+  // Turn markdown into something worth hearing.
   function speechText(md) {
     return md
       .replace(/```[\s\S]*?```/g, ' (code shown on screen) ')
@@ -720,40 +721,58 @@
     updateVoiceUI();
   });
 
-  if (!canListen) {
-    micBtn.style.display = 'none'; // no mic without HTTPS/localhost — Wispr Flow still types anywhere
-  } else {
-    const rec = new SR();
-    rec.lang = 'en-US';
-    rec.interimResults = true;
-    let finalHeard = '';
-
-    rec.onresult = (e) => {
-      let text = '';
-      for (const r of e.results) text += r[0].transcript;
-      input.value = text;
-      finalHeard = Array.from(e.results).some(r => r.isFinal) ? text : finalHeard;
-    };
-    rec.onend = () => {
-      listening = false;
-      updateVoiceUI();
-      if (finalHeard.trim()) {
-        // Spoken input gets a spoken reply — that's the whole point.
-        if (canSpeak && !voiceOn) { voiceOn = true; localStorage.setItem('jarvis-voice', 'on'); }
-        finalHeard = '';
-        updateVoiceUI();
-        form.requestSubmit();
+  async function transcribeBlob(blob) {
+    const fd = new FormData();
+    fd.append('audio', blob, 'clip.webm');
+    input.placeholder = 'Transcribing…';
+    try {
+      const res = await fetch('/api/transcribe', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (data.text) {
+        input.value = (input.value ? input.value + ' ' : '') + data.text;
+        input.focus();
+      } else {
+        input.placeholder = data.note ? ('Didn\'t catch that — ' + data.note) : 'Didn\'t catch that. Try again.';
       }
-    };
-    rec.onerror = () => { listening = false; updateVoiceUI(); };
+    } catch (err) {
+      input.placeholder = 'Transcription failed — type instead.';
+    } finally {
+      setTimeout(() => { input.placeholder = 'Ask or tell me something...'; }, 2500);
+    }
+  }
 
+  async function startRecording() {
+    try {
+      micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (err) {
+      input.placeholder = 'Mic permission needed — allow it and try again.';
+      setTimeout(() => { input.placeholder = 'Ask or tell me something...'; }, 3000);
+      return;
+    }
+    chunks = [];
+    mediaRecorder = new MediaRecorder(micStream);
+    mediaRecorder.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+    mediaRecorder.onstop = () => {
+      if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
+      if (chunks.length) transcribeBlob(new Blob(chunks, { type: 'audio/webm' }));
+    };
+    mediaRecorder.start();
+    recording = true;
+    updateVoiceUI();
+  }
+
+  function stopRecording() {
+    if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
+    recording = false;
+    updateVoiceUI();
+  }
+
+  if (!canRecord) {
+    micBtn.style.display = 'none'; // no mic API here — typing (incl. dictation tools) still works
+  } else {
     micBtn.addEventListener('click', () => {
-      if (listening) { rec.stop(); return; }
-      speechSynthesis.cancel();
-      finalHeard = '';
-      listening = true;
-      updateVoiceUI();
-      rec.start();
+      if (recording) stopRecording();
+      else { speechSynthesis && speechSynthesis.cancel(); startRecording(); }
     });
   }
   if (!canSpeak) voiceToggle.style.display = 'none';

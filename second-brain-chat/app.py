@@ -83,6 +83,8 @@ NOTE_INDEX = vault_index.VaultIndex(OBSIDIAN_VAULT_PATH)
 # Claude vision). Local module; heavy work shells out to ffmpeg/whisper-cli.
 import video_processor  # noqa: E402
 import task_tracker  # noqa: E402 — lightweight local task ledger (SQLite; not autonomous)
+import conversation_memory  # noqa: E402 — durable, searchable long-term chat memory (local SQLite)
+import screen_watch  # noqa: E402 — WATCH-ONLY screen capture + vision (no control code)
 # Where uploaded / dropped videos live for the analyze_video tool.
 INBOX_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "inbox")
 os.makedirs(INBOX_DIR, exist_ok=True)
@@ -96,6 +98,7 @@ if _PROJECT_ROOT_DIR not in _sys.path:
 import data_synthesizer_agent  # noqa: E402
 import website_creator_agent  # noqa: E402
 import video_toolkit  # noqa: E402
+import run_drafter  # noqa: E402 — drafts overnight-build prompts (DRAFTS ONLY, never launches)
 # Where drafted agent scripts get written. Sibling to this file's folder, inside
 # the main second-brain project (~/second-brain/agents/).
 AGENTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "agents")
@@ -154,6 +157,50 @@ def login():
 claude = Anthropic(api_key=CLAUDE_API_KEY)
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 composio = Composio(provider=AnthropicProvider(), api_key=COMPOSIO_API_KEY)
+
+
+# ---- Conversation memory (durable, searchable, auto-summarized) -------------
+# Every chat message is mirrored into a local SQLite database (gitignored), grouped
+# into sessions by inactivity and summarized on close so retrieval stays sharp as the
+# history grows. Summaries are produced by Claude when a session closes; the module
+# falls back to a heuristic summary if the model call fails, so memory never breaks.
+def _summarize_conversation(msgs: list) -> tuple:
+    """Return (title, summary) for a closed conversation. Cheap single model call."""
+    transcript = "\n".join(
+        f"{m['role'].upper()}: {m['content'][:1500]}" for m in msgs[:60]
+    )[:12000]
+    prompt = (
+        "Below is a past conversation between Alex and his assistant. Write a concise "
+        "memory of it so the assistant can recall it later.\n\n"
+        "Return EXACTLY two lines:\n"
+        "TITLE: <a short 3-8 word title>\n"
+        "SUMMARY: <2-4 sentences: what Alex asked about, key facts/decisions, and any "
+        "follow-ups or preferences worth remembering. Be specific and factual.>\n\n"
+        f"Conversation:\n{transcript}"
+    )
+    msg = claude.messages.create(
+        model="claude-sonnet-5",
+        max_tokens=400,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    text = "".join(b.text for b in msg.content if b.type == "text").strip()
+    title, summary = "", ""
+    for line in text.splitlines():
+        if line.upper().startswith("TITLE:"):
+            title = line.split(":", 1)[1].strip()
+        elif line.upper().startswith("SUMMARY:"):
+            summary = line.split(":", 1)[1].strip()
+    if not summary:  # model ignored the format — take the whole thing as the summary
+        summary = text
+    return title, summary
+
+
+MEMORY = conversation_memory.get_memory(summarizer=_summarize_conversation)
+# On startup, close + summarize any session left open by a previous run/crash.
+try:
+    MEMORY.close_open_sessions()
+except Exception as e:
+    print(f"Warning: couldn't reconcile open memory sessions at startup: {e}")
 
 # Read-only Google Calendar tools only — explicitly whitelisted by slug so write/mutation
 # tools in the googlecalendar toolkit (create/update/delete event) can never reach Claude.
@@ -280,6 +327,39 @@ them as things you know about Alex. When he tells you something worth keeping lo
 preference, a goal, a recurring commitment, a fact about his life), or asks you to remember
 something, save it with the remember tool. Keep each memory to one short, self-contained
 sentence. Don't save throwaway context or things already in your memories.
+
+You also have a durable LONG-TERM CONVERSATION MEMORY of everything you and Alex have ever
+discussed — every past chat is stored, grouped into sessions, and summarized. Relevant past
+context is surfaced to you automatically when it applies (under "Relevant past conversations"
+below when present) — use it naturally, as if you simply remember. When he explicitly asks
+what you two discussed before, or you need context from an older conversation not in the
+current thread, use search_memory to look it up. He can browse and delete this history on the
+Memory page.
+
+You can SEE ALEX'S SCREEN on request with watch_screen: it captures his current screen and lets
+you answer a question about it ("what's on my screen?", "what's this error?", "summarize this
+article"). It's WATCH-ONLY — you can look and analyze but never click, type, or control
+anything. The screenshot is deleted right after unless he asks to keep it. If macOS Screen
+Recording permission isn't granted you'll be told so — pass that along rather than guessing.
+
+You can DRAFT overnight-build runs with draft_run: given a goal or a tracked task, you gather
+context, run it through the council, and write a complete, ready-to-launch build prompt into
+run_drafts/ for his review. This DRAFTS ONLY — you never launch, schedule, or run anything;
+Alex reviews drafts on his dashboard and launches approved ones himself. Use list_drafted_runs
+to show what's drafted. Never imply a drafted run is running.
+
+Alex has GOALS (bigger things he's working toward) alongside the task tracker. Use create_goal
+to capture one, link_task_to_goal to connect tasks that serve it, update_goal to record progress
+or status, and list_goals to show them with progress derived from their linked tasks. His tasks
+also carry urgency and importance — when he tells you how urgent/important a task is, note it.
+
+When he says "brief me", "catch me up", "what's on my plate", or "good morning", use
+morning_briefing for a short, prioritized rundown: urgent tasks, goal progress, recent agent/
+council activity, drafts awaiting approval, recent notes, and a recap of your last conversation.
+
+You can back up his whole system with run_backup (timestamped snapshot to ~/second-brain-backups/,
+keeping the last 7, plus a read-only copy of his vault). Use it when he asks to back up or
+snapshot. It doesn't schedule itself — mention he can schedule it if he wants it automatic.
 
 When Alex wants a decision analyzed or asks whether something is worth doing, you can run it
 through his decision council with the deliberate tool — an Advocate argues for it, a Critic
@@ -794,8 +874,23 @@ TOOLS = [
             "properties": {
                 "title": {"type": "string", "description": "Short task title, e.g. 'Edit the sprint-mechanics clip'."},
                 "description": {"type": "string", "description": "Optional detail: what it involves, why, any specifics."},
+                "urgency": {"type": "integer", "description": "Optional 0-5 how time-sensitive it is (0 = unset, 5 = drop-everything). Set when Alex signals a deadline or pressure."},
+                "importance": {"type": "integer", "description": "Optional 0-5 how much it matters (0 = unset, 5 = mission-critical). Set when Alex signals stakes."},
             },
             "required": ["title"],
+        },
+    },
+    {
+        "name": "set_task_priority",
+        "description": "Set or change a task's urgency and/or importance (each 0-5). Use when Alex tells you how urgent or important a task is, or to re-prioritize. Drives default task ordering.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "integer", "description": "The task's id."},
+                "urgency": {"type": "integer", "description": "0-5 time-sensitivity."},
+                "importance": {"type": "integer", "description": "0-5 how much it matters."},
+            },
+            "required": ["task_id"],
         },
     },
     {
@@ -938,6 +1033,146 @@ TOOLS = [
             "required": ["name", "purpose"],
         },
     },
+    {
+        "name": "search_memory",
+        "description": (
+            "Search your long-term memory of PAST conversations with Alex (everything you've "
+            "ever discussed, grouped into sessions and summarized). Use this when he asks what "
+            "you two talked about before ('what did we discuss about X?', 'remind me what I said "
+            "about Y', 'did we ever talk about Z?'), or when you need context from an earlier "
+            "conversation that isn't in the current thread. Returns matching sessions with "
+            "summaries and snippets. Read-only."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "What to look for across past conversations."},
+                "limit": {"type": "integer", "description": "Max sessions to return. Default 5."},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "watch_screen",
+        "description": (
+            "Capture Alex's screen right now and answer a question about what's on it. Use when he "
+            "asks 'what's on my screen?', 'what's this error?', 'summarize this article/page', 'what "
+            "am I looking at?', or otherwise refers to what's currently displayed. This is WATCH-ONLY "
+            "— it takes a screenshot and analyzes it; it can never click, type, or control anything. "
+            "The screenshot is deleted right after unless he asks to keep it. If macOS Screen Recording "
+            "permission is missing you'll get a note about that instead of a wrong answer."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "question": {"type": "string", "description": "What Alex wants to know about his screen. Default: describe what's on screen."},
+                "display": {"type": "string", "enum": ["main", "all"], "description": "'main' (default) captures the primary display; 'all' captures every display."},
+                "keep": {"type": "boolean", "description": "Set true only if Alex says to save/keep the screenshot. Default false (deleted after analysis)."},
+            },
+        },
+    },
+    {
+        "name": "draft_run",
+        "description": (
+            "Draft a complete overnight-build prompt (an 'autonomous run') for Alex to review and "
+            "launch himself. Give it a goal in plain language OR a tracked task id. It gathers context, "
+            "runs the idea through the decision council, and writes a full, correctly-formatted run "
+            "prompt (system directive, hard safety rules copied verbatim, project context, prioritized "
+            "spec, success criteria) into run_drafts/ with the council verdict attached. This DRAFTS "
+            "ONLY — it never launches, schedules, or executes anything. Tell Alex it's waiting for his "
+            "review on the dashboard and that he launches approved drafts himself with jarvis-launch.sh."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "goal": {"type": "string", "description": "The goal/idea to turn into an overnight run, in plain language. Provide this OR task_id."},
+                "task_id": {"type": "integer", "description": "Optional: a task-tracker task id to draft a run from instead of a free-form goal."},
+                "title": {"type": "string", "description": "Optional short title for the run."},
+            },
+        },
+    },
+    {
+        "name": "list_drafted_runs",
+        "description": "List the overnight-build drafts in run_drafts/ and their status (draft / approved / launched / completed). Use when Alex asks what runs are drafted or waiting for approval.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "status": {"type": "string", "description": "Optional filter: draft, approved, launched, or completed."},
+            },
+        },
+    },
+    {
+        "name": "create_goal",
+        "description": (
+            "Create a goal Alex is working toward (title, optional description, optional target date). "
+            "Goals track progress from their linked tasks. Use when he says he wants to achieve something "
+            "bigger than a single task ('my goal is to…', 'I want to get to…')."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "Short goal title."},
+                "description": {"type": "string", "description": "Optional detail about the goal."},
+                "target_date": {"type": "string", "description": "Optional target date, e.g. '2026-12-31' or 'end of the semester'."},
+            },
+            "required": ["title"],
+        },
+    },
+    {
+        "name": "update_goal",
+        "description": "Update a goal's status ('active', 'achieved', 'dropped') or fields, or add a progress note. Use when Alex reports progress on or changes a goal.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "goal_id": {"type": "integer", "description": "The goal's id."},
+                "status": {"type": "string", "description": "Optional new status: active, achieved, or dropped."},
+                "note": {"type": "string", "description": "Optional progress note to append."},
+            },
+            "required": ["goal_id"],
+        },
+    },
+    {
+        "name": "link_task_to_goal",
+        "description": "Link a tracked task to a goal so the goal's progress reflects it. Use when Alex says a task is part of / in service of a goal.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "integer", "description": "The task's id."},
+                "goal_id": {"type": "integer", "description": "The goal's id."},
+            },
+            "required": ["task_id", "goal_id"],
+        },
+    },
+    {
+        "name": "list_goals",
+        "description": "List Alex's goals with progress bars derived from their linked tasks. Use when he asks about his goals or how he's tracking toward them.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "status": {"type": "string", "description": "Optional filter: active, achieved, or dropped."},
+            },
+        },
+    },
+    {
+        "name": "morning_briefing",
+        "description": (
+            "Produce Alex's briefing: open tasks by urgency/importance, goal progress, latest agent "
+            "outputs and council verdicts, drafted runs awaiting approval, recent vault notes, and a "
+            "recap of the last conversation. Use when he says 'brief me', 'what's on my plate', "
+            "'catch me up', or 'good morning'. Written short and prioritized, not a data dump."
+        ),
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "run_backup",
+        "description": (
+            "Create a timestamped backup snapshot of the whole project (code, conversation memory DB, "
+            "task/goal data, drafts, notes) to ~/second-brain-backups/, keeping the 7 most recent, plus "
+            "a read-only copy of the Obsidian vault. Use when Alex asks to back up / snapshot his system. "
+            "Excludes heavy model files and generated media. It does NOT schedule anything."
+        ),
+        "input_schema": {"type": "object", "properties": {}},
+    },
 ] + CALENDAR_TOOLS + GMAIL_TOOLS
 
 # ---- EXTENSIONS: tools Jarvis drafted that Alex adopted (see adopt_tool). ----
@@ -997,6 +1232,12 @@ def save_chat_message(role: str, content: str) -> None:
     supabase.table("Agent Outputs").insert(
         {"agent_name": "jarvis_chat", "output_text": json.dumps({"role": role, "content": content})}
     ).execute()
+    # Mirror into durable local long-term memory (sessions + search + summaries).
+    # Never let a memory hiccup break the live chat path.
+    try:
+        MEMORY.log(role, content)
+    except Exception as e:
+        print(f"Warning: conversation_memory.log failed: {e}")
 
 
 def _last_clear_id() -> int:
@@ -1073,12 +1314,22 @@ def forget_memory(matching_text: str) -> str:
     return f"Forgotten: {matches[0]['output_text']}"
 
 
-def build_system_prompt() -> str:
+def build_system_prompt(recall_text: str = "") -> str:
     memories = load_memories()
     if not memories:
-        return SYSTEM_PROMPT + "\n\nSaved memories: none yet."
-    lines = "\n".join(f"- {m}" for m in memories)
-    return SYSTEM_PROMPT + f"\n\nSaved memories:\n{lines}"
+        prompt = SYSTEM_PROMPT + "\n\nSaved memories: none yet."
+    else:
+        lines = "\n".join(f"- {m}" for m in memories)
+        prompt = SYSTEM_PROMPT + f"\n\nSaved memories:\n{lines}"
+    # Automatic recall: relevant snippets from PAST conversations, injected so Jarvis
+    # just remembers without being asked. Empty when nothing is relevant.
+    if recall_text:
+        prompt += (
+            "\n\nRelevant past conversations (your long-term memory — use these to "
+            "recall context Alex may expect you to remember; don't announce that you "
+            "looked them up, just remember):\n" + recall_text
+        )
+    return prompt
 
 
 # ============================================================
@@ -1809,6 +2060,199 @@ def evaluate_task(task_id: int, intended_outcome: str = "") -> str:
 
 
 # ============================================================
+# RUN DRAFTER — drafts overnight-build prompts (DRAFTS ONLY, never launches).
+# Gathers context, runs the council, and hands a full prompt to run_drafter.
+# ============================================================
+def _gather_run_context(goal: str, task: dict = None) -> str:
+    """Assemble context for a drafted run: task details, related BUILD_LOG entries,
+    and a hint of related code areas. Read-only."""
+    parts = []
+    if task:
+        parts.append(f"Source task #{task['id']}: {task['title']} (status: {task['status']}).")
+        if task.get("description"):
+            parts.append(f"Task description: {task['description']}")
+
+    # Related BUILD_LOG entries: grab phase headers + the lines around keyword hits.
+    try:
+        blog = os.path.join(_PROJECT_ROOT_DIR, "BUILD_LOG.md")
+        if os.path.exists(blog):
+            with open(blog, encoding="utf-8", errors="ignore") as f:
+                lines = f.readlines()
+            keywords = [w for w in re.findall(r"[a-zA-Z]{4,}", goal.lower())][:8]
+            hits = []
+            for i, ln in enumerate(lines):
+                low = ln.lower()
+                if ln.startswith("#") or any(k in low for k in keywords):
+                    hits.append(ln.rstrip())
+                if len(hits) >= 25:
+                    break
+            if hits:
+                parts.append("Relevant BUILD_LOG context (phase headers + matches):\n" + "\n".join(hits[:25]))
+    except Exception as e:
+        print(f"draft context: BUILD_LOG read failed: {e}")
+
+    # Related code areas: filenames that mention a goal keyword.
+    try:
+        keywords = [w for w in re.findall(r"[a-zA-Z]{4,}", goal.lower())][:6]
+        related = []
+        for base in (_PROJECT_ROOT_DIR, os.path.join(_PROJECT_ROOT_DIR, "second-brain-chat")):
+            for fn in os.listdir(base):
+                if fn.endswith(".py") and any(k in fn.lower() for k in keywords):
+                    related.append(fn)
+        if related:
+            parts.append("Possibly-related existing modules: " + ", ".join(sorted(set(related))[:10]))
+    except Exception:
+        pass
+
+    return "\n\n".join(parts)
+
+
+def draft_run_tool(goal: str = "", task_id: int = None, title: str = "") -> str:
+    """Draft an overnight run from a goal or a tracked task. DRAFTS ONLY."""
+    task = None
+    if task_id is not None:
+        task = task_tracker.get_tracker().get(task_id)
+        if not task:
+            return f"No task #{task_id} found to draft a run from."
+        if not goal:
+            goal = task["title"] + ((" — " + task["description"]) if task.get("description") else "")
+    goal = (goal or "").strip()
+    if not goal:
+        return "Give me a goal (or a task id) to draft an overnight run from."
+
+    context = _gather_run_context(goal, task)
+    # Run the idea through the council (pros / cons / feasibility) so its cautions
+    # shape the drafted spec and are attached for Alex's review.
+    try:
+        verdict = deliberate(idea=goal, context=context)
+    except Exception as e:
+        print(f"draft_run: council failed, drafting without it: {e}")
+        verdict = ""
+
+    result = run_drafter.create_draft(goal, context, verdict, claude, title=title)
+    if result.get("error"):
+        return result["error"]
+    if task_id is not None:
+        task_tracker.get_tracker().add_note(task_id, f"Drafted overnight run #{result['id']} ({result['file']}).")
+    return (
+        f"Drafted an overnight run: **{result['title']}** → `run_drafts/{result['file']}` "
+        f"(draft #{result['id']}). The council's verdict is attached at the bottom.\n\n"
+        f"It's on your dashboard's **Drafted Runs** panel for review. When you're happy with it, "
+        f"launch it yourself with `bash jarvis-launch.sh` — I only draft, I never launch or run it."
+    )
+
+
+# ============================================================
+# MORNING BRIEFING — a short, prioritized rundown assembled from the whole system.
+# ============================================================
+def build_morning_briefing() -> str:
+    """Assemble Alex's briefing. Each section is independently fail-safe and the whole
+    thing degrades gracefully when parts are empty."""
+    now = datetime.now(LOCAL_TZ)
+    greeting = "Good morning" if now.hour < 12 else ("Good afternoon" if now.hour < 18 else "Good evening")
+    out = [f"**{greeting}, Alex.** Here's your briefing — {now.strftime('%A %B %-d, %-I:%M %p')}."]
+
+    # 1. Urgent/important open tasks
+    try:
+        tasks = task_tracker.get_tracker().top_by_priority(limit=5)
+        if tasks:
+            out.append("\n**On your plate** (by urgency & importance):")
+            for t in tasks:
+                bits = t["status"].replace("_", " ")
+                tags = []
+                if t.get("urgency"):
+                    tags.append(f"U{t['urgency']}")
+                if t.get("importance"):
+                    tags.append(f"I{t['importance']}")
+                tag = f" [{'/'.join(tags)}]" if tags else ""
+                out.append(f"- #{t['id']} {t['title']} — {bits}{tag}")
+    except Exception as e:
+        print(f"briefing tasks failed: {e}")
+
+    # 2. Goal progress
+    try:
+        goals = task_tracker.get_tracker().list_goals(status="active")
+        if goals:
+            out.append("\n**Goals in motion:**")
+            for g in goals[:4]:
+                pct = g.get("progress_pct", 0)
+                bar = "▰" * (pct // 10) + "▱" * (10 - pct // 10)
+                td = f" · target {g['target_date']}" if g.get("target_date") else ""
+                out.append(f"- {g['title']} — {bar} {pct}% ({g['done_tasks']}/{g['total_tasks']} tasks){td}")
+    except Exception as e:
+        print(f"briefing goals failed: {e}")
+
+    # 3. Drafted runs awaiting approval
+    try:
+        pending = [d for d in run_drafter.list_drafts() if d["status"] in ("draft", "approved")]
+        if pending:
+            out.append("\n**Overnight runs awaiting you:**")
+            for d in pending[:4]:
+                out.append(f"- #{d['id']} [{d['status']}] {d['title']}")
+    except Exception as e:
+        print(f"briefing drafts failed: {e}")
+
+    # 4. Recent agent/council activity
+    try:
+        acts = get_home_agent_outputs(limit=3)
+        council = get_recent_council(limit=2)
+        if acts:
+            out.append("\n**Latest from your agents:**")
+            for a in acts:
+                s = f" — {a['summary']}" if a.get("summary") else ""
+                out.append(f"- {a['agent']}{s} ({a.get('when','')})")
+        if council:
+            out.append("\n**Recent council calls:**")
+            for c in council:
+                out.append(f"- {c['idea']}: {c.get('headline','')} ({c.get('when','')})")
+    except Exception as e:
+        print(f"briefing activity failed: {e}")
+
+    # 5. Recent vault notes
+    try:
+        notes = get_recent_vault_notes(limit=3)
+        if notes:
+            out.append("\n**Recent notes:**")
+            for n in notes:
+                out.append(f"- {n['title']} ({n['folder']}, {n.get('when','')})")
+    except Exception as e:
+        print(f"briefing notes failed: {e}")
+
+    # 6. Last conversation recap
+    try:
+        last = MEMORY.last_closed_summary(within_days=3)
+        if last and last.get("summary"):
+            out.append(f"\n**Last time we talked** ({conversation_memory._humanize(last['ended_at'])}): {last['summary']}")
+    except Exception as e:
+        print(f"briefing memory failed: {e}")
+
+    if len(out) == 1:
+        out.append("\nNothing pressing on record yet — clean slate. Add a task or a goal and I'll "
+                   "start tracking it.")
+    return "\n".join(out)
+
+
+# ============================================================
+# BACKUP — timestamped project snapshot (see scripts/backup.sh). Chat command only;
+# never scheduled automatically.
+# ============================================================
+def run_backup_tool() -> str:
+    script = os.path.join(_PROJECT_ROOT_DIR, "scripts", "backup.sh")
+    if not os.path.exists(script):
+        return "The backup script (scripts/backup.sh) isn't present."
+    try:
+        res = subprocess.run(["bash", script], capture_output=True, text=True, timeout=600)
+    except subprocess.TimeoutExpired:
+        return "The backup ran long and timed out (very large project?). Check ~/second-brain-backups/."
+    out = (res.stdout or "").strip()
+    if res.returncode != 0:
+        return f"Backup hit a problem:\n{(res.stderr or out)[:500]}"
+    # Surface the last few lines (the script prints the archive path + retained count).
+    tail = "\n".join(out.splitlines()[-6:])
+    return f"Backup done.\n{tail}"
+
+
+# ============================================================
 # BACKGROUND TASKS — delegate_task queues a job as a jarvis_task row;
 # a single daemon worker thread claims queued tasks (atomically, via a
 # compare-and-swap on the row's JSON) and runs each through the same
@@ -2120,7 +2564,12 @@ def handle_tool_call(tool_name: str, tool_input: dict) -> str:
         )
     if tool_name == "create_task":
         return task_tracker.tool_create_task(
-            title=tool_input["title"], description=tool_input.get("description", ""))
+            title=tool_input["title"], description=tool_input.get("description", ""),
+            urgency=tool_input.get("urgency", 0), importance=tool_input.get("importance", 0))
+    if tool_name == "set_task_priority":
+        return task_tracker.tool_set_task_priority(
+            task_id=tool_input["task_id"], urgency=tool_input.get("urgency"),
+            importance=tool_input.get("importance"))
     if tool_name == "update_task_status":
         return task_tracker.tool_update_task_status(
             task_id=tool_input["task_id"], status=tool_input["status"],
@@ -2133,6 +2582,39 @@ def handle_tool_call(tool_name: str, tool_input: dict) -> str:
         return evaluate_task(
             task_id=tool_input["task_id"],
             intended_outcome=tool_input.get("intended_outcome", ""))
+    if tool_name == "search_memory":
+        return conversation_memory.tool_search_memory(
+            query=tool_input["query"], limit=tool_input.get("limit", 5))
+    if tool_name == "watch_screen":
+        return screen_watch.watch_screen(
+            claude,
+            question=tool_input.get("question", ""),
+            display=tool_input.get("display", "main"),
+            keep=tool_input.get("keep", False))
+    if tool_name == "draft_run":
+        return draft_run_tool(
+            goal=tool_input.get("goal", ""),
+            task_id=tool_input.get("task_id"),
+            title=tool_input.get("title", ""))
+    if tool_name == "list_drafted_runs":
+        return run_drafter.tool_list_drafts(status=tool_input.get("status"))
+    if tool_name == "create_goal":
+        return task_tracker.tool_create_goal(
+            title=tool_input["title"], description=tool_input.get("description", ""),
+            target_date=tool_input.get("target_date", ""))
+    if tool_name == "update_goal":
+        return task_tracker.tool_update_goal(
+            goal_id=tool_input["goal_id"], status=tool_input.get("status"),
+            note=tool_input.get("note", ""))
+    if tool_name == "link_task_to_goal":
+        return task_tracker.tool_link_task_to_goal(
+            task_id=tool_input["task_id"], goal_id=tool_input["goal_id"])
+    if tool_name == "list_goals":
+        return task_tracker.tool_list_goals(status=tool_input.get("status"))
+    if tool_name == "morning_briefing":
+        return build_morning_briefing()
+    if tool_name == "run_backup":
+        return run_backup_tool()
     if tool_name == "adopt_tool":
         return adopt_tool(tool_input["name"])
     if tool_name == "delegate_task":
@@ -2182,10 +2664,21 @@ TOOL_STATUS_LABELS = {
     "deliberate": "Convening the council (for, against, and can-it-work)…",
     "assess_feasibility": "Pressure-testing whether it can actually work…",
     "create_task": "Adding that to your task tracker…",
+    "set_task_priority": "Setting that task's priority…",
     "update_task_status": "Updating that task…",
     "list_tasks": "Pulling up your tasks…",
     "show_task_history": "Opening that task's history…",
     "evaluate_task": "Sending that task to the council…",
+    "search_memory": "Searching our past conversations…",
+    "watch_screen": "Taking a look at your screen…",
+    "draft_run": "Drafting an overnight run (gathering context + council)…",
+    "list_drafted_runs": "Checking your drafted runs…",
+    "create_goal": "Setting up that goal…",
+    "update_goal": "Updating that goal…",
+    "link_task_to_goal": "Linking that task to the goal…",
+    "list_goals": "Pulling up your goals…",
+    "morning_briefing": "Putting your briefing together…",
+    "run_backup": "Backing up your system…",
     "scan_downloads": "Scanning your Downloads…",
     "propose_file_cleanup": "Queuing cleanup for your approval…",
     "list_vault_notes": "Looking through your vault…",
@@ -2220,12 +2713,13 @@ TOOL_STATUS_LABELS = {
 }
 
 
-def stream_chat(messages: list):
+def stream_chat(messages: list, recall_text: str = ""):
     """Runs the Claude tool-use loop, yielding events as they happen:
     {"type": "text", "delta": ...}    — a chunk of the reply as it's written
     {"type": "status", "label": ...}  — what tool is being used right now
+    `recall_text` is the automatic long-term-memory recall block for this turn.
     """
-    system_prompt = build_system_prompt()  # fresh memories every request
+    system_prompt = build_system_prompt(recall_text)  # fresh memories every request
     while True:
         with claude.messages.stream(
             model="claude-sonnet-5",
@@ -2527,12 +3021,13 @@ def get_home_data() -> dict:
             print(f"Warning: home panel '{fn.__name__}' failed: {e}")
             return default
 
-    tasks = []
+    tasks, goals = [], []
     try:
         import task_tracker
         tasks = task_tracker.get_tracker().recent_for_dashboard(8)
+        goals = task_tracker.get_tracker().goals_for_dashboard(6)
     except Exception as e:
-        print(f"Warning: task panel unavailable: {e}")
+        print(f"Warning: task/goal panel unavailable: {e}")
 
     return {
         "agent_outputs": _safe(get_home_agent_outputs, []),
@@ -2541,6 +3036,9 @@ def get_home_data() -> dict:
         "reports": _safe(get_recent_reports, []),
         "sites": _safe(get_recent_sites, []),
         "tasks": tasks,
+        "goals": goals,
+        "drafts": _safe(lambda: run_drafter.dashboard_rows(8), []),
+        "memory": _safe(lambda: MEMORY.list_sessions(limit=5), []),
         "generated_at": datetime.now(LOCAL_TZ).strftime("%-I:%M:%S %p"),
     }
 
@@ -2609,6 +3107,78 @@ def api_home():
         return jsonify({"error": "temporarily unavailable", "detail": str(e)}), 503
 
 
+@app.route("/memory")
+def memory_page():
+    return render_template("memory.html")
+
+
+@app.route("/api/drafts/<int:did>")
+def api_draft_view(did):
+    """Full drafted-run content (for 'view in full'). ?raw=1 returns plain text."""
+    body = run_drafter.read_draft_body(did)
+    if body is None:
+        return jsonify({"error": "not found"}), 404
+    meta = run_drafter.get_draft(did)
+    if request.args.get("raw"):
+        return Response(body, mimetype="text/plain; charset=utf-8")
+    return jsonify({"meta": meta, "content": body})
+
+
+@app.route("/api/drafts/<int:did>/status", methods=["POST"])
+def api_draft_status(did):
+    """Advance a draft's status (draft → approved → launched → completed). This is Alex's
+    approval action; the drafter never sets 'approved'/'launched' itself. Setting a status
+    NEVER launches anything — it's bookkeeping the dashboard and jarvis-launch.sh read."""
+    data = request.get_json(silent=True) or {}
+    status = data.get("status", "")
+    res = run_drafter.set_status(did, status)
+    if res is None:
+        return jsonify({"ok": False, "error": "not found"}), 404
+    if isinstance(res, dict) and res.get("error"):
+        return jsonify({"ok": False, "error": res["error"]}), 400
+    return jsonify({"ok": True, "status": res["status"]})
+
+
+@app.route("/api/memory/sessions")
+def api_memory_sessions():
+    try:
+        return jsonify({"sessions": MEMORY.list_sessions(limit=100), "stats": MEMORY.stats()})
+    except Exception as e:
+        print(f"Warning: /api/memory/sessions error: {e}")
+        return jsonify({"error": "temporarily unavailable", "detail": str(e)}), 503
+
+
+@app.route("/api/memory/search")
+def api_memory_search():
+    q = request.args.get("q", "")
+    try:
+        return jsonify({"query": q, "results": MEMORY.search(q, limit=20)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 503
+
+
+@app.route("/api/memory/session/<int:sid>")
+def api_memory_session(sid):
+    s = MEMORY.get_session(sid)
+    if not s:
+        return jsonify({"error": "not found"}), 404
+    return jsonify(s)
+
+
+@app.route("/api/memory/session/<int:sid>/summarize", methods=["POST"])
+def api_memory_summarize(sid):
+    s = MEMORY.summarize_session(sid, force=True)
+    if not s:
+        return jsonify({"error": "not found"}), 404
+    return jsonify({"ok": True, "title": s.get("title"), "summary": s.get("summary")})
+
+
+@app.route("/api/memory/session/<int:sid>/delete", methods=["POST"])
+def api_memory_delete(sid):
+    ok = MEMORY.delete_session(sid)
+    return jsonify({"ok": ok}), (200 if ok else 404)
+
+
 @app.route("/preview/<slug>/")
 @app.route("/preview/<slug>/<path:page>")
 def preview_site(slug, page="index.html"):
@@ -2652,19 +3222,47 @@ def _normalize_for_api(messages: list) -> list:
     return cleaned
 
 
+def _load_shortcuts() -> dict:
+    """User-editable command shortcuts (shortcuts.json at project root). Read fresh so
+    edits apply without a restart. Keys starting with '_' (e.g. _comment) are ignored."""
+    path = os.path.join(_PROJECT_ROOT_DIR, "shortcuts.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            raw = json.load(f)
+        return {k.lower(): v for k, v in raw.items() if not k.startswith("_") and isinstance(v, str)}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _expand_shortcut(message: str) -> str:
+    """Expand a message that is EXACTLY a shortcut key (case-insensitive) into its
+    mapped prompt. Whole-message match only, so normal messages pass through untouched."""
+    key = (message or "").strip().lower()
+    if not key:
+        return message
+    return _load_shortcuts().get(key, message)
+
+
 @app.route("/chat", methods=["POST"])
 def chat():
     data = request.get_json()
-    user_message = data.get("message", "")
+    user_message = _expand_shortcut(data.get("message", ""))
 
     history = load_chat_history()
     messages = _normalize_for_api(history + [{"role": "user", "content": user_message}])
+    # Automatic long-term recall: pull relevant snippets from PAST conversations before
+    # saving this message (so the current turn isn't matched against itself).
+    try:
+        recall_text = conversation_memory.recall_for_prompt(user_message)
+    except Exception as e:
+        print(f"Warning: recall failed: {e}")
+        recall_text = ""
     save_chat_message("user", user_message)
 
     def generate():
         reply_parts = []
         try:
-            for event in stream_chat(messages):
+            for event in stream_chat(messages, recall_text=recall_text):
                 if event.get("type") == "text":
                     reply_parts.append(event["delta"])
                 yield json.dumps(event) + "\n"
@@ -2725,6 +3323,62 @@ def api_upload_video():
         n += 1
     f.save(dest)
     return jsonify({"filename": os.path.basename(dest), "path": dest})
+
+
+@app.route("/api/transcribe", methods=["POST"])
+def api_transcribe():
+    """Push-to-talk: accept a recorded audio blob, transcribe it LOCALLY with the
+    existing whisper.cpp setup (no cloud), and return the text. The mic UI drops the
+    text into the chat box for Alex to review and send. Audio is deleted immediately."""
+    import tempfile as _tf
+    if "audio" not in request.files:
+        return jsonify({"error": "No audio in upload."}), 400
+    f = request.files["audio"]
+    if not f or not f.filename:
+        return jsonify({"error": "Empty audio."}), 400
+    os.makedirs(video_processor.WORK_DIR, exist_ok=True)
+    ext = os.path.splitext(f.filename)[1].lower() or ".webm"
+    tmp = _tf.mkdtemp(prefix="voice_", dir=video_processor.WORK_DIR)
+    src = os.path.join(tmp, "clip" + ext)
+    try:
+        f.save(src)
+        if os.path.getsize(src) < 500:
+            return jsonify({"text": "", "note": "recording was empty or too short"})
+        result = video_processor.transcribe_file(src, work_dir=tmp)
+        return jsonify({"text": (result.get("text") or "").strip(), "note": result.get("note", "")})
+    except Exception as e:
+        print(f"Warning: /api/transcribe error: {e}")
+        return jsonify({"error": f"Transcription failed: {e}"}), 500
+    finally:
+        import shutil as _sh
+        _sh.rmtree(tmp, ignore_errors=True)
+
+
+# Guard so a runaway request can't spawn endless `say` processes.
+_SPEAK_LOCK = threading.Lock()
+
+
+@app.route("/api/speak", methods=["POST"])
+def api_speak():
+    """Speak text aloud on this Mac with the built-in `say` command. Optional server-side
+    TTS (the chat UI's default spoken-replies uses the browser's voices; this endpoint is
+    for when Alex wants the Mac itself to talk). Off by default — only called when the UI
+    asks. Capped in length; runs detached so the request returns immediately."""
+    import shutil as _sh
+    if not _sh.which("say"):
+        return jsonify({"ok": False, "error": "macOS `say` not available."}), 400
+    data = request.get_json(silent=True) or {}
+    text = (data.get("text") or "").strip()[:2000]  # cap length
+    if not text:
+        return jsonify({"ok": False, "error": "No text."}), 400
+    try:
+        with _SPEAK_LOCK:
+            # Detached; don't block the response on speech finishing.
+            subprocess.Popen(["say", text],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
 @app.route("/reindex", methods=["GET", "POST"])

@@ -37,6 +37,14 @@ def _now_iso() -> str:
     return datetime.now(_TZ).isoformat()
 
 
+def _clamp(v, lo: int = 0, hi: int = 5) -> int:
+    """Urgency/importance live on a 0-5 scale (0 = unset)."""
+    try:
+        return max(lo, min(hi, int(v)))
+    except (TypeError, ValueError):
+        return 0
+
+
 def _humanize(iso: str) -> str:
     if not iso:
         return ""
@@ -78,6 +86,27 @@ class TaskTracker:
                     history TEXT NOT NULL DEFAULT '[]'
                 )"""
             )
+            # --- Round-4 migration: urgency/importance on tasks + goal_id link ---
+            cols = {r["name"] for r in self._conn.execute("PRAGMA table_info(tasks)")}
+            if "urgency" not in cols:
+                self._conn.execute("ALTER TABLE tasks ADD COLUMN urgency INTEGER DEFAULT 0")
+            if "importance" not in cols:
+                self._conn.execute("ALTER TABLE tasks ADD COLUMN importance INTEGER DEFAULT 0")
+            if "goal_id" not in cols:
+                self._conn.execute("ALTER TABLE tasks ADD COLUMN goal_id INTEGER")
+            # --- Goals ---
+            self._conn.execute(
+                """CREATE TABLE IF NOT EXISTS goals (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    title TEXT NOT NULL,
+                    description TEXT DEFAULT '',
+                    target_date TEXT DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'active',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    history TEXT NOT NULL DEFAULT '[]'
+                )"""
+            )
             self._conn.commit()
 
     # ---- internal helpers ----
@@ -87,6 +116,10 @@ class TaskTracker:
             d["history"] = json.loads(d.get("history") or "[]")
         except (json.JSONDecodeError, TypeError):
             d["history"] = []
+        d["urgency"] = d.get("urgency") or 0
+        d["importance"] = d.get("importance") or 0
+        # Priority score: importance weighted a touch above urgency; drives default ordering.
+        d["priority_score"] = d["importance"] * 2 + d["urgency"]
         d["updated_human"] = _humanize(d.get("updated_at", ""))
         d["created_human"] = _humanize(d.get("created_at", ""))
         return d
@@ -96,20 +129,42 @@ class TaskTracker:
         return cur.fetchone()
 
     # ---- public API ----
-    def create(self, title: str, description: str = "") -> dict:
+    def create(self, title: str, description: str = "", urgency: int = 0,
+               importance: int = 0) -> dict:
         title = (title or "").strip()
         if not title:
             return {"error": "A task needs a title."}
+        urgency = _clamp(urgency)
+        importance = _clamp(importance)
         now = _now_iso()
         history = [{"type": "created", "at": now, "note": "task created", "to": "idea"}]
         with self._lock:
             cur = self._conn.execute(
-                "INSERT INTO tasks (title, description, status, created_at, updated_at, history) "
-                "VALUES (?, ?, 'idea', ?, ?, ?)",
-                (title, (description or "").strip(), now, now, json.dumps(history)),
+                "INSERT INTO tasks (title, description, status, created_at, updated_at, history, "
+                "urgency, importance) VALUES (?, ?, 'idea', ?, ?, ?, ?, ?)",
+                (title, (description or "").strip(), now, now, json.dumps(history),
+                 urgency, importance),
             )
             self._conn.commit()
             row = self._fetch_raw(cur.lastrowid)
+        return self._row_to_dict(row)
+
+    def set_priority(self, task_id, urgency: int = None, importance: int = None) -> dict | None:
+        with self._lock:
+            row = self._fetch_raw(task_id)
+            if not row:
+                return None
+            u = _clamp(urgency) if urgency is not None else row["urgency"]
+            i = _clamp(importance) if importance is not None else row["importance"]
+            now = _now_iso()
+            d = self._row_to_dict(row)
+            d["history"].append({"type": "priority", "urgency": u, "importance": i, "at": now})
+            self._conn.execute(
+                "UPDATE tasks SET urgency = ?, importance = ?, updated_at = ?, history = ? WHERE id = ?",
+                (u, i, now, json.dumps(d["history"]), task_id),
+            )
+            self._conn.commit()
+            row = self._fetch_raw(task_id)
         return self._row_to_dict(row)
 
     def get(self, task_id) -> dict | None:
@@ -174,16 +229,127 @@ class TaskTracker:
         return self._row_to_dict(row)
 
     def recent_for_dashboard(self, limit: int = 8) -> list:
-        """Compact rows for the home dashboard's tasks panel. Terminal tasks sink
-        below active ones so what's actually in-flight shows first."""
+        """Compact rows for the home dashboard's tasks panel. Active tasks first,
+        ordered by priority (importance+urgency) then recency; terminal tasks sink."""
         tasks = self.list(limit=200)
         active = [t for t in tasks if t["status"] not in ("done", "dropped")]
         terminal = [t for t in tasks if t["status"] in ("done", "dropped")]
+        active.sort(key=lambda t: (t["priority_score"], t.get("updated_at", "")), reverse=True)
         ordered = (active + terminal)[:limit]
         return [{
             "id": t["id"], "title": t["title"], "status": t["status"],
             "updated_human": t["updated_human"],
+            "urgency": t["urgency"], "importance": t["importance"],
+            "priority_score": t["priority_score"],
         } for t in ordered]
+
+    def top_by_priority(self, limit: int = 5) -> list:
+        """Highest-priority ACTIVE tasks (for the briefing). Excludes terminal states."""
+        active = [t for t in self.list(limit=200) if t["status"] not in ("done", "dropped")]
+        active.sort(key=lambda t: (t["priority_score"], t.get("updated_at", "")), reverse=True)
+        return active[:limit]
+
+    # ================= GOALS =================
+    def create_goal(self, title: str, description: str = "", target_date: str = "") -> dict:
+        title = (title or "").strip()
+        if not title:
+            return {"error": "A goal needs a title."}
+        now = _now_iso()
+        history = [{"type": "created", "at": now, "note": "goal created"}]
+        with self._lock:
+            cur = self._conn.execute(
+                "INSERT INTO goals (title, description, target_date, status, created_at, updated_at, history) "
+                "VALUES (?, ?, ?, 'active', ?, ?, ?)",
+                (title, (description or "").strip(), (target_date or "").strip(), now, now, json.dumps(history)),
+            )
+            self._conn.commit()
+            gid = cur.lastrowid
+        return self.get_goal(gid)
+
+    def get_goal(self, goal_id) -> dict | None:
+        with self._lock:
+            row = self._conn.execute("SELECT * FROM goals WHERE id = ?", (goal_id,)).fetchone()
+            if not row:
+                return None
+            linked = self._conn.execute(
+                "SELECT id, title, status FROM tasks WHERE goal_id = ? ORDER BY id", (goal_id,)
+            ).fetchall()
+        g = dict(row)
+        try:
+            g["history"] = json.loads(g.get("history") or "[]")
+        except (json.JSONDecodeError, TypeError):
+            g["history"] = []
+        tasks = [dict(t) for t in linked]
+        total = len(tasks)
+        done = sum(1 for t in tasks if t["status"] == "done")
+        g["total_tasks"] = total
+        g["done_tasks"] = done
+        g["progress_pct"] = int(round(100 * done / total)) if total else 0
+        g["linked_tasks"] = tasks
+        g["updated_human"] = _humanize(g.get("updated_at", ""))
+        return g
+
+    def list_goals(self, status: str = None, limit: int = 100) -> list:
+        with self._lock:
+            if status:
+                rows = self._conn.execute(
+                    "SELECT id FROM goals WHERE status = ? ORDER BY updated_at DESC LIMIT ?",
+                    (status, limit)).fetchall()
+            else:
+                rows = self._conn.execute(
+                    "SELECT id FROM goals ORDER BY updated_at DESC LIMIT ?", (limit,)).fetchall()
+        return [self.get_goal(r["id"]) for r in rows]
+
+    def update_goal(self, goal_id, status: str = None, note: str = "",
+                    title: str = None, target_date: str = None) -> dict | None:
+        with self._lock:
+            row = self._conn.execute("SELECT * FROM goals WHERE id = ?", (goal_id,)).fetchone()
+            if not row:
+                return None
+            g = dict(row)
+            try:
+                hist = json.loads(g.get("history") or "[]")
+            except (json.JSONDecodeError, TypeError):
+                hist = []
+            now = _now_iso()
+            new_status = g["status"]
+            if status:
+                new_status = status.strip().lower()
+                if new_status not in ("active", "achieved", "dropped"):
+                    return {"error": "Goal status must be active, achieved, or dropped."}
+                hist.append({"type": "status", "to": new_status, "at": now})
+            new_title = title.strip() if title else g["title"]
+            new_target = target_date.strip() if target_date is not None else g["target_date"]
+            if note:
+                hist.append({"type": "note", "note": note.strip(), "at": now})
+            self._conn.execute(
+                "UPDATE goals SET status = ?, title = ?, target_date = ?, updated_at = ?, history = ? WHERE id = ?",
+                (new_status, new_title, new_target, now, json.dumps(hist), goal_id),
+            )
+            self._conn.commit()
+        return self.get_goal(goal_id)
+
+    def link_task_to_goal(self, task_id, goal_id) -> dict | None:
+        with self._lock:
+            t = self._fetch_raw(task_id)
+            g = self._conn.execute("SELECT id FROM goals WHERE id = ?", (goal_id,)).fetchone()
+            if not t or not g:
+                return None
+            self._conn.execute("UPDATE tasks SET goal_id = ? WHERE id = ?", (goal_id, task_id))
+            self._conn.commit()
+        return self.get_goal(goal_id)
+
+    def goals_for_dashboard(self, limit: int = 6) -> list:
+        goals = self.list_goals(limit=limit * 2)
+        active = [g for g in goals if g["status"] == "active"]
+        other = [g for g in goals if g["status"] != "active"]
+        ordered = (active + other)[:limit]
+        return [{
+            "id": g["id"], "title": g["title"], "status": g["status"],
+            "target_date": g.get("target_date", ""),
+            "progress_pct": g["progress_pct"], "done_tasks": g["done_tasks"],
+            "total_tasks": g["total_tasks"], "when": g["updated_human"],
+        } for g in ordered]
 
 
 # ---- module-level singleton (shared by the chat tools + dashboard) ----------
@@ -206,14 +372,80 @@ def _fmt_task_line(t: dict) -> str:
     return f"#{t['id']} [{t['status']}] {t['title']}"
 
 
-def tool_create_task(title: str, description: str = "") -> str:
-    t = get_tracker().create(title, description)
+def tool_create_task(title: str, description: str = "", urgency: int = 0,
+                     importance: int = 0) -> str:
+    t = get_tracker().create(title, description, urgency=urgency, importance=importance)
     if t.get("error"):
         return t["error"]
-    return (f"Created task #{t['id']}: **{t['title']}** (status: idea)."
+    pri = ""
+    if t.get("urgency") or t.get("importance"):
+        pri = f" · urgency {t['urgency']}/5, importance {t['importance']}/5"
+    return (f"Created task #{t['id']}: **{t['title']}** (status: idea{pri})."
             + (f"\n{t['description']}" if t.get("description") else "")
             + "\nUpdate it any time — say something like \"move task "
             f"#{t['id']} to in progress\".")
+
+
+def tool_set_task_priority(task_id: int, urgency: int = None, importance: int = None) -> str:
+    res = get_tracker().set_priority(task_id, urgency=urgency, importance=importance)
+    if res is None:
+        return f"No task #{task_id} found."
+    return (f"Task #{res['id']} priority set — urgency {res['urgency']}/5, "
+            f"importance {res['importance']}/5.")
+
+
+# ================= GOAL TOOLS =================
+def _progress_bar(pct: int) -> str:
+    filled = pct // 10
+    return "▰" * filled + "▱" * (10 - filled)
+
+
+def tool_create_goal(title: str, description: str = "", target_date: str = "") -> str:
+    g = get_tracker().create_goal(title, description, target_date)
+    if g.get("error"):
+        return g["error"]
+    td = f" (target {g['target_date']})" if g.get("target_date") else ""
+    return (f"Created goal #{g['id']}: **{g['title']}**{td}. Link tasks to it "
+            f"(\"link task #N to goal #{g['id']}\") and its progress will track them.")
+
+
+def tool_update_goal(goal_id: int, status: str = None, note: str = "") -> str:
+    res = get_tracker().update_goal(goal_id, status=status, note=note)
+    if res is None:
+        return f"No goal #{goal_id} found."
+    if isinstance(res, dict) and res.get("error"):
+        return res["error"]
+    bits = []
+    if status:
+        bits.append(f"status → {res['status']}")
+    if note:
+        bits.append("note added")
+    change = (" (" + ", ".join(bits) + ")") if bits else ""
+    return f"Updated goal #{res['id']} **{res['title']}**{change} — {res['progress_pct']}% done."
+
+
+def tool_link_task_to_goal(task_id: int, goal_id: int) -> str:
+    res = get_tracker().link_task_to_goal(task_id, goal_id)
+    if res is None:
+        return f"Couldn't link — check that both task #{task_id} and goal #{goal_id} exist."
+    return (f"Linked task #{task_id} to goal **{res['title']}** (#{res['id']}). "
+            f"Goal is now {res['progress_pct']}% ({res['done_tasks']}/{res['total_tasks']} tasks).")
+
+
+def tool_list_goals(status: str = None) -> str:
+    status_n = (status or "").strip().lower() or None
+    goals = get_tracker().list_goals(status=status_n)
+    if not goals:
+        return "No goals yet." if not status_n else f"No goals with status '{status_n}'."
+    lines = ["Goals:" if not status_n else f"Goals ({status_n}):"]
+    for g in goals:
+        td = f" · target {g['target_date']}" if g.get("target_date") else ""
+        lines.append(f"\n**#{g['id']} {g['title']}** [{g['status']}]{td}")
+        lines.append(f"{_progress_bar(g['progress_pct'])} {g['progress_pct']}% "
+                     f"({g['done_tasks']}/{g['total_tasks']} tasks)")
+        if g.get("description"):
+            lines.append(g["description"])
+    return "\n".join(lines)
 
 
 def tool_update_task_status(task_id: int, status: str, note: str = "") -> str:

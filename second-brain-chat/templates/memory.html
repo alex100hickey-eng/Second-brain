@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Second Brain — Memory</title>
+<link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32.png">
+<meta name="theme-color" content="#0a0e14">
+<style>
+  :root {
+    --bg: #0a0e14; --panel: #0f1520; --panel-2: #121a28; --line: #1c2534;
+    --text: #e7ecf5; --text-dim: #6b7688; --accent: #3fd0ff; --accent-dim: #1a4a5c;
+    --good: #52e0a0; --warn: #ffb84d; --danger: #ff5c5c;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body { background: var(--bg); color: var(--text); min-height: 100vh;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased; }
+  header { padding: 16px 20px; border-bottom: 1px solid var(--line);
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    position: sticky; top: 0; background: rgba(10,14,20,0.92); backdrop-filter: blur(8px); z-index: 10; }
+  .brand { display: flex; align-items: center; gap: 10px;
+    font-family: "SF Mono", "Courier New", monospace; font-size: 12px;
+    letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-dim); }
+  .pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--accent);
+    box-shadow: 0 0 8px var(--accent), 0 0 16px var(--accent); animation: pulse 2.4s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+  nav { display: flex; align-items: center; gap: 4px; }
+  nav a { color: var(--text-dim); text-decoration: none; font-size: 13px;
+    padding: 6px 12px; border-radius: 6px; border: 1px solid transparent; }
+  nav a:hover { color: var(--text); border-color: var(--line); }
+  nav a.active { color: var(--accent); border-color: var(--accent-dim); }
+  main { max-width: 900px; margin: 0 auto; padding: 20px 16px 60px; }
+  .searchbar { display: flex; gap: 8px; margin-bottom: 18px; }
+  .searchbar input { flex: 1; background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; color: var(--text); font-size: 14px; padding: 11px 14px; outline: none; }
+  .searchbar input:focus { border-color: var(--accent-dim); }
+  .stat { font-size: 11px; color: var(--text-dim); font-family: "SF Mono", monospace; margin-bottom: 14px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 14px 16px; margin-bottom: 12px; }
+  .card .top { display: flex; align-items: baseline; gap: 10px; justify-content: space-between; }
+  .card .title { font-size: 15px; color: var(--text); font-weight: 600; cursor: pointer; }
+  .card .title:hover { color: var(--accent); }
+  .card .meta { font-size: 11px; color: var(--text-dim); font-family: "SF Mono", monospace; white-space: nowrap; }
+  .card .summary { font-size: 13px; color: var(--text-dim); margin-top: 6px; line-height: 1.5; }
+  .card .snippet { font-size: 12.5px; color: #8892a4; margin-top: 6px; font-style: italic; }
+  .card .actions { margin-top: 10px; display: none; gap: 8px; }
+  .card.open .actions { display: flex; }
+  .btn { background: transparent; border: 1px solid var(--line); color: var(--text-dim);
+    border-radius: 7px; padding: 5px 11px; font-size: 12px; cursor: pointer; }
+  .btn:hover { border-color: var(--accent-dim); color: var(--text); }
+  .btn.danger:hover { border-color: var(--danger); color: var(--danger); }
+  .transcript { display: none; margin-top: 12px; border-top: 1px solid var(--line); padding-top: 12px; }
+  .card.open .transcript { display: block; }
+  .m { padding: 7px 0; border-top: 1px solid var(--line); }
+  .m:first-child { border-top: none; }
+  .m .role { font-size: 10px; letter-spacing: .08em; text-transform: uppercase;
+    font-family: "SF Mono", monospace; color: var(--accent); }
+  .m.assistant .role { color: var(--good); }
+  .m .body { font-size: 13.5px; color: var(--text); line-height: 1.5; margin-top: 3px; white-space: pre-wrap; }
+  .m .stamp { font-size: 10px; color: var(--text-dim); float: right; }
+  .empty { color: var(--text-dim); font-size: 14px; padding: 30px 0; text-align: center; line-height: 1.6; }
+  .loading { color: var(--text-dim); font-size: 13px; padding: 20px 0; }
+  @media (max-width: 560px) { main { padding: 14px 10px 50px; } .card .meta { display:none; } }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand"><div class="pulse"></div><span>Memory</span></div>
+  <nav>
+    <a href="/">Chat</a>
+    <a href="/dashboard">Dashboard</a>
+    <a href="/memory" class="active">Memory</a>
+    <a href="/hud">HUD</a>
+  </nav>
+</header>
+<main>
+  <div class="searchbar">
+    <input type="text" id="q" placeholder="Search everything you've discussed…" autocomplete="off" />
+  </div>
+  <div class="stat" id="stat"></div>
+  <div id="list"><div class="loading">Loading your conversation memory…</div></div>
+</main>
+<script>
+  const listEl = document.getElementById('list');
+  const statEl = document.getElementById('stat');
+  const qEl = document.getElementById('q');
+  let mode = 'sessions';
+
+  function esc(s){ return (s==null?'':String(s)).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+  function card(s, snippet) {
+    return `<div class="card" data-sid="${s.session_id}">
+      <div class="top">
+        <div class="title">${esc(s.title)}</div>
+        <div class="meta">${esc(s.when)} · ${s.message_count} msg</div>
+      </div>
+      ${s.summary ? `<div class="summary">${esc(s.summary)}</div>` : `<div class="summary" style="opacity:.6">No summary yet.</div>`}
+      ${snippet ? `<div class="snippet">…${esc(snippet)}…</div>` : ``}
+      <div class="actions">
+        <button class="btn" data-act="summarize">Re-summarize</button>
+        <button class="btn danger" data-act="delete">Delete permanently</button>
+      </div>
+      <div class="transcript"></div>
+    </div>`;
+  }
+
+  async function loadSessions() {
+    mode = 'sessions';
+    try {
+      const res = await fetch('/api/memory/sessions');
+      if (res.status === 401) { location.href='/login'; return; }
+      const d = await res.json();
+      const s = d.stats || {};
+      statEl.textContent = `${s.sessions||0} conversations · ${s.messages||0} messages remembered${s.fts ? '' : ' · basic search'}`;
+      if (!(d.sessions||[]).length) {
+        listEl.innerHTML = `<div class="empty">No conversations remembered yet.<br>Everything you and Jarvis discuss is stored here automatically.</div>`;
+        return;
+      }
+      listEl.innerHTML = d.sessions.map(x => card(x)).join('');
+    } catch(e) {
+      listEl.innerHTML = `<div class="empty">Couldn't load memory (${esc(e.message)}).</div>`;
+    }
+  }
+
+  async function search(q) {
+    mode = 'search';
+    try {
+      const res = await fetch('/api/memory/search?q=' + encodeURIComponent(q));
+      const d = await res.json();
+      statEl.textContent = `${(d.results||[]).length} matching conversation(s) for "${esc(q)}"`;
+      if (!(d.results||[]).length) {
+        listEl.innerHTML = `<div class="empty">Nothing found for "${esc(q)}".</div>`;
+        return;
+      }
+      listEl.innerHTML = d.results.map(x => card(x, x.snippet)).join('');
+    } catch(e) {
+      listEl.innerHTML = `<div class="empty">Search failed (${esc(e.message)}).</div>`;
+    }
+  }
+
+  async function openTranscript(cardEl, sid) {
+    const t = cardEl.querySelector('.transcript');
+    if (t.dataset.loaded) return;
+    t.innerHTML = '<div class="loading">Loading…</div>';
+    const res = await fetch('/api/memory/session/' + sid);
+    const s = await res.json();
+    t.innerHTML = (s.messages||[]).map(m => `
+      <div class="m ${esc(m.role)}">
+        <span class="stamp">${esc(m.when)}</span>
+        <div class="role">${esc(m.role)}</div>
+        <div class="body">${esc(m.content)}</div>
+      </div>`).join('');
+    t.dataset.loaded = '1';
+  }
+
+  listEl.addEventListener('click', async (e) => {
+    const cardEl = e.target.closest('.card');
+    if (!cardEl) return;
+    const sid = cardEl.dataset.sid;
+    const act = e.target.dataset.act;
+    if (e.target.classList.contains('title')) {
+      cardEl.classList.toggle('open');
+      if (cardEl.classList.contains('open')) openTranscript(cardEl, sid);
+      return;
+    }
+    if (act === 'delete') {
+      if (!confirm('Permanently delete this conversation from memory? This cannot be undone.')) return;
+      await fetch('/api/memory/session/' + sid + '/delete', { method: 'POST' });
+      cardEl.remove();
+    } else if (act === 'summarize') {
+      e.target.textContent = 'Summarizing…';
+      const res = await fetch('/api/memory/session/' + sid + '/summarize', { method: 'POST' });
+      const d = await res.json();
+      const sum = cardEl.querySelector('.summary');
+      if (d.summary) { sum.textContent = d.summary; sum.style.opacity = 1; }
+      const title = cardEl.querySelector('.title');
+      if (d.title) title.textContent = d.title;
+      e.target.textContent = 'Re-summarize';
+    }
+  });
+
+  let timer = null;
+  qEl.addEventListener('input', () => {
+    clearTimeout(timer);
+    const q = qEl.value.trim();
+    timer = setTimeout(() => { q ? search(q) : loadSessions(); }, 250);
+  });
+
+  loadSessions();
+</script>
+</body>
+</html>

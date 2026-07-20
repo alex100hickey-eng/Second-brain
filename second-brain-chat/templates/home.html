@@ -124,6 +124,23 @@
   .st-done { background: var(--good); }
   .st-dropped { background: #4a3540; }
 
+  /* Draft run status dots */
+  .draft-draft { background: var(--warn); }
+  .draft-approved { background: var(--accent); }
+  .draft-launched { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+  .draft-completed { background: var(--good); }
+
+  /* Goal progress bar */
+  .progress { height: 6px; background: var(--line); border-radius: 20px; margin: 7px 0 5px; overflow: hidden; }
+  .progress-fill { height: 100%; background: linear-gradient(90deg, var(--accent-dim), var(--accent));
+    border-radius: 20px; transition: width .3s; }
+
+  /* Draft action buttons */
+  .draft-actions { margin-top: 6px; }
+  .mini-btn { background: transparent; border: 1px solid var(--accent-dim); color: var(--accent);
+    border-radius: 6px; padding: 3px 10px; font-size: 12px; cursor: pointer; }
+  .mini-btn:hover { background: var(--accent-dim); }
+
   @media (max-width: 560px) {
     main { padding: 14px 10px 50px; }
     .grid { grid-template-columns: 1fr; }
@@ -138,6 +155,7 @@
   <nav>
     <a href="/">Chat</a>
     <a href="/dashboard" class="active">Dashboard</a>
+    <a href="/memory">Memory</a>
     <a href="/hud">HUD</a>
   </nav>
 </header>
@@ -191,6 +209,35 @@
         </div>`),
       'No tasks yet.', 'Say "create a task: …" in chat, or use New Task above.'));
 
+    // Goals (with progress bars)
+    panels.push(panel('Goals', (d.goals||[]).length,
+      rows(d.goals||[], g => {
+        const pct = g.progress_pct || 0;
+        const td = g.target_date ? ` · target ${esc(g.target_date)}` : '';
+        return `
+        <div class="row">
+          <div class="r-title">${esc(g.title)} <span class="pill">${esc(g.status)}</span></div>
+          <div class="progress"><div class="progress-fill" style="width:${pct}%"></div></div>
+          <div class="r-meta">${pct}% · ${g.done_tasks}/${g.total_tasks} tasks${td}</div>
+        </div>`;
+      }),
+      'No goals yet.', 'Say "my goal is to…" in chat to start tracking one.'));
+
+    // Drafted runs (overnight-build prompts awaiting your review)
+    panels.push(panel('Drafted Runs', (d.drafts||[]).length,
+      rows(d.drafts||[], r => `
+        <div class="row">
+          <div class="r-title"><span class="status-dot draft-${esc(r.status)}"></span>${esc(r.title)}</div>
+          <div class="r-sub">${esc(r.status)}${r.has_verdict ? ' · council ✓' : ''} · <a href="/api/drafts/${r.id}?raw=1" target="_blank" rel="noopener">view full &#8599;</a></div>
+          <div class="draft-actions" data-id="${r.id}">
+            ${r.status==='draft' ? `<button class="mini-btn" data-status="approved">Approve</button>` : ''}
+            ${r.status==='approved' ? `<button class="mini-btn" data-status="launched">Mark launched</button>` : ''}
+            ${r.status==='launched' ? `<button class="mini-btn" data-status="completed">Mark completed</button>` : ''}
+          </div>
+          <div class="r-meta">${when(r.when)}</div>
+        </div>`),
+      'No drafted runs.', 'Ask "draft a run to…" — I write the prompt; you launch it with jarvis-launch.sh.'));
+
     // Council decisions
     panels.push(panel('Council Decisions', (d.council||[]).length,
       rows(d.council||[], c => `
@@ -240,6 +287,16 @@
         </div>`),
       'No sites built yet.', 'Use Build Website above to generate one.'));
 
+    // Recent conversations (long-term memory)
+    panels.push(panel('Recent Conversations', (d.memory||[]).length,
+      rows(d.memory||[], m => `
+        <div class="row">
+          <div class="r-title"><a href="/memory">${esc(m.title)}</a></div>
+          ${m.summary ? `<div class="r-sub">${esc(m.summary)}</div>` : ''}
+          <div class="r-meta">${m.message_count} msg${m.when ? ' · ' + esc(m.when) : ''}</div>
+        </div>`),
+      'No conversations remembered yet.', 'Everything you and Jarvis discuss is saved to Memory.'));
+
     grid.innerHTML = panels.join('');
     refreshedEl.textContent = d.generated_at ? ('Updated ' + d.generated_at) : '';
   }
@@ -256,6 +313,23 @@
         <span class="hint">It will retry automatically. Check that the app is running.</span></div></div>`;
     }
   }
+
+  // Draft status controls (approve / mark launched / mark completed). Setting a status
+  // is bookkeeping only — it never launches anything.
+  grid.addEventListener('click', async (e) => {
+    const btn = e.target.closest('.draft-actions button');
+    if (!btn) return;
+    const id = btn.closest('.draft-actions').dataset.id;
+    const status = btn.dataset.status;
+    btn.disabled = true; btn.textContent = '…';
+    try {
+      await fetch(`/api/drafts/${id}/status`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status }),
+      });
+      load();
+    } catch (err) { btn.disabled = false; }
+  });
 
   document.getElementById('refresh-btn').addEventListener('click', load);
   load();

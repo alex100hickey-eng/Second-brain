@@ -133,3 +133,37 @@ risk today is low — but it grows the moment a note contains anything you didn'
 
 _Files changed in this pass: `app.py`, `task_manager.py`, the three agents, both connect
 scripts, both `requirements.txt`, plus new `.env` (gitignored), `.env.example`, and this file._
+
+---
+
+## 7. Round-4 privacy & safety additions — 2026-07-20
+
+New capabilities were added with their safety constraints built in:
+
+- **Conversation memory** — every chat is stored in a **local, gitignored** SQLite DB
+  (`second-brain-chat/conversation_memory.db`). It never leaves the machine and is not
+  committed. You can permanently delete any conversation from the Memory page (`/memory`).
+- **Screen-watch is WATCH-ONLY.** `watch_screen` captures the screen and analyzes it with
+  Claude vision — nothing more. There is **no mouse/keyboard/UI control code anywhere** in
+  the project (no pyautogui/pynput/CGEvent/cliclick); a regression test enforces this on
+  every `.py` file. Screenshots are written to a temp dir and **deleted after processing**;
+  only an explicit "keep" saves one, into gitignored `screenshots/`. Never silently archived.
+  Uses your Mac's **Screen Recording** permission (already granted); a blank capture returns
+  grant instructions rather than a wrong answer.
+- **The run drafter DRAFTS ONLY.** `draft_run` / `run_drafter.py` writes overnight-build
+  prompts to `run_drafts/` for your review; it has **no code path that launches, schedules,
+  or executes** anything (no subprocess/Popen/os.system). The HARD SAFETY RULES are copied
+  into every draft **verbatim and never weakened** (they're Python constants, not model
+  output — only the spec is model-written). `jarvis-launch.sh` only ever **prints** a launch
+  command and **copies** the draft path; it never invokes `claude`. Launching stays your
+  deliberate action.
+- **Voice** transcribes **locally** (whisper.cpp) — audio is posted to `/api/transcribe`,
+  transcribed on-device, and deleted; nothing is sent to a transcription cloud.
+- **Backups** (`scripts/backup.sh`) read-only-copy the project + vault to
+  `~/second-brain-backups/`; they never delete anything except their own snapshots beyond the
+  newest 7, and the Obsidian vault is only ever read.
+- `.gitignore` updated: `conversation_memory.db*` and `screenshots/` join `.env` as
+  never-committed, local-only.
+
+All Round-4 endpoints sit behind the same `ACCESS_CODE` gate on 127.0.0.1 — no new
+unauthenticated routes, no new network exposure.

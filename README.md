@@ -142,6 +142,53 @@ flow idea → evaluating → approved → in_progress → done/dropped, with a p
 `evaluate_task` sends a task to the council and attaches the verdict. **This is bookkeeping only —
 nothing here executes a task** (distinct from the autonomous `task_manager.py`).
 
+## Memory, screen, drafts, goals & voice (Round 4)
+
+### 🧠 Conversation memory (`search_memory` + automatic recall + `/memory`)
+Every chat is stored in a local, gitignored SQLite DB (`second-brain-chat/conversation_memory.py`),
+grouped into sessions by inactivity and summarized (by Claude, with a heuristic fallback) when a
+session closes. Jarvis recalls relevant past context **automatically** — the most relevant snippets
+from earlier conversations are injected into each turn — and you can search explicitly with
+`search_memory` ("what did we discuss about X?"). Browse, search, re-summarize, and **permanently
+delete** conversations on the **Memory page** (`/memory`). Private + local; never committed.
+
+### 👀 Screen-watch (`watch_screen`) — WATCH-ONLY
+Ask "what's on my screen?", "what's this error?", or "summarize this article" and Jarvis captures
+your screen (macOS `screencapture`, main or all displays) and answers with Claude vision. The
+screenshot is **deleted right after** unless you say to keep it (saved to gitignored `screenshots/`).
+It is strictly watch-only — **no mouse/keyboard/UI control code exists anywhere**. Needs macOS
+Screen Recording permission; if it's missing you get grant instructions, not a wrong answer.
+
+### 📝 Run drafter (`draft_run` / `run_drafter.py` / `jarvis-launch.sh`) — DRAFTS ONLY
+Jarvis turns a goal (or a tracked task) into a complete overnight-build prompt: it gathers context,
+runs the idea through the council, and writes a ready-to-launch prompt to `run_drafts/` — with the
+**hard safety rules copied verbatim (never weakened)** and the council verdict attached. Review
+drafts on the dashboard's **Drafted Runs** panel (view full, approve, mark launched/completed).
+It **never launches anything** — you launch an approved draft yourself with `bash jarvis-launch.sh`,
+which lists approved drafts, prints the exact command, and copies the draft path (it never invokes
+`claude`).
+
+### 🎯 Goals + task priority (`create_goal` / `link_task_to_goal` / `list_goals`, urgency/importance)
+Track bigger goals (title, target date, status) whose progress derives from their linked tasks
+(shown with progress bars on the dashboard). Tasks now carry **urgency** and **importance** (0-5);
+the default task ordering and the briefing use them.
+
+### 🎙️ Voice v1 (mic → local Whisper; spoken replies)
+The mic records audio and transcribes it **locally with whisper.cpp** (`/api/transcribe`), dropping
+the text into the chat box for you to send. Spoken replies (off by default, "Voice" toggle) use the
+browser's system voices; `/api/speak` also exposes macOS `say`. Not always-listening.
+
+### ☀️ Morning briefing (`morning_briefing`, say "brief me")
+A short, prioritized rundown: urgent/important tasks, goal progress, drafts awaiting approval,
+recent agent/council activity, recent notes, and a recap of your last conversation.
+
+### 💾 Backups + shortcuts (`run_backup` / `scripts/backup.sh` / `shortcuts.json`)
+`scripts/backup.sh` snapshots the project (including the conversation + task/goal DBs, excluding
+model weights and generated media) plus a read-only Obsidian vault copy to `~/second-brain-backups/`,
+keeping the newest 7. Run it by hand or say "back up my system" (`run_backup`) — it does **not**
+schedule itself. `shortcuts.json` maps short commands (brief, goals, tasks, screen, backup, …) to
+longer prompts, expanded in chat; edit it freely.
+
 ## Testing (`run_tests.py`)
 
 `run_tests.py` at the project root is the single regression suite — **run it after any change.**
@@ -153,8 +200,12 @@ python3 run_tests.py --only vault,gate,tasks   # run named suites only
 ```
 
 It covers vault tools (+ the read-only guarantee), the access gate, the video toolkit and pipeline,
-the data synthesizer, the website idempotency guard, the feasibility judge, the task tracker, and
-the security invariants (no live secret in any `.py`, localhost-only default, `.env` gitignored).
+the data synthesizer, the website idempotency guard, the feasibility judge, the task tracker,
+conversation memory (sessions/search/recall/delete), goals + task priority, screen-watch (blank
+detection + vision + no control code), the run drafter (verbatim safety + status flow), voice (local
+whisper transcription), the briefing + shortcuts, the backup script, and the security invariants
+(no live secret in any `.py`, localhost-only default, `.env`/memory-DB/screenshots gitignored, and
+**no mouse/keyboard control code anywhere**).
 Offline mode uses realistic fakes for anything that would hit Claude or the web, so it's
 deterministic and costs nothing; `--live` exercises the real model/network paths. It points
 `OBSIDIAN_VAULT_PATH` at `sample_vault` first, so it never touches your real vault.

@@ -277,6 +277,42 @@ def transcribe_audio(path: str, duration: float, work_dir: str) -> dict:
     return {"text": text, "truncated": truncated, "note": note}
 
 
+def transcribe_file(path: str, work_dir: str = None) -> dict:
+    """Transcribe a standalone audio (or video) file with whisper.cpp. Used by the
+    voice push-to-talk endpoint. Probes duration first, then reuses transcribe_audio.
+    Returns {text, note}. Works on any container ffmpeg can read (webm/m4a/wav/mp4…)."""
+    if not os.path.isfile(path):
+        return {"text": "", "note": "audio file not found"}
+    made_dir = False
+    if not work_dir:
+        os.makedirs(WORK_DIR, exist_ok=True)
+        work_dir = tempfile.mkdtemp(prefix="voice_", dir=WORK_DIR)
+        made_dir = True
+    try:
+        try:
+            duration = probe_audio_duration(path)
+        except Exception:
+            duration = 0.0
+        tr = transcribe_audio(path, duration or 60.0, work_dir)
+        return {"text": tr.get("text", ""), "note": tr.get("note", "")}
+    finally:
+        if made_dir:
+            shutil.rmtree(work_dir, ignore_errors=True)
+
+
+def probe_audio_duration(path: str) -> float:
+    """Duration in seconds via ffprobe; 0.0 if unknown. Tolerant of audio-only files."""
+    try:
+        out = subprocess.run(
+            [_bin("ffprobe"), "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", path],
+            capture_output=True, text=True, timeout=30,
+        )
+        return float((out.stdout or "0").strip() or 0.0)
+    except (ValueError, subprocess.TimeoutExpired):
+        return 0.0
+
+
 # ---- assemble + call Claude ------------------------------------------------
 def _image_block(path: str) -> dict:
     with open(path, "rb") as f:

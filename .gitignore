@@ -17,3 +17,13 @@ media_lib/
 # Local task-tracker SQLite DB (bookkeeping state, not source)
 second-brain-chat/task_tracker.db
 second-brain-chat/task_tracker.db-journal
+
+# Round-4: durable conversation memory DB — LOCAL + PRIVATE, never commit
+second-brain-chat/conversation_memory.db
+second-brain-chat/conversation_memory.db-journal
+second-brain-chat/conversation_memory.db-wal
+second-brain-chat/conversation_memory.db-shm
+# Screen-watch: captured screenshots are processed then deleted; never commit any
+screenshots/
+# run drafts are text (tracked on purpose), but the launch state index stays local
+# (kept tracked — small JSON; drafts are useful history)
