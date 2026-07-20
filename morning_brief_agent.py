@@ -17,6 +17,13 @@ import json
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
+# Load secrets from the project-root .env (gitignored) before reading os.environ.
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
+except ImportError:
+    pass  # dotenv optional — fall back to the ambient environment
+
 CLAUDE_API_KEY = os.environ.get("CLAUDE_API_KEY")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")

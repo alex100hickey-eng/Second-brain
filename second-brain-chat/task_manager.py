@@ -39,6 +39,15 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+# Load secrets from the project-root .env (gitignored). app.py already loads it before
+# importing this module, but loading again (idempotent) keeps task_manager self-contained
+# if it's ever imported or run directly. This file lives in second-brain-chat/, root is up one.
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"))
+except ImportError:
+    pass  # dotenv optional — fall back to the ambient environment
+
 import httpx
 
 # Shared context, injected by app.py via init() — same idea as the extension

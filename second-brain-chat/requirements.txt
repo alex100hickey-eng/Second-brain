@@ -2,5 +2,6 @@ flask
 anthropic
 supabase
 gunicorn
+python-dotenv
 composio==0.18.0
 composio-anthropic==0.18.0

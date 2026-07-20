@@ -1,2 +1,3 @@
 anthropic
 supabase
+python-dotenv

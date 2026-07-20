@@ -12,6 +12,13 @@ Requires: COMPOSIO_API_KEY env var
 import os
 import sys
 
+# Load secrets from the project-root .env (gitignored). This file lives in scripts/.
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"))
+except ImportError:
+    pass  # dotenv optional — fall back to the ambient environment
+
 from composio import Composio
 
 COMPOSIO_API_KEY = os.environ.get("COMPOSIO_API_KEY")

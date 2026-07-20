@@ -29,6 +29,14 @@ import sys
 import json
 from datetime import datetime, timezone
 
+# Load secrets from the project-root .env (gitignored) before reading os.environ.
+# This file lives in agents/, so the project root is one directory up.
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"))
+except ImportError:
+    pass  # dotenv optional — fall back to the ambient environment
+
 from anthropic import Anthropic
 from supabase import create_client
 
