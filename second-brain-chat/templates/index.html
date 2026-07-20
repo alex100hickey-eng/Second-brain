@@ -402,6 +402,18 @@
   const emptyState = document.getElementById('empty-state');
   const form = document.getElementById('chat-form');
   const input = document.getElementById('message-input');
+
+  // Dashboard quick actions link here with ?q=… to pre-fill (not auto-send) the box.
+  (function prefillFromQuery() {
+    try {
+      const q = new URLSearchParams(location.search).get('q');
+      if (q) {
+        input.value = q;
+        setTimeout(() => { input.focus(); input.setSelectionRange(q.length, q.length); }, 60);
+        history.replaceState(null, '', location.pathname);
+      }
+    } catch (e) { /* ignore */ }
+  })();
   const sendBtn = document.getElementById('send-btn');
   const status = document.getElementById('status');
 
@@ -609,6 +621,19 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: outboundMessage }),
       });
+
+      if (!res.ok) {
+        removeThinking();
+        removeToolStatus();
+        if (res.status === 401) {
+          addMessage('assistant', 'Your session expired. Reloading the login page…');
+          setTimeout(() => { location.href = '/login'; }, 1600);
+        } else {
+          addMessage('assistant', `The server returned an error (${res.status}). Your message is back in the box below — hit Send to try again.`);
+          input.value = message;
+        }
+        return;
+      }
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();

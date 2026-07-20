@@ -14,3 +14,6 @@ inbox/
 # video_toolkit outputs
 media_lib/
 # sites/ and synthesized/ are text artifacts — left tracked on purpose.
+# Local task-tracker SQLite DB (bookkeeping state, not source)
+second-brain-chat/task_tracker.db
+second-brain-chat/task_tracker.db-journal

@@ -1,0 +1,272 @@
+/* =========================================================================
+   BUSINESS RESULTS FITNESS — core stylesheet
+   Real Coaching. Real Accountability. Real Results.
+   Heading font: "Anton"  |  Body font: "Work Sans"
+   ========================================================================= */
+
+:root {
+  /* ---- brand tokens ---- */
+  --bg: #F7F4EE;
+  --surface: #FFFFFF;
+  --text: #191512;
+  --muted: #5B564F;
+  --primary: #141210;
+  --accent: #FF5A1F;
+  --border: #E4DFD4;
+  --on-primary: #F7F4EE;
+
+  --radius: 0.375rem;
+  --shadow: 0 12px 30px -12px rgba(20, 18, 16, 0.35);
+
+  /* ---- fonts ---- */
+  --font-head: "Anton", "Arial Narrow", sans-serif;
+  --font-body: "Work Sans", -apple-system, BlinkMacSystemFont, sans-serif;
+
+  /* ---- 8px spacing grid ---- */
+  --sp-1: 0.5rem;   /* 8px  */
+  --sp-2: 1rem;     /* 16px */
+  --sp-3: 1.5rem;   /* 24px */
+  --sp-4: 2rem;     /* 32px */
+  --sp-5: 3rem;     /* 48px */
+  --sp-6: 4rem;     /* 64px */
+  --sp-7: 6rem;     /* 96px */
+}
+
+/* ===== self-review polish layer (appended) ===== */
+/* ============================================================
+   POLISH LAYER — Business Results Fitness
+   Appended after styles.css — refines rhythm, hierarchy, motion
+   ============================================================ */
+
+/* ---- base rhythm & type hierarchy ---- */
+body { line-height: 1.65; }
+h1, h2, h3, .cinema__title { line-height: 1.05; letter-spacing: 0.01em; }
+h1 { font-size: clamp(2.75rem, 6vw, 4.5rem); }
+h2, .section-header h2 { font-size: clamp(1.9rem, 4vw, 3rem); }
+h3 { font-size: clamp(1.25rem, 2.2vw, 1.75rem); }
+small, .footer-copy, .copyright { font-size: 0.8125rem; color: var(--muted); }
+
+/* ---- section rhythm on the 8px grid ---- */
+.section, .section-alt, .cta-band {
+  padding-block: clamp(4rem, 10vw, 8rem);
+}
+.section-header { margin-bottom: var(--sp-5); text-align: left; max-width: 42ch; }
+.card-grid { gap: var(--sp-4); }
+.split { gap: var(--sp-6); align-items: center; }
+.split.reverse { flex-direction: row-reverse; }
+
+/* diagonal cut divider — signature motif, not everywhere-centered blandness */
+.section-alt {
+  position: relative;
+  clip-path: polygon(0 2.5vw, 100% 0, 100% calc(100% - 2.5vw), 0 100%);
+}
+.cta-band {
+  background: var(--primary);
+  color: var(--on-primary);
+  clip-path: polygon(0 3vw, 100% 0, 100% 100%, 0 calc(100% - 3vw));
+}
+.cta-band .btn-primary { box-shadow: var(--shadow); }
+
+/* ---- badges / eyebrows / price — accent used with intent ---- */
+.badge {
+  background: var(--accent);
+  color: var(--primary);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.75rem;
+  padding: 0.35em 0.75em;
+  border-radius: var(--radius);
+}
+.cinema__eyebrow {
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+.price {
+  font-family: var(--font-head);
+  color: var(--accent);
+  font-size: clamp(2rem, 4vw, 3rem);
+  line-height: 1;
+}
+
+/* ---- buttons: real hover/focus states ---- */
+.btn {
+  border-radius: var(--radius);
+  transition: transform 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease;
+}
+.btn:hover { transform: translateY(-2px); box-shadow: var(--shadow); }
+.btn-primary {
+  background: var(--accent);
+  color: var(--on-primary);
+}
+.btn-primary:hover { background: color-mix(in srgb, var(--accent) 85%, black); }
+.btn:focus-visible,
+.nav-links a:focus-visible,
+.nav-toggle:focus-visible,
+.faq-q:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: var(--radius);
+}
+.hero-ctas { gap: var(--sp-2); }
+
+/* ---- cards: consistent border/shadow/hover lift ---- */
+.card, .card-featured {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  transition: transform 0.25s ease, box-shadow 0.25s ease, border-color 0.25s ease;
+}
+.card:hover, .card-featured:hover {
+  transform: translateY(-4px);
+  box-shadow: var(--shadow);
+  border-color: var(--accent);
+}
+.card-featured {
+  border-color: var(--accent);
+  box-shadow: var(--shadow);
+}
+
+/* ---- media placeholder honesty (no generic grey blob) ---- */
+.media-ph {
+  background: linear-gradient(155deg, var(--primary), #05070d 85%);
+  border-radius: var(--radius);
+  display: flex;
+  align-items: flex-end;
+}
+.media-ph__label {
+  color: var(--on-primary);
+  opacity: 0.65;
+  font-size: 0.8125rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  padding: var(--sp-2);
+}
+
+/* ---- cinema block: caption legibility over photography ---- */
+.cinema__content { max-width: 46ch; }
+.cinema__caption { color: var(--on-primary); opacity: 0.85; }
+.cinema__title { color: var(--on-primary); }
+.cinema__cue { color: var(--accent); }
+
+/* ---- nav: crisp underline hover, real mobile toggle behavior ---- */
+.site-nav { align-items: center; }
+.nav-links a {
+  position: relative;
+  transition: color 0.2s ease;
+}
+.nav-links a::after {
+  content: "";
+  position: absolute;
+  left: 0; right: 0; bottom: -4px;
+  height: 2px;
+  background: var(--accent);
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform 0.2s ease;
+}
+.nav-links a:hover::after,
+.nav-links a[aria-current="page"]::after { transform: scaleX(1); }
+.nav-toggle {
+  display: none;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--sp-1) var(--sp-2);
+}
+@media (max-width: 760px) {
+  .nav-toggle { display: inline-flex; }
+  .nav-links {
+    position: absolute;
+    top: 100%; left: 0; right: 0;
+    flex-direction: column;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: var(--sp-3);
+    gap: var(--sp-2);
+    max-height: 0;
+    overflow: hidden;
+    opacity: 0;
+    transition: max-height 0.3s ease, opacity 0.2s ease;
+  }
+  .nav-toggle[aria-expanded="true"] ~ .nav-links {
+    max-height: 24rem;
+    opacity: 1;
+  }
+}
+
+/* ---- footer & FAQ spacing consistency ---- */
+.site-footer { padding-block: var(--sp-6); border-top: 1px solid var(--border); }
+.footer-col { display: flex; flex-direction: column; gap: var(--sp-1); }
+.faq { display: flex; flex-direction: column; gap: var(--sp-3); }
+.faq-q { font-weight: 700; cursor: pointer; }
+.faq-a { color: var(--muted); margin-top: var(--sp-1); }
+.form-row { margin-bottom: var(--sp-3); }
+
+/* ===== added: fills for classes used by pages ===== */
+.brand {
+  font-family: 'Oswald', 'Bebas Neue', Impact, sans-serif;
+  font-weight: 700;
+  font-size: 1.5rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--primary);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.brand::before {
+  content: "";
+  display: inline-block;
+  width: 0.6rem;
+  height: 1.4rem;
+  background: var(--accent);
+  transform: skewX(-12deg);
+}
+
+.container {
+  width: 100%;
+  max-width: 1200px;
+  margin-inline: auto;
+  padding-inline: 1.5rem;
+}
+
+.hero {
+  position: relative;
+  background: var(--primary);
+  color: var(--on_primary);
+  padding: 6rem 1.5rem 8rem;
+  overflow: hidden;
+  clip-path: polygon(0 0, 100% 0, 100% 88%, 0 100%);
+}
+
+.hero::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(115deg, transparent 60%, var(--accent) 60.5%, var(--accent) 62%, transparent 62.5%);
+  opacity: 0.9;
+  pointer-events: none;
+}
+
+.hero h1,
+.hero .hero-title {
+  font-family: 'Oswald', 'Bebas Neue', Impact, sans-serif;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  line-height: 0.95;
+  font-size: clamp(2.5rem, 6vw, 5rem);
+  max-width: 20ch;
+}
+
+.hero p {
+  color: var(--on_primary);
+  opacity: 0.8;
+  max-width: 45ch;
+  margin-top: 1rem;
+  font-size: 1.125rem;
+}

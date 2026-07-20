@@ -301,3 +301,135 @@ read-only; app stays on 127.0.0.1 behind the access code; no schema/secrets chan
   (two valid sites built). Benign but wastes a build; noted for a future idempotency guard.
 
 **Round 2 build complete.** App running on http://127.0.0.1:5001 with all new tools live.
+
+---
+
+# OVERNIGHT BUILD — ROUND 3 — 2026-07-20 (late morning session)
+
+Scope: (1) fixes & polish + a single regression suite, (2) a Feasibility Judge for the
+decision council, (3) a clean readable/mobile home dashboard, (4) a task-tracker
+scaffold (bookkeeping only, never autonomous), (5) a full-system smoothing pass.
+All inside the project; vault stays read-only; app stays on 127.0.0.1 behind the access
+code; no Supabase schema changes; nothing executes tasks autonomously.
+
+## Priority 1 — Fixes, polish & the regression suite — DONE ✅
+- **create_website idempotency guard** (`website_creator_agent.py`): a module lock
+  serializes builds and a 5-min TTL cache keyed by the normalized brief makes one request
+  produce exactly one build. The duplicate second tool-call the model sometimes emits now
+  returns the first build's result instantly with a "reused that build" note — no second
+  site dir. Empty briefs are rejected cleanly. Verified by the suite (build-count == 1 on a
+  duplicate call; a different brief still builds).
+- **Error handling / feedback sweep:** create_website failures now say nothing-was-saved +
+  what to do; the chat UI (`index.html`) now handles a non-OK HTTP response (401 → bounce to
+  /login with a message; other codes → restore the message to the box to retry) instead of
+  silently reading an error body as a stream. Existing per-tool try/except friendly messages
+  (edit_video, analyze_video, synthesize) confirmed. Loading feedback already present via the
+  live tool-status pulse; left intact.
+- **`run_tests.py`** (project root, ONE command = the regression bar): offline by default
+  (fast, free, deterministic — fakes/stubs stand in for anything that would hit Claude or the
+  web), `--live` adds the real model/network paths, `--only a,b` runs named suites. Covers:
+  vault tools (+read-only byte-for-byte guarantee), the access gate (Flask test client:
+  unauth redirect/401, wrong vs right code), video toolkit (trim/vertical/thumbnail/caption/
+  concat via ffmpeg), the video pipeline's local stages (probe/frame-sample/transcribe),
+  the data synthesizer (offline organize mode via a fake client + graceful zero-source web),
+  the website idempotency guard, the feasibility judge (shape offline, 3-idea differentiation
+  live), the task tracker (full CRUD + history + persistence), and the security invariants
+  (no live secret value in any .py, 127.0.0.1 default + debug off, .env gitignored/untracked).
+  **Result: 49 passed, 0 failed offline.** README documents how to run it.
+- **Fix the suite revealed:** video-toolkit fixtures must live inside the project (the toolkit
+  refuses out-of-project paths) — moved test clips under media_lib/ with cleanup. Also made
+  the suite flush before its hard exit (background daemon threads).
+
+## Priority 2 — Feasibility Judge (council's third member) — DONE ✅
+- Added `feasibility_judge()` + `assess_feasibility()` in `app.py`, following the exact
+  `_council_call` pattern. It answers a different question than the Advocate/Critic: CAN this
+  actually work, and how likely to work as intended? Fixed headings: Plausibility (N/10 +
+  unlikely/possible/likely), Technical feasibility, Resource realism (framed for a solo
+  college student), Causal chain + weakest link, Most likely failure mode, What would raise
+  the rating. Prompt explicitly separates "impossible" from "hard" and licenses a plain
+  "this won't work."
+- Wired into the council: `deliberate()` now runs Advocate + Critic + **Feasibility Judge**,
+  and the final Judge sees the feasibility read too. Output shows all four sections.
+- Also standalone: new `assess_feasibility` chat tool ("is this idea feasible: …") returns just
+  the calibrated read. Both are logged to Supabase (agent_name "council") for the dashboard.
+- **Tested (live), 3 ideas of different plausibility:** budgeting spreadsheet → **9/10 likely**;
+  YouTube to 10k in a year → **4/10 unlikely-but-possible** (named the weak links); FTL radio
+  in a dorm → **0/10** (correctly grounded in physics/relativity, not "just hard"). Ratings and
+  reasoning meaningfully differ. Through live chat, "is this feasible: juggle in a week" → 8/10.
+
+## Priority 3 — Home dashboard (/dashboard) — DONE ✅
+- New `templates/home.html`: a clean, fast, **mobile-friendly** command deck matching the chat
+  app's aesthetic (same dark-navy palette, cyan accent, mono headers). Responsive auto-fill grid,
+  30-second auto-refresh + a manual Refresh button, and a graceful empty-state (with a helpful
+  hint) for every panel — designed for the sparse reality, not fake fullness.
+- Panels: **Tasks**, **Council Decisions** (pros/cons/feasibility summaries), **Recent Agent
+  Activity**, **Recent Vault Notes** (from the read-only Obsidian index), **Synthesized Reports**,
+  **Built Sites** (each links to a live preview). **Quick actions:** Open Chat, Run Synthesizer,
+  Build Website, New Task — the three build actions deep-link to the chat with a pre-filled (not
+  auto-sent) prompt via `?q=`, which `index.html` now reads.
+- New backend: `/api/home` (`get_home_data()` — every panel independently fail-safe), plus
+  `get_home_agent_outputs / get_recent_council / get_recent_vault_notes / get_recent_reports /
+  get_recent_sites`. New `/preview/<slug>/<page>` route serves a built site read-only, behind the
+  gate, path-contained to sites/<slug>/ (traversal → 404, verified).
+- **Preserved the old sci-fi HUD** at **/hud** (nothing deleted); `/dashboard` now serves the
+  new readable home base; `/` stays the chat.
+- **Tested (live over HTTP, logged in):** `/dashboard` 200, `/api/home` returns real data
+  (agent outputs, 3 reports, 3 sites) with empty council/tasks that then populate as used;
+  preview index+styles 200, traversal 404; the old `/api/dashboard` HUD still 200.
+
+## Priority 4 — Task Tracker scaffold (structure only) — DONE ✅
+- New `second-brain-chat/task_tracker.py` — **local SQLite** (no Supabase tables, no network),
+  distinct from the autonomous `task_manager.py`. Model: task = {id, title, description, status,
+  created_at, updated_at, history[]}; pipeline idea → evaluating → approved → in_progress →
+  done/dropped; append-only history of status changes + notes. Thread-safe (one guarded
+  connection). **Nothing here executes a task** — pure bookkeeping.
+- Chat tools wired into `app.py`: `create_task`, `update_task_status`, `list_tasks`,
+  `show_task_history`, and `evaluate_task` (optional wiring: sends a task to the council, sets it
+  to 'evaluating', and attaches the verdict + feasibility rating to the task's history). Plus the
+  Tasks panel on the dashboard. System prompt describes it and stresses it's bookkeeping only.
+- DB gitignored.
+- **Tested end-to-end through chat:** "create a task…" → #1 (idea); "move task 1 to in progress"
+  → in_progress; both reflected on `/api/home` immediately. CRUD/history/persistence covered by
+  the suite (8/8).
+
+## Priority 5 — Full-system smoothing pass — DONE ✅
+Used the system as a user (chat + dashboard) and fixed the rough edges found:
+- **Duplicate agent-activity rows** (old pre-idempotency double builds showed twice) — the
+  home dashboard now collapses repeat agent+result rows so activity reads clean.
+- **Inconsistent timestamps** — the dashboard mixed raw ISO strings (agent/council rows) with
+  relative times (file panels). Added `_humanize_iso` so every panel reads "27m ago" / "1h ago".
+- **Chat error on a non-OK HTTP response** — `index.html` previously tried to stream-parse an
+  error body; now it handles it: 401 → bounce to /login with a message, other codes → restore
+  the message to the box to retry.
+- **`/api/dashboard` (HUD) 500 on a transient upstream read error** — a startup Composio/Supabase
+  read race surfaced as an HTML 500. Both `/api/dashboard` and `/api/home` now catch it and return
+  clean JSON (503) so the front-end just retries on its refresh loop. (Endpoints verified reliably
+  200 across repeated requests afterward.)
+- **Website-build failure messaging** — now states nothing was saved + what to do next.
+- **Feasibility offline test side-effect** — the offline suite was writing "council" rows to
+  production Supabase via the logger; stubbed it so `run_tests.py` (offline) is side-effect-free.
+
+## Round 3 — final verification — 2026-07-20
+- **`run_tests.py`: 49 passed / 0 failed offline; 56 / 0 with `--live`** (real web synthesis, a
+  real small website build, real video-vision analysis, and the 3-idea feasibility differentiation
+  9 > 4 > 1 all pass).
+- **Feasibility judge live-differentiates** (solo-budget spreadsheet 9/10 · YouTube-to-10k 4/10 ·
+  FTL radio 0-1/10, grounded in physics not "hard"); wired into the council (Advocate/Critic/
+  **Feasibility**/Judge) and standalone. Verified end-to-end through chat, including `evaluate_task`
+  attaching the verdict to a tracked task.
+- **Dashboard**: `/dashboard` (new home base) + `/hud` (preserved HUD) + `/preview/<slug>/`
+  (site previews, traversal-blocked). `/api/home` returns real data with graceful empty states;
+  auto-refresh; mobile grid. No Composio dependency (faster + can't 500 on calendar).
+- **Task tracker**: SQLite CRUD + history + council evaluation, all through chat and on the
+  dashboard. Nothing autonomous.
+- **Security invariants intact**: bound to 127.0.0.1 only (LAN 192.168.7.27 refused); gate
+  enforced (/ →302, /api/* →401); no live secret in any `.py`; `.env` gitignored/untracked;
+  the read-only Obsidian vault is never written (suite's byte-for-byte guarantee passes).
+- **Regression — prior functionality intact**: vault tools, synthesizer, website agent, video
+  toolkit + pipeline all pass; existing tools untouched.
+- **Housekeeping**: test chat history cleared; junk test task removed (kept one illustrative
+  evaluated task); no stray test media; task DB gitignored; README updated (Round-3 section +
+  a Testing section); nothing committed to git.
+
+**Round 3 build complete.** App running on http://127.0.0.1:5001 — new home dashboard at
+/dashboard, the council now has its Feasibility Judge, and the task tracker is live (bookkeeping only).

@@ -120,6 +120,45 @@ python3 video_toolkit.py caption inbox/clip.mp4 --text "Hello" --position bottom
 python3 video_toolkit.py vertical inbox/clip.mp4 --mode crop
 ```
 
+## Decisions, dashboard & tasks (Round 3)
+
+### 🧭 Decision council + feasibility judge (`deliberate` / `assess_feasibility`)
+Run an idea through the council: an **Advocate** argues for it, a **Critic** argues against, a
+**Feasibility Judge** assesses whether it can *actually* work as intended (a plausibility rating
+N/10, the causal chain's weakest link, and the most likely failure mode), and a **Judge** weighs
+all three. Ask *"run this through the council"* for the full deliberation, or *"is this feasible: …"*
+for just the calibrated feasibility read. Analytical only — takes no action. Both are logged and
+surface on the dashboard's Council panel.
+
+### 🏠 Home dashboard (`/dashboard`)
+A clean, mobile-friendly command deck: Tasks, Council Decisions, Recent Agent Activity, Recent
+Vault Notes, Synthesized Reports, and Built Sites (each links to a live in-app preview at
+`/preview/<slug>/`). Quick actions deep-link into the chat. Auto-refreshes every 30s. The original
+sci-fi HUD is preserved at **`/hud`**.
+
+### ✅ Task tracker (`create_task` / `update_task_status` / `list_tasks` / `show_task_history` / `evaluate_task`)
+A supervised idea/to-do board stored in local SQLite (`second-brain-chat/task_tracker.py`). Tasks
+flow idea → evaluating → approved → in_progress → done/dropped, with a per-task history log.
+`evaluate_task` sends a task to the council and attaches the verdict. **This is bookkeeping only —
+nothing here executes a task** (distinct from the autonomous `task_manager.py`).
+
+## Testing (`run_tests.py`)
+
+`run_tests.py` at the project root is the single regression suite — **run it after any change.**
+
+```bash
+python3 run_tests.py                 # offline: fast, free, no new network calls (the regression bar)
+python3 run_tests.py --live          # ALSO run real Claude API / web tests
+python3 run_tests.py --only vault,gate,tasks   # run named suites only
+```
+
+It covers vault tools (+ the read-only guarantee), the access gate, the video toolkit and pipeline,
+the data synthesizer, the website idempotency guard, the feasibility judge, the task tracker, and
+the security invariants (no live secret in any `.py`, localhost-only default, `.env` gitignored).
+Offline mode uses realistic fakes for anything that would hit Claude or the web, so it's
+deterministic and costs nothing; `--live` exercises the real model/network paths. It points
+`OBSIDIAN_VAULT_PATH` at `sample_vault` first, so it never touches your real vault.
+
 ## Adding a new tool/capability
 
 The app is built to extend by touching one place per concern (see the header comment in

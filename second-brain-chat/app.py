@@ -82,6 +82,7 @@ NOTE_INDEX = vault_index.VaultIndex(OBSIDIAN_VAULT_PATH)
 # Video input pipeline (ffmpeg frame sampling + local Whisper transcription +
 # Claude vision). Local module; heavy work shells out to ffmpeg/whisper-cli.
 import video_processor  # noqa: E402
+import task_tracker  # noqa: E402 — lightweight local task ledger (SQLite; not autonomous)
 # Where uploaded / dropped videos live for the analyze_video tool.
 INBOX_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "inbox")
 os.makedirs(INBOX_DIR, exist_ok=True)
@@ -201,6 +202,8 @@ INTERNAL_AGENT_NAMES = {
     "jarvis_taskman_step",  # per-step audit trail for managed tasks
     "jarvis_taskman_kill",  # kill-switch rows for managed tasks
     "jarvis_file_undo",  # reversible-file-op undo trail for managed tasks
+    "council",  # decision-council / feasibility runs — shown in their own dashboard panel
+    "jarvis_tasktracker",  # lightweight task-tracker mirror rows (see task_tracker.py)
 }
 
 SYSTEM_PROMPT = """You are Alex's personal assistant — the brain of his "second brain" system.
@@ -280,7 +283,12 @@ sentence. Don't save throwaway context or things already in your memories.
 
 When Alex wants a decision analyzed or asks whether something is worth doing, you can run it
 through his decision council with the deliberate tool — an Advocate argues for it, a Critic
-independently argues against it, and a Judge rules. Present the full deliberation to him.
+independently argues against it, a Feasibility Judge assesses whether it can actually work as
+intended, and a Judge rules. Present the full deliberation to him. When he instead asks only
+whether something is feasible / realistic / "could actually work" (not whether it's worth it),
+use assess_feasibility for just the Feasibility Judge's calibrated read — an honest plausibility
+rating with the weakest link and most likely failure mode. It will say plainly when something
+won't work, and distinguishes "impossible" from merely "hard".
 
 You can propose adding events to Alex's calendar with propose_calendar_event, but you cannot
 create them directly. A proposal goes into a pending-approval queue that Alex reviews on his
@@ -301,6 +309,14 @@ when it finishes. Use it when Alex says "get back to me", "work on this in the b
 or the job would take a while. Background runs follow the exact same rules you do — anything
 consequential still goes through the approval queue. Use check_delegated_tasks to see how
 past tasks went. Don't delegate trivial one-tool lookups — just do those directly.
+
+Alex has a lightweight task tracker (a supervised idea/to-do board — it does NOT run tasks).
+Use create_task to capture something to do, update_task_status to move a task through its
+pipeline (idea → evaluating → approved → in_progress → done/dropped), list_tasks to show them,
+and show_task_history for one task's full log. When he wants a task vetted, evaluate_task runs
+it through the council and attaches the verdict (including the feasibility rating) to the task.
+This tracker is just bookkeeping — nothing here executes work; that stays supervised. It's
+separate from the autonomous Task Manager below.
 
 For bigger autonomous goals there's the Task Manager (run_managed_task): a Prompter extracts
 the goal and candidate guardrails, the Guardrail Council (same Advocate/Critic/Judge pattern
@@ -710,11 +726,12 @@ TOOLS = [
     {
         "name": "deliberate",
         "description": (
-            "Run an idea or decision through Alex's three-agent decision council: an Advocate builds "
-            "the strongest case FOR, a Critic independently builds the strongest case AGAINST (neither "
-            "sees the other's arguments), and a Judge weighs both and delivers a verdict with reasoning. "
-            "Use when Alex asks whether something is worth doing, wants a decision analyzed, or says to "
-            "'run it through the council'. Purely analytical — produces a recommendation, takes no action."
+            "Run an idea or decision through Alex's decision council: an Advocate builds the strongest "
+            "case FOR, a Critic independently builds the strongest case AGAINST, a Feasibility Judge "
+            "assesses whether it can ACTUALLY work as intended (plausibility rating + weakest link + "
+            "likely failure mode), and a Judge weighs all three and delivers a verdict. Use when Alex "
+            "asks whether something is worth doing, wants a decision analyzed, or says to 'run it "
+            "through the council'. Purely analytical — produces a recommendation, takes no action."
         ),
         "input_schema": {
             "type": "object",
@@ -727,8 +744,115 @@ TOOLS = [
                     "type": "string",
                     "description": "Optional relevant context Alex gave (budget, goals, constraints).",
                 },
+                "intended_outcome": {
+                    "type": "string",
+                    "description": "Optional — the specific result Alex wants this to achieve (helps the Feasibility Judge calibrate). E.g. '10k subscribers in a year'.",
+                },
             },
             "required": ["idea"],
+        },
+    },
+    {
+        "name": "assess_feasibility",
+        "description": (
+            "Get JUST the Feasibility Judge's read on an idea — can it actually work, and how likely is "
+            "it to work the way Alex intends? Returns a plausibility rating (N/10, unlikely/possible/likely) "
+            "with technical feasibility, resource realism for a solo college student, the causal chain and "
+            "its weakest link, the most likely failure mode, and what would raise the rating. Use when Alex "
+            "asks 'is this feasible', 'could this actually work', or 'how realistic is this' — as opposed to "
+            "'is it worth it' (that's the full council via deliberate). Analytical only; takes no action."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "idea": {
+                    "type": "string",
+                    "description": "The idea/plan to assess, stated plainly.",
+                },
+                "intended_outcome": {
+                    "type": "string",
+                    "description": "The specific outcome Alex wants it to achieve, if he said. Sharpens the read.",
+                },
+                "context": {
+                    "type": "string",
+                    "description": "Optional relevant context (budget, timeline, skills, constraints).",
+                },
+            },
+            "required": ["idea"],
+        },
+    },
+    {
+        "name": "create_task",
+        "description": (
+            "Add a task to Alex's task tracker — a supervised idea/to-do board (NOT autonomous "
+            "execution; nothing runs the task). Use when Alex says 'add a task', 'track this', "
+            "'remind me to work on…', or wants to capture something to do later. New tasks start "
+            "in status 'idea'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "Short task title, e.g. 'Edit the sprint-mechanics clip'."},
+                "description": {"type": "string", "description": "Optional detail: what it involves, why, any specifics."},
+            },
+            "required": ["title"],
+        },
+    },
+    {
+        "name": "update_task_status",
+        "description": (
+            "Move a task through its pipeline: idea → evaluating → approved → in_progress → done "
+            "(or dropped). Use when Alex says a task is started, finished, approved, or abandoned."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "integer", "description": "The task's id (from list_tasks)."},
+                "status": {"type": "string", "enum": task_tracker.STATUSES,
+                           "description": "New status."},
+                "note": {"type": "string", "description": "Optional note about why/what changed."},
+            },
+            "required": ["task_id", "status"],
+        },
+    },
+    {
+        "name": "list_tasks",
+        "description": "List Alex's tracked tasks, newest-updated first. Optionally filter by status.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "status": {"type": "string", "enum": task_tracker.STATUSES,
+                           "description": "Optional — only tasks in this status."},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "show_task_history",
+        "description": "Show one task's full detail and its history log (status changes + notes).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "integer", "description": "The task's id."},
+            },
+            "required": ["task_id"],
+        },
+    },
+    {
+        "name": "evaluate_task",
+        "description": (
+            "Send a task to the decision council (Advocate, Critic, Feasibility Judge, Judge), set "
+            "its status to 'evaluating', and attach the council's verdict + feasibility rating to the "
+            "task's history. Use when Alex asks to 'evaluate', 'vet', or 'run the council on' a task he's "
+            "tracking. Analytical only — it does not execute the task."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "integer", "description": "The task's id (from list_tasks)."},
+                "intended_outcome": {"type": "string", "description": "Optional — what outcome Alex wants, sharpens the feasibility read."},
+            },
+            "required": ["task_id"],
         },
     },
     {
@@ -1543,7 +1667,80 @@ def _council_call(system: str, user: str) -> str:
     return next((b.text for b in msg.content if b.type == "text"), "").strip()
 
 
-def deliberate(idea: str, context: str = "") -> str:
+def _extract_feasibility_rating(text: str) -> str:
+    """Pull the 'N/10 (label)' headline out of a feasibility read, for the dashboard."""
+    m = re.search(r"Plausibility:\s*(\d+\s*/\s*10[^*\n]*)", text or "")
+    return m.group(1).strip() if m else ""
+
+
+def _log_council(kind: str, idea: str, headline: str, full: str) -> None:
+    """Persist a council/feasibility run so it surfaces on the dashboard. Best-effort:
+    a logging failure never breaks the analysis the user asked for."""
+    try:
+        supabase.table("Agent Outputs").insert({
+            "agent_name": "council",
+            "output_text": json.dumps({
+                "kind": kind,            # "deliberation" | "feasibility"
+                "idea": idea[:300],
+                "headline": headline[:300],
+                "full": full[:8000],
+            }),
+        }).execute()
+    except Exception as e:
+        print(f"Warning: couldn't log council run: {e}")
+
+
+# --- Feasibility Judge — the council's third member ---------------------------
+# Answers a different question from the Advocate/Critic (who argue whether an idea
+# is WORTH doing): CAN this actually work, and how likely is it to work the way Alex
+# intends? It is a calibration voice, not a third cheerleader — willing to say "this
+# won't work" plainly, but careful to distinguish "impossible" from merely "hard".
+FEASIBILITY_SYSTEM = (
+    "You are the Feasibility Judge on Alex's personal decision council. Alex is a solo "
+    "college student who builds things mostly by himself, with limited time, limited money, "
+    "and the skills of a sharp but non-expert generalist. You do NOT argue for or against "
+    "whether the idea is worth doing — the Advocate and Critic handle desirability. Your only "
+    "job is CALIBRATION: can this actually work, and how likely is it to work the way Alex "
+    "intends? Be concrete and honest. Crucially, distinguish IMPOSSIBLE from merely HARD — an "
+    "ambitious-but-achievable idea should score as achievable with its real obstacles named, "
+    "and a genuine dead-end should be called one plainly. You are not a cheerleader; your value "
+    "is an accurate read. Never invent facts; if something is uncertain, say so.\n\n"
+    "Answer using these exact markdown headings, in this order:\n"
+    "**Plausibility: N/10 (unlikely | possible | likely)** — then one sentence on why, in plain language.\n"
+    "**Technical feasibility** — is this possible at all with what exists today, and how mature is what it depends on?\n"
+    "**Resource realism** — the time, money, skills, and tools it truly needs vs. what a solo college student has.\n"
+    "**Causal chain** — the links that must ALL go right for it to work as intended; then name the single WEAKEST link.\n"
+    "**Most likely failure mode** — the specific, concrete way this most probably falls short.\n"
+    "**What would raise the rating** — the concrete things that would have to become true to move the score up.\n\n"
+    "Keep each section tight (1-4 sentences or a few bullets). Lead with the rating."
+)
+
+
+def feasibility_judge(idea: str, intended_outcome: str = "", context: str = "") -> str:
+    """Standalone-callable feasibility assessment (also invoked inside deliberate)."""
+    outcome = intended_outcome.strip() or "(not stated — infer the most likely intended outcome from the idea)"
+    user = f"Idea: {idea}\nIntended outcome Alex wants: {outcome}"
+    if context:
+        user += f"\nContext: {context}"
+    return _council_call(FEASIBILITY_SYSTEM, user)
+
+
+def assess_feasibility(idea: str, intended_outcome: str = "", context: str = "") -> str:
+    """The `assess_feasibility` chat tool — feasibility read on its own, no pros/cons."""
+    if not idea or not idea.strip():
+        return "Tell me the idea you want a feasibility read on (and, ideally, what outcome you're after)."
+    try:
+        body = feasibility_judge(idea, intended_outcome, context)
+    except Exception as e:
+        return f"Couldn't run the feasibility check ({e}). It's usually a transient model hiccup — try again."
+    if not body:
+        return "The feasibility check came back empty — try rephrasing the idea a little."
+    result = f"## Feasibility read: {idea}\n\n{body}"
+    _log_council("feasibility", idea, _extract_feasibility_rating(body) or "feasibility read", result)
+    return result
+
+
+def deliberate(idea: str, context: str = "", intended_outcome: str = "") -> str:
     subject = f"Idea: {idea}" + (f"\nContext: {context}" if context else "")
 
     pro = _council_call(
@@ -1558,21 +1755,57 @@ def deliberate(idea: str, context: str = "") -> str:
         "truthful; don't invent facts. 4-8 tight bullet points.",
         subject,
     )
+    # Third member: can it actually work, and how likely to work as intended? Runs
+    # independently of the Advocate/Critic (it sees only the idea + intended outcome).
+    feasibility = feasibility_judge(idea, intended_outcome, context)
+
     verdict = _council_call(
-        "You are the Judge on a personal decision council. You receive an idea plus an Advocate's case "
-        "for it and a Critic's case against it, prepared independently. Weigh both fairly, note which "
-        "arguments are strongest and which are weak, and rule: WORTH IT, NOT WORTH IT, or WORTH IT IF "
-        "(with the condition). Give your ruling first, then 3-6 sentences of reasoning, then one line "
-        "on what evidence would change your mind.",
-        f"{subject}\n\n--- ADVOCATE'S CASE ---\n{pro}\n\n--- CRITIC'S CASE ---\n{con}",
+        "You are the Judge on a personal decision council. You receive an idea, an Advocate's case "
+        "for it, a Critic's case against it, and a Feasibility Judge's read on whether it can actually "
+        "work as intended — all prepared independently. Weigh all three fairly, note which arguments "
+        "are strongest and which are weak, and explicitly account for the feasibility rating (a great "
+        "idea that can't be pulled off is not WORTH IT as-is). Rule: WORTH IT, NOT WORTH IT, or WORTH "
+        "IT IF (with the condition). Give your ruling first, then 3-6 sentences of reasoning, then one "
+        "line on what evidence would change your mind.",
+        f"{subject}\n\n--- ADVOCATE'S CASE ---\n{pro}\n\n--- CRITIC'S CASE ---\n{con}"
+        f"\n\n--- FEASIBILITY JUDGE'S READ ---\n{feasibility}",
     )
 
-    return (
+    result = (
         f"## Council deliberation: {idea}\n\n"
         f"### Advocate — the case for\n{pro}\n\n"
         f"### Critic — the case against\n{con}\n\n"
+        f"### Feasibility Judge — can it actually work?\n{feasibility}\n\n"
         f"### Judge's ruling\n{verdict}"
     )
+    # Headline for the dashboard: the Judge's ruling (first line) + feasibility rating.
+    ruling = (verdict.splitlines()[0].strip() if verdict else "").lstrip("#* ")
+    rating = _extract_feasibility_rating(feasibility)
+    headline = " · ".join(x for x in (ruling[:120], f"feasibility {rating}" if rating else "") if x)
+    _log_council("deliberation", idea, headline or "deliberation", result)
+    return result
+
+
+def evaluate_task(task_id: int, intended_outcome: str = "") -> str:
+    """Send a tracked task through the council and attach the verdict to its history.
+    Sets the task to 'evaluating'. Analytical only — never executes the task."""
+    tracker = task_tracker.get_tracker()
+    task = tracker.get(task_id)
+    if not task:
+        return f"No task #{task_id} found. Use \"list my tasks\" to see the ids."
+    idea = task["title"]
+    context = task.get("description", "")
+    tracker.update_status(task_id, "evaluating", note="sent to the decision council")
+    deliberation = deliberate(idea=idea, context=context, intended_outcome=intended_outcome)
+    ruling = ""
+    m = re.search(r"### Judge's ruling\n(.+)", deliberation)
+    if m:
+        ruling = m.group(1).strip().splitlines()[0][:200]
+    rating = _extract_feasibility_rating(deliberation)
+    summary = " · ".join(x for x in (ruling, f"feasibility {rating}" if rating else "") if x) or "council evaluated"
+    tracker.add_note(task_id, f"Council verdict — {summary}")
+    return (f"Ran the council on task #{task_id} (**{idea}**) and set it to **evaluating**. "
+            f"The verdict is saved to the task's history.\n\n{deliberation}")
 
 
 # ============================================================
@@ -1877,7 +2110,29 @@ def handle_tool_call(tool_name: str, tool_input: dict) -> str:
         return deliberate(
             idea=tool_input["idea"],
             context=tool_input.get("context", ""),
+            intended_outcome=tool_input.get("intended_outcome", ""),
         )
+    if tool_name == "assess_feasibility":
+        return assess_feasibility(
+            idea=tool_input["idea"],
+            intended_outcome=tool_input.get("intended_outcome", ""),
+            context=tool_input.get("context", ""),
+        )
+    if tool_name == "create_task":
+        return task_tracker.tool_create_task(
+            title=tool_input["title"], description=tool_input.get("description", ""))
+    if tool_name == "update_task_status":
+        return task_tracker.tool_update_task_status(
+            task_id=tool_input["task_id"], status=tool_input["status"],
+            note=tool_input.get("note", ""))
+    if tool_name == "list_tasks":
+        return task_tracker.tool_list_tasks(status=tool_input.get("status"))
+    if tool_name == "show_task_history":
+        return task_tracker.tool_show_task_history(task_id=tool_input["task_id"])
+    if tool_name == "evaluate_task":
+        return evaluate_task(
+            task_id=tool_input["task_id"],
+            intended_outcome=tool_input.get("intended_outcome", ""))
     if tool_name == "adopt_tool":
         return adopt_tool(tool_input["name"])
     if tool_name == "delegate_task":
@@ -1924,7 +2179,13 @@ TOOL_STATUS_LABELS = {
     "remember": "Committing that to memory…",
     "forget_memory": "Forgetting that…",
     "propose_calendar_event": "Queuing that for your approval…",
-    "deliberate": "Convening the council…",
+    "deliberate": "Convening the council (for, against, and can-it-work)…",
+    "assess_feasibility": "Pressure-testing whether it can actually work…",
+    "create_task": "Adding that to your task tracker…",
+    "update_task_status": "Updating that task…",
+    "list_tasks": "Pulling up your tasks…",
+    "show_task_history": "Opening that task's history…",
+    "evaluate_task": "Sending that task to the council…",
     "scan_downloads": "Scanning your Downloads…",
     "propose_file_cleanup": "Queuing cleanup for your approval…",
     "list_vault_notes": "Looking through your vault…",
@@ -2100,6 +2361,190 @@ def get_dashboard_data() -> dict:
     }
 
 
+# ============================================================
+# HOME DASHBOARD DATA — the clean, readable home base (/dashboard).
+# A focused, mobile-friendly summary: recent agent outputs, council
+# decisions, vault notes, synthesized reports, built sites, and tasks.
+# Every panel degrades gracefully to an empty state.
+# ============================================================
+
+def _rel_from_root(p: str) -> str:
+    return os.path.relpath(p, _PROJECT_ROOT_DIR)
+
+
+def _humanize_epoch(ts: float) -> str:
+    try:
+        delta = time.time() - ts
+    except (TypeError, ValueError):
+        return ""
+    if delta < 60:
+        return "just now"
+    if delta < 3600:
+        return f"{int(delta // 60)}m ago"
+    if delta < 86400:
+        return f"{int(delta // 3600)}h ago"
+    if delta < 7 * 86400:
+        return f"{int(delta // 86400)}d ago"
+    return datetime.fromtimestamp(ts, LOCAL_TZ).strftime("%b %-d")
+
+
+def _humanize_iso(iso: str) -> str:
+    """Turn a Supabase ISO timestamp into a relative label, so the dashboard reads
+    consistently (agent/council rows are stored as ISO strings; file panels use mtime)."""
+    if not iso:
+        return ""
+    try:
+        dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+        return _humanize_epoch(dt.timestamp())
+    except (ValueError, TypeError):
+        return iso
+
+
+def get_home_agent_outputs(limit: int = 6) -> list:
+    rows = (
+        supabase.table("Agent Outputs").select("*")
+        .order("created_at", desc=True).limit(40).execute().data or []
+    )
+    rows = [r for r in rows if r["agent_name"] not in INTERNAL_AGENT_NAMES]
+    out = []
+    seen = set()  # collapse repeat runs of the same agent+result (e.g. old duplicate builds)
+    for r in rows:
+        text = r.get("output_text") or ""
+        # If it's JSON (agent summaries often are), show a compact human line.
+        summary = text
+        try:
+            obj = json.loads(text)
+            if isinstance(obj, dict):
+                summary = (obj.get("topic") or obj.get("site") or obj.get("brief")
+                           or obj.get("summary") or next((str(v) for v in obj.values() if v), ""))
+        except (json.JSONDecodeError, TypeError):
+            pass
+        agent = r["agent_name"].replace("_", " ")
+        summary = (summary or "").strip()[:200]
+        key = (agent, summary)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"agent": agent, "summary": summary, "when": _humanize_iso(r.get("created_at", ""))})
+        if len(out) >= limit:
+            break
+    return out
+
+
+def get_recent_council(limit: int = 6) -> list:
+    rows = (
+        supabase.table("Agent Outputs").select("*")
+        .eq("agent_name", "council").order("id", desc=True).limit(limit).execute().data or []
+    )
+    out = []
+    for r in rows:
+        try:
+            d = json.loads(r["output_text"])
+        except (json.JSONDecodeError, TypeError):
+            continue
+        out.append({
+            "kind": d.get("kind", "deliberation"),
+            "idea": d.get("idea", ""),
+            "headline": d.get("headline", ""),
+            "when": _humanize_iso(r.get("created_at", "")),
+        })
+    return out
+
+
+def get_recent_vault_notes(limit: int = 6) -> list:
+    try:
+        notes = NOTE_INDEX.recent(limit)
+    except Exception as e:
+        print(f"Warning: couldn't read recent vault notes: {e}")
+        return []
+    return [{
+        "title": n.get("title") or n.get("stem"),
+        "folder": n.get("folder"),
+        "preview": vault_index.one_line_preview(n, 90),
+        "when": _humanize_epoch(n.get("mtime", 0)),
+    } for n in notes]
+
+
+def get_recent_reports(limit: int = 6) -> list:
+    d = os.path.join(_PROJECT_ROOT_DIR, "synthesized")
+    if not os.path.isdir(d):
+        return []
+    files = [f for f in os.listdir(d) if f.endswith(".md")]
+    files.sort(key=lambda f: os.path.getmtime(os.path.join(d, f)), reverse=True)
+    out = []
+    for f in files[:limit]:
+        fp = os.path.join(d, f)
+        title = f
+        try:
+            with open(fp, encoding="utf-8", errors="ignore") as fh:
+                for line in fh:
+                    if line.startswith("# "):
+                        title = line[2:].strip()
+                        break
+        except OSError:
+            pass
+        out.append({"title": title, "file": f, "when": _humanize_epoch(os.path.getmtime(fp))})
+    return out
+
+
+def get_recent_sites(limit: int = 6) -> list:
+    d = os.path.join(_PROJECT_ROOT_DIR, "sites")
+    if not os.path.isdir(d):
+        return []
+    slugs = [x for x in os.listdir(d)
+             if os.path.isdir(os.path.join(d, x))
+             and os.path.exists(os.path.join(d, x, "index.html"))]
+    slugs.sort(key=lambda x: os.path.getmtime(os.path.join(d, x)), reverse=True)
+    out = []
+    for slug in slugs[:limit]:
+        sd = os.path.join(d, slug)
+        pages = [p for p in os.listdir(sd) if p.endswith(".html")]
+        name = slug.replace("-", " ").title()
+        # Prefer the real site name from the README's H1 if present.
+        readme = os.path.join(sd, "README.md")
+        if os.path.exists(readme):
+            try:
+                with open(readme, encoding="utf-8", errors="ignore") as fh:
+                    first = fh.readline().strip()
+                    if first.startswith("# "):
+                        name = first[2:].strip()
+            except OSError:
+                pass
+        out.append({
+            "slug": slug, "name": name, "pages": len(pages),
+            "preview_url": f"/preview/{slug}/",
+            "when": _humanize_epoch(os.path.getmtime(sd)),
+        })
+    return out
+
+
+def get_home_data() -> dict:
+    """Everything the home dashboard shows, each panel independently fail-safe."""
+    def _safe(fn, default):
+        try:
+            return fn()
+        except Exception as e:
+            print(f"Warning: home panel '{fn.__name__}' failed: {e}")
+            return default
+
+    tasks = []
+    try:
+        import task_tracker
+        tasks = task_tracker.get_tracker().recent_for_dashboard(8)
+    except Exception as e:
+        print(f"Warning: task panel unavailable: {e}")
+
+    return {
+        "agent_outputs": _safe(get_home_agent_outputs, []),
+        "council": _safe(get_recent_council, []),
+        "vault_notes": _safe(get_recent_vault_notes, []),
+        "reports": _safe(get_recent_reports, []),
+        "sites": _safe(get_recent_sites, []),
+        "tasks": tasks,
+        "generated_at": datetime.now(LOCAL_TZ).strftime("%-I:%M:%S %p"),
+    }
+
+
 # Start the background-task worker. Under gunicorn (one worker process) this is
 # one thread; under the local dev server the reloader may import the module twice,
 # but the compare-and-swap claim in _claim_task makes duplicate workers harmless.
@@ -2134,12 +2579,51 @@ def index():
 
 @app.route("/dashboard")
 def dashboard():
+    # The clean, readable, mobile-friendly home base (see home.html). The elaborate
+    # sci-fi HUD is preserved at /hud.
+    return render_template("home.html")
+
+
+@app.route("/hud")
+def hud():
     return render_template("dashboard.html")
 
 
 @app.route("/api/dashboard")
 def api_dashboard():
-    return jsonify(get_dashboard_data())
+    # A transient upstream read error (Supabase/Composio) shouldn't blow up as an HTML
+    # 500 — return clean JSON so the front-end just retries on its refresh loop.
+    try:
+        return jsonify(get_dashboard_data())
+    except Exception as e:
+        print(f"Warning: /api/dashboard transient error: {e}")
+        return jsonify({"error": "temporarily unavailable", "detail": str(e)}), 503
+
+
+@app.route("/api/home")
+def api_home():
+    try:
+        return jsonify(get_home_data())
+    except Exception as e:
+        print(f"Warning: /api/home transient error: {e}")
+        return jsonify({"error": "temporarily unavailable", "detail": str(e)}), 503
+
+
+@app.route("/preview/<slug>/")
+@app.route("/preview/<slug>/<path:page>")
+def preview_site(slug, page="index.html"):
+    """Serve a locally-built static site (read-only) so the dashboard can link to a
+    live preview. Behind the same access gate as everything else. Path-contained to
+    the sites/<slug>/ directory — no traversal outside it."""
+    from flask import send_from_directory, abort
+    sites_dir = os.path.join(_PROJECT_ROOT_DIR, "sites")
+    site_dir = os.path.realpath(os.path.join(sites_dir, slug))
+    # Containment: the resolved dir must live directly under sites/.
+    if os.path.commonpath([site_dir, os.path.realpath(sites_dir)]) != os.path.realpath(sites_dir):
+        abort(404)
+    if not os.path.isdir(site_dir):
+        abort(404)
+    return send_from_directory(site_dir, page)
 
 
 @app.route("/api/approve", methods=["POST"])

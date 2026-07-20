@@ -793,6 +793,26 @@ def _link_effects(html: str) -> str:
     return html
 
 
+def _ensure_script(html: str) -> str:
+    """Guarantee <script src="main.js"> loads on every page. The page prompt asks the model
+    to add it, but the model is unreliable — and it notably drops it on the cinematic homepage,
+    which is the ONE page that needs main.js to run the scroll-scrub engine (without it the
+    cinematic intro renders as a static sticky stack and never animates). So force it in,
+    deterministically, the same way _link_effects guarantees the effect stylesheet. Idempotent:
+    a page that already links main.js is left unchanged. Inserted just before </body>, else </html>,
+    else appended."""
+    if re.search(r'<script[^>]+src=["\']main\.js["\']', html, re.I):
+        return html
+    tag = '<script src="main.js"></script>'
+    m = re.search(r'</body>', html, re.I)
+    if m:
+        return html[:m.start()] + "  " + tag + "\n" + html[m.start():]
+    m = re.search(r'</html>', html, re.I)
+    if m:
+        return html[:m.start()] + tag + "\n" + html[m.start():]
+    return html + "\n" + tag
+
+
 def _fix_images(html: str, site_dir: str) -> str:
     """Guarantee no broken images: replace every <img> whose src is a local file that
     doesn't exist (the agent generates no image assets) with a styled .media-ph placeholder
@@ -937,6 +957,7 @@ def create_website(brief: str, port: int = DEFAULT_PREVIEW_PORT, log: bool = Tru
         html = build_page(claude, plan, page, class_ref, cinematic_home=is_cinematic_home)
         html = _fix_images(html, site_dir)   # no broken images ever ship
         html = _link_effects(html)           # load the guaranteed effect layer as its own sheet
+        html = _ensure_script(html)          # guarantee main.js loads (esp. the cinematic home)
         if is_cinematic_home:
             html = _inject_cinema(html, cinema_html)  # prepend the scroll intro after the nav
         with open(os.path.join(site_dir, page["filename"]), "w", encoding="utf-8") as f:
