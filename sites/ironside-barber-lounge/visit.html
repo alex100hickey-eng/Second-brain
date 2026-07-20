@@ -3,12 +3,13 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Visit — Ironside Barber Lounge | Downtown LA</title>
-<meta name="description" content="Find Ironside Barber Lounge in the heart of Downtown LA. Hours, parking, transit, what to expect during your visit, and how to book your chair.">
+<title>Visit Ironside — Hours, Location & Booking | Ironside Barber Lounge</title>
+<meta name="description" content="Find Ironside Barber Lounge in downtown LA. Hours, validated parking, directions, what to expect on your first visit, and how to book your chair.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Marcellus&family=Jost:wght@300;400;500;600&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Karla:wght@400;500;600&display=swap">
 <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="effects.css">
 </head>
 <body>
 
@@ -23,174 +24,135 @@
 </nav>
 
 <header class="hero">
-  <div class="container">
-    <div data-reveal>
-      <h1>Fourth &amp; Spring, Downtown LA.</h1>
-      <p>Tucked below street level in the old Continental Building, one block from Grand Central Market and a straight shot from the Financial District. No sign out front. Just a brass door and a bell.</p>
-      <div style="display:flex; gap:1rem; flex-wrap:wrap;">
-        <a href="#book" class="btn btn-primary">Book Your Chair</a>
-        <a href="#getting-here" class="btn">Get Directions</a>
-      </div>
+  <div class="container" data-reveal>
+    <h1>Find Your Chair</h1>
+    <p>Tucked into the ground floor of the old Continental Building on 4th &amp; Spring — three blocks from the Financial District, a world away from its noise.</p>
+    <div style="display:flex; gap:1rem; flex-wrap:wrap;">
+      <a href="#booking" class="btn btn-primary">Book Your Chair</a>
+      <a href="#location" class="btn">Get Directions</a>
+    </div>
+  </div>
+  <div class="container" data-reveal>
+    <div class="media-ph" data-shape="square">
+      <span class="media-ph__label">Downtown LA skyline at dusk, seen through the lounge's street-level windows</span>
     </div>
   </div>
 </header>
 
 <section class="section">
   <div class="container">
-    <div data-reveal>
-      <h2>Hours &amp; Chair Availability</h2>
-      <p>Four chairs, one shop. We keep it tight so every seat gets full attention. Reservations hold priority; walk-ins are seen as chairs open.</p>
-    </div>
-
-    <div data-reveal style="overflow-x:auto; margin-top:2rem;">
-      <table style="width:100%; border-collapse:collapse; min-width:480px;">
-        <thead>
-          <tr style="border-bottom:1px solid var(--border, #333);">
-            <th style="text-align:left; padding:0.75rem 1rem;">Day</th>
-            <th style="text-align:left; padding:0.75rem 1rem;">Hours</th>
-            <th style="text-align:left; padding:0.75rem 1rem;">Policy</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr style="border-bottom:1px solid var(--border, #2a2a2a);">
-            <td style="padding:0.75rem 1rem;">Monday</td>
-            <td style="padding:0.75rem 1rem;">Closed</td>
-            <td style="padding:0.75rem 1rem;">Chairs resting</td>
-          </tr>
-          <tr style="border-bottom:1px solid var(--border, #2a2a2a);">
-            <td style="padding:0.75rem 1rem;">Tuesday – Friday</td>
-            <td style="padding:0.75rem 1rem;">9:00 AM – 8:00 PM</td>
-            <td style="padding:0.75rem 1rem;">Reservation preferred, walk-ins welcome</td>
-          </tr>
-          <tr style="border-bottom:1px solid var(--border, #2a2a2a);">
-            <td style="padding:0.75rem 1rem;">Saturday</td>
-            <td style="padding:0.75rem 1rem;">8:00 AM – 6:00 PM</td>
-            <td style="padding:0.75rem 1rem;">Reservation strongly recommended</td>
-          </tr>
-          <tr>
-            <td style="padding:0.75rem 1rem;">Sunday</td>
-            <td style="padding:0.75rem 1rem;">10:00 AM – 3:00 PM</td>
-            <td style="padding:0.75rem 1rem;">By reservation only</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-
-    <p data-reveal style="margin-top:1.5rem; max-width:60ch;">Saturdays run at capacity by 10 AM most weeks. If a specific barber matters to you, book at least five days out. Walk-ins are always looked after — but the wait can run 30 to 45 minutes on weekends, and we'd rather you spend that time at the bar next door than in our chairs.</p>
+    <h2 data-reveal>Hours of Operation</h2>
+    <table style="width:100%; border-collapse:collapse; margin-top:2rem;">
+      <thead>
+        <tr style="border-bottom:2px solid var(--color-border, #333);">
+          <th style="text-align:left; padding:0.75rem 0.5rem;">Day</th>
+          <th style="text-align:left; padding:0.75rem 0.5rem;">Hours</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr style="border-bottom:1px solid var(--color-border, #333);">
+          <td style="padding:0.75rem 0.5rem;">Monday</td>
+          <td style="padding:0.75rem 0.5rem;">Closed — the chairs rest too</td>
+        </tr>
+        <tr style="border-bottom:1px solid var(--color-border, #333);">
+          <td style="padding:0.75rem 0.5rem;">Tuesday – Friday</td>
+          <td style="padding:0.75rem 0.5rem;">9:00 AM – 8:00 PM</td>
+        </tr>
+        <tr style="border-bottom:1px solid var(--color-border, #333);">
+          <td style="padding:0.75rem 0.5rem;">Saturday</td>
+          <td style="padding:0.75rem 0.5rem;">8:00 AM – 6:00 PM</td>
+        </tr>
+        <tr>
+          <td style="padding:0.75rem 0.5rem;">Sunday</td>
+          <td style="padding:0.75rem 0.5rem;">10:00 AM – 4:00 PM (walk-ins only, first-come)</td>
+        </tr>
+      </tbody>
+    </table>
+    <p style="margin-top:1.5rem;"><small>Last appointment booked 45 minutes before close. We run on time — plan your arrival accordingly.</small></p>
   </div>
 </section>
 
-<section class="section" id="getting-here">
+<section class="section" id="location" style="background:var(--color-surface, #151515);">
   <div class="container">
-    <div data-reveal>
-      <h2>Getting Here</h2>
-      <p>Street parking downtown is a gamble. Plan around it and the visit starts calm instead of rushed.</p>
-    </div>
-
-    <div class="card-grid" data-reveal-group style="margin-top:2rem;">
+    <h2 data-reveal>Location & Parking</h2>
+    <div class="card-grid" data-reveal-group>
       <div class="card">
-        <h3>Address</h3>
-        <p>408 S. Spring St., Suite B (street level entrance, shop is downstairs). Downtown Los Angeles, CA 90013 — Historic Core, across from the Grand Central Market breezeway.</p>
+        <h3>The Address</h3>
+        <p>412 S. Spring Street, Suite 101, Los Angeles, CA 90013 — street level, glass door, brass handle. No sign out front except a small brushed-steel plate. You'll know it when you see it.</p>
       </div>
       <div class="card">
-        <h3>Parking &amp; Valet</h3>
-        <p>Valet available Thursday–Saturday, 3 PM to close, $12 flat. Self-park at the Pershing Square garage (2 blocks north) runs about $8/hr after validation from us — bring your ticket to the desk.</p>
+        <h3>Validated Garage Parking</h3>
+        <p>Pull into the Spring Arcade Garage on 5th Street. Bring your ticket to the front desk — we validate for two hours, plenty for any service on the menu.</p>
       </div>
       <div class="card">
-        <h3>Transit</h3>
-        <p>Pershing Square Metro station (Red/Purple Line) is a four-minute walk. DASH Route D stops directly outside. If you're biking in, we've got secure rack space just inside the entrance.</p>
-      </div>
-    </div>
-
-    <div data-reveal style="margin-top:2rem;">
-      <div class="media-ph" data-shape="square">
-        <span class="media-ph__label">Map — Ironside Barber Lounge, 408 S. Spring St., Downtown LA</span>
+        <h3>Street Entrance Notes</h3>
+        <p>Our entrance sits between a coffee roaster and a tailor shop. If the outer gate is down, ring the buzzer marked "Ironside" — someone will let you in within a minute.</p>
       </div>
     </div>
   </div>
 </section>
 
 <section class="section">
-  <div class="container">
-    <div data-reveal>
-      <h2>Inside a Visit</h2>
-      <p>From the door to the mirror, roughly 55 minutes for a standard cut. Longer for the full ritual services. Nobody's rushing you back out.</p>
+  <div class="container" data-reveal>
+    <h2>Getting Here</h2>
+    <div class="media-ph" data-shape="square">
+      <span class="media-ph__label">Map view of downtown LA highlighting 412 S. Spring Street and nearby parking garage</span>
     </div>
+    <p style="margin-top:1.5rem; font-family:var(--font-heading, inherit); font-size:1.25rem;">412 S. Spring Street, Suite 101 · Los Angeles, CA 90013</p>
+    <p><small>Two blocks from the Pershing Square Metro stop. If you're walking from the Financial District, we're closer than your usual lunch spot.</small></p>
+  </div>
+</section>
 
-    <div class="card-grid" data-reveal-group style="margin-top:2rem;">
+<section class="section" style="background:var(--color-surface, #151515);">
+  <div class="container">
+    <h2 data-reveal>Getting Ready: Your First Visit</h2>
+    <div class="card-grid" data-reveal-group>
       <div class="card">
-        <h3>Check-In</h3>
-        <p>Ring the bell, give your name. We'll take your coat, pour you something — coffee, water, or a finger of bourbon if it's past noon.</p>
+        <h3>Arrive Ten Minutes Early</h3>
+        <p>Settle in, hang your jacket, take a bourbon or black coffee from the bar. Your barber will come find you when the chair's ready — no waiting room shuffle.</p>
       </div>
       <div class="card">
-        <h3>Consultation</h3>
-        <p>Your barber sits with you first. Face shape, hair pattern, how you actually style it at home. Two minutes that save you a bad six weeks.</p>
+        <h3>The Consultation</h3>
+        <p>Every first visit opens with five minutes of real conversation — your hair's history, your week ahead, what's worked and what hasn't. We build the cut around your life, not a template.</p>
       </div>
       <div class="card">
-        <h3>The Chair</h3>
-        <p>Cut, shape, and finish — scissor-over-comb precision, straight razor detail at the neckline. Hot towel if you're getting a beard trim.</p>
+        <h3>What to Bring</h3>
+        <p>Nothing but yourself. If you've got a reference photo or a specific ask, we welcome it — but most men leave that at the door and trust the chair.</p>
       </div>
       <div class="card">
-        <h3>Finish &amp; Walk-Out</h3>
-        <p>A final check in the mirror, product recommendations if you want them, no pressure if you don't. Settle up at the front, book your next date on the way out.</p>
+        <h3>After the Chair</h3>
+        <p>We'll walk you through upkeep — what product, what interval, what to ask for next time. Return visits get faster and sharper as your barber learns your head.</p>
       </div>
     </div>
   </div>
 </section>
 
-<section class="section">
+<section class="section" id="booking">
   <div class="container">
-    <div data-reveal>
-      <h2>Client Notes</h2>
-      <p>House rules, kept simple. This is a shop built on respect for the chair and the man in it.</p>
-    </div>
-
-    <div class="card-grid" data-reveal-group style="margin-top:2rem;">
+    <h2 data-reveal>Contact & Booking</h2>
+    <div class="card-grid" data-reveal-group>
       <div class="card">
-        <h3>Arrival</h3>
-        <p>Show up 10 minutes early for your first visit — there's intake paperwork and a quick consult. After that, arriving right on time is fine.</p>
+        <h3>Call the Lounge</h3>
+        <p>(213) 555-0142 — ring us directly for same-week openings or to speak with a barber about a specific request.</p>
       </div>
       <div class="card">
-        <h3>Cancellations</h3>
-        <p>Give us 24 hours notice to cancel or reschedule without charge. Inside that window, a 50% fee applies to hold the barber's time.</p>
+        <h3>Walk-In Policy</h3>
+        <p>We hold two chairs open daily for walk-ins, first-come basis, Tuesday through Saturday. Sundays are walk-in only. No guarantees, but rarely a long wait before 11 AM.</p>
       </div>
       <div class="card">
-        <h3>Phones</h3>
-        <p>Take the call if you need to. We'd just ask you keep it brief — this is 55 minutes that's supposed to be yours.</p>
+        <h3>Book Online</h3>
+        <p>Reserve your exact barber, service, and time slot in under a minute. The fastest way to lock in the chair you want.</p>
+        <a href="#" class="btn btn-primary" style="margin-top:1rem; display:inline-block;">Book Online Now</a>
       </div>
     </div>
   </div>
 </section>
 
-<section class="section" id="book">
+<section class="section" style="background:var(--color-accent, #a8321f); color:var(--color-on-accent, #fff);">
   <div class="container" data-reveal style="text-align:center;">
-    <h2>Your chair is waiting. Claim it.</h2>
-    <p style="max-width:50ch; margin-left:auto; margin-right:auto;">Reserve online in under a minute, or call the shop directly and we'll find your slot.</p>
-    <a href="tel:+12135550147" class="btn btn-primary" style="margin-top:1rem;">Book Your Chair</a>
-  </div>
-</section>
-
-<section class="section">
-  <div class="container">
-    <div data-reveal>
-      <h2>Contact &amp; Concierge</h2>
-      <p>Questions before you come in, or planning something bigger than a single cut — we handle both personally.</p>
-    </div>
-
-    <div class="card-grid" data-reveal-group style="margin-top:2rem;">
-      <div class="card">
-        <h3>Phone</h3>
-        <p><a href="tel:+12135550147">(213) 555-0147</a><br>Tuesday–Sunday, during shop hours. Leave a message after close and we'll call back next open day.</p>
-      </div>
-      <div class="card">
-        <h3>Email</h3>
-        <p><a href="mailto:concierge@ironsidebarberlounge.com">concierge@ironsidebarberlounge.com</a><br>For scheduling questions, product inquiries, or anything that isn't urgent.</p>
-      </div>
-      <div class="card">
-        <h3>Private Events &amp; Groups</h3>
-        <p>Buying out the shop for a bachelor party, corporate offsite, or a wedding party morning-of? Email <a href="mailto:events@ironsidebarberlounge.com">events@ironsidebarberlounge.com</a> — we book these out 3-4 weeks in advance.</p>
-      </div>
-    </div>
+    <h2>Your Chair Is Waiting</h2>
+    <p>Downtown's sharpest men don't leave their grooming to chance. Reserve your seat at Ironside and walk out looking like you run the room — because you do.</p>
+    <a href="#booking" class="btn btn-primary">Book Your Chair</a>
   </div>
 </section>
 
@@ -198,20 +160,19 @@
   <div class="container">
     <div>
       <h3>Ironside Barber Lounge</h3>
-      <p>408 S. Spring St., Downtown Los Angeles</p>
+      <p>412 S. Spring Street, Suite 101<br>Los Angeles, CA 90013</p>
     </div>
     <div>
-      <h3>Explore</h3>
+      <h4>Explore</h4>
       <a href="index.html">Home</a>
       <a href="services.html">Services</a>
       <a href="visit.html">Visit</a>
     </div>
     <div>
-      <h3>Reach Us</h3>
-      <a href="tel:+12135550147">(213) 555-0147</a>
-      <a href="mailto:concierge@ironsidebarberlounge.com">concierge@ironsidebarberlounge.com</a>
+      <h4>Contact</h4>
+      <p>(213) 555-0142<br>hello@ironsidebarber.com</p>
     </div>
-    <p style="width:100%; margin-top:2rem;">&copy; 2024 Ironside Barber Lounge. All rights reserved.</p>
+    <p style="width:100%; margin-top:2rem;"><small>&copy; 2024 Ironside Barber Lounge. All rights reserved.</small></p>
   </div>
 </footer>
 

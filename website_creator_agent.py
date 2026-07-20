@@ -29,6 +29,8 @@ import os
 import re
 import sys
 import json
+import time
+import threading
 import argparse
 from datetime import datetime, timezone
 
@@ -185,7 +187,7 @@ CINEMATIC_CSS = """
               linear-gradient(180deg, rgba(0,0,0,.45), rgba(0,0,0,.10) 45%, rgba(0,0,0,.65));
 }
 .cinema__content {
-  text-align: center; color: #fff; padding: 2rem; max-width: 24ch;
+  text-align: center; color: #fff; padding: 2rem; max-width: min(92vw, 42rem);
   opacity: var(--enter, 1);
   transform: translateY(calc((1 - var(--enter, 1)) * 42px)) scale(calc(0.98 + var(--enter,1) * 0.02));
   will-change: opacity, transform;
@@ -195,7 +197,7 @@ CINEMATIC_CSS = """
   opacity: .85; margin: 0 0 1rem;
 }
 .cinema__title {
-  font-size: clamp(3rem, 13vw, 9rem); line-height: .9; font-weight: 800;
+  font-size: clamp(2.5rem, 8vw, 6rem); line-height: .95; font-weight: 800;
   text-transform: uppercase; letter-spacing: -.015em; margin: 0;
   text-shadow: 0 6px 48px rgba(0,0,0,.55);
 }
@@ -755,18 +757,40 @@ document.addEventListener('DOMContentLoaded', function () {
 
 
 def _balance_braces(css: str) -> str:
-    """Model-generated CSS occasionally leaves a rule's closing brace off. In a single
-    stylesheet an unclosed brace mid-file swallows every rule after it (including layers we
-    append later). Balancing each segment at its seam contains the damage to that segment so
-    the rest of the sheet — and our appended motion layer — still parses. Only ever ADDS
-    missing closers; never removes."""
-    probe = re.sub(r'/\*.*?\*/', '', css, flags=re.S)          # ignore braces in comments
-    probe = re.sub(r'"(?:[^"\\]|\\.)*"', '""', probe)          # ignore braces in strings
+    """Repair the two malformations model-generated CSS actually produces, either of which can
+    silently swallow every rule that follows (including layers appended later):
+      1. A truncated function like `var(--` with an unclosed '(' — the '(' eats the next '}' so
+         the rule never closes. We close such parens right before the terminating ';' or '}'.
+      2. A missing rule-closing '}'. We append the shortfall so damage is contained to a segment.
+    Only ever ADDS closers; never removes. (Guaranteed effect layers live in a separate file — see
+    effects.css — so this is a best-effort cleanup for the model's own base sheet.)"""
+    # 1) close a truncated var()/function value sitting directly before ';' or '}'
+    css = re.sub(r'(\b[a-zA-Z-]+\(\s*--?[A-Za-z0-9_-]*)(\s*[;}])', r'\1)\2', css)
+    # 2) balance braces (ignoring those inside comments/strings)
+    probe = re.sub(r'/\*.*?\*/', '', css, flags=re.S)
+    probe = re.sub(r'"(?:[^"\\]|\\.)*"', '""', probe)
     probe = re.sub(r"'(?:[^'\\]|\\.)*'", "''", probe)
     diff = probe.count('{') - probe.count('}')
     if diff > 0:
         css = css.rstrip() + "\n" + ("}" * diff) + "\n"
     return css
+
+
+def _link_effects(html: str) -> str:
+    """Add <link rel=stylesheet href=effects.css> right after the styles.css link so the
+    guaranteed motion/cinematic layer loads as its OWN sheet — immune to any parse error in the
+    model-generated styles.css. Falls back to just before </head>."""
+    if re.search(r'href=["\']effects\.css["\']', html, re.I):
+        return html
+    link = '<link rel="stylesheet" href="effects.css">'
+    m = re.search(r'<link[^>]+href=["\']styles\.css["\'][^>]*>', html, re.I)
+    if m:
+        i = m.end()
+        return html[:i] + "\n  " + link + html[i:]
+    m = re.search(r'</head>', html, re.I)
+    if m:
+        return html[:m.start()] + "  " + link + "\n" + html[m.start():]
+    return html
 
 
 def _fix_images(html: str, site_dir: str) -> str:
@@ -855,6 +879,7 @@ bash serve.sh          # then open http://localhost:{port}
 ## Structure
 - `*.html` — the pages
 - `styles.css` — the shared, hand-tuned stylesheet (single source of design truth)
+- `effects.css` — guaranteed motion/cinematic layer, loaded after styles.css (kept separate so it always works)
 - `main.js` — progressive-enhancement script (mobile nav, scroll-reveal animations, FAQ accordion, sticky-nav shadow)
 - `serve.sh` — local preview server
 {cinema_block}
@@ -910,7 +935,8 @@ def create_website(brief: str, port: int = DEFAULT_PREVIEW_PORT, log: bool = Tru
     for i, page in enumerate(plan["pages"]):
         is_cinematic_home = bool(cinema_html) and i == 0
         html = build_page(claude, plan, page, class_ref, cinematic_home=is_cinematic_home)
-        html = _fix_images(html, site_dir)  # no broken images ever ship
+        html = _fix_images(html, site_dir)   # no broken images ever ship
+        html = _link_effects(html)           # load the guaranteed effect layer as its own sheet
         if is_cinematic_home:
             html = _inject_cinema(html, cinema_html)  # prepend the scroll intro after the nav
         with open(os.path.join(site_dir, page["filename"]), "w", encoding="utf-8") as f:
@@ -923,26 +949,28 @@ def create_website(brief: str, port: int = DEFAULT_PREVIEW_PORT, log: bool = Tru
 
     _p("Self-review polish pass…")
     css, review_notes = self_review(claude, plan, css, first_html, used_classes)
-    css = _balance_braces(css)  # seal the polish layer before appending the motion layer
+    css = _balance_braces(css)
 
-    # Append the guaranteed motion layer LAST so it wins the cascade (scroll reveals,
-    # stagger, hover polish, .media-ph placeholder styling, FAQ accordion).
-    css = css.rstrip() + "\n" + MOTION_CSS
-    if cinema_html:
-        css = css.rstrip() + "\n" + CINEMATIC_CSS  # cinematic intro styling + scrub
+    # The guaranteed motion + cinematic layers live in a SEPARATE effects.css (loaded after
+    # styles.css). Isolating them means no parse error in the model's styles.css can ever swallow
+    # them — the class of bug where a truncated var() or unclosed brace killed the whole effect.
+    effects_css = MOTION_CSS + ("\n" + CINEMATIC_CSS if cinema_html else "")
 
-    # Coverage guard: every class the pages use must be defined in the final CSS. If any are
-    # missing, ask the model to add the missing rules (keeps the pages from rendering unstyled).
-    defined = set(re.findall(r'\.([a-zA-Z][\w-]*)', css))
+    # Coverage guard: every class the pages use must be defined SOMEWHERE (styles.css OR
+    # effects.css). Only ask the model to fill rules that neither sheet defines.
+    defined = set(re.findall(r'\.([a-zA-Z][\w-]*)', css + effects_css))
     missing = {c for c in used_classes if c and c not in defined}
     if missing:
         _p(f"Filling {len(missing)} missing style rule(s)…")
         css = _patch_missing_classes(claude, plan, css, missing)
-    css = _balance_braces(css)  # final safety on the whole sheet
+    css = _balance_braces(css)  # final safety on the model's own sheet
 
     # write shared assets
     with open(os.path.join(site_dir, "styles.css"), "w", encoding="utf-8") as f:
         f.write(css)
+    with open(os.path.join(site_dir, "effects.css"), "w", encoding="utf-8") as f:
+        f.write("/* Guaranteed effect layer — motion" + (" + cinematic intro" if cinema_html else "")
+                + ". Loaded after styles.css. */\n" + effects_css)
     with open(os.path.join(site_dir, "main.js"), "w", encoding="utf-8") as f:
         f.write(MAIN_JS + (CINEMATIC_JS if cinema_html else ""))
     serve_path = os.path.join(site_dir, "serve.sh")
@@ -984,23 +1012,63 @@ def _log_to_supabase(brief, result, supabase_client=None):
 _CINEMATIC_HINTS = ("cinematic", "immersive", "scroll", "flashy", "eye-catching", "eye catching",
                     "movie", "dramatic", "storytelling", "travel in", "zoom in")
 
+# ---- Idempotency guard -------------------------------------------------------
+# The chat model occasionally emits create_website TWICE for a single request,
+# producing two redundant builds (each costs several sequential model calls and
+# a few minutes). This guard makes one request produce exactly one build:
+#   * a lock serializes builds so two calls can never build concurrently;
+#   * a short-TTL cache keyed by the normalized brief returns the first build's
+#     result string for any identical brief seen within the window, instead of
+#     rebuilding. The second (duplicate) tool call therefore returns instantly
+#     with a note, and no second site directory is created.
+_BUILD_LOCK = threading.Lock()
+_RECENT_BUILDS = {}            # normalized_brief -> (finished_at_epoch, result_string)
+_IDEMPOTENCY_TTL_SECONDS = 300
+
+
+def _normalize_brief(brief: str) -> str:
+    return " ".join((brief or "").lower().split())
+
 
 def create_website_for_chat(brief: str, claude_client=None, supabase_client=None,
                             cinematic=None) -> str:
     # auto-enable the cinematic intro when the brief asks for that kind of energy
     if cinematic is None:
         cinematic = any(h in brief.lower() for h in _CINEMATIC_HINTS)
-    try:
-        r = create_website(brief, claude_client=claude_client, supabase_client=supabase_client,
-                           cinematic=cinematic)
-    except Exception as e:
-        return f"Website build failed: {e}"
-    rel = os.path.relpath(r["dir"], os.path.dirname(os.path.abspath(__file__)))
-    return (f"Built **{r['plan'].get('name')}** — {r['plan'].get('tagline')}\n"
-            f"{len(r['pages'])} pages: {', '.join(r['pages'])}\n"
-            f"Aesthetic: {r['plan']['design'].get('aesthetic')}\n\n"
-            f"Saved to `{rel}/`. Preview it with:\n```\nbash {rel}/serve.sh\n```\n"
-            f"then open http://localhost:{r['port']}. A README with the design system is in the folder.")
+
+    key = _normalize_brief(brief)
+    if not key:
+        return "I need a brief describing the site to build — what's it for, and roughly what pages?"
+
+    # Serialize builds and dedupe identical briefs within the TTL window. Holding
+    # the lock across the whole build means a duplicate second call waits for the
+    # first to finish, then finds the cached result rather than starting its own.
+    with _BUILD_LOCK:
+        now = time.time()
+        # prune stale cache entries so it can't grow unbounded
+        for k in [k for k, (ts, _) in _RECENT_BUILDS.items() if now - ts > _IDEMPOTENCY_TTL_SECONDS]:
+            _RECENT_BUILDS.pop(k, None)
+        cached = _RECENT_BUILDS.get(key)
+        if cached and now - cached[0] <= _IDEMPOTENCY_TTL_SECONDS:
+            return (cached[1] +
+                    "\n\n_(This matched a site I just built moments ago, so I reused that build "
+                    "instead of making a duplicate.)_")
+
+        try:
+            r = create_website(brief, claude_client=claude_client, supabase_client=supabase_client,
+                               cinematic=cinematic)
+        except Exception as e:
+            return (f"Website build failed: {e}\n\n"
+                    "Nothing was saved. This is usually a transient model/network hiccup — "
+                    "try again, and if it keeps failing, simplify the brief a little.")
+        rel = os.path.relpath(r["dir"], os.path.dirname(os.path.abspath(__file__)))
+        msg = (f"Built **{r['plan'].get('name')}** — {r['plan'].get('tagline')}\n"
+               f"{len(r['pages'])} pages: {', '.join(r['pages'])}\n"
+               f"Aesthetic: {r['plan']['design'].get('aesthetic')}\n\n"
+               f"Saved to `{rel}/`. Preview it with:\n```\nbash {rel}/serve.sh\n```\n"
+               f"then open http://localhost:{r['port']}. A README with the design system is in the folder.")
+        _RECENT_BUILDS[key] = (time.time(), msg)
+        return msg
 
 
 # ============================================================
