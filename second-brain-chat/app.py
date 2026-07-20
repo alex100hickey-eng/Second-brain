@@ -1590,10 +1590,10 @@ def resolve_pending_action(row_id: int, decision: str) -> dict:
         supabase.table("Agent Outputs").update({"output_text": json.dumps(action)}).eq("id", row_id).execute()
         return {"ok": result["ok"], "status": action["status"], **({} if result["ok"] else {"error": result["error"]})}
 
-    if action.get("action") in ("promote_tool", "shell_command"):
-        # Nothing executes HERE: the paused Task Manager run is polling this
-        # row and performs the hot-load / shell run itself, on whichever
-        # machine (Mac or server) the task actually lives on.
+    if action.get("action") in ("promote_tool", "shell_command", "install_expansion"):
+        # Nothing executes HERE: the paused Task Manager run — or the expansion
+        # applicator — is polling this row and performs the hot-load / shell run /
+        # pinned install itself, on whichever machine the work actually lives on.
         action["status"] = "approved"
         supabase.table("Agent Outputs").update({"output_text": json.dumps(action)}).eq("id", row_id).execute()
         return {"ok": True, "status": "approved"}
@@ -2271,6 +2271,12 @@ BACKGROUND_EXCLUDED_TOOLS = {
     "run_managed_task",
     "check_managed_tasks",
     "stop_managed_task",
+    # Self-expansion tools are human-triggered from chat, never from autonomous runs
+    # (a background/managed task should not be scouting + installing code on its own).
+    "run_scout",
+    "review_findings",
+    "apply_finding",
+    "check_expansion_findings",
 }
 
 BACKGROUND_TASK_PROMPT_SUFFIX = """
@@ -2632,6 +2638,18 @@ def handle_tool_call(tool_name: str, tool_input: dict) -> str:
         return task_manager.stop_managed_task(task_id=tool_input.get("task_id"))
     if tool_name == "undo_file_operations":
         return task_manager.undo_file_operations(task_row_id=tool_input["task_row_id"])
+    if tool_name == "run_scout":
+        return expansion_pipeline.run_scout(
+            focus_brief=tool_input.get("focus_brief", ""),
+            sources=tool_input.get("sources", "both"),
+            cap=tool_input.get("cap", 10),
+        )
+    if tool_name == "review_findings":
+        return expansion_pipeline.review_findings(limit=tool_input.get("limit", 10))
+    if tool_name == "apply_finding":
+        return expansion_pipeline.apply_finding(finding_id=tool_input["finding_id"])
+    if tool_name == "check_expansion_findings":
+        return expansion_pipeline.check_expansion_findings(limit=tool_input.get("limit", 12))
     if tool_name in EXTENSION_FUNCS:
         try:
             return str(EXTENSION_FUNCS[tool_name](**tool_input))
@@ -2852,6 +2870,7 @@ def get_dashboard_data() -> dict:
         "memories": load_memories(),
         "background_tasks": get_background_tasks(),
         "managed_tasks": task_manager.get_managed_tasks(),
+        "expansion": expansion_pipeline.get_expansion_findings(),
     }
 
 
@@ -3039,6 +3058,7 @@ def get_home_data() -> dict:
         "goals": goals,
         "drafts": _safe(lambda: run_drafter.dashboard_rows(8), []),
         "memory": _safe(lambda: MEMORY.list_sessions(limit=5), []),
+        "expansion": _safe(expansion_pipeline.get_expansion_findings, {"counts": {}, "recent": []}),
         "generated_at": datetime.now(LOCAL_TZ).strftime("%-I:%M:%S %p"),
     }
 
@@ -3064,6 +3084,22 @@ task_manager.init(
 )
 TOOLS.extend(task_manager.TOOL_SCHEMAS)
 task_manager.start_managed_worker(post_to_chat=save_chat_message)
+
+# Self-Expanding Pipeline (Scout → Council → Applicator) — lives in
+# expansion_pipeline.py, reuses this app's council (_council_call/_log_council),
+# approval queue, and task_manager's sandbox. Human-triggered tools only.
+import expansion_pipeline  # noqa: E402 — needs the objects above to exist first
+
+expansion_pipeline.init(
+    claude_client=claude,
+    supabase_client=supabase,
+    tool_dispatcher=handle_tool_call,
+    council_call_fn=_council_call,
+    log_council_fn=_log_council,
+    tools_list=TOOLS,
+    excluded_tools=BACKGROUND_EXCLUDED_TOOLS,
+)
+TOOLS.extend(expansion_pipeline.TOOL_SCHEMAS)
 
 
 # ============================================================
