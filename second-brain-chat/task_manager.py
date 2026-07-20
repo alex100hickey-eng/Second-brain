@@ -35,6 +35,7 @@ import subprocess
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -87,6 +88,7 @@ def _call(system: str, user: str, max_tokens: int = 1200) -> str:
         max_tokens=max_tokens,
         system=system,
         messages=[{"role": "user", "content": user}],
+        timeout=120.0,
     )
     return next((b.text for b in msg.content if b.type == "text"), "").strip()
 
@@ -110,20 +112,24 @@ def _extract_json(text: str):
 def guardrail_council(guardrail: str, task_context: str) -> dict:
     subject = f"Proposed guardrail: {guardrail}\nTask context: {task_context}"
 
-    pro_freedom = _call(
-        "You are the Advocate on a guardrail council for an autonomous task agent. Argue the "
-        "strongest honest case that this restriction is UNNECESSARY for this task — why the agent "
-        "can be trusted with this freedom, what the restriction would cost in capability, why the "
-        "risk is low or already covered elsewhere. Truthful, no invented facts. 3-6 tight bullets.",
-        subject,
-    )
-    pro_restrict = _call(
-        "You are the Critic on a guardrail council for an autonomous task agent. Argue the "
-        "strongest honest case that this restriction IS NECESSARY — what concretely goes wrong "
-        "without it, worst realistic failure, why 'probably fine' isn't good enough here. "
-        "Truthful, no invented facts. 3-6 tight bullets.",
-        subject,
-    )
+    # Advocate and Critic are blind to each other, so they can run concurrently.
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        freedom_f = pool.submit(_call,
+            "You are the Advocate on a guardrail council for an autonomous task agent. Argue the "
+            "strongest honest case that this restriction is UNNECESSARY for this task — why the agent "
+            "can be trusted with this freedom, what the restriction would cost in capability, why the "
+            "risk is low or already covered elsewhere. Truthful, no invented facts. 3-6 tight bullets.",
+            subject,
+        )
+        restrict_f = pool.submit(_call,
+            "You are the Critic on a guardrail council for an autonomous task agent. Argue the "
+            "strongest honest case that this restriction IS NECESSARY — what concretely goes wrong "
+            "without it, worst realistic failure, why 'probably fine' isn't good enough here. "
+            "Truthful, no invented facts. 3-6 tight bullets.",
+            subject,
+        )
+        pro_freedom = freedom_f.result()
+        pro_restrict = restrict_f.result()
     verdict_text = _call(
         "You are the Judge on a guardrail council for an autonomous task agent. Default stance: "
         "the agent starts UNRESTRICTED — apply a guardrail only if the Critic's case convinces you "
@@ -157,10 +163,40 @@ def guardrail_council(guardrail: str, task_context: str) -> dict:
 # verdicts → compiled task object, queued as a jarvis_managed_task row.
 # ============================================================
 
+def _recent_tasks(limit: int = 15) -> list:
+    """Recent managed-task rows as [{"id": row_id, "task": parsed_json}], newest first."""
+    rows = (
+        supabase.table("Agent Outputs")
+        .select("id,output_text")
+        .eq("agent_name", "jarvis_managed_task")
+        .order("id", desc=True)
+        .limit(limit)
+        .execute()
+        .data
+        or []
+    )
+    out = []
+    for row in rows:
+        try:
+            out.append({"id": row["id"], "task": json.loads(row["output_text"])})
+        except (json.JSONDecodeError, TypeError):
+            continue
+    return out
+
+
 def run_managed_task(request: str, runtime: str = None) -> str:
     if not request or not request.strip():
         return "Empty request — nothing planned."
     runtime = runtime if runtime in ("local", "server", "any") else RUNTIME
+
+    # Duplicate guard: an identical request already queued or running means a
+    # re-ask (retry, garbled chat reply) — point at the existing task instead.
+    for existing in _recent_tasks(15):
+        if (existing["task"].get("original_request", "").strip() == request.strip()
+                and existing["task"].get("status") in ("queued", "running", "waiting_approval")):
+            return (f"Managed task #{existing['id']} with this exact request is already "
+                    f"{existing['task']['status']} — not queueing a duplicate. "
+                    f"Use check_managed_tasks to see its progress.")
 
     plan_text = _call(
         "You plan tasks for an autonomous agent. From the user's raw request, extract the "
@@ -179,10 +215,13 @@ def run_managed_task(request: str, runtime: str = None) -> str:
     except (ValueError, json.JSONDecodeError, KeyError):
         return "Couldn't parse a plan out of that request — try rephrasing the goal."
 
-    guardrails = [
-        guardrail_council(c.get("guardrail", "unnamed"), f"Goal: {goal}\nRaw request: {request}")
-        for c in candidates
-    ]
+    # Each guardrail's council is independent — deliberate them all concurrently.
+    with ThreadPoolExecutor(max_workers=max(1, len(candidates))) as pool:
+        guardrails = list(pool.map(
+            lambda c: guardrail_council(
+                c.get("guardrail", "unnamed"), f"Goal: {goal}\nRaw request: {request}"),
+            candidates,
+        ))
 
     task = {
         "goal": goal,
@@ -796,11 +835,25 @@ def _run_managed(row_id: int, task: dict) -> None:
                      + TASKMAN_TOOL_SCHEMAS
                      + [d["schema"] for d in ctx["dynamic"].values()])
             response = claude.messages.create(
-                model=MODEL, max_tokens=2000, system=system_prompt,
-                tools=tools, messages=messages,
+                model=MODEL, max_tokens=8000, system=system_prompt,
+                tools=tools, messages=messages, timeout=300.0,
             )
             final_text = "".join(b.text for b in response.content if b.type == "text").strip()
-            if response.stop_reason != "tool_use":
+            has_tool_calls = any(b.type == "tool_use" for b in response.content)
+            if response.stop_reason == "max_tokens" and not has_tool_calls:
+                # Reply truncated mid-generation (a partial tool call is dropped
+                # by the API). Don't end the task on a cut-off answer — nudge it
+                # to finish. Counts as a round, so MAX_ROUNDS still bounds us.
+                messages.append({"role": "assistant",
+                                 "content": final_text or "(reply cut off at token limit)"})
+                messages.append({"role": "user", "content":
+                                 "Your reply hit the token limit and was cut off. Continue and "
+                                 "finish — if the work is done, produce the final report now, "
+                                 "more concisely."})
+                _log_step(row_id, step_n, "note", "",
+                          "Reply truncated at max_tokens — asked to continue.")
+                continue
+            if not has_tool_calls:
                 break
             messages.append({"role": "assistant", "content": response.content})
             tool_results = []
