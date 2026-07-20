@@ -2,3 +2,15 @@ __pycache__/
 *.pyc
 .env
 scripts/*.log
+
+# Round-2: large / temporary / generated media (keep out of git)
+# (git .gitignore has no inline comments — patterns must stand alone)
+# Whisper model weights (~141 MB) — re-download via requirements.txt
+models/*.bin
+# temp frame/audio scratch from video analysis
+video_work/
+# uploaded / dropped source videos
+inbox/
+# video_toolkit outputs
+media_lib/
+# sites/ and synthesized/ are text artifacts — left tracked on purpose.

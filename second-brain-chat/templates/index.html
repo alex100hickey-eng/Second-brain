@@ -314,6 +314,31 @@
     animation: micPulse 1.2s ease-in-out infinite;
   }
 
+  /* Attached-video chip shown above the input row */
+  .attach-chip {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+    padding: 6px 10px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text-dim);
+    font-size: 13px;
+    max-width: fit-content;
+  }
+  .attach-chip.uploading { opacity: 0.6; }
+  .attach-chip button {
+    background: transparent;
+    border: none;
+    color: var(--text-dim);
+    font-size: 16px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0 2px;
+  }
+
   @keyframes micPulse {
     0%, 100% { box-shadow: 0 0 0 0 rgba(255, 92, 92, 0.5); }
     50% { box-shadow: 0 0 0 6px rgba(255, 92, 92, 0); }
@@ -359,8 +384,14 @@
 </main>
 
 <form id="chat-form">
+  <div class="attach-chip" id="attach-chip" style="display:none">
+    <span id="attach-label"></span>
+    <button type="button" id="attach-clear" title="Remove attachment">&times;</button>
+  </div>
   <div class="input-row">
     <input type="text" id="message-input" placeholder="Ask or tell me something..." autocomplete="off" />
+    <input type="file" id="video-input" accept="video/mp4,video/quicktime,video/webm,video/x-matroska,video/x-msvideo,.mp4,.mov,.webm,.mkv,.avi,.m4v" style="display:none" />
+    <button type="button" class="mic-btn" id="attach-btn" title="Attach a video to analyze">&#128206;</button>
     <button type="button" class="mic-btn" id="mic-btn" title="Hold a conversation — tap and speak">&#127908;</button>
     <button type="submit" id="send-btn">Send</button>
   </div>
@@ -489,12 +520,62 @@
     if (el) el.remove();
   }
 
+  // ---- Video attachment ----
+  const videoInput = document.getElementById('video-input');
+  const attachBtn = document.getElementById('attach-btn');
+  const attachChip = document.getElementById('attach-chip');
+  const attachLabel = document.getElementById('attach-label');
+  const attachClear = document.getElementById('attach-clear');
+  let attachedVideo = null;  // server-side filename once uploaded
+
+  function clearAttachment() {
+    attachedVideo = null;
+    attachChip.style.display = 'none';
+    attachChip.classList.remove('uploading');
+    videoInput.value = '';
+  }
+  attachBtn.addEventListener('click', () => videoInput.click());
+  attachClear.addEventListener('click', clearAttachment);
+  videoInput.addEventListener('change', async () => {
+    const file = videoInput.files[0];
+    if (!file) return;
+    attachChip.style.display = 'flex';
+    attachChip.classList.add('uploading');
+    attachLabel.textContent = 'Uploading ' + file.name + '…';
+    const fd = new FormData();
+    fd.append('file', file);
+    try {
+      const res = await fetch('/api/upload_video', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Upload failed');
+      attachedVideo = data.filename;
+      attachChip.classList.remove('uploading');
+      attachLabel.textContent = '🎬 ' + attachedVideo;
+      if (!input.value.trim()) input.placeholder = 'What should I do with this video?';
+      input.focus();
+    } catch (err) {
+      attachLabel.textContent = 'Upload failed: ' + err.message;
+      attachedVideo = null;
+    }
+  });
+
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
-    const message = input.value.trim();
+    let message = input.value.trim();
+    // A video can be sent with just an implied instruction.
+    if (!message && attachedVideo) message = 'Take a look at this video and tell me what it is.';
     if (!message) return;
 
-    addMessage('user', message);
+    const displayMessage = attachedVideo ? (message + '\n\n🎬 ' + attachedVideo) : message;
+    let outboundMessage = message;
+    if (attachedVideo) {
+      outboundMessage = message + '\n\n[Attached video in my inbox — filename: "' + attachedVideo +
+        '". Use the analyze_video tool on it to answer.]';
+    }
+
+    addMessage('user', displayMessage);
+    clearAttachment();
+    input.placeholder = 'Ask or tell me something...';
     input.value = '';
     sendBtn.disabled = true;
     status.textContent = 'Thinking...';
@@ -526,7 +607,7 @@
       const res = await fetch('/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message }),
+        body: JSON.stringify({ message: outboundMessage }),
       });
 
       const reader = res.body.getReader();

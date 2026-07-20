@@ -1,3 +1,19 @@
+# Core
 anthropic
 supabase
 python-dotenv
+
+# Data synthesizer agent (web research)
+ddgs              # keyless DuckDuckGo search
+beautifulsoup4    # page-text extraction
+lxml              # bs4 parser backend
+
+# Video toolkit (caption rendering)
+Pillow            # renders caption PNGs overlaid via ffmpeg
+
+# --- System dependencies (NOT pip — install with brew) ---
+#   brew install ffmpeg        # frame sampling, all video editing (ffmpeg + ffprobe)
+#   brew install whisper-cpp   # local audio transcription (whisper-cli binary)
+# Plus a Whisper model at models/ggml-base.en.bin:
+#   curl -L -o models/ggml-base.en.bin \
+#     https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin

@@ -5,3 +5,9 @@ gunicorn
 python-dotenv
 composio==0.18.0
 composio-anthropic==0.18.0
+# Round-2 features (video input, data synthesizer, website creator, video toolkit):
+ddgs
+beautifulsoup4
+lxml
+Pillow
+# System deps (brew, not pip): ffmpeg, whisper-cpp + models/ggml-base.en.bin — see ../requirements.txt

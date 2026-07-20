@@ -79,6 +79,47 @@ cd second-brain-chat
 OBSIDIAN_VAULT_PATH=../sample_vault python3 test_vault_tools.py
 ```
 
+## Media & research capabilities (Round 2)
+
+These require two system tools from Homebrew — `brew install ffmpeg whisper-cpp` — plus the
+Whisper model at `models/ggml-base.en.bin` (download command is in `requirements.txt`). Python
+deps (`ddgs`, `beautifulsoup4`, `lxml`, `Pillow`) come from `pip install -r requirements.txt`.
+
+### 🎬 Video input to the chat (`analyze_video`)
+Upload a video in the chat (📎 button) or drop one in `inbox/`, then ask about it. The pipeline
+samples representative frames (ffmpeg scene detection + even sampling), transcribes the audio
+locally with Whisper (no cloud), and sends frames + transcript + your instruction to Claude.
+Handles no-audio clips, long videos (caps transcription at 15 min), and unsupported formats.
+Module: `second-brain-chat/video_processor.py`. Upload endpoint: `POST /api/upload_video`.
+
+### 🔎 Data synthesizer (`synthesize_data` / `data_synthesizer_agent.py`)
+Give it a topic to research online (keyless DuckDuckGo) or paste raw material to organize; it
+produces one structured markdown report (summary, sections, cited sources) saved to
+`synthesized/` and logged to Supabase. Drop a `TAVILY_API_KEY`/`SERPER_API_KEY`/`BRAVE_API_KEY`
+in `.env` to upgrade search with zero code changes.
+```bash
+python3 data_synthesizer_agent.py "topic to research"
+python3 data_synthesizer_agent.py "title" --text "raw notes to organize..."
+```
+
+### 🌐 Website creator (`create_website` / `website_creator_agent.py`)
+Give it a brief; it plans a site, designs a coherent visual system, writes each page with real
+copy, self-reviews, and saves a complete static site to `sites/<name>/` with a one-command
+preview and README. Nothing is deployed.
+```bash
+python3 website_creator_agent.py --brief "A landing site for..."
+bash sites/<name>/serve.sh          # preview on http://localhost:8080
+```
+
+### ✂️ Video toolkit (`edit_video` / `video_toolkit.py`)
+ffmpeg-backed editing from chat or CLI: trim, caption (burned-in), concat, add/replace audio,
+9:16 vertical for Shorts, thumbnail. Output goes to `media_lib/`. AI video *generation* is a
+documented V2 stub (`video_gen_stub.py`), not yet implemented.
+```bash
+python3 video_toolkit.py caption inbox/clip.mp4 --text "Hello" --position bottom
+python3 video_toolkit.py vertical inbox/clip.mp4 --mode crop
+```
+
 ## Adding a new tool/capability
 
 The app is built to extend by touching one place per concern (see the header comment in

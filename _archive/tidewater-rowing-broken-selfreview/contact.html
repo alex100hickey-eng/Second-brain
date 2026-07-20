@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Contact & Join — Tidewater Rowing Club</title>
+<meta name="description" content="Find Tidewater Rowing Club's boathouse on the Elizabeth River, get dock and parking details, and submit a join or inquiry form to start rowing with us.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Public+Sans:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<nav class="site-nav">
+  <a class="brand" href="index.html">Tidewater Rowing Club</a>
+  <button class="nav-toggle" aria-label="Menu" aria-expanded="false">☰</button>
+  <div class="nav-links">
+    <a href="index.html">Home</a>
+    <a href="programs.html">Programs</a>
+    <a href="membership.html">Membership</a>
+    <a href="contact.html" aria-current="page">Contact</a>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="container">
+    <h1>Come find us at the water</h1>
+    <p>We're tucked into a quiet bend of the Elizabeth River, five minutes from downtown Portsmouth. Bring a water bottle, questions welcome — the coffee's always on in the boathouse kitchen.</p>
+    <a class="btn btn-primary" href="#join-form">Jump to the join form</a>
+  </div>
+</header>
+
+<main>
+
+  <section class="section" id="boathouse" aria-labelledby="boathouse-heading">
+    <div class="container">
+      <h2 id="boathouse-heading">Find the Boathouse</h2>
+      <p>Tidewater Rowing Club is based out of the old Crawford Bay boathouse at <strong>1420 Riverside Landing, Portsmouth, VA 23704</strong> — a converted 1940s net-repair shed with a wide dock and a view straight down the channel toward the Elizabeth River.</p>
+
+      <div class="card-grid">
+        <div class="card">
+          <h3>Driving from Norfolk / I-264</h3>
+          <p>Take I-264 W across the Downtown Tunnel, exit onto Effingham St, then follow Water St south for eight blocks. Turn right onto Riverside Landing — the boathouse is the gray building at the end of the lane, past the old crab shack.</p>
+        </div>
+        <div class="card">
+          <h3>Driving from Chesapeake / I-464</h3>
+          <p>Take I-464 N to Portsmouth Blvd, follow signs for High St, then continue onto Water St. Riverside Landing is on your left just before the road curves toward the shipyard.</p>
+        </div>
+        <div class="card">
+          <h3>By bike or on foot</h3>
+          <p>The Elizabeth River Trail passes within a quarter mile of the boathouse. Look for the blue Tidewater Rowing sign where the trail spur splits toward the water — we've got a bike rack by the side door.</p>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:1.5rem;">
+        <h3>Map</h3>
+        <iframe title="Map to Tidewater Rowing Club boathouse" width="100%" height="320" style="border:0; border-radius:8px;" loading="lazy" src="https://www.google.com/maps?q=1420+Riverside+Landing,+Portsmouth,+VA+23704&output=embed"></iframe>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="dock-parking" aria-labelledby="dock-parking-heading">
+    <div class="container">
+      <h2 id="dock-parking-heading">Dock & Parking Details</h2>
+      <div class="card-grid">
+        <div class="card">
+          <h3>Parking lot</h3>
+          <p>The gravel lot behind the boathouse holds about 25 cars. It fills up fast for the 5:45am rows, so carpool when you can — regulars usually post a ride-share thread in the club group chat the night before.</p>
+        </div>
+        <div class="card">
+          <h3>Overflow parking</h3>
+          <p>When the main lot's full, street parking along Riverside Landing is open to the public and free before 8am. Please don't block the driveway of the sail loft next door — they're early risers too.</p>
+        </div>
+        <div class="card">
+          <h3>The dock itself</h3>
+          <p>Our floating dock has two launch bays and enough rack space for the whole fleet. It's steady underfoot but can get slick with dew — water shoes or an old pair of sneakers with grip are your friend.</p>
+        </div>
+        <div class="card">
+          <h3>Accessibility</h3>
+          <p>The boathouse entrance and dock ramp are both wheelchair accessible with a gentle grade. Accessible parking is available directly beside the side door — just let us know ahead of time and we'll have it clear.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="join-form" aria-labelledby="join-form-heading">
+    <div class="container">
+      <h2 id="join-form-heading">Join / Inquiry Form</h2>
+      <p>Whether you're ready to sign up or just want to ask a question before your first visit, this form gets to a real person — usually our membership coordinator, Dana — within a day or two.</p>
+
+      <form class="card" action="#" method="post">
+        <div style="display:grid; gap:1rem; grid-template-columns:1fr 1fr;">
+          <div style="grid-column:1/-1;">
+            <label for="name">Full name</label><br>
+            <input type="text" id="name" name="name" required style="width:100%; padding:0.5rem;">
+          </div>
+          <div>
+            <label for="email">Email</label><br>
+            <input type="email" id="email" name="email" required style="width:100%; padding:0.5rem;">
+          </div>
+          <div>
+            <label for="phone">Phone (optional)</label><br>
+            <input type="tel" id="phone" name="phone" style="width:100%; padding:0.5rem;">
+          </div>
+          <div style="grid-column:1/-1;">
+            <label for="experience">Rowing experience</label><br>
+            <select id="experience" name="experience" style="width:100%; padding:0.5rem;">
+              <option value="none">None — total beginner</option>
+              <option value="some">Some — a class or camp, maybe a few seasons ago</option>
+              <option value="hs-college">High school or college rower</option>
+              <option value="masters">Current or former masters/club rower</option>
+            </select>
+          </div>
+          <div style="grid-column:1/-1;">
+            <label for="interest">What are you interested in?</label><br>
+            <select id="interest" name="interest" style="width:100%; padding:0.5rem;">
+              <option value="learn-to-row">Learn-to-Row program</option>
+              <option value="masters-team">Masters competitive team</option>
+              <option value="recreational">Recreational / fitness rowing</option>
+              <option value="just-asking">Just have some questions</option>
+            </select>
+          </div>
+          <div style="grid-column:1/-1;">
+            <label for="message">Anything else we should know?</label><br>
+            <textarea id="message" name="message" rows="4" style="width:100%; padding:0.5rem;" placeholder="Schedule constraints, injuries, which morning you'd like to try, etc."></textarea>
+          </div>
+        </div>
+        <button type="submit" class="btn btn-primary" style="margin-top:1rem;">Send it over</button>
+      </form>
+    </div>
+  </section>
+
+  <section class="section" id="first-visit" aria-labelledby="first-visit-heading">
+    <div class="container">
+      <h2 id="first-visit-heading">First Visit Checklist</h2>
+      <div class="card-grid">
+        <div class="card">
+          <h3>Arrive 15 minutes early</h3>
+          <p>Give yourself time to find parking, meet your coach, and fill out a one-page waiver. We'll get you a loaner life jacket and a quick tour of the boathouse.</p>
+        </div>
+        <div class="card">
+          <h3>Wear the right layers</h3>
+          <p>Snug-fitting athletic clothes — no loose shorts or drawstrings that could snag on the seat track. Bring a warm layer for before and after; the water's cooler than the parking lot most mornings.</p>
+        </div>
+        <div class="card">
+          <h3>Bring water and shoes you don't mind getting wet</h3>
+          <p>Old sneakers or water shoes are ideal. Leave the good running shoes at home — the dock and shells get damp, especially at sunrise.</p>
+        </div>
+        <div class="card">
+          <h3>Skip the big breakfast</h3>
+          <p>A light snack and coffee are plenty for an early row. Save the full breakfast for after — plenty of our members swing by Baker's Crust on Water St. afterward.</p>
+        </div>
+        <div class="card">
+          <h3>No experience needed</h3>
+          <p>Every Learn-to-Row session starts on land with the stroke basics before anyone touches the water. Nobody expects you to know port from starboard yet.</p>
+        </div>
+        <div class="card">
+          <h3>Say hello to Dana at check-in</h3>
+          <p>Our membership coordinator will be at the dock most first mornings to make introductions and answer any last-minute questions.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="follow" aria-labelledby="follow-heading">
+    <div class="container">
+      <h2 id="follow-heading">Follow Our Mornings</h2>
+      <p>We post most mornings — fog rolling off the river, launch photos, the occasional heron who thinks the dock is his. Follow along or tag us in your own shots.</p>
+      <div class="card-grid">
+        <div class="card">
+          <h3>@tidewaterrowing</h3>
+          <p>Instagram — daily launch photos, race results, and the odd blooper reel from novice practice.</p>
+        </div>
+        <div class="card">
+          <h3>Tidewater Rowing Club</h3>
+          <p>Facebook — event announcements, regatta carpool threads, and our monthly newsletter archive.</p>
+        </div>
+        <div class="card">
+          <h3>#FindYourStrokeTRC</h3>
+          <p>Our community hashtag. Use it when you post your own row — we love reposting member mornings.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="site-footer">
+  <div class="container">
+    <p><strong>Tidewater Rowing Club</strong> — Find your stroke on the Chesapeake.</p>
+    <p>1420 Riverside Landing, Portsmouth, VA 23704 · dana@tidewaterrowing.org · (757) 555-0142</p>
+    <p><a href="index.html">Home</a> · <a href="programs.html">Programs</a> · <a href="membership.html">Membership</a> · <a href="contact.html">Contact</a></p>
+    <p>&copy; 2024 Tidewater Rowing Club. All oars accounted for.</p>
+  </div>
+</footer>
+
+<script src="main.js"></script>
+</body>
+</html>

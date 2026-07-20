@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Contact & Boathouse Directions | Tidewater Rowing Club</title>
+<meta name="description" content="Find Tidewater Rowing Club's boathouse on the Lafayette River, get parking and gear info for your first row, check season hours, and send us an inquiry.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Work+Sans:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<nav class="site-nav">
+  <a href="index.html" class="brand">Tidewater Rowing Club</a>
+  <button class="nav-toggle" aria-label="Menu" aria-expanded="false">☰</button>
+  <div class="nav-links">
+    <a href="index.html">Home</a>
+    <a href="programs.html">Programs</a>
+    <a href="membership.html">Membership</a>
+    <a href="contact.html" aria-current="page">Contact</a>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="container">
+    <h1>Come find us at the dock</h1>
+    <p>We're tucked into a bend of the Lafayette River, five minutes from downtown Norfolk and a world away from traffic. Directions, parking, gear, and everything else you need for your first pull.</p>
+  </div>
+</header>
+
+<section class="section" id="find-us">
+  <div class="container">
+    <h2>Find the boathouse</h2>
+    <div class="card-grid">
+      <div class="card">
+        <h3>Address</h3>
+        <p>
+          Tidewater Rowing Club<br>
+          4417 Colley Avenue Boat Ramp Road<br>
+          Norfolk, VA 23508
+        </p>
+        <p>Look for the gray shingled boathouse with the green dock — GPS sometimes wants to send you to the wrong side of the river, so see the driving note below.</p>
+      </div>
+      <div class="card">
+        <h3>Getting to the launch dock</h3>
+        <p>From I-64: take Exit 279 toward Norfolk/VA-406, follow Tidewater Drive south, then turn onto Colley Avenue. Where Colley dead-ends at the water, bear right onto the gravel access road — that's us, not the public ramp next door.</p>
+        <p>The floating dock is on the downstream side of the boathouse. Boat traffic (trailers, launches) has the right of way there during morning practice — walk the upper path if you're arriving after 6:30am.</p>
+      </div>
+      <div class="card">
+        <h3>Map</h3>
+        <div style="aspect-ratio:16/9; border-radius:8px; overflow:hidden;">
+          <iframe
+            src="https://www.google.com/maps?q=Norfolk+Yacht+Club+Norfolk+VA&output=embed"
+            width="100%" height="100%" style="border:0;"
+            loading="lazy"
+            referrerpolicy="no-referrer-when-downgrade"
+            title="Map showing Tidewater Rowing Club boathouse location on the Lafayette River">
+          </iframe>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="parking-gear">
+  <div class="container">
+    <h2>Parking, gear storage & what to bring</h2>
+    <div class="card-grid">
+      <div class="card">
+        <h3>Parking</h3>
+        <p>Gravel lot behind the boathouse holds about 30 cars — first-come, first-served. Overflow parking is along the access road shoulder, but please leave the turnaround clear for trailers. Don't park in the marked slips reserved for the sailing club next door; they will have you towed, and they will not feel bad about it.</p>
+      </div>
+      <div class="card">
+        <h3>Gear storage</h3>
+        <p>Members get a bay in the erg room and a labeled hook in the rigging shed for oars, blades, and life jackets. Boats live on slings in the main bay — new rowers, your coach will walk you through the carry and rack system in week one so nothing gets scratched (including you).</p>
+      </div>
+      <div class="card">
+        <h3>What to bring your first day</h3>
+        <ul>
+          <li>Snug-fitting layers — no loose shorts or drawstrings that can catch on the seat track</li>
+          <li>Shoes you don't mind getting wet (or none — most of our shells row bare-foot in the summer)</li>
+          <li>A water bottle and a hat; the river doesn't care what season it is</li>
+          <li>Sunscreen, always, even in March</li>
+          <li>A willingness to get a little damp and laugh about it</li>
+        </ul>
+        <p>We provide life jackets, oars, and boats for every intro session — you don't need to own a thing to start.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="join">
+  <div class="container">
+    <h2>Join / send an inquiry</h2>
+    <p>Curious about a learn-to-row session, ready to register for a season, or just have a question about the water this time of year? Fill this out and a real person from our board will get back to you within two days — usually faster if it's launch-day weather.</p>
+    <form class="card" action="#" method="post">
+      <div style="margin-bottom:1rem;">
+        <label for="name">Full name</label><br>
+        <input type="text" id="name" name="name" required style="width:100%; padding:0.5rem;">
+      </div>
+      <div style="margin-bottom:1rem;">
+        <label for="email">Email</label><br>
+        <input type="email" id="email" name="email" required style="width:100%; padding:0.5rem;">
+      </div>
+      <div style="margin-bottom:1rem;">
+        <label for="phone">Phone (optional)</label><br>
+        <input type="tel" id="phone" name="phone" style="width:100%; padding:0.5rem;">
+      </div>
+      <div style="margin-bottom:1rem;">
+        <label for="interest">What brings you to the dock?</label><br>
+        <select id="interest" name="interest" style="width:100%; padding:0.5rem;">
+          <option value="learn-to-row">Learn-to-Row (total beginner)</option>
+          <option value="returning-rower">Returning collegiate/HS rower</option>
+          <option value="masters-competitive">Competitive masters racing</option>
+          <option value="recreational">Recreational / fitness rowing</option>
+          <option value="coaching-volunteer">Coaching or volunteering</option>
+          <option value="other">Something else</option>
+        </select>
+      </div>
+      <div style="margin-bottom:1rem;">
+        <label for="message">Tell us a bit about your rowing background (or lack thereof)</label><br>
+        <textarea id="message" name="message" rows="5" style="width:100%; padding:0.5rem;"></textarea>
+      </div>
+      <button type="submit" class="btn btn-primary">Send inquiry</button>
+    </form>
+  </div>
+</section>
+
+<section class="section" id="hours">
+  <div class="container">
+    <h2>Season hours & morning launch times</h2>
+    <div class="card-grid">
+      <div class="card">
+        <h3>Spring/Summer (April–September)</h3>
+        <p>First launch: 5:45am, Tuesday–Saturday<br>
+        Evening recreational row: 6:00pm Tuesdays & Thursdays<br>
+        Saturday learn-to-row sessions: 8:00am, dock opens 7:30am</p>
+      </div>
+      <div class="card">
+        <h3>Fall (October–November)</h3>
+        <p>First launch: 6:30am, Tuesday–Saturday<br>
+        Head-race season means variable Saturday schedules — check the members calendar or ask your captain before you drive out.</p>
+      </div>
+      <div class="card">
+        <h3>Winter (December–March)</h3>
+        <p>Erg-room training: Monday, Wednesday, Friday, 6:00–7:15am<br>
+        Water sessions when temps and ice allow, announced by 9pm the night before via the team text chain.</p>
+      </div>
+    </div>
+    <p>Not sure which group you belong in? That's exactly what the inquiry form above is for — tell us your experience and we'll point you to the right launch time.</p>
+  </div>
+</section>
+
+<section class="section" id="follow">
+  <div class="container">
+    <h2>Follow along</h2>
+    <p>Fog on the river, a sunrise finish, somebody's dog on the dock again — that's most of what we post. Follow along, or get the twice-monthly newsletter with race results, launch changes, and the occasional bad rowing pun.</p>
+    <div class="card-grid">
+      <div class="card">
+        <h3>Social</h3>
+        <p>
+          <a href="https://instagram.com" target="_blank" rel="noopener">Instagram: @tidewaterrowing</a><br>
+          <a href="https://facebook.com" target="_blank" rel="noopener">Facebook: Tidewater Rowing Club</a>
+        </p>
+      </div>
+      <div class="card">
+        <h3>Newsletter</h3>
+        <form action="#" method="post">
+          <label for="newsletter-email">Email address</label><br>
+          <input type="email" id="newsletter-email" name="newsletter-email" required style="width:100%; padding:0.5rem; margin:0.5rem 0;">
+          <button type="submit" class="btn btn-primary">Subscribe</button>
+        </form>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer class="site-footer">
+  <div class="container">
+    <p><strong>Tidewater Rowing Club</strong> — Find your stroke on the Chesapeake</p>
+    <p>4417 Colley Avenue Boat Ramp Road, Norfolk, VA 23508</p>
+    <nav>
+      <a href="index.html">Home</a> |
+      <a href="programs.html">Programs</a> |
+      <a href="membership.html">Membership</a> |
+      <a href="contact.html">Contact</a>
+    </nav>
+    <p>&copy; 2024 Tidewater Rowing Club. All rights reserved.</p>
+  </div>
+</footer>
+
+<script src="main.js"></script>
+</body>
+</html>

@@ -172,3 +172,132 @@ is nearly empty today — the rich demo above used `sample_vault` via the env ov
 - [x] SECURITY_NOTES.md, BUILD_LOG.md, RESEARCH_NOTES.md complete.
 
 **Build complete.** The hardened app is running on http://127.0.0.1:5001.
+
+---
+
+# OVERNIGHT BUILD — ROUND 2 — 2026-07-20
+
+New scope: (1) video input for the chat brain, (2) data synthesizer agent, (3) website
+creator agent, (4) video maker/editor toolkit. All built inside the project; vault stays
+read-only; app stays on 127.0.0.1 behind the access code; no schema/secrets changes.
+
+## Setup — toolchain
+- Installed via brew: **ffmpeg 8.1.2** (+ ffprobe) and **whisper-cpp** (whisper-cli).
+- Downloaded **ggml-base.en** Whisper model (141 MB) to `models/ggml-base.en.bin`;
+  verified against the bundled jfk.wav — transcription accurate.
+- pip: **ddgs** (keyless DuckDuckGo search), **beautifulsoup4**, **lxml**.
+- Decision: use **whisper.cpp**, NOT openai-whisper/faster-whisper. Python here is 3.14 and
+  torch has no stable 3.14 wheels — whisper.cpp is a native binary with no Python deps, so
+  it's robust and fast. No cloud, no API key for transcription.
+- New dirs: `inbox/`, `synthesized/`, `sites/`, `media_lib/`, `video_work/`, `models/`, `_archive/`.
+
+## Phase 1 — Video input for the chat brain — DONE ✅
+- New module `second-brain-chat/video_processor.py`:
+  - `probe_video` (ffprobe: duration, audio presence, validity),
+  - `sample_frames` (ffmpeg scene-change detection merged with evenly-spaced sampling so a
+    static clip still yields frames; downscaled to 768px; capped at 8, max 16),
+  - `transcribe_audio` (ffmpeg → 16 kHz mono wav → whisper-cli; caps transcription at 15 min),
+  - `analyze_video` (assembles frames-as-images + transcript + instruction and calls Claude
+    vision with the existing Anthropic pattern; returns text for the chat tool loop).
+  - Path containment: only reads files inside the project (inbox/); rejects traversal.
+- Wired into `app.py`: new **`analyze_video`** tool (schema + handle_tool_call routing +
+  status label + system-prompt paragraph), plus **`/api/upload_video`** endpoint
+  (500 MB cap, extension whitelist, secure_filename, no-clobber).
+- Chat UI (`index.html`): 📎 attach button + hidden file input + attachment chip; uploads to
+  inbox/ then augments the sent message so Claude calls analyze_video on it.
+- **Tested end-to-end:** generated a 12 s test clip (red→green→blue scenes + macOS `say`
+  narration). Via HTTP through the live app (login → upload → chat): tool fired, reply
+  correctly gave color order AND quoted the narrated purpose. Edge cases verified:
+  no-audio clip (visual-only note), unsupported .txt (clean error), missing file (clean error).
+- Known limits: frames are samples not every moment; very long videos capped at 15 min of
+  audio transcription (noted in output). base.en model is English-tuned.
+
+## Phase 2 — Data synthesizer agent — DONE ✅
+- New agent `data_synthesizer_agent.py` (project root, follows money_clips_agent pattern):
+  - Modes: **web research** (keyless `ddgs` DuckDuckGo → fetch pages → bs4 text extraction)
+    and **organize raw material** you paste; `auto` picks based on whether material is given.
+  - Output: one structured markdown report (executive summary, thematic `##` sections
+    synthesized across sources, inline `[n]` citations, `## Sources` list with URLs). A
+    machine-appended Sources block guarantees traceability even if the model omits it.
+  - Saved to `synthesized/<date>-<slug>.md` (no-clobber) AND logged to Supabase "Agent Outputs".
+  - `search_web()` is provider-pluggable: if TAVILY/SERPER/BRAVE_API_KEY is set it uses that
+    (branches stubbed with exact request shapes), else keyless DDG. Never scrapes Google.
+  - CLI: `python3 data_synthesizer_agent.py "topic"` / `--text ...` / `--stdin` / `--web`.
+- Wired into `app.py` as the **`synthesize_data`** tool (schema + routing + status label +
+  system prompt); reuses the app's Claude + Supabase clients.
+- **Tested end-to-end:** (1) web research on "creatine monohydrate benefits and dosing" — 5 live
+  sources fetched, cited, saved (8.5 KB), Supabase row confirmed. (2) Through the live chat:
+  "cold water immersion for recovery" — tool fired, report saved, chat gave highlights + file
+  path. (3) Raw-material mode on standup notes — organized cleanly, 0 web sources.
+- Known limits: keyless DDG is rate-limited / lower recall than a paid API (drop-in upgrade
+  path documented); page extraction is best-effort (paywalls/JS/PDF may yield little).
+
+## Phase 4 — Video maker/editor toolkit — DONE ✅
+- New `video_toolkit.py` (project root) — ffmpeg-backed primitives, each returns an output path
+  in `media_lib/`: `probe`, `trim`, `concat` (auto-normalizes mixed sizes/fps + handles clips
+  with/without audio via silent-track padding), `caption`, `set_audio` (replace or mix),
+  `to_vertical` (9:16 1080x1920, crop or pad), `thumbnail`. Full CLI with subcommands.
+- **Captions:** this brew ffmpeg has NO drawtext/subtitles/libass filter (verified). Pivot:
+  render caption text to a transparent PNG with **Pillow** (word-wrapped, bold, stroked, sized to
+  video width) and `overlay` it — full styling control, robust. Installed Pillow.
+- NL wrapper: `run_operation(operation, **params)` dispatches one edit and returns a friendly
+  string with the output filename so the chat can chain steps.
+- AI generation stub: `video_gen_stub.py` — clearly-marked NotImplementedError stubs documenting
+  V2 (provider options Runway/Luma/Veo/Pika/Kling/Stability + which env key, submit→poll→fetch
+  interface, the dashboard-approval spend gate, and how it slots into money_clips_agent → toolkit
+  to assemble Shorts). No network calls.
+- Wired into `app.py` as the **`edit_video`** tool (operation enum + params) + system prompt.
+- **Tested:** generated test clips; ran all 7 ops via CLI and verified outputs with ffprobe —
+  trim=4.0s, vertical=1080x1920, concat=15s (normalized from mixed 640x480+480x480), caption text
+  pixels confirmed present, audio replace=6s (‑shortest), audio add=full length mix, thumbnail JPG.
+  Through the live chat: "trim to first 5s then caption 'Color test clip'" → chained two edit_video
+  calls → final file 5.0s with caption verified present.
+- Known limits: captions use macOS system fonts (Arial/Helvetica fallback); no libass styling;
+  AI generation is V2 (stubbed).
+
+## Phase 3 — Website creator agent — DONE ✅
+- New `website_creator_agent.py` (project root). Staged single-agent pipeline:
+  1. **Plan+design** — forced structured-JSON (Anthropic tool-forcing, so no fragile text/quote
+     parsing) → site name/slug, 3-5 pages, and a real design system (characterful Google Font
+     pairing, considered palette, radius/shadow, vibe keywords).
+  2. **Stylesheet** — one hand-tuned styles.css (CSS variables, fluid clamp type, flex/grid,
+     components: nav+mobile hamburger, buttons, hero, cards, sections, footer, forms).
+  3. **Pages** — one call per page, real on-brand copy (no lorem ipsum), reusing the shared classes.
+  4. **Self-review polish** — an APPENDED override layer (never a destructive rewrite).
+  5. **Coverage guard** — any class a page uses but the sheet never defined gets auto-filled.
+  Writes sites/<slug>/ with pages, styles.css, main.js (mobile nav), `serve.sh` (one-command
+  preview on **:8080**, deliberately not 5001), and a per-site README. Logs a summary to Supabase.
+- Wired into `app.py` as the **`create_website`** tool (+ system prompt).
+- **Two bugs found and fixed during testing:**
+  1. The self-review originally REWROTE styles.css and dropped .hero/.btn/.card definitions →
+     pages rendered unstyled. Fixed: made self-review additive (append-only polish layer) + added
+     the coverage guard that fills any missing class rules. Verified: 0 used-but-undefined classes.
+  2. The self-review call returned EMPTY — `claude-sonnet-5` spent the whole 2500-token budget on
+     automatic thinking (2128 thinking tokens) before emitting CSS, hitting max_tokens. Fixed by
+     raising that call's budget to 6000 so thinking + the CSS both fit. Also hardened fence-stripping.
+- **Tested end-to-end:** (1) "Tidewater Rowing Club" (4 pages) direct — coherent nautical design
+  (Fraunces/Public Sans, teal/sand/copper), all pages serve 200, real copy, all classes styled.
+  (2) Through the live chat: "Ember & Oak" wood-fired pizza (3 pages) — built, self-review polish
+  layer present, all classes styled, serves 200, logged to Supabase. Archived the first (pre-fix)
+  broken build to _archive/.
+- Known limits: Google Fonts load from the network in-browser (rest is self-contained); ~2-3 min
+  per site (several sequential model passes); no image assets generated (design is type/color/layout).
+
+## Final verification — 2026-07-20
+- **All 4 priorities working end-to-end through the live chat** (login → tool → result), verified
+  over HTTP against the running app on 127.0.0.1:5001.
+- **Regression — prior functionality intact:**
+  - Vault tools test suite: **18 passed, 0 failed** (incl. read-only byte-for-byte guarantee).
+  - Supabase agent-output lookup via chat: works (listed the synthesizer's reports).
+  - Access gate: `/api/*` unauth → 401, `/` → 302→login, wrong code rejected.
+  - Localhost-only: LAN IP (10.0.0.132:5001) refused connection; bound to 127.0.0.1.
+- App log clean (no tracebacks/errors across all testing).
+- New deps added to requirements.txt (pip: ddgs, beautifulsoup4, lxml, Pillow; system/brew:
+  ffmpeg, whisper-cpp + ggml-base.en model). `.gitignore` updated to keep the 141 MB model,
+  temp dirs, and test media out of any commit. README updated with a Round-2 capabilities section.
+- Housekeeping: test chat history cleared (clean slate); archived one duplicate site build and
+  the pre-fix broken site to `_archive/`. Nothing committed to git.
+- **Known minor issue:** the chat model occasionally invokes create_website twice for one request
+  (two valid sites built). Benign but wastes a build; noted for a future idempotency guard.
+
+**Round 2 build complete.** App running on http://127.0.0.1:5001 with all new tools live.
