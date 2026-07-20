@@ -71,6 +71,7 @@ supabase = None
 handle_tool_call = None
 council_call = None        # app._council_call(system, user) -> str
 log_council = None         # app._log_council(kind, idea, headline, full) -> None
+feasibility_judge = None   # app.feasibility_judge(idea, intended_outcome, context) -> str
 TOOLS = None
 EXCLUDED_TOOLS = set()
 
@@ -83,15 +84,27 @@ GITHUB_API = "https://api.github.com"
 
 
 def init(claude_client, supabase_client, tool_dispatcher, council_call_fn,
-         log_council_fn, tools_list, excluded_tools):
-    global claude, supabase, handle_tool_call, council_call, log_council, TOOLS, EXCLUDED_TOOLS
+         log_council_fn, tools_list, excluded_tools, feasibility_fn=None):
+    global claude, supabase, handle_tool_call, council_call, log_council
+    global feasibility_judge, TOOLS, EXCLUDED_TOOLS
     claude = claude_client
     supabase = supabase_client
     handle_tool_call = tool_dispatcher
     council_call = council_call_fn
     log_council = log_council_fn
+    feasibility_judge = feasibility_fn
     TOOLS = tools_list
     EXCLUDED_TOOLS = set(excluded_tools)
+
+
+def _capabilities_summary(limit: int = 40) -> str:
+    """A short list of what Jarvis already does, so the council can judge OVERLAP and
+    usefulness against reality instead of guessing."""
+    try:
+        names = [t.get("name") for t in (TOOLS or []) if t.get("name")]
+        return ", ".join(sorted(set(names))[:limit]) or "(unknown)"
+    except Exception:
+        return "(unknown)"
 
 
 # ============================================================
@@ -239,51 +252,92 @@ def _structure_findings(focus_brief: str, source: str, raw_items: list) -> list:
     return findings
 
 
-def _github_search(query: str, cap: int) -> list:
+def _distill_queries(focus_brief: str) -> list:
+    """Turn a natural-language brief into 1-3 TIGHT search queries. A long brief pasted
+    straight into GitHub's `q` AND-matches every word and returns almost nothing — this is
+    the single biggest lever on scout quality. Falls back to a keyword-only brief."""
+    try:
+        text = _call(
+            "Turn this capability brief into up to 3 short, high-signal SEARCH QUERIES for finding "
+            "tools/libraries/repos (3-6 keywords each, no full sentences, no punctuation). Prefer "
+            "concrete tech nouns over verbs. Return ONLY a JSON array of strings.",
+            focus_brief, max_tokens=300)
+        arr = _extract_json(text)
+        qs = [str(q).strip() for q in arr if str(q).strip()][:3] if isinstance(arr, list) else []
+        if qs:
+            return qs
+    except Exception:
+        pass
+    # Fallback: strip to keyword-ish (drop obvious filler), keep it short.
+    words = re.findall(r"[a-zA-Z][a-zA-Z0-9.+-]{2,}", focus_brief)
+    stop = {"tools", "that", "would", "help", "with", "recent", "work", "libraries", "skills", "for", "and", "the"}
+    kept = [w for w in words if w.lower() not in stop][:6]
+    return [" ".join(kept) or focus_brief[:60]]
+
+
+def _github_search(query: str, want: int) -> list:
     headers = {"Accept": "application/vnd.github+json",
                "User-Agent": "Jarvis-second-brain-scout"}
     token = os.environ.get("GITHUB_TOKEN")  # optional; NEVER hardcoded
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    try:
-        r = httpx.get(f"{GITHUB_API}/search/repositories",
-                      params={"q": query, "sort": "stars", "order": "desc",
-                              "per_page": min(cap, 20)},
-                      headers=headers, timeout=25)
-        items = r.json().get("items", []) if r.status_code == 200 else []
-    except Exception:
-        return []
     out = []
-    for it in items[:cap]:
-        lic = (it.get("license") or {}).get("spdx_id") or "unknown"
-        out.append({
-            "name": it.get("full_name"),
-            "url": it.get("html_url"),
-            "description": it.get("description") or "",
-            "license": lic,
-            "signals": f"{it.get('stargazers_count', 0)}★, pushed {str(it.get('pushed_at'))[:10]}",
-        })
+    # Two complementary orderings so we surface both established AND fresh/niche repos,
+    # not just the biggest stars. Merge + dedupe by url downstream.
+    for sort in ("stars", "updated"):
+        try:
+            r = httpx.get(f"{GITHUB_API}/search/repositories",
+                          params={"q": query, "sort": sort, "order": "desc",
+                                  "per_page": min(max(want, 10), 30)},
+                          headers=headers, timeout=25)
+            items = r.json().get("items", []) if r.status_code == 200 else []
+        except Exception:
+            items = []
+        for it in items:
+            lic = (it.get("license") or {}).get("spdx_id") or "unknown"
+            out.append({
+                "name": it.get("full_name"),
+                "url": it.get("html_url"),
+                "description": it.get("description") or "",
+                "license": lic,
+                "signals": f"{it.get('stargazers_count', 0)}★, pushed {str(it.get('pushed_at'))[:10]}",
+            })
+    return out
+
+
+def _dedupe_raw(items: list) -> list:
+    seen, out = set(), []
+    for it in items:
+        u = (it.get("url") or "").strip().rstrip("/").lower()
+        if u and u not in seen:
+            seen.add(u)
+            out.append(it)
     return out
 
 
 def github_scout(focus_brief: str, cap: int = DEFAULT_SCOUT_CAP) -> list:
-    """Search GitHub for repos/tools/MCP servers/skills relevant to the brief."""
-    raw = _github_search(focus_brief, cap)
-    return _structure_findings(focus_brief, "github", raw)
+    """Search GitHub for repos/tools/MCP servers/skills. Over-fetches across distilled
+    queries so the model can pick the best `cap`, rather than filtering a thin list."""
+    raw = []
+    for q in _distill_queries(focus_brief):
+        raw.extend(_github_search(q, want=cap * 2))
+    return _structure_findings(focus_brief, "github", _dedupe_raw(raw)[:cap * 4])
 
 
 def web_scout(focus_brief: str, cap: int = DEFAULT_SCOUT_CAP) -> list:
-    """Search the open web (keyless DuckDuckGo via the data synthesizer) for tools,
-    techniques, and services that could expand Jarvis."""
+    """Search the open web (keyless DuckDuckGo via the data synthesizer) using the same
+    distilled queries, so a long brief doesn't dilute recall."""
     try:
         from data_synthesizer_agent import search_web
     except Exception:
         return []
-    try:
-        raw = search_web(f"{focus_brief} tool OR library OR framework", max_results=cap)
-    except Exception:
-        return []
-    return _structure_findings(focus_brief, "web", raw)
+    raw = []
+    for q in _distill_queries(focus_brief):
+        try:
+            raw.extend(search_web(f"{q} open source tool library", max_results=cap))
+        except Exception:
+            continue
+    return _structure_findings(focus_brief, "web", _dedupe_raw(raw)[:cap * 4])
 
 
 def run_scout(focus_brief: str = "", sources: str = "both",
@@ -362,10 +416,12 @@ def _default_focus_brief() -> str:
 _RUBRIC_SYSTEM = (
     "You are the Judge on Alex's decision council, in EXPANSION-REVIEW mode. A scout found a "
     "tool/repo/skill that Jarvis (an autonomous personal assistant) might adopt. You receive the "
-    "finding plus an Advocate's case for adopting it and a Critic's case against. " + UNTRUSTED_BANNER
+    "finding, a list of what Jarvis ALREADY does, an Advocate's case for, a Critic's case against, "
+    "and a Feasibility read on whether Jarvis could actually integrate it. " + UNTRUSTED_BANNER
     + "\n\nFill a scoring rubric and rule. Be calibrated: reject clear junk and anything redundant "
     "with capabilities Jarvis already has, but do NOT reject genuinely useful things out of "
-    "excess caution — use 'defer' for borderline cases worth revisiting. Answer with ONLY JSON:\n"
+    "excess caution — use 'defer' for borderline cases worth revisiting. Judge 'overlap' against "
+    "the provided capability list, not a guess. Answer with ONLY JSON:\n"
     '{"usefulness": 1-5, "integration_effort": "small|medium|large", '
     '"maintenance_burden": "low|medium|high", "security_risk": 1-5, '
     '"license_compatibility": "compatible|restrictive|unknown", '
@@ -375,19 +431,66 @@ _RUBRIC_SYSTEM = (
 )
 
 
+def _calibrate_decision(rubric: dict) -> tuple:
+    """Deterministic backstop so a miscalibrated model reply can't push something risky or
+    redundant to 'approved'. Never HARDENS toward approve; only downgrades. Returns
+    (decision, reason_or_None). Tuned to defer (human looks), not auto-reject."""
+    decision = str(rubric.get("decision", "defer")).lower()
+    if decision not in ("approve", "reject", "defer"):
+        return "defer", "unrecognized decision → defer"
+    if decision != "approve":
+        return decision, None
+
+    def _num(v):
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+
+    risk = _num(rubric.get("security_risk"))
+    use = _num(rubric.get("usefulness"))
+    lic = str(rubric.get("license_compatibility", "")).lower()
+    overlap = str(rubric.get("overlap_with_existing", "")).lower()
+
+    if risk is not None and risk >= 4:
+        return "defer", f"security_risk {rubric.get('security_risk')}/5 too high to auto-approve"
+    if lic in ("restrictive", "unknown"):
+        return "defer", f"license '{lic}' needs a human check before approve"
+    if overlap == "high":
+        return "defer", "high overlap with existing capabilities — approve only on a human call"
+    if use is not None and use <= 2:
+        return "defer", f"usefulness {rubric.get('usefulness')}/5 too low to approve"
+    return "approve", None
+
+
 def expansion_review_one(row_id: int, finding: dict) -> dict:
-    """Run the existing Advocate/Critic council on a finding, then a scored rubric.
-    Persists rubric + decision onto the finding and logs to the council dashboard feed."""
+    """Run the existing Advocate/Critic/Feasibility council on a finding, then a scored
+    rubric with a deterministic calibration backstop. Persists rubric + decision and logs."""
+    caps = _capabilities_summary()
     subject = (f"{UNTRUSTED_BANNER}\nCandidate for Jarvis to adopt:\n"
                f"name: {finding.get('name')}\nurl: {finding.get('url')}\n"
                f"what: {finding.get('what')}\nwhy it might help: {finding.get('why_it_helps')}\n"
                f"license: {finding.get('license')}\nsignals: {finding.get('signals')}\n"
-               f"red flags noted by scout: {finding.get('red_flags')}")
+               f"red flags noted by scout: {finding.get('red_flags')}\n\n"
+               f"What Jarvis ALREADY does (judge overlap against this): {caps}")
 
     finding["status"] = "under_review"
     _update_finding(row_id, finding)
 
-    with ThreadPoolExecutor(max_workers=2) as pool:
+    # Three independent voices, in parallel: Advocate, Critic, and the existing
+    # Feasibility Judge (repurposed: can Jarvis actually integrate & run this?).
+    def _feas():
+        if not feasibility_judge:
+            return "(feasibility judge unavailable)"
+        try:
+            return feasibility_judge(
+                f"Adopt '{finding.get('name')}' ({finding.get('url')}) into Jarvis",
+                "Jarvis reliably integrates and runs this new capability",
+                subject)
+        except Exception as e:
+            return f"(feasibility read failed: {e})"
+
+    with ThreadPoolExecutor(max_workers=3) as pool:
         pro_f = pool.submit(council_call,
             "You are the Advocate. Argue the strongest HONEST case FOR adopting this into Jarvis — "
             "concrete capability gains, why it's worth the integration cost. " + UNTRUSTED_BANNER
@@ -396,20 +499,25 @@ def expansion_review_one(row_id: int, finding: dict) -> dict:
             "You are the Critic. Argue the strongest HONEST case AGAINST adopting this — security "
             "risk, maintenance burden, redundancy with what Jarvis already has, license issues. "
             + UNTRUSTED_BANNER + " 3-6 tight bullets, no invented facts.", subject)
-        pro, con = pro_f.result(), con_f.result()
+        feas_f = pool.submit(_feas)
+        pro, con, feas = pro_f.result(), con_f.result(), feas_f.result()
 
     rubric_text = council_call(_RUBRIC_SYSTEM,
-        f"{subject}\n\n--- ADVOCATE ---\n{pro}\n\n--- CRITIC ---\n{con}")
+        f"{subject}\n\n--- ADVOCATE ---\n{pro}\n\n--- CRITIC ---\n{con}\n\n--- FEASIBILITY ---\n{feas}")
     try:
         rubric = _extract_json(rubric_text)
-        decision = str(rubric.get("decision", "defer")).lower()
-        if decision not in ("approve", "reject", "defer"):
-            decision = "defer"
+        if not isinstance(rubric, dict):
+            raise ValueError("rubric not an object")
     except (ValueError, json.JSONDecodeError):
         # Unreadable rubric → defer (neither auto-approve nor silently drop).
         rubric = {"verdict": "Council rubric was unparseable — deferred for a human look.",
                   "decision": "defer"}
-        decision = "defer"
+
+    # Deterministic calibration backstop overrides an over-eager model 'approve'.
+    decision, override = _calibrate_decision(rubric)
+    rubric["decision"] = decision
+    if override:
+        rubric["calibration_override"] = override
 
     status = {"approve": "approved", "reject": "rejected", "defer": "deferred"}[decision]
     finding["status"] = status
@@ -479,6 +587,55 @@ def _static_safety_scan(code: str) -> list:
     return flags
 
 
+def _gh_headers() -> dict:
+    h = {"Accept": "application/vnd.github+json", "User-Agent": "Jarvis-second-brain-scout"}
+    token = os.environ.get("GITHUB_TOKEN")
+    if token:
+        h["Authorization"] = f"Bearer {token}"
+    return h
+
+
+def _sample_repo_code(url: str, commit: str, max_files: int = 12, budget: int = 40000) -> str:
+    """Fetch a representative slice of the repo's Python code at the pinned commit, using the
+    git-trees API to find files beyond the root. Prioritises setup/entry files, then other .py
+    by shallow path depth, so the static scan sees more than just the README."""
+    m = re.search(r"github\.com/([^/]+)/([^/#?]+)", url)
+    if not m:
+        return ""
+    owner, repo = m.group(1), m.group(2).replace(".git", "")
+    paths = []
+    try:
+        tr = httpx.get(f"{GITHUB_API}/repos/{owner}/{repo}/git/trees/{commit}",
+                       params={"recursive": "1"}, headers=_gh_headers(), timeout=20)
+        if tr.status_code == 200:
+            blobs = [n for n in tr.json().get("tree", []) if n.get("type") == "blob"]
+            py = [n["path"] for n in blobs if n["path"].endswith(".py")]
+            manifests = [p for p in ("setup.py", "pyproject.toml", "setup.cfg") if p in {n["path"] for n in blobs}]
+            # entry/init/main files first, then shallowest paths (top-level logic).
+            py.sort(key=lambda p: (0 if os.path.basename(p) in ("__init__.py", "main.py", "__main__.py", "cli.py") else 1,
+                                   p.count("/"), len(p)))
+            paths = manifests + py
+    except Exception:
+        paths = []
+    if not paths:  # trees API failed — fall back to a few well-known root files
+        paths = ["setup.py", "pyproject.toml", "main.py", "__init__.py", "README.md"]
+
+    sample, used = "", 0
+    for path in paths[:max_files]:
+        raw = f"https://raw.githubusercontent.com/{owner}/{repo}/{commit}/{path}"
+        try:
+            rr = httpx.get(raw, timeout=15, headers={"User-Agent": "Jarvis-scout"})
+            if rr.status_code == 200:
+                chunk = rr.text[:6000]
+                sample += f"\n# ---- {path} ----\n" + chunk
+                used += len(chunk)
+                if used >= budget:
+                    break
+        except Exception:
+            continue
+    return sample
+
+
 def _resolve_commit(repo_url: str) -> str:
     """Resolve a repo's default-branch HEAD commit sha, for pinning. Empty string if
     it can't be resolved — the applicator then REFUSES to install (no unpinned installs)."""
@@ -486,13 +643,9 @@ def _resolve_commit(repo_url: str) -> str:
     if not m:
         return ""
     owner, repo = m.group(1), m.group(2).replace(".git", "")
-    headers = {"Accept": "application/vnd.github+json", "User-Agent": "Jarvis-second-brain-scout"}
-    token = os.environ.get("GITHUB_TOKEN")
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
     try:
         r = httpx.get(f"{GITHUB_API}/repos/{owner}/{repo}/commits",
-                      params={"per_page": 1}, headers=headers, timeout=20)
+                      params={"per_page": 1}, headers=_gh_headers(), timeout=20)
         if r.status_code == 200 and r.json():
             return r.json()[0]["sha"]
     except Exception:
@@ -508,20 +661,9 @@ def _build_install_plan(row_id: int, finding: dict) -> dict:
     is_repo = "github.com" in url
     target = os.path.join(EXPANSION_BASE, re.sub(r"[^a-z0-9_-]", "-", (finding.get("name") or "tool").lower())[:60])
 
-    # Pull a sample of the code for scanning (README + repo root listing via API is enough
-    # to catch the obvious red flags before a human commits to a full clone).
-    sample = ""
-    if is_repo and commit:
-        m = re.search(r"github\.com/([^/]+)/([^/#?]+)", url)
-        owner, repo = m.group(1), m.group(2).replace(".git", "")
-        for path in ("setup.py", "pyproject.toml", "main.py", "__init__.py", "README.md"):
-            raw = f"https://raw.githubusercontent.com/{owner}/{repo}/{commit}/{path}"
-            try:
-                rr = httpx.get(raw, timeout=15, headers={"User-Agent": "Jarvis-scout"})
-                if rr.status_code == 200:
-                    sample += f"\n# ---- {path} ----\n" + rr.text[:6000]
-            except Exception:
-                continue
+    # Sample real code (not just the README) so the static scan is meaningful BEFORE a
+    # human approves a clone. Uses the git-trees API to reach into the repo, not just root.
+    sample = _sample_repo_code(url, commit) if (is_repo and commit) else ""
     flags = _static_safety_scan(sample) if sample else [{"category": "no code sampled", "note": "scan at clone time"}]
 
     commands = []
@@ -627,31 +769,98 @@ def _execute_install(plan: dict, action_row_id: int) -> dict:
                        capture_output=True, text=True, timeout=120)
         subprocess.run(["git", "-C", target, "checkout", plan["pinned_commit"]],
                        check=True, capture_output=True, text=True, timeout=60)
-        # RULE 4 — smoke test inside task_manager's macOS sandbox (network denied,
-        # writes confined). We only import the package to prove it loads cleanly.
-        smoke = _smoke_test(target, plan["name"])
+        # Isolated venv + PINNED install (post-approval — network is allowed now that a
+        # human signed off on the scanned plan). This is the step the plan advertises.
+        install = _venv_install(target)
+        if not install["ok"]:
+            raise RuntimeError(f"pinned install failed: {install['detail']}")
+        # Real smoke test: actually IMPORT the package and confirm it loads cleanly.
+        smoke = _smoke_test(target, plan.get("name", ""), install.get("python"))
         if not smoke["ok"]:
             raise RuntimeError(f"smoke test failed: {smoke['detail']}")
     except Exception as e:
         shutil.rmtree(target, ignore_errors=True)  # never leave it half-installed
         return {"ok": False, "error": str(e)[:400]}
-    return {"ok": True, "install_dir": target, "smoke": smoke}
+    return {"ok": True, "install_dir": target, "smoke": smoke, "install": install}
 
 
-def _smoke_test(target: str, name: str) -> dict:
-    """Import-load the installed package in the sandbox (no network, confined writes)."""
-    if task_manager is None:
-        return {"ok": True, "detail": "sandbox unavailable — skipped (import-only smoke)"}
+def _venv_install(target: str) -> dict:
+    """Create an isolated venv and pip-install the checked-out (pinned) package into it.
+    Non-Python repos (no setup.py/pyproject) skip pip and just report that."""
+    is_pkg = any(os.path.exists(os.path.join(target, f)) for f in ("setup.py", "pyproject.toml", "setup.cfg"))
+    if not is_pkg:
+        return {"ok": True, "python": None, "detail": "no setup.py/pyproject — not a pip package; cloned only"}
+    venv = os.path.join(target, ".venv")
+    py = os.path.join(venv, "bin", "python")
     try:
-        scratch = task_manager._scratch_dir(9_000_000)
+        subprocess.run(["python3", "-m", "venv", venv], check=True,
+                       capture_output=True, text=True, timeout=120)
+        r = subprocess.run([py, "-m", "pip", "install", "--no-input", target],
+                           capture_output=True, text=True, timeout=600)
+        if r.returncode != 0:
+            return {"ok": False, "python": py, "detail": (r.stderr or r.stdout)[-400:]}
+        return {"ok": True, "python": py, "detail": "pip install ok"}
+    except Exception as e:
+        return {"ok": False, "python": py, "detail": str(e)[:300]}
+
+
+def _import_candidates(target: str) -> list:
+    """Best guesses at the importable top module(s): declared packages plus any top-level
+    package dir (has __init__.py) or lone module file in the checkout."""
+    cands = []
+    base = os.path.basename(target).replace("-", "_")
+    cands.append(base)
+    try:
+        for name in sorted(os.listdir(target)):
+            p = os.path.join(target, name)
+            if os.path.isdir(p) and os.path.exists(os.path.join(p, "__init__.py")):
+                cands.append(name)
+            elif name.endswith(".py") and name not in ("setup.py", "conftest.py"):
+                cands.append(name[:-3])
+    except OSError:
+        pass
+    seen, out = set(), []
+    for c in cands:
+        if c and c not in seen and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", c):
+            seen.add(c)
+            out.append(c)
+    return out[:6]
+
+
+def _smoke_test(target: str, name: str, python: str = None) -> dict:
+    """Actually import the installed package and confirm it loads. Uses the venv python
+    when there is one (deps present); else a sandboxed import against the checkout dir."""
+    candidates = _import_candidates(target)
+    if not candidates:
+        return {"ok": True, "detail": "nothing importable to smoke-test (cloned artifact only)"}
+
+    # Preferred: import inside the venv where the pinned deps actually live.
+    if python and os.path.exists(python):
+        for mod in candidates:
+            try:
+                r = subprocess.run([python, "-c", f"import {mod}"],
+                                   capture_output=True, text=True, timeout=60)
+                if r.returncode == 0:
+                    return {"ok": True, "detail": f"imported '{mod}' cleanly in venv"}
+            except Exception:
+                continue
+        return {"ok": False, "detail": f"none of {candidates} imported in venv"}
+
+    # Fallback (non-pip repo): import in task_manager's sandbox (no network, confined).
+    if task_manager is None:
+        return {"ok": True, "detail": "no venv and no sandbox — skipped"}
+    try:
+        scratch = task_manager._scratch_dir(int(time.time()) % 8_000_000 + 1_000_000)
         probe = os.path.join(scratch, "tools", "smoke_probe.py")
         with open(probe, "w") as f:
-            f.write("import os, sys\n"
+            f.write("import sys\n"
                     f"sys.path.insert(0, {target!r})\n"
-                    "print('import path ok:', os.path.isdir(sys.path[0]))\n")
+                    f"for m in {candidates!r}:\n"
+                    "    try:\n        __import__(m); print('imported', m); break\n"
+                    "    except Exception as e:\n        last=e\n"
+                    "else:\n    raise SystemExit(f'no candidate imported: {last}')\n")
         out = task_manager._sandbox_run(scratch, probe, "{}", timeout=60)
-        ok = "exit=0" in out
-        return {"ok": ok, "detail": out[:400]}
+        return {"ok": "exit=0" in out, "detail": out[:400]}
     except Exception as e:
         return {"ok": False, "detail": str(e)[:300]}
 

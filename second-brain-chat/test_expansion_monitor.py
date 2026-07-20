@@ -64,10 +64,11 @@ def check(label, cond):
     print(f"{PASS if cond else FAIL} {label}")
 
 
-def _reset(council_fn=None):
+def _reset(council_fn=None, feasibility_fn=None, tools=None):
     ep.init(claude_client=None, supabase_client=FakeSB(), tool_dispatcher=None,
             council_call_fn=council_fn or (lambda s, u: ""), log_council_fn=lambda *a, **k: None,
-            tools_list=[], excluded_tools=set())
+            tools_list=tools or [], excluded_tools=set(),
+            feasibility_fn=feasibility_fn or (lambda *a, **k: "feasible enough"))
 
 
 # ============================================================
@@ -196,11 +197,60 @@ def test_static_scanner():
           not ({"shell execution", "dynamic code execution", "credential / secret access"} & clean_cats))
 
 
+def test_calibration_backstop():
+    print("\n=== 5. council calibration backstop ===")
+    # model says 'approve' but risk is high → code downgrades to defer
+    hi_risk = {"usefulness": 5, "security_risk": 5, "license_compatibility": "compatible",
+               "overlap_with_existing": "none", "decision": "approve"}
+    d, why = ep._calibrate_decision(hi_risk)
+    check("high security_risk approve → defer", d == "defer" and "risk" in (why or ""))
+
+    restrictive = {"usefulness": 5, "security_risk": 1, "license_compatibility": "restrictive",
+                   "overlap_with_existing": "none", "decision": "approve"}
+    check("restrictive license approve → defer", ep._calibrate_decision(restrictive)[0] == "defer")
+
+    redundant = {"usefulness": 5, "security_risk": 1, "license_compatibility": "compatible",
+                 "overlap_with_existing": "high", "decision": "approve"}
+    check("high overlap approve → defer", ep._calibrate_decision(redundant)[0] == "defer")
+
+    clean = {"usefulness": 5, "security_risk": 2, "license_compatibility": "compatible",
+             "overlap_with_existing": "none", "decision": "approve"}
+    check("clean high-value approve stays approve", ep._calibrate_decision(clean) == ("approve", None))
+
+    # a model 'reject' is never hardened UP to approve by the backstop
+    check("reject is preserved", ep._calibrate_decision({"decision": "reject"})[0] == "reject")
+
+    # end-to-end: model returns approve+risk5, finding must land 'deferred'
+    def council_riskapprove(system, user):
+        if "EXPANSION-REVIEW" in system:
+            return json.dumps(dict(hi_risk, verdict="looks great"))
+        return "- bullet"
+    _reset(council_riskapprove)
+    rid = ep._insert_finding({"name": "risky", "url": "https://github.com/a/z", "status": "found"})
+    res = ep.expansion_review_one(rid, ep._find_row(rid))
+    check("e2e: risky 'approve' calibrated to deferred",
+          res["decision"] == "defer" and ep._find_row(rid)["status"] == "deferred"
+          and "calibration_override" in res["rubric"])
+
+
+def test_query_distillation():
+    print("\n=== 6. scout query distillation ===")
+    _reset()
+    # no claude wired (claude=None) → distill falls back to keyword extraction, never crashes
+    qs = ep._distill_queries("Tools that would help with recent work: organize downloads and transcribe audio")
+    check("distill returns at least one query", isinstance(qs, list) and len(qs) >= 1)
+    check("fallback strips filler words",
+          all("would" not in q and "that" not in q for q in qs))
+    check("fallback keeps signal words", any("transcribe" in q or "organize" in q or "downloads" in q for q in qs))
+
+
 if __name__ == "__main__":
     test_dedup()
     test_rubric_format()
     test_approval_gate()
     test_static_scanner()
+    test_calibration_backstop()
+    test_query_distillation()
     total, passed = len(_results), sum(_results)
     print(f"\n{'='*48}\n{passed}/{total} checks passed")
     sys.exit(0 if passed == total else 1)

@@ -3098,6 +3098,7 @@ expansion_pipeline.init(
     log_council_fn=_log_council,
     tools_list=TOOLS,
     excluded_tools=BACKGROUND_EXCLUDED_TOOLS,
+    feasibility_fn=feasibility_judge,
 )
 TOOLS.extend(expansion_pipeline.TOOL_SCHEMAS)
 
