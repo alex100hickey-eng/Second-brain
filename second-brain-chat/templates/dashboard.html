@@ -13,17 +13,18 @@
 <meta name="apple-mobile-web-app-title" content="CLARVIS">
 <style>
   :root {
-    --bg: #040910;
-    --bg-2: #071120;
-    --panel: rgba(10, 22, 38, 0.72);
-    --line: #12283f;
-    --line-bright: #1e4a6e;
-    --text: #d9ecfa;
-    --text-dim: #557191;
-    --accent: #3fd0ff;
-    --accent-soft: #9ae6ff;
-    --accent-dim: #0e3a52;
-    --accent-glow: rgba(63, 208, 255, 0.55);
+    --bg: #081226;
+    --bg-2: #0d1e3f;
+    --panel: rgba(12, 28, 56, 0.72);
+    --line: #1b3a66;
+    --line-bright: #2e5ea6;
+    --text: #dcecfd;
+    --text-dim: #6284b3;
+    --accent: #45d6ff;
+    --accent2: #3d7dff;
+    --accent-soft: #a6ecff;
+    --accent-dim: #123e63;
+    --accent-glow: rgba(69, 214, 255, 0.55);
     --warn: #ffb454;
     --warn-dim: #4a3a1a;
     --good: #6ee7a0;
@@ -39,9 +40,9 @@
     color: var(--text);
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     background:
-      radial-gradient(ellipse 80% 60% at 50% 38%, rgba(20, 60, 100, 0.35), transparent 70%),
-      radial-gradient(ellipse 40% 30% at 50% 42%, rgba(63, 208, 255, 0.08), transparent 70%),
-      linear-gradient(180deg, #050c16 0%, var(--bg) 55%, #030710 100%);
+      radial-gradient(ellipse 80% 60% at 50% 38%, rgba(32, 82, 160, 0.38), transparent 70%),
+      radial-gradient(ellipse 40% 30% at 50% 42%, rgba(69, 214, 255, 0.09), transparent 70%),
+      linear-gradient(160deg, #0d1e3f 0%, var(--bg) 55%, #050b18 100%);
     min-height: 100vh;
     overflow-x: hidden;
   }
@@ -453,6 +454,350 @@
     padding: 30px;
   }
 
+  /* ============ HUD VIEWPORT FRAME ============ */
+  .hud-frame {
+    position: fixed; inset: 6px; pointer-events: none; z-index: 15;
+    border: 1px solid var(--line-bright);
+    opacity: .9;
+  }
+  .hud-frame i {
+    position: absolute;
+    width: 42px; height: 42px;
+    border-color: var(--line-bright);
+    border-style: solid;
+  }
+  .hud-frame i:nth-child(1) { top: 0; left: 0; border-width: 2px 0 0 2px; }
+  .hud-frame i:nth-child(2) { top: 0; right: 0; border-width: 2px 2px 0 0; }
+  .hud-frame i:nth-child(3) { bottom: 0; left: 0; border-width: 0 0 2px 2px; }
+  .hud-frame i:nth-child(4) { bottom: 0; right: 0; border-width: 0 2px 2px 0; }
+  .hud-frame b {
+    position: absolute; top: 0; bottom: 0;
+    width: 1px;
+    background: repeating-linear-gradient(0deg, var(--line) 0 14px, transparent 14px 26px);
+    opacity: .5;
+  }
+  .hud-frame b:first-of-type { left: 0; }
+  .hud-frame b:last-of-type { right: 0; }
+
+  /* ============ PANEL INSTRUMENTATION ============ */
+  .zone {
+    margin-left: auto;
+    color: var(--text-dim);
+    font-size: 9px;
+    letter-spacing: 0.18em;
+    opacity: .8;
+  }
+  .panel h2 .count { margin-left: 10px; }
+  .ruler {
+    height: 4px;
+    margin: -6px 0 10px;
+    background: repeating-linear-gradient(90deg,
+      var(--line-bright) 0 1px, transparent 1px 7px,
+      var(--line-bright) 7px 8px, transparent 8px 28px);
+    opacity: .55;
+  }
+  .panel .dots {
+    position: absolute;
+    right: 8px; bottom: 6px;
+    width: 34px; height: 12px;
+    background-image: radial-gradient(var(--line-bright) 1px, transparent 1px);
+    background-size: 6px 6px;
+    opacity: .5;
+    pointer-events: none;
+  }
+
+  /* activity equalizer — rendered only when ops are actually running */
+  .eq { display: inline-flex; align-items: flex-end; gap: 2px; height: 10px; margin-left: 8px; }
+  .eq i { width: 3px; background: var(--accent); animation: eqb 1s ease-in-out infinite; }
+  .eq i:nth-child(2) { animation-delay: .2s; }
+  .eq i:nth-child(3) { animation-delay: .4s; }
+  .eq i:nth-child(4) { animation-delay: .1s; }
+  @keyframes eqb { 0%,100% { height: 3px; } 50% { height: 10px; } }
+
+  /* circuit traces out of the reactor */
+  .reactor-wrap::before, .reactor-wrap::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    width: 12%;
+    height: 1px;
+    background: linear-gradient(90deg, var(--accent), transparent);
+    box-shadow: 0 0 6px var(--accent-glow);
+    opacity: .5;
+  }
+  .reactor-wrap::before { left: 0; transform: scaleX(-1); }
+  .reactor-wrap::after { right: 0; }
+
+  /* telemetry waveform under reactor stats */
+  .wave { display: flex; align-items: center; gap: 3px; height: 22px; margin-top: 12px; opacity: .75; }
+  .wave i {
+    width: 2px; height: 30%;
+    background: var(--accent);
+    animation: wv 2.6s ease-in-out infinite;
+  }
+  @keyframes wv { 0%,100% { height: 15%; opacity: .4; } 50% { height: 95%; opacity: 1; } }
+
+  @media (prefers-reduced-motion: reduce) {
+    .spin-slow, .spin-rev, .spin-fast, .pulse, .eq i, .wave i { animation: none !important; }
+    .wave i { height: 45%; }
+  }
+
+  /* ============ ASYMMETRY: varied silhouettes + staggered rails ============ */
+  /* three rotating panel silhouettes per rail — no two neighbors match */
+  .rail .panel:nth-child(3n+1) {
+    clip-path: polygon(0 0, calc(100% - 30px) 0, 100% 30px, 100% 100%, 16px 100%, 0 calc(100% - 16px));
+  }
+  .rail .panel:nth-child(3n+2) {
+    clip-path: polygon(22px 0, 100% 0, 100% calc(100% - 26px), calc(100% - 26px) 100%, 0 100%, 0 22px);
+  }
+  .rail .panel:nth-child(3n) {
+    clip-path: polygon(0 12px, 52% 12px, 58% 0, 100% 0, 100% calc(100% - 18px), calc(100% - 18px) 100%, 0 100%);
+    padding-top: 24px;
+  }
+  /* stagger widths/offsets so the rails aren't straight walls */
+  .rail-l .panel:nth-child(3n+1) { margin-right: 30px; }
+  .rail-l .panel:nth-child(3n+2) { margin-left: 24px; }
+  .rail-l .panel:nth-child(3n)   { margin-right: 14px; margin-left: 8px; }
+  .rail-r .panel:nth-child(3n+1) { margin-left: 30px; }
+  .rail-r .panel:nth-child(3n+2) { margin-right: 24px; }
+  .rail-r .panel:nth-child(3n)   { margin-left: 14px; margin-right: 8px; }
+
+  /* header reads as a filled tab with an angled end, like the reference callout boxes */
+  .panel h2 {
+    background: linear-gradient(90deg, rgba(63,208,255,0.14), rgba(63,208,255,0.02) 70%, transparent);
+    padding: 5px 10px;
+    margin: -4px -6px 10px;
+    clip-path: polygon(0 0, calc(100% - 16px) 0, 100% 100%, 0 100%);
+  }
+  .panel.alert h2 {
+    background: linear-gradient(90deg, rgba(255,180,84,0.16), rgba(255,180,84,0.02) 70%, transparent);
+  }
+
+  /* ornaments floating between panels */
+  .decor {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 6px;
+    color: var(--line-bright);
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.3em;
+    opacity: .8;
+    user-select: none;
+  }
+  .rail-r .decor { justify-content: flex-end; }
+  .decor .bar-cluster { display: inline-flex; align-items: flex-end; gap: 2px; height: 12px; }
+  .decor .bar-cluster i { width: 3px; background: var(--line-bright); }
+  .decor .rule { flex: 1; height: 1px; background: repeating-linear-gradient(90deg, var(--line-bright) 0 6px, transparent 6px 12px); opacity: .5; }
+
+  /* callout wires from panels toward the core */
+  #wires {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 1;
+  }
+  #wires line, #wires polyline { stroke: var(--accent); stroke-width: 1; opacity: .28; }
+  #wires circle { fill: var(--accent); opacity: .55; }
+
+  /* starfield depth */
+  #stars { position: fixed; inset: 0; pointer-events: none; z-index: 0; }
+  #stars i { position: absolute; width: 2px; height: 2px; border-radius: 50%; background: var(--accent-soft); }
+
+  /* light burst behind the core */
+  .reactor::before {
+    content: "";
+    position: absolute;
+    inset: -14%;
+    border-radius: 50%;
+    background:
+      radial-gradient(circle, rgba(154,230,255,0.20) 0%, rgba(63,208,255,0.06) 32%, transparent 62%),
+      repeating-conic-gradient(from 0deg, rgba(63,208,255,0.055) 0deg 1.6deg, transparent 1.6deg 9deg);
+    -webkit-mask-image: radial-gradient(circle, #000 34%, transparent 70%);
+    mask-image: radial-gradient(circle, #000 34%, transparent 70%);
+    animation: spin 150s linear infinite;
+  }
+
+  @media (max-width: 1100px) {
+    #wires { display: none; }
+    .rail .panel { margin-left: 0 !important; margin-right: 0 !important; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .reactor::before { animation: none; }
+  }
+
+  /* ============ SCATTER SCENE (desktop) ============ */
+  .scene { display: none; }
+  @media (min-width: 1101px) {
+    .deck { display: none; }
+    .scene {
+      display: block;
+      position: relative;
+      z-index: 1;
+      height: calc(100vh - 150px);
+      min-height: 640px;
+      max-width: 1720px;
+      margin: 0 auto;
+    }
+    .scene .reactor-anchor {
+      position: absolute;
+      left: 50%; top: 46%;
+      transform: translate(-50%, -50%);
+      display: flex; flex-direction: column; align-items: center;
+    }
+    /* the core floats free — no panel box around it in the scene */
+    .scene .reactor-wrap {
+      background: none;
+      border: none;
+      backdrop-filter: none;
+    }
+    .scene .reactor-wrap.panel::before,
+    .scene .reactor-wrap.panel::after { display: none; }
+  }
+
+  .w { position: absolute; cursor: pointer; transition: filter .15s, transform .15s; }
+  .w:hover { filter: drop-shadow(0 0 14px var(--accent-glow)); transform: scale(1.04); }
+  .w:focus-visible { outline: 1px solid var(--accent); outline-offset: 4px; }
+
+  /* circular gauge */
+  .gauge { width: 118px; text-align: center; }
+  .gauge svg { width: 100%; overflow: visible; }
+  .g-tick { fill: none; stroke: var(--line-bright); stroke-width: 1.5; stroke-dasharray: 1 5; }
+  .g-bg { fill: none; stroke: var(--line); stroke-width: 6; }
+  .g-arc {
+    fill: none; stroke: var(--accent); stroke-width: 6; stroke-linecap: round;
+    filter: drop-shadow(0 0 5px var(--accent-glow));
+  }
+  .gauge .g-center {
+    position: absolute; inset: 0 0 22px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    font-family: var(--mono);
+  }
+  .g-center b { font-size: 21px; font-weight: 400; color: var(--accent-soft); text-shadow: 0 0 10px var(--accent-glow); }
+  .g-center i { font-style: normal; font-size: 8.5px; letter-spacing: .14em; color: var(--text-dim); text-transform: uppercase; margin-top: 2px; }
+  .g-label {
+    display: block; margin-top: 2px;
+    font-family: var(--mono); font-size: 9px; letter-spacing: .26em;
+    color: var(--accent); text-transform: uppercase;
+  }
+  .gauge.galert .g-arc { stroke: var(--warn); filter: drop-shadow(0 0 6px rgba(255,180,84,.6)); }
+  .gauge.galert .g-center b { color: var(--warn); text-shadow: 0 0 10px rgba(255,180,84,.5); }
+  .gauge.galert .g-label { color: var(--warn); }
+
+  /* small stat readout */
+  .chip {
+    font-family: var(--mono);
+    padding-left: 10px;
+    border-left: 2px solid var(--accent);
+    filter: none;
+  }
+  .chip b { display: block; font-size: 19px; font-weight: 400; color: var(--accent-soft); text-shadow: 0 0 8px var(--accent-glow); }
+  .chip span { font-size: 8.5px; letter-spacing: .24em; color: var(--text-dim); text-transform: uppercase; }
+  .chip small { display: block; font-size: 9.5px; color: var(--text-dim); margin-top: 3px; max-width: 190px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  /* event stack — thin time rules, no box */
+  .evstack { font-family: var(--mono); width: 210px; }
+  .evstack .ev { padding: 5px 0 5px 10px; border-left: 1px solid var(--line-bright); position: relative; }
+  .evstack .ev::before {
+    content: ""; position: absolute; left: -3px; top: 50%;
+    width: 5px; height: 5px; background: var(--accent); transform: translateY(-50%) rotate(45deg);
+    box-shadow: 0 0 6px var(--accent-glow);
+  }
+  .evstack .ev b { display: block; font-size: 11px; color: var(--text); font-weight: 400; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .evstack .ev span { font-size: 9px; color: var(--text-dim); letter-spacing: .1em; }
+
+  /* orbit quick-launch: glyph-only circular buttons */
+  .orbit {
+    position: absolute; left: 50%; bottom: 2%;
+    transform: translateX(-50%);
+    display: flex; gap: 14px;
+  }
+  .orbit a {
+    width: 44px; height: 44px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    border: 1px solid var(--line-bright);
+    background: rgba(8, 18, 32, 0.5);
+    color: var(--accent-soft);
+    font-size: 17px; text-decoration: none;
+    transition: box-shadow .15s, border-color .15s, transform .15s;
+  }
+  .orbit a:hover {
+    border-color: var(--accent);
+    box-shadow: 0 0 16px rgba(63,208,255,.35), inset 0 0 10px rgba(63,208,255,.12);
+    transform: translateY(-3px);
+  }
+  .orbit a b { position: absolute; opacity: 0; pointer-events: none; transform: translateY(30px); font: 8.5px var(--mono); letter-spacing: .2em; color: var(--text-dim); text-transform: uppercase; transition: opacity .15s; }
+  .orbit a:hover b { opacity: 1; }
+
+  /* pure-decor scatter pieces */
+  .fx { position: absolute; color: var(--line-bright); font-family: var(--mono); opacity: .84; pointer-events: none; }
+  .fx svg { overflow: visible; display: block; }
+  .fx.bright { color: var(--accent); opacity: .6; filter: drop-shadow(0 0 6px rgba(69, 214, 255, 0.45)); }
+
+  /* decor motion utilities */
+  .sp-s { animation: spin 46s linear infinite; }
+  .sp-m { animation: spin 22s linear infinite; }
+  .sp-f { animation: spin 11s linear infinite; }
+  .sp-r { animation: spin 30s linear infinite reverse; }
+  @keyframes fxblink { 0%, 100% { opacity: .25; } 50% { opacity: .85; } }
+  .bl { animation: fxblink 3.2s ease-in-out infinite; }
+  .bl2 { animation: fxblink 5.1s ease-in-out infinite 1.2s; }
+  @keyframes fxdash { to { stroke-dashoffset: -220; } }
+  .dash-run { animation: fxdash 9s linear infinite; }
+  @keyframes ecgrun { to { stroke-dashoffset: -240; } }
+  .ecg-run { stroke-dasharray: 70 170; animation: ecgrun 3.4s linear infinite; }
+  @keyframes shimmer { 0% { transform: translateX(-100%); } 100% { transform: translateX(260%); } }
+  .fx .pbar { position: relative; height: 7px; border: 1px solid var(--line-bright); overflow: hidden; }
+  .fx .pbar i { position: absolute; inset: 1px auto 1px 1px; background: var(--accent); opacity: .55; }
+  .fx .pbar b {
+    position: absolute; inset: 0; width: 38%;
+    background: linear-gradient(90deg, transparent, rgba(154,230,255,.5), transparent);
+    animation: shimmer 3.8s ease-in-out infinite;
+  }
+  .fx .plabel { font-size: 9px; letter-spacing: .18em; margin-top: 3px; color: var(--text-dim); }
+  .fx .fxbars { display: flex; align-items: flex-end; gap: 2px; height: 26px; }
+  .fx .fxbars i { width: 3px; background: currentColor; animation: eqb 1.4s ease-in-out infinite; }
+  .fx .battery { display: flex; flex-direction: column-reverse; gap: 2px; width: 16px; }
+  .fx .battery i { height: 5px; background: currentColor; opacity: .8; }
+  .fx .battery i.off { opacity: .2; }
+
+  /* perspective grid floor */
+  .floor {
+    position: absolute;
+    left: -6%; right: -6%; bottom: -4%;
+    height: 30%;
+    pointer-events: none;
+    background:
+      repeating-linear-gradient(90deg, rgba(63,208,255,.14) 0 1px, transparent 1px 70px),
+      repeating-linear-gradient(0deg, rgba(63,208,255,.14) 0 1px, transparent 1px 34px);
+    transform: perspective(420px) rotateX(58deg);
+    transform-origin: 50% 100%;
+    -webkit-mask-image: linear-gradient(0deg, rgba(0,0,0,.8), transparent 85%);
+    mask-image: linear-gradient(0deg, rgba(0,0,0,.8), transparent 85%);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .fx *, .fx { animation: none !important; }
+  }
+
+  /* detail overlay */
+  #overlay {
+    position: fixed; inset: 0; z-index: 40;
+    display: none;
+    align-items: center; justify-content: center;
+    background: rgba(2, 6, 12, 0.72);
+    backdrop-filter: blur(6px);
+  }
+  #overlay.open { display: flex; }
+  #overlay .sheet { width: min(620px, 92vw); max-height: 78vh; overflow-y: auto; }
+  #overlay .sheet .panel { clip-path: none; margin: 0; }
+  #overlay .close-hint {
+    text-align: center; margin-top: 10px;
+    font-family: var(--mono); font-size: 10px; letter-spacing: .2em;
+    color: var(--text-dim); text-transform: uppercase;
+  }
+
   /* ============ RESPONSIVE ============ */
   @media (max-width: 1100px) {
     .deck { grid-template-columns: 1fr 1fr; }
@@ -464,7 +809,8 @@
     header { padding: 10px 14px; }
     .clock .time { font-size: 16px; }
     .clock #clock-date { display: none; }
-    .brand { letter-spacing: 0.14em; font-size: 11px; }
+    .brand span { display: none; } /* pulse dot only — the reactor carries the name */
+    .hud-frame { display: none; }
   }
 </style>
 </head>
@@ -484,6 +830,19 @@
     <a href="/dashboard" class="active">Deck</a>
   </nav>
 </header>
+
+<div class="hud-frame" aria-hidden="true"><i></i><i></i><i></i><i></i><b></b><b></b></div>
+<div id="stars" aria-hidden="true"></div>
+<svg id="wires" aria-hidden="true"></svg>
+
+<div class="scene" id="scene"></div>
+
+<div id="overlay">
+  <div>
+    <div class="sheet" id="overlay-sheet"></div>
+    <div class="close-hint">esc or tap outside to close</div>
+  </div>
+</div>
 
 <div class="deck" id="deck">
   <div class="refresh-note" style="grid-column:1/-1">Initializing command deck…</div>
@@ -544,6 +903,16 @@
 
   // ---------- arc reactor SVG ----------
   function reactorSVG() {
+    // dense radial tick marks, three lengths on a 6° cycle (like a clock bezel)
+    let ticks = '';
+    for (let i = 0; i < 60; i++) {
+      const a = (i * 6) * Math.PI / 180;
+      const len = i % 15 === 0 ? 14 : i % 5 === 0 ? 9 : 5;
+      const r1 = 196 - len, r2 = 196;
+      ticks += `<line x1="${200 + r1 * Math.cos(a)}" y1="${200 + r1 * Math.sin(a)}"
+        x2="${200 + r2 * Math.cos(a)}" y2="${200 + r2 * Math.sin(a)}"
+        stroke="#3fd0ff" stroke-width="${i % 15 === 0 ? 2 : 1}" opacity="${i % 5 === 0 ? 0.8 : 0.35}"/>`;
+    }
     return `
     <div class="reactor-wrap panel" style="clip-path:none">
       <div class="reactor">
@@ -554,17 +923,80 @@
               <stop offset="100%" stop-color="#1a7fae"/>
             </linearGradient>
           </defs>
+          <defs>
+            <radialGradient id="coreGlow">
+              <stop offset="0%" stop-color="#ffffff" stop-opacity="0.95"/>
+              <stop offset="30%" stop-color="#a6ecff" stop-opacity="0.45"/>
+              <stop offset="70%" stop-color="#45d6ff" stop-opacity="0.12"/>
+              <stop offset="100%" stop-color="#45d6ff" stop-opacity="0"/>
+            </radialGradient>
+          </defs>
+          <!-- radiating trapezoid flaps, clustered like the reference (upper-left / lower-right) -->
+          <g class="spin-slow" opacity="0.5">
+            ${[195, 222, 250, 300, 25, 52, 82, 140].map((deg, i) => i % 3 === 0
+              ? `<polygon points="162,196 238,196 228,248 172,248" fill="#45d6ff" opacity="0.32"
+                  transform="rotate(${deg} 200 200)"/>`
+              : `<polygon points="162,196 238,196 228,248 172,248" fill="none" stroke="#45d6ff"
+                  stroke-width="1.5" opacity="0.6" transform="rotate(${deg} 200 200)"/>`).join('')}
+          </g>
+          <!-- chunky irregular outer arc fragments -->
+          <g class="spin-rev" opacity="0.75">
+            <circle cx="200" cy="200" r="196" fill="none" stroke="#45d6ff" stroke-width="12"
+              stroke-dasharray="88 40 30 80 14 150" opacity="0.4"/>
+            <circle cx="200" cy="200" r="186" fill="none" stroke="#3d7dff" stroke-width="5"
+              stroke-dasharray="120 90 40 110" opacity="0.5"/>
+          </g>
+          <!-- high-contrast bright arc ring + clean outlines, like the reference's mid band -->
+          <circle cx="200" cy="200" r="155" fill="none" stroke="#2e5ea6" stroke-width="1"/>
+          <circle cx="200" cy="200" r="100" fill="none" stroke="#2e5ea6" stroke-width="1"/>
+          <g class="spin-rev">
+            <circle cx="200" cy="200" r="132" fill="none" stroke="#cfeeff" stroke-width="9"
+              stroke-linecap="round" stroke-dasharray="60 26 34 40 18 52" opacity="0.75"/>
+          </g>
+          <!-- bright comet arc sweeping the lower rim -->
+          <g class="spin-slow">
+            <circle cx="200" cy="200" r="150" fill="none" stroke="#eafaff" stroke-width="3.5"
+              stroke-linecap="round" stroke-dasharray="85 999" opacity="0.9"
+              transform="rotate(115 200 200)"/>
+          </g>
+          <!-- extra shattered segment rings for density -->
+          <g class="spin-m" opacity="0.6">
+            <circle cx="200" cy="200" r="140" fill="none" stroke="#45d6ff" stroke-width="14"
+              stroke-dasharray="6 10 18 14 4 22" opacity="0.3"/>
+            <circle cx="200" cy="200" r="108" fill="none" stroke="#a6ecff" stroke-width="8"
+              stroke-dasharray="3 9 12 6" opacity="0.4"/>
+          </g>
+          <!-- orbiting satellite rectangles -->
+          <g class="spin-rev" opacity="0.8">
+            ${[15, 80, 160, 210, 290, 335].map(deg => `
+              <rect x="196" y="30" width="8" height="${4 + (deg % 3) * 3}" fill="#a6ecff" opacity="0.7"
+                transform="rotate(${deg} 200 200)"/>`).join('')}
+          </g>
+          <!-- white-hot center -->
+          <circle cx="200" cy="200" r="86" fill="url(#coreGlow)"/>
+          <!-- fixed bezel: dense tick marks + compass points -->
+          <g>${ticks}</g>
+          <g stroke="#9ae6ff" stroke-width="2" opacity="0.9">
+            <line x1="200" y1="0" x2="200" y2="10"/>
+            <line x1="200" y1="390" x2="200" y2="400"/>
+            <line x1="0" y1="200" x2="10" y2="200"/>
+            <line x1="390" y1="200" x2="400" y2="200"/>
+          </g>
           <!-- outer tick ring -->
           <g class="spin-slow">
-            <circle cx="200" cy="200" r="188" fill="none" stroke="#12283f" stroke-width="1"/>
-            <circle cx="200" cy="200" r="182" fill="none" stroke="url(#ringGrad)" stroke-width="3"
+            <circle cx="200" cy="200" r="176" fill="none" stroke="#12283f" stroke-width="1"/>
+            <circle cx="200" cy="200" r="172" fill="none" stroke="url(#ringGrad)" stroke-width="3"
               stroke-dasharray="2 6" opacity="0.7"/>
+            <circle cx="200" cy="200" r="172" fill="none" stroke="#9ae6ff" stroke-width="7"
+              stroke-dasharray="34 310" stroke-linecap="round" opacity="0.9"/>
           </g>
           <!-- segmented arc ring -->
           <g class="spin-rev">
-            <circle cx="200" cy="200" r="160" fill="none" stroke="#3fd0ff" stroke-width="6"
+            <circle cx="200" cy="200" r="156" fill="none" stroke="#3fd0ff" stroke-width="6"
               stroke-dasharray="70 18 24 18" stroke-linecap="butt" opacity="0.55"/>
-            <circle cx="200" cy="200" r="148" fill="none" stroke="#1e4a6e" stroke-width="1.5"/>
+            <circle cx="200" cy="200" r="146" fill="none" stroke="#1e4a6e" stroke-width="1.5"/>
+            <circle cx="200" cy="200" r="146" fill="none" stroke="#3fd0ff" stroke-width="3"
+              stroke-dasharray="1 11" opacity="0.6"/>
           </g>
           <!-- inner dashed ring -->
           <g class="spin-fast">
@@ -583,6 +1015,7 @@
         </div>
       </div>
       <div class="reactor-stats" id="reactor-stats"></div>
+      <div class="wave" id="wave" aria-hidden="true"></div>
     </div>`;
   }
 
@@ -599,18 +1032,519 @@
     { label: 'YT Studio', glyph: '▶', href: 'https://studio.youtube.com' },
   ];
 
+  // ---------- HUD dressing: ornaments, stars, callout wires ----------
+  function decorStrip(i) {
+    const bars = [5, 9, 4, 11, 7, 3][i % 6];
+    let cluster = '';
+    for (let b = 0; b < 5; b++) cluster += `<i style="height:${3 + ((i * 7 + b * 5) % 9)}px"></i>`;
+    const variants = [
+      `<span>&#187;&#187;</span><span class="rule"></span><span class="bar-cluster">${cluster}</span>`,
+      `<span class="bar-cluster">${cluster}</span><span class="rule"></span><span>${String(bars).padStart(2, '0')}.${(i * 37) % 100}</span>`,
+      `<span>&#9671;</span><span class="rule"></span><span>&#171;&#171;</span>`,
+    ];
+    return `<div class="decor" aria-hidden="true">${variants[i % 3]}</div>`;
+  }
+  function withDecor(panels) {
+    return panels.map((p, i) => p + (i < panels.length - 1 ? decorStrip(i) : '')).join('');
+  }
+
+  // deterministic starfield (seeded LCG so it doesn't twinkle differently every refresh)
+  (function stars() {
+    const holder = document.getElementById('stars');
+    let seed = 42, out = '';
+    const rnd = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+    for (let i = 0; i < 90; i++) {
+      const big = rnd() > 0.9;
+      out += `<i style="left:${(rnd() * 100).toFixed(2)}%; top:${(rnd() * 100).toFixed(2)}%;
+        opacity:${(0.15 + rnd() * (big ? 0.65 : 0.35)).toFixed(2)};
+        ${big ? 'width:3px;height:3px;box-shadow:0 0 8px var(--accent-glow);background:#eaf6ff;' : ''}"></i>`;
+    }
+    holder.innerHTML = out;
+  })();
+
+  // elbow leader lines from each instrument toward the core, like schematic callouts
+  function drawWires() {
+    const svg = document.getElementById('wires');
+    if (!svg || window.innerWidth <= 1100) { if (svg) svg.innerHTML = ''; return; }
+    svg.setAttribute('viewBox', `0 0 ${window.innerWidth} ${window.innerHeight}`);
+    const core = document.querySelector('.scene .reactor');
+    if (!core) { svg.innerHTML = ''; return; }
+    const c = core.getBoundingClientRect();
+    const cx = c.left + c.width / 2, cy = c.top + c.height / 2;
+    const coreR = c.width / 2 + 30;
+    let out = '';
+    document.querySelectorAll('.scene .w').forEach((p, i) => {
+      const r = p.getBoundingClientRect();
+      if (r.bottom < 0 || r.top > window.innerHeight) return;
+      const onLeft = r.left + r.width / 2 < cx;
+      const x0 = onLeft ? r.right + 6 : r.left - 6;
+      const y0 = r.top + r.height * [0.4, 0.6, 0.5, 0.3][i % 4];
+      // horizontal run, then a 45° elbow angled toward the core, stopping short of it
+      const run = 22 + (i * 17) % 40;
+      const x1 = x0 + (onLeft ? run : -run);
+      const dy = cy - y0, dx = (cx - (onLeft ? coreR : -coreR)) - x1;
+      const seg = Math.min(Math.abs(dx) * 0.55, 90);
+      const x2 = x1 + (onLeft ? seg : -seg);
+      const y2 = y0 + Math.sign(dy) * seg * 0.55;
+      out += `<polyline fill="none" points="${x0},${y0} ${x1},${y0} ${x2},${y2}"/>`
+           + `<circle cx="${x2}" cy="${y2}" r="2.5"/>`
+           + `<circle cx="${x0}" cy="${y0}" r="1.8"/>`;
+    });
+    svg.innerHTML = out;
+  }
+  let resizeT;
+  window.addEventListener('resize', () => {
+    clearTimeout(resizeT);
+    resizeT = setTimeout(() => { if (lastData) render(lastData); else drawWires(); }, 150);
+  });
+
+  // ---------- scene widgets ----------
+  let panelMap = {};
+  let overlayKey = null;
+  let lastData = null;
+
+  function gauge(key, label, main, sub, frac, pos, alert = false) {
+    const c = 2 * Math.PI * 32;
+    return `
+      <div class="w gauge ${alert ? 'galert' : ''}" data-key="${key}" tabindex="0" style="${pos}">
+        <svg viewBox="0 0 84 84">
+          <circle class="g-tick" cx="42" cy="42" r="39"/>
+          <circle class="g-bg" cx="42" cy="42" r="32"/>
+          <circle class="g-arc" cx="42" cy="42" r="32" transform="rotate(-90 42 42)"
+            stroke-dasharray="${c}" stroke-dashoffset="${c * (1 - Math.max(0.02, Math.min(1, frac)))}"/>
+        </svg>
+        <div class="g-center"><b>${main}</b><i>${sub}</i></div>
+        <span class="g-label">${label}</span>
+      </div>`;
+  }
+
+  // small donut like the reference's 30%/50%/70% charts — count in the middle
+  function miniDonut(key, label, count, pos, alert = false) {
+    const c = 2 * Math.PI * 26;
+    const frac = Math.max(0.06, Math.min(1, count / 5));
+    return `
+      <div class="w gauge ${alert ? 'galert' : ''}" data-key="${key}" tabindex="0" style="${pos}; width:74px">
+        <svg viewBox="0 0 66 66">
+          <circle class="g-bg" cx="33" cy="33" r="26" stroke-width="8"/>
+          <circle class="g-arc" cx="33" cy="33" r="26" stroke-width="8" transform="rotate(-90 33 33)"
+            stroke-dasharray="${c}" stroke-dashoffset="${c * (1 - frac)}"/>
+        </svg>
+        <div class="g-center" style="inset:0 0 14px"><b style="font-size:17px">${count}</b></div>
+        <span class="g-label" style="font-size:8px">${label}</span>
+      </div>`;
+  }
+
+  function chip(key, label, count, sub, pos) {
+    return `
+      <div class="w chip" data-key="${key}" tabindex="0" style="${pos}">
+        <b>${count}</b><span>${label}</span>
+        <small>${esc(String(sub))}</small>
+      </div>`;
+  }
+
+  // pure decoration, scattered like the reference clutter — no data, no clicks
+  function sceneFx() {
+    const S = (pos, cls, inner) => `<span class="fx ${cls}" style="${pos}">${inner}</span>`;
+    const svg = (s, inner) => `<svg width="${s}" height="${s}" viewBox="0 0 ${s} ${s}">${inner}</svg>`;
+    const c = s => s / 2;
+
+    // segmented ring (rotating)
+    const segRing = (pos, s, dash, cls, sw = 3) => S(pos, cls, svg(s,
+      `<circle cx="${c(s)}" cy="${c(s)}" r="${c(s) - sw}" fill="none" stroke="currentColor"
+        stroke-width="${sw}" stroke-dasharray="${dash}"/>`));
+    // pie chart wedge (rotating slowly)
+    const pie = (pos, s, frac, cls = 'sp-s') => {
+      const r = c(s) - 2, a = frac * 2 * Math.PI;
+      const x = c(s) + r * Math.sin(a), y = c(s) - r * Math.cos(a);
+      return S(pos, `bright ${cls}`, svg(s,
+        `<circle cx="${c(s)}" cy="${c(s)}" r="${r}" fill="none" stroke="currentColor" stroke-width="1.5"/>
+         <path d="M${c(s)},${c(s)} L${c(s)},${c(s) - r} A${r},${r} 0 ${frac > .5 ? 1 : 0} 1 ${x},${y} Z"
+           fill="currentColor" opacity=".5"/>`));
+    };
+    // crosshair reticle
+    const reticle = (pos, s, cls = 'sp-m') => S(pos, cls, svg(s,
+      `<circle cx="${c(s)}" cy="${c(s)}" r="${c(s) - 4}" fill="none" stroke="currentColor" stroke-width="1" stroke-dasharray="10 6"/>
+       <circle cx="${c(s)}" cy="${c(s)}" r="${(c(s) - 4) * .55}" fill="none" stroke="currentColor" stroke-width="1"/>
+       <line x1="${c(s)}" y1="0" x2="${c(s)}" y2="${s * .22}" stroke="currentColor"/>
+       <line x1="${c(s)}" y1="${s * .78}" x2="${c(s)}" y2="${s}" stroke="currentColor"/>
+       <line x1="0" y1="${c(s)}" x2="${s * .22}" y2="${c(s)}" stroke="currentColor"/>
+       <line x1="${s * .78}" y1="${c(s)}" x2="${s}" y2="${c(s)}" stroke="currentColor"/>`));
+    // hexagon
+    const hex = (pos, s, cls = 'sp-r') => {
+      const r = c(s) - 3;
+      const pts = [...Array(6)].map((_, i) => {
+        const a = Math.PI / 3 * i - Math.PI / 6;
+        return `${c(s) + r * Math.cos(a)},${c(s) + r * Math.sin(a)}`;
+      }).join(' ');
+      return S(pos, cls, svg(s, `<polygon points="${pts}" fill="none" stroke="currentColor"
+        stroke-width="1.5" stroke-dasharray="6 4" class="dash-run"/>`));
+    };
+    // ECG heartbeat line
+    const ecg = (pos, w) => S(pos, 'bright', `<svg width="${w}" height="30" viewBox="0 0 ${w} 30">
+      <polyline fill="none" stroke="currentColor" stroke-width="1.5" class="ecg-run"
+        points="0,17 ${w * .18},17 ${w * .24},8 ${w * .3},25 ${w * .36},3 ${w * .42},22 ${w * .48},17 ${w * .72},17 ${w * .78},10 ${w * .84},17 ${w},17"/></svg>`);
+    // labeled progress bar
+    const pbar = (pos, w, frac, label) => S(pos, '',
+      `<span class="pbar" style="display:block; width:${w}px"><i style="width:${frac * 100}%"></i><b></b></span>
+       <span class="plabel">${label}</span>`);
+    // animated bar cluster
+    const fxbars = (pos, n, cls = '') => S(pos, cls,
+      `<span class="fxbars">${[...Array(n)].map((_, i) =>
+        `<i style="height:${5 + (i * 7) % 20}px; animation-delay:${(i * .17).toFixed(2)}s"></i>`).join('')}</span>`);
+    // dot matrix bank (blinking)
+    const dots = (pos, w, h, cls = 'bl2') => S(pos, cls,
+      `<span style="display:block; width:${w}px; height:${h}px;
+        background-image:radial-gradient(currentColor 1px, transparent 1px); background-size:7px 7px"></span>`);
+    // battery cells
+    const battery = (pos, on, off) => S(pos, 'bright bl',
+      `<span class="battery">${'<i></i>'.repeat(on)}${'<i class="off"></i>'.repeat(off)}</span>`);
+    // circuit trace with node dots
+    const circuit = (pos, pts, cls = '') => {
+      const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
+      const w = Math.max(...xs) + 4, h = Math.max(...ys) + 4;
+      return S(pos, cls, `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">
+        <polyline fill="none" stroke="currentColor" stroke-width="1" points="${pts.map(p => p.join(',')).join(' ')}"/>
+        <circle cx="${pts[0][0]}" cy="${pts[0][1]}" r="2.5" fill="currentColor"/>
+        <circle cx="${pts[pts.length - 1][0]}" cy="${pts[pts.length - 1][1]}" r="2.5" fill="currentColor"/></svg>`);
+    };
+    // solid pointer arrow
+    const arrow = (pos, s, rot) => S(pos, 'bright bl2',
+      svg(s, `<polygon points="${c(s)},2 ${s - 2},${s - 2} ${c(s)},${s * .68} 2,${s - 2}"
+        fill="currentColor" opacity=".6" transform="rotate(${rot} ${c(s)} ${c(s)})"/>`));
+    const chevrons = (pos, txt, cls = 'bl') => S(pos, cls,
+      `<span style="font-size:13px; letter-spacing:.4em; color:var(--accent)">${txt}</span>`);
+
+    // ---- reference-specific builders ----
+    // vertical equalizer bar-chart (top-left of the reference)
+    const vbars = (pos, n, hmax) => S(pos, 'bright',
+      `<span class="fxbars" style="height:${hmax}px">${[...Array(n)].map((_, i) =>
+        `<i style="height:${6 + ((i * 13 + 7) % hmax)}px; animation-delay:${(i * .11).toFixed(2)}s; animation-duration:2.2s"></i>`).join('')}</span>`);
+    // corner-bracket square
+    const bracketSq = (pos, s) => S(pos, 'bl2', svg(s,
+      `<path d="M2,${s * .3} V2 H${s * .3} M${s * .7},2 H${s - 2} V${s * .3} M${s - 2},${s * .7} V${s - 2} H${s * .7} M${s * .3},${s - 2} H2 V${s * .7}"
+        fill="none" stroke="currentColor" stroke-width="2"/>`));
+    // diagonal slash group
+    const diag = (pos, n) => S(pos, '', `<svg width="${n * 14 + 20}" height="34">
+      ${[...Array(n)].map((_, i) => `<line x1="${i * 14 + 20}" y1="2" x2="${i * 14}" y2="32"
+        stroke="currentColor" stroke-width="${i % 3 ? 1.5 : 3}"/>`).join('')}</svg>`);
+    // 3D cone with ellipse base
+    const cone = (pos, w, h) => S(pos, 'bright bl',
+      `<svg width="${w}" height="${h}"><polygon points="${w / 2},2 ${w - 4},${h - 12} 4,${h - 12}"
+         fill="var(--accent2)" opacity=".45" stroke="currentColor" stroke-width="1"/>
+       <ellipse cx="${w / 2}" cy="${h - 10}" rx="${w / 2 - 3}" ry="7" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>`);
+    // framed ECG monitor panel
+    const ecgPanel = (pos, w) => S(pos, '',
+      `<span style="display:flex; align-items:stretch; gap:5px">
+       <span style="display:block; border:1px solid var(--line-bright); background:rgba(5,12,26,.85);
+         padding:7px 9px 4px; box-shadow:0 0 12px rgba(69,214,255,.12) inset;
+         clip-path:polygon(10px 0,100% 0,100% calc(100% - 10px),calc(100% - 10px) 100%,0 100%,0 10px)">
+         ${ecg('position:static', w - 22).replace('class="fx bright"', 'class="bright"')}
+         <span style="display:flex; justify-content:space-between; font-size:8px; letter-spacing:.2em; color:var(--text-dim)">
+           <span style="color:var(--accent)">&#187;&#187;&#187;</span><span>TELEMETRY</span></span></span>
+       <span style="width:14px; border:1px solid var(--line-bright); background:rgba(12,28,56,.5);
+         display:flex; flex-direction:column; gap:3px; padding:4px 2px">
+         ${'<i style="display:block;height:3px;background:var(--accent);opacity:.6"></i>'.repeat(4)}</span></span>`);
+    // 75%-style panel: stacked ring rows + hexagon crosshair
+    const pctPanel = (pos, pctText) => S(pos, '',
+      `<span style="display:block; border:1px solid var(--line); background:rgba(12,28,56,.4); padding:8px 12px 5px">
+       <span style="display:flex; gap:12px; align-items:center">
+        <span style="display:flex; flex-direction:column; gap:6px">
+          ${[0.75, 0.4, 0.6].map((f, i) => `<span style="display:flex; align-items:center; gap:5px">
+            <svg width="22" height="22" class="${i === 1 ? 'sp-r' : 'sp-m'}" style="display:block">
+            <circle cx="11" cy="11" r="8" fill="none" stroke="var(--line-bright)" stroke-width="2.5"/>
+            <circle cx="11" cy="11" r="8" fill="none" stroke="var(--accent)" stroke-width="2.5"
+              stroke-dasharray="${(2 * Math.PI * 8 * f).toFixed(1)} 99" transform="rotate(-90 11 11)"/></svg>
+            <svg width="26" height="4"><rect width="${8 + i * 8}" height="4" fill="var(--line-bright)"/></svg></span>`).join('')}
+        </span>
+        <span style="font-size:15px; color:var(--accent-soft)">${pctText}</span>
+        <svg width="46" height="46" class="sp-s">
+          <polygon points="23,4 39,13 39,32 23,42 7,32 7,13" fill="none" stroke="currentColor" stroke-width="1.3"/>
+          <circle cx="23" cy="23" r="6" fill="none" stroke="currentColor" stroke-width="1"/>
+          <line x1="23" y1="10" x2="23" y2="17" stroke="currentColor"/>
+          <line x1="23" y1="29" x2="23" y2="36" stroke="currentColor"/></svg>
+       </span>
+       <span style="display:block; margin-top:5px; height:1px; background:repeating-linear-gradient(90deg, var(--line-bright) 0 8px, transparent 8px 14px)"></span>
+       <span style="font-size:7.5px; letter-spacing:.24em; color:var(--text-dim)">COOLANT&#160;&#160;SYS</span>
+      </span>`);
+    // chaotic scribble sphere
+    const scribble = (pos, s) => {
+      let seed = 7, d = `M${c(s)},${c(s)}`;
+      const rr = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+      for (let i = 0; i < 26; i++) {
+        const a = rr() * Math.PI * 2, r = (0.25 + rr() * 0.75) * (c(s) - 3);
+        d += ` Q${c(s) + (rr() - .5) * s},${c(s) + (rr() - .5) * s} ${c(s) + r * Math.cos(a)},${c(s) + r * Math.sin(a)}`;
+      }
+      return S(pos, 'bright sp-s', svg(s,
+        `<circle cx="${c(s)}" cy="${c(s)}" r="${c(s) - 2}" fill="none" stroke="currentColor" stroke-width="1" opacity=".6"/>
+         <path d="${d}" fill="none" stroke="currentColor" stroke-width=".7" opacity=".8"/>`));
+    };
+    // stacked data-line block (the "text readout" look)
+    const lineStack = (pos, w, rows) => S(pos, 'bl2', `<svg width="${w}" height="${rows * 7}">
+      ${[...Array(rows)].map((_, i) => `<rect x="0" y="${i * 7}" height="3.5"
+        width="${w * (0.35 + ((i * 29) % 60) / 100)}" fill="currentColor" opacity="${i % 2 ? .5 : .85}"/>`).join('')}</svg>`);
+    // big trapezoid outline frame (top-center of the reference)
+    const trapFrame = (pos, w, h) => S(pos, '', `<svg width="${w}" height="${h}">
+      <polygon points="${w * .12},2 ${w * .88},2 ${w - 2},${h - 2} 2,${h - 2}"
+        fill="rgba(18,40,80,.25)" stroke="var(--line-bright)" stroke-width="1.5"/>
+      <polygon points="${w * .135},8 ${w * .865},8 ${w - 12},${h - 8} 12,${h - 8}"
+        fill="none" stroke="var(--line)" stroke-width="1" stroke-dasharray="10 6"/>
+      <line x1="${w * .3}" y1="${h - 2}" x2="${w * .34}" y2="${h - 8}" stroke="var(--accent)"/>
+      <line x1="${w * .7}" y1="${h - 2}" x2="${w * .66}" y2="${h - 8}" stroke="var(--accent)"/></svg>`);
+    // headphone icon (reference has one inside the trapezoid)
+    const headphone = pos => S(pos, 'bl2', `<svg width="26" height="22">
+      <path d="M3,16 V11 A10,10 0 0 1 23,11 V16" fill="none" stroke="currentColor" stroke-width="1.6"/>
+      <rect x="1" y="13" width="5" height="8" rx="2" fill="currentColor" opacity=".8"/>
+      <rect x="20" y="13" width="5" height="8" rx="2" fill="currentColor" opacity=".8"/></svg>`);
+    // overlapping circle pair outline
+    const circlePair = (pos, s) => S(pos, 'bl', `<svg width="${s * 1.6}" height="${s}">
+      <circle cx="${c(s)}" cy="${c(s)}" r="${c(s) - 2}" fill="none" stroke="currentColor" stroke-width="1.2"/>
+      <circle cx="${s * 1.1}" cy="${c(s)}" r="${c(s) - 2}" fill="none" stroke="currentColor" stroke-width="1.2" opacity=".6"/></svg>`);
+    // dotted-bezel arc gauge with center dot
+    const dotGauge = (pos, s) => S(pos, 'sp-r', svg(s,
+      `<circle cx="${c(s)}" cy="${c(s)}" r="${c(s) - 3}" fill="none" stroke="currentColor" stroke-width="1.5" stroke-dasharray="2 5"/>
+       <circle cx="${c(s)}" cy="${c(s)}" r="${c(s) * .55}" fill="none" stroke="var(--accent)" stroke-width="4"
+         stroke-dasharray="${(2 * Math.PI * c(s) * .55 * .6).toFixed(0)} 999" opacity=".7"/>
+       <circle cx="${c(s)}" cy="${c(s)}" r="3" fill="var(--accent)"/>`));
+    // hatch-mark rows ////
+    const hatch = (pos, n) => S(pos, '', `<svg width="${n * 9 + 8}" height="14">
+      ${[...Array(n)].map((_, i) => `<line x1="${i * 9 + 8}" y1="2" x2="${i * 9}" y2="12"
+        stroke="currentColor" stroke-width="2.5" opacity="${i < n * .6 ? .9 : .3}"/>`).join('')}</svg>`);
+    // chunky segmented loading bar
+    const loadBar = (pos, w, frac) => S(pos, 'bright',
+      `<svg width="${w}" height="12">
+        <rect x="0" y="0" width="${w}" height="12" fill="none" stroke="var(--line-bright)"/>
+        ${[...Array(Math.floor(w / 9))].map((_, i) => i / (w / 9) < frac
+          ? `<rect x="${i * 9 + 2}" y="2" width="6" height="8" fill="currentColor" opacity=".8"/>` : '').join('')}</svg>`);
+    // aperture: rounded square + segmented ring
+    const aperture = (pos, s) => S(pos, '', `<svg width="${s}" height="${s}">
+      <rect x="1.5" y="1.5" width="${s - 3}" height="${s - 3}" rx="10" fill="none" stroke="var(--line-bright)" stroke-width="1.5"/>
+      <g class="sp-m" style="transform-origin:50% 50%">
+        <circle cx="${c(s)}" cy="${c(s)}" r="${c(s) * .58}" fill="none" stroke="var(--accent)" stroke-width="6"
+          stroke-dasharray="16 9" opacity=".8"/></g>
+      <circle cx="${c(s)}" cy="${c(s)}" r="${c(s) * .3}" fill="none" stroke="currentColor" stroke-width="1"/></svg>`);
+    // tall vertical dash column
+    const tallDash = (pos, h) => S(pos, 'bright', `<svg width="18" height="${h}">
+      <rect x="1" y="1" width="16" height="${h - 2}" rx="8" fill="none" stroke="var(--line-bright)" stroke-width="1.5"/>
+      ${[...Array(Math.floor(h / 12))].map((_, i) => `<rect x="5" y="${i * 12 + 6}" width="8" height="6"
+        fill="currentColor" opacity="${i % 4 === 3 ? .2 : .75}"/>`).join('')}</svg>`);
+    // geodesic wireframe sphere
+    const geo = (pos, s) => S(pos, 'sp-r', svg(s,
+      `<circle cx="${c(s)}" cy="${c(s)}" r="${c(s) - 2}" fill="none" stroke="currentColor" stroke-width="1"/>
+       <ellipse cx="${c(s)}" cy="${c(s)}" rx="${c(s) - 2}" ry="${(c(s) - 2) * .4}" fill="none" stroke="currentColor" stroke-width=".8"/>
+       <ellipse cx="${c(s)}" cy="${c(s)}" rx="${(c(s) - 2) * .4}" ry="${c(s) - 2}" fill="none" stroke="currentColor" stroke-width=".8"/>
+       <line x1="2" y1="${c(s)}" x2="${s - 2}" y2="${c(s)}" stroke="currentColor" stroke-width=".8"/>
+       <line x1="${c(s)}" y1="2" x2="${c(s)}" y2="${s - 2}" stroke="currentColor" stroke-width=".8"/>`));
+    // solid paper-plane arrow
+    const plane = (pos, s, rot) => S(pos, 'bright bl',
+      svg(s, `<g transform="rotate(${rot} ${c(s)} ${c(s)})">
+        <polygon points="${c(s)},2 ${s - 3},${s - 6} ${c(s)},${s * .7}" fill="var(--accent2)" opacity=".75"/>
+        <polygon points="${c(s)},2 3,${s - 6} ${c(s)},${s * .7}" fill="var(--accent)" opacity=".5"/></g>`));
+    // big concentric arc fragments (bottom-center floor rings)
+    const arcRings = (pos, s) => S(pos, '', `<svg width="${s}" height="${s * .5}" viewBox="0 0 ${s} ${s * .5}">
+      <g class="sp-s" style="transform-origin:${c(s)}px ${s * .52}px">
+        <circle cx="${c(s)}" cy="${s * .52}" r="${s * .46}" fill="none" stroke="var(--accent2)" stroke-width="9"
+          stroke-dasharray="150 90 60 999" opacity=".35"/>
+        <circle cx="${c(s)}" cy="${s * .52}" r="${s * .34}" fill="none" stroke="var(--accent)" stroke-width="5"
+          stroke-dasharray="90 70 40 999" opacity=".4"/>
+        <circle cx="${c(s)}" cy="${s * .52}" r="${s * .22}" fill="none" stroke="var(--accent)" stroke-width="12"
+          stroke-dasharray="40 30 999" opacity=".3"/></g></svg>`);
+    // row of mismatched mini spinners
+    const spinnerRow = (pos, n) => S(pos, '', `<span style="display:flex; gap:16px; align-items:center">
+      ${[...Array(n)].map((_, i) => `<svg width="30" height="30" class="${['sp-f', 'sp-r', 'sp-m'][i % 3]}" style="display:block">
+        <circle cx="15" cy="15" r="11" fill="none" stroke="var(--accent)" stroke-width="${2 + i % 3}"
+          stroke-dasharray="${['5 7', '14 8', '2 5', '20 14', '8 4'][i % 5]}" opacity=".7"/></svg>`).join('')}</span>`);
+    // plus-sign star
+    const plus = (pos, s, cls = 'bl') => S(pos, cls, svg(s,
+      `<line x1="${c(s)}" y1="0" x2="${c(s)}" y2="${s}" stroke="currentColor"/>
+       <line x1="0" y1="${c(s)}" x2="${s}" y2="${c(s)}" stroke="currentColor"/>`));
+
+    return [
+      '<div class="floor" aria-hidden="true"></div>',
+      // ---- top-left region ----
+      vbars('left:3%; top:4%', 22, 30),
+      bracketSq('left:21%; top:5%', 30),
+      diag('left:25%; top:5%', 6),
+      dots('left:4%; top:26.5%', 260, 14, 'bl2'),
+      dots('left:6%; top:29%', 200, 10, 'bl'),
+      S('left:12.5%; top:32.8%', 'bl2', `<svg width="8" height="14">
+        <path d="M7,1 H1 V13 H7" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>`),
+      pbar('left:14%; top:33%', 96, 0.55, ''),
+      chevrons('left:22%; top:30%', '&#187;&#187;&#187;', 'bl'),
+      cone('left:6.5%; top:39%', 58, 68),
+      S('left:5%; top:36.5%', '', '<span style="font-size:8px; color:var(--text-dim)">5.23245</span>'),
+      S('left:4.5%; top:48%', '', '<span style="font-size:8px; color:var(--text-dim)">5.23697</span>'),
+      // ---- left edge vertical strip ----
+      S('left:1.2%; top:52%', '', `<svg width="20" height="150">
+        <path d="M18,2 H2 V148 H18" fill="none" stroke="var(--line-bright)" stroke-width="1.5"/>
+        ${[0, 1, 2].map(i => `<rect x="6" y="${14 + i * 46}" width="8" height="34"
+          fill="var(--accent2)" opacity="${.35 + i * .2}" class="bl${i % 2 ? '2' : ''}"/>`).join('')}</svg>`),
+      // ---- left-mid ----
+      ecgPanel('left:8%; top:56%', 170),
+      S('left:13%; top:67.5%', 'bright bl', '<span style="font-size:14px; letter-spacing:.3em; color:var(--accent)">&#8250;&#8250;&#8250;</span>'),
+      // bracketed 100% badge with flanking arc wings, like the reference's mid-left
+      S('left:13%; top:50%', '', `<span style="display:flex; align-items:center; gap:6px">
+        <svg width="16" height="44" class="bl2"><path d="M14,4 A22,22 0 0 0 14,40" fill="none"
+          stroke="var(--accent)" stroke-width="2.5" stroke-dasharray="5 4"/></svg>
+        <span style="border:1px solid var(--accent); padding:4px 12px; font-size:13px;
+          color:#eaf6ff; background:rgba(61,125,255,.28); text-shadow:0 0 8px var(--accent-glow);
+          box-shadow:0 0 14px rgba(69,214,255,.3), inset 0 0 10px rgba(69,214,255,.15)">100%</span>
+        <svg width="16" height="44" class="bl"><path d="M2,4 A22,22 0 0 1 2,40" fill="none"
+          stroke="var(--accent)" stroke-width="2.5" stroke-dasharray="5 4"/></svg>
+      </span>`),
+      pctPanel('left:23%; top:63%', '75%'),
+      bracketSq('left:8%; top:70%', 26),
+      pbar('left:11%; top:71%', 120, 0.62, ''),
+      circuit('left:23%; top:72%', [[0, 24], [40, 24], [58, 4], [120, 4]], 'bl2'),
+      // ---- bottom-left: framed vertical spinner panel like the reference ----
+      S('left:7%; top:77%', '', `<span style="display:flex; flex-direction:column; gap:8px; align-items:center;
+         border:1px solid var(--line-bright); padding:10px 12px; background:rgba(12,28,56,.45);
+         clip-path:polygon(8px 0,100% 0,100% calc(100% - 8px),calc(100% - 8px) 100%,0 100%,0 8px)">
+         ${[['sp-f', '3 5'], ['sp-r', '10 6'], ['sp-m', '2 7']].map(([cls, dash]) =>
+           `<svg width="26" height="26" class="${cls}" style="display:block"><circle cx="13" cy="13" r="9"
+             fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-dasharray="${dash}"/></svg>`).join('')}
+         <span style="font-size:11px; color:var(--accent-soft)">100%</span>
+         <svg width="22" height="22"><polygon points="11,2 19,7 19,16 11,21 3,16 3,7"
+           fill="none" stroke="var(--accent)" stroke-width="1.2"/><circle cx="11" cy="11" r="2.5" fill="var(--accent)"/></svg>
+       </span>`),
+      vbars('left:13%; top:92%', 9, 18),
+      dots('left:29%; top:84%', 40, 60, 'bl'),
+      // ---- top-center trapezoid assembly ----
+      trapFrame('left:35%; top:3%', 490, 130),
+      bracketSq('left:38.2%; top:5.2%', 76),
+      scribble('left:39%; top:6%', 64),
+      lineStack('left:46%; top:7%', 90, 7),
+      S('left:60%; top:6.5%', 'bl', `<svg width="52" height="16">${[0, 1, 2].map(i =>
+        `<circle cx="${8 + i * 18}" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.3"/>`).join('')}</svg>`),
+      S('left:63.5%; top:10%', 'bright bl2', `<svg width="38" height="30"><polygon points="19,2 36,28 2,28"
+        fill="currentColor" opacity=".6"/></svg>`),
+      headphone('left:57%; top:12%'),
+      S('left:64.5%; top:5.5%', 'bl', `<svg width="30" height="10">${[0, 1, 2].map(i =>
+        `<circle cx="${5 + i * 10}" cy="5" r="2" fill="currentColor"/>`).join('')}</svg>`),
+      // circuit traces flowing from the trapezoid
+      circuit('left:31%; top:2%', [[110, 8], [60, 8], [42, 26], [0, 26]]),
+      circuit('right:28%; top:2%', [[0, 8], [50, 8], [70, 30], [140, 30]]),
+      // ---- top-right region ----
+      hatch('right:14%; top:5%', 14),
+      pbar('right:4%; top:6%', 120, 0.85, ''),
+      pbar('right:4%; top:9%', 90, 0.45, ''),
+      dots('right:8%; top:13%', 110, 20, 'bl'),
+      loadBar('right:13%; top:20%', 150, 0.66),
+      // PCB corner trace cluster
+      S('right:1%; top:3%', '', `<svg width="120" height="90">
+        ${[0, 1, 2, 3].map(i => `<polyline fill="none" stroke="currentColor" stroke-width="1"
+          points="0,${8 + i * 10} ${44 - i * 8},${8 + i * 10} ${70 - i * 8},${34 + i * 10} ${118},${34 + i * 10}"/>
+          <circle cx="1.5" cy="${8 + i * 10}" r="2" fill="currentColor"/>`).join('')}</svg>`),
+      S('left:63%; top:23%', 'bl', '<span style="font-size:9px; color:var(--accent-soft)">99%</span>'),
+      S('right:26%; top:24.5%', 'bl2', '<span style="font-size:8px; color:var(--text-dim)">22%</span>'),
+      pie('right:7%; top:25%', 64, 0.62, 'sp-s'),
+      battery('right:13.5%; top:27%', 5, 2),
+      hatch('right:2.5%; top:39.5%', 6),
+      // ---- right-mid ----
+      tallDash('right:2%; top:24%', 130),
+      aperture('right:3%; top:56%', 92),
+      S('right:10.5%; top:58%', '', `<svg width="10" height="80">${[...Array(9)].map((_, i) =>
+        `<line x1="0" y1="${i * 9 + 3}" x2="${i % 3 ? 6 : 10}" y2="${i * 9 + 3}" stroke="currentColor"/>`).join('')}</svg>`),
+      S('right:28%; top:41%', 'bright sp-r', svg(92,
+        `<circle cx="46" cy="46" r="42" fill="none" stroke="currentColor" stroke-width="1.5" stroke-dasharray="14 8"/>
+         <circle cx="46" cy="46" r="26" fill="none" stroke="currentColor" stroke-width="4" stroke-dasharray="30 12" opacity=".8"/>
+         <line x1="46" y1="0" x2="46" y2="16" stroke="currentColor" stroke-width="2"/>
+         <line x1="46" y1="76" x2="46" y2="92" stroke="currentColor" stroke-width="2"/>
+         <line x1="0" y1="46" x2="16" y2="46" stroke="currentColor" stroke-width="2"/>
+         <line x1="76" y1="46" x2="92" y2="46" stroke="currentColor" stroke-width="2"/>
+         <circle cx="46" cy="46" r="7" fill="none" stroke="currentColor" stroke-width="1.5"/>`)),
+      circlePair('right:13%; top:58%', 34),
+      dotGauge('right:24%; top:60%', 58),
+      dots('right:16%; top:53%', 190, 22, 'bl2'),
+      // ---- right-lower panel: spinners + geodesic ----
+      S('right:16%; top:70%', '', `<span style="display:flex; gap:14px; align-items:center;
+         border:1px solid var(--line-bright); padding:7px 14px">
+         <svg width="26" height="26" class="sp-f"><circle cx="13" cy="13" r="9" fill="none"
+           stroke="var(--accent)" stroke-width="2" stroke-dasharray="4 6"/></svg>
+         ${geo('position:static', 40).replace('class="fx sp-r"', 'class="sp-r"')}
+         <svg width="26" height="26" class="sp-r"><circle cx="13" cy="13" r="9" fill="none"
+           stroke="var(--accent)" stroke-width="2" stroke-dasharray="12 5"/></svg></span>`),
+      chevrons('right:18%; top:79%', '&#187;&#187;&#187;&#187;&#187;&#187;', 'bl2'),
+      plane('right:4%; top:76%', 40, 0),
+      S('right:9%; top:74%', 'bl', '<span style="font-size:11px; color:var(--accent-soft)">75%</span>'),
+      // ---- bottom-right ----
+      loadBar('right:3%; top:91%', 90, 1),
+      S('right:9.5%; top:88.5%', 'bright', '<span style="font-size:10px">100%</span>'),
+      // ---- bottom-center ----
+      arcRings('left:29%; top:73%', 640),
+      // dark SOS ring behind the orbit launcher
+      S('left:46.5%; top:84.5%', '', `<svg width="110" height="110">
+        <circle cx="55" cy="55" r="52" fill="rgba(5,12,26,.7)" stroke="var(--line-bright)" stroke-width="1.5"/>
+        <circle cx="55" cy="55" r="42" fill="none" stroke="var(--accent)" stroke-width="2" stroke-dasharray="6 8" class="dash-run"/>
+      </svg>`),
+      // faint histogram field on the floor
+      S('left:55%; top:84%', '', `<svg width="150" height="46" opacity=".45">
+        ${[...Array(24)].map((_, i) => `<rect x="${i * 6}" y="${46 - (5 + (i * 11) % 34)}" width="3.5"
+          height="${5 + (i * 11) % 34}" fill="currentColor" opacity="${i % 4 ? .5 : .9}"/>`).join('')}</svg>`),
+      S('left:33%; top:86%', '', `<svg width="90" height="34" opacity=".4">
+        ${[...Array(15)].map((_, i) => `<rect x="${i * 6}" y="${34 - (4 + (i * 7) % 24)}" width="3.5"
+          height="${4 + (i * 7) % 24}" fill="currentColor"/>`).join('')}</svg>`),
+      spinnerRow('left:24%; top:88%', 4),
+      vbars('left:38%; top:92%', 12, 14),
+      dots('right:38%; top:92%', 60, 14, 'bl2'),
+      // extra scatter for reference-level density
+      S('left:47%; top:26%', 'bl2', `<svg width="8" height="8"><rect width="8" height="8" fill="currentColor" opacity=".6"/></svg>`),
+      S('right:47%; top:30%', 'bl', `<svg width="6" height="6"><rect width="6" height="6" fill="currentColor" opacity=".6"/></svg>`),
+      S('right:2%; top:52%', '', `<svg width="10" height="70">${[...Array(8)].map((_, i) =>
+        `<line x1="0" y1="${i * 9 + 3}" x2="${i % 2 ? 5 : 9}" y2="${i * 9 + 3}" stroke="currentColor"/>`).join('')}</svg>`),
+      dots('left:44%; top:94%', 40, 12, 'bl'),
+      hatch('left:31%; top:66%', 5),
+      // ---- thin callout lines radiating from the core itself ----
+      circuit('left:56%; top:26%', [[0, 34], [30, 8], [96, 8]], 'bright'),
+      circuit('left:35%; top:54%', [[86, 0], [56, 20], [0, 20]], 'bright'),
+      // hatched corner mark, bottom-right inside the frame
+      S('right:0.6%; top:94.5%', '', `<svg width="26" height="26">
+        ${[0, 1, 2, 3].map(i => `<line x1="${26 - i * 7}" y1="26" x2="26" y2="${26 - i * 7}"
+          stroke="currentColor" stroke-width="2"/>`).join('')}</svg>`),
+      // ---- scattered plus-stars ----
+      plus('left:30%; top:22%', 10), plus('left:12%; top:50%', 8, 'bl2'),
+      plus('right:33%; top:12%', 10, 'bl2'), plus('right:12%; top:33%', 8),
+      plus('left:40%; top:70%', 9, 'bl2'), plus('right:40%; top:64%', 9),
+    ].join('');
+  }
+
+  // ---------- overlay ----------
+  const overlayEl = document.getElementById('overlay');
+  function openOverlay(key) {
+    if (!panelMap[key]) return;
+    overlayKey = key;
+    document.getElementById('overlay-sheet').innerHTML = panelMap[key];
+    overlayEl.classList.add('open');
+  }
+  function closeOverlay() {
+    overlayKey = null;
+    overlayEl.classList.remove('open');
+  }
+  overlayEl.addEventListener('click', e => { if (!e.target.closest('.sheet')) closeOverlay(); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeOverlay(); });
+  document.getElementById('scene').addEventListener('click', e => {
+    const w = e.target.closest('[data-key]');
+    if (w) openOverlay(w.dataset.key);
+  });
+  document.getElementById('scene').addEventListener('keydown', e => {
+    const w = e.target.closest('[data-key]');
+    if (w && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); openOverlay(w.dataset.key); }
+  });
+
   // ---------- render ----------
   const deck = document.getElementById('deck');
 
   function panel(title, inner, opts = {}) {
     return `
       <div class="panel ${opts.alert ? 'alert' : ''}">
-        <h2><span class="tick"></span>${title}${opts.count != null ? `<span class="count">${opts.count}</span>` : ''}${opts.badge ? `<span class="count"><span class="badge">${opts.badge}</span></span>` : ''}</h2>
+        <h2><span class="tick"></span>${title}${opts.live ? '<span class="eq" aria-hidden="true"><i></i><i></i><i></i><i></i></span>' : ''}${opts.zone ? `<span class="zone">${opts.zone}</span>` : ''}${opts.count != null ? `<span class="count">${opts.count}</span>` : ''}${opts.badge ? `<span class="count"><span class="badge">${opts.badge}</span></span>` : ''}</h2>
+        <div class="ruler" aria-hidden="true"></div>
         ${opts.scroll ? `<div class="scroll">${inner}</div>` : inner}
+        <div class="dots" aria-hidden="true"></div>
       </div>`;
   }
 
   function render(data) {
+    lastData = data;
     const events = data.today_events || [];
     const actions = data.pending_actions || [];
     const decided = data.decided_actions || [];
@@ -633,7 +1567,7 @@
             <div class="item-meta">${ev.all_day ? 'ALL DAY' : fmtTime(ev.start) + ' – ' + fmtTime(ev.end)}</div>
           </div>`).join('')
       : '<div class="empty">Nothing on the calendar today.</div>',
-      { count: new Date().toLocaleDateString([], { month: 'short', day: 'numeric' }).toUpperCase() }));
+      { zone: 'SYS·01', count: new Date().toLocaleDateString([], { month: 'short', day: 'numeric' }).toUpperCase() }));
 
     left.push(panel('Approvals', (actions.length
       ? actions.map(a => `
@@ -655,7 +1589,7 @@
               <div class="item-meta">${d.status === 'approved' ? '✓ APPROVED' : d.status === 'denied' ? '✗ DENIED' : '⚠ FAILED'} — ${timeAgo(d.created_at)}</div>
             </div>`).join('')}
         </div>` : ''),
-      { alert: !!actions.length, badge: actions.length || null, scroll: true }));
+      { zone: 'SYS·02', alert: !!actions.length, badge: actions.length || null, scroll: true }));
 
     left.push(panel('Review Queue', pendingItems.length
       ? pendingItems.map(i => `
@@ -664,12 +1598,12 @@
             <div class="item-meta">${i.kind} — ${esc(i.path)} — not running, not wired in</div>
           </div>`).join('')
       : '<div class="empty">Nothing drafted right now.</div>',
-      { alert: !!pendingItems.length, badge: pendingItems.length || null }));
+      { zone: 'SYS·03', alert: !!pendingItems.length, badge: pendingItems.length || null }));
 
     left.push(panel('Memory Bank', memories.length
       ? memories.map(m => `<div class="item" style="font-size:12.5px">${esc(m)}</div>`).join('')
       : '<div class="empty">Nothing saved yet.</div>',
-      { count: memories.length, scroll: true }));
+      { zone: 'SYS·04', count: memories.length, scroll: true }));
 
     // ----- center -----
     const center = [];
@@ -678,7 +1612,7 @@
       `<div class="links-grid">${QUICK_LINKS.map(l => `
         <a class="link-tile" href="${l.href}" ${l.href.startsWith('http') ? 'target="_blank" rel="noopener"' : ''}>
           <span class="glyph">${l.glyph}</span><span>${l.label}</span>
-        </a>`).join('')}</div>`));
+        </a>`).join('')}</div>`, { zone: 'ACC·01' }));
     center.push(panel('Agent Transmissions', outputs.length
       ? outputs.map(o => `
           <div class="item">
@@ -687,7 +1621,7 @@
             <div class="item-body">${esc(o.output_text || '')}</div>
           </div>`).join('')
       : '<div class="empty">No agent outputs yet.</div>',
-      { count: outputs.length, scroll: true }));
+      { zone: 'TRX·01', count: outputs.length, scroll: true }));
 
     // ----- right rail -----
     const right = [];
@@ -701,7 +1635,7 @@
             ${t.result ? `<div class="item-body">${esc(t.result)}</div>` : ''}
           </div>`).join('')
       : '<div class="empty">No managed tasks yet — give CLARVIS a goal.</div>',
-      { count: managed.length, scroll: true }));
+      { zone: 'OPS·01', live: managed.some(t => t.status === 'running' || t.status === 'queued'), count: managed.length, scroll: true }));
 
     const statusGlyph = { queued: '⏳ QUEUED', running: '⚡ RUNNING', done: '✓ DONE', failed: '⚠ FAILED' };
     right.push(panel('Background Ops', tasks.length
@@ -712,7 +1646,7 @@
             ${t.result ? `<div class="item-body">${esc(t.result)}</div>` : ''}
           </div>`).join('')
       : '<div class="empty">No delegated tasks yet.</div>',
-      { count: tasks.length, scroll: true }));
+      { zone: 'OPS·02', live: tasks.some(t => t.status === 'running' || t.status === 'queued'), count: tasks.length, scroll: true }));
 
     // revenue tracker
     const rev = getRevenue();
@@ -735,17 +1669,79 @@
           GOAL: <b>$${REV_GOAL.toLocaleString()}/mo</b><br>
           <button class="rev-edit" onclick="setRevenue()">Update</button>
         </div>
-      </div>`));
+      </div>`, { zone: 'REV·01' }));
 
     right.push(panel('Vault Archive', vault.length
       ? vault.map(p => `<div class="item item-meta" style="padding:6px 0">${esc(p)}</div>`).join('')
       : '<div class="empty">No notes in the vault yet.</div>',
-      { count: vault.length, scroll: true }));
+      { zone: 'VLT·01', count: vault.length, scroll: true }));
 
-    deck.innerHTML = `
-      <div class="rail">${left.join('')}</div>
-      <div class="center-col">${center.join('')}</div>
-      <div class="rail">${right.join('')}</div>`;
+    // detail sheets for the overlay (and the mobile stacked layout)
+    panelMap = {
+      today: left[0], approvals: left[1], review: left[2], memory: left[3],
+      access: center[1], transmissions: center[2],
+      managed: right[0], background: right[1], revenue: right[2], vault: right[3],
+    };
+
+    const wide = window.innerWidth > 1100;
+    if (wide) {
+      // scattered instrument scene — reactor only lives here (unique ids)
+      const mActive = managed.filter(t => t.status === 'running' || t.status === 'queued').length;
+      const mDone = managed.filter(t => t.status === 'done').length;
+      const bActive = tasks.filter(t => t.status === 'running' || t.status === 'queued').length;
+      const bDone = tasks.filter(t => t.status === 'done').length;
+      const rev = getRevenue();
+      const pct = Math.min(100, Math.round(rev / REV_GOAL * 100));
+      deck.innerHTML = '';
+      document.getElementById('scene').innerHTML = `
+        <div class="reactor-anchor">${reactorSVG()}</div>
+
+        <!-- triple donut row, top-left like the reference's 30/50/70 charts -->
+        ${miniDonut('approvals', 'Approvals', actions.length, 'left:4%; top:15%', !!actions.length)}
+        <span class="fx bright" style="left:10.2%; top:18.2%; font-size:10px; letter-spacing:.3em">&#183;&#183;&#183;</span>
+        ${miniDonut('review', 'Review', pendingItems.length, 'left:12%; top:15%', false)}
+        <span class="fx bright" style="left:18.2%; top:18.2%; font-size:10px; letter-spacing:.3em">&#183;&#183;&#183;</span>
+        ${miniDonut('memory', 'Memories', memories.length, 'left:20%; top:15%', false)}
+        <span class="fx" style="left:6%; top:31%; font-size:10px; letter-spacing:.28em; color:var(--text-dim)">CLARVIS &#183; SECOND BRAIN INTERFACE</span>
+
+        <div class="w evstack" data-key="today" tabindex="0" style="left:24%; top:37%">
+          <span class="g-label" style="margin-bottom:8px">Today · ${events.length}</span>
+          ${events.slice(0, 3).map(ev => `
+            <div class="ev"><b>${esc(ev.title)}</b>
+            <span>${ev.all_day ? 'ALL DAY' : fmtTime(ev.start)}</span></div>`).join('')
+            || '<div class="ev"><span>clear schedule</span></div>'}
+        </div>
+
+        ${gauge('managed', 'Managed Ops', mActive, mDone + ' done',
+                managed.length ? mDone / managed.length : 0, 'right:22%; top:6%',
+                managed.some(t => t.status === 'waiting_approval'))}
+        ${gauge('revenue', '$' + rev.toLocaleString() + ' mtd', pct + '%', 'of $3k goal',
+                pct / 100, 'right:16%; top:26%')}
+        ${gauge('background', 'Background', bActive, bDone + ' done',
+                tasks.length ? bDone / tasks.length : 0, 'right:6%; top:41%')}
+        ${chip('vault', 'Vault Notes', vault.length,
+               vault[0] || 'empty', 'left:20%; top:80%')}
+        ${chip('transmissions', 'Transmissions', outputs.length,
+               outputs[0] ? outputs[0].agent_name : 'no signals', 'left:52%; top:8%')}
+
+        ${sceneFx()}
+
+        <div class="orbit">
+          ${QUICK_LINKS.map(l => `
+            <a href="${l.href}" ${l.href.startsWith('http') ? 'target="_blank" rel="noopener"' : ''}
+               aria-label="${l.label}">${l.glyph}<b>${l.label}</b></a>`).join('')}
+        </div>`;
+    } else {
+      document.getElementById('scene').innerHTML = '';
+      deck.innerHTML = `
+        <div class="rail rail-l">${withDecor(left)}</div>
+        <div class="center-col">${center.join('')}</div>
+        <div class="rail rail-r">${withDecor(right)}</div>`;
+    }
+    drawWires();
+    if (overlayKey && panelMap[overlayKey]) {
+      document.getElementById('overlay-sheet').innerHTML = panelMap[overlayKey];
+    }
 
     // reactor stats
     const activeCount = managed.filter(t => t.status === 'running' || t.status === 'queued').length
@@ -756,6 +1752,14 @@
       <div class="rstat"><div class="val ${needsTap ? 'warm' : ''}">${needsTap}</div><div class="lbl">Awaiting Tap</div></div>
       <div class="rstat"><div class="val">${events.length}</div><div class="lbl">Events Today</div></div>
       <div class="rstat"><div class="val" style="color:var(--good); text-shadow:0 0 12px rgba(110,231,160,.5)">ONLINE</div><div class="lbl">Status</div></div>`;
+
+    // telemetry waveform: per-bar phase offsets so it reads as a live signal
+    const wave = document.getElementById('wave');
+    let bars = '';
+    for (let i = 0; i < 48; i++) {
+      bars += `<i style="animation-delay:-${(i * 0.13).toFixed(2)}s; animation-duration:${(2.1 + (i % 7) * 0.18).toFixed(2)}s"></i>`;
+    }
+    wave.innerHTML = bars;
   }
 
   // ---------- approvals ----------
