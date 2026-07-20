@@ -51,6 +51,210 @@ SITES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sites")
 DEFAULT_PREVIEW_PORT = 8080
 
 
+# ============================================================
+# DESIGN SYSTEM — the "skill" (baked into every stage's system prompt)
+# The tutorial's frontend-design skill, adapted for an autonomous static-HTML
+# generator: taste rules the model must follow on every call.
+# ============================================================
+DESIGN_SYSTEM = """DESIGN SYSTEM — follow on every decision:
+- TYPE SCALE: use a real modular scale, not random sizes. Fluid headings via clamp()
+  (e.g. h1 clamp(2.5rem,6vw,4.5rem)), a clear h1>h2>h3>body>small hierarchy, generous
+  line-height on body (1.6-1.75), tighter on headings (1.05-1.2). One heading font + one
+  body font, both characterful (never Roboto/Open Sans/Arial defaults).
+- SPACING: an 8px base grid. Section vertical rhythm is large and deliberate
+  (clamp(4rem,10vw,8rem) block padding). Whitespace is a feature, not a gap to fill.
+- COLOR: use ONLY the design tokens (CSS variables) — no stray hex codes in components.
+  Real contrast, one confident accent, restrained neutrals. Accessible text/bg contrast.
+- MOTION: the site should feel alive — scroll-reveal entrances, staggered card reveals,
+  smooth hover transitions. (The build appends a motion layer + observer automatically;
+  your job is to add the data-reveal hooks and tasteful :hover states.)
+- POLISH: real focus-visible rings, rounded corners via var(--radius), soft shadows via
+  var(--shadow), hover lift on cards/buttons, consistent border treatment.
+- ANTI-GENERIC: avoid the generic AI look — everything centered, three identical grey
+  cards, one hero and nothing else, purple gradient on white. Aim for an intentional,
+  editorial, agency-grade result with a distinctive point of view."""
+
+# ============================================================
+# SECTION BLUEPRINTS — the "21st.dev" equivalent: a curated set of premium
+# section patterns (as structure/guidance, since we emit static HTML not React).
+# ============================================================
+SECTION_BLUEPRINTS = """PREMIUM SECTION PATTERNS to draw from (pick what fits the brief; adapt, don't dump all):
+- STICKY NAV: brand left, links right, mobile hamburger; subtle shadow/blur on scroll.
+- HERO: strong headline + one-line subhead + primary & secondary CTA; a supporting visual
+  block (use a .media-ph placeholder or inline SVG — never an external image file).
+- FEATURE GRID: 3-4 .card items in a .card-grid, each with an icon (inline SVG/emoji),
+  a short title, and a concrete benefit line. Stagger their reveal (data-reveal-group).
+- SOCIAL PROOF: testimonial cards or a stat row (big number + label).
+- PRICING: 2-3 tiers, one highlighted "featured" plan, clear CTA per tier.
+- FAQ: an accordion (.faq with <button class="faq-q"> toggling .faq-a) — JS is provided.
+- CTA BAND: a full-width closing call-to-action with a single clear action.
+- FOOTER: multi-column .site-footer with brand, links, and copyright."""
+
+# ============================================================
+# MOTION LAYER — appended to EVERY stylesheet so scroll-reveal + hover polish is
+# guaranteed and consistent regardless of what the CSS model produced. This is the
+# vanilla equivalent of Framer Motion's scroll reveals / staggered entrances.
+# Progressive enhancement: only hides content once main.js flags .reveal-ready, and
+# fully disabled under prefers-reduced-motion.
+# ============================================================
+MOTION_CSS = """
+/* ===== motion layer (auto-appended) — scroll reveals, stagger, hover polish ===== */
+[data-reveal], [data-reveal-group] > * {
+  transition: opacity .7s cubic-bezier(.16,1,.3,1), transform .7s cubic-bezier(.16,1,.3,1);
+}
+html.reveal-ready [data-reveal],
+html.reveal-ready [data-reveal-group] > * {
+  opacity: 0;
+  transform: translateY(24px);
+}
+html.reveal-ready [data-reveal].in-view,
+html.reveal-ready [data-reveal-group].in-view > * {
+  opacity: 1;
+  transform: none;
+}
+/* stagger children of a revealed group */
+[data-reveal-group].in-view > *:nth-child(1) { transition-delay: .00s; }
+[data-reveal-group].in-view > *:nth-child(2) { transition-delay: .08s; }
+[data-reveal-group].in-view > *:nth-child(3) { transition-delay: .16s; }
+[data-reveal-group].in-view > *:nth-child(4) { transition-delay: .24s; }
+[data-reveal-group].in-view > *:nth-child(5) { transition-delay: .32s; }
+[data-reveal-group].in-view > *:nth-child(6) { transition-delay: .40s; }
+
+/* hover polish */
+.card { transition: transform .25s ease, box-shadow .25s ease; }
+.card:hover { transform: translateY(-4px); }
+.btn, .btn-primary { transition: transform .18s ease, box-shadow .18s ease, background-color .18s ease, color .18s ease; }
+.btn:hover, .btn-primary:hover { transform: translateY(-2px); }
+
+/* generated-image placeholder — replaces any missing <img> so nothing renders broken */
+.media-ph {
+  display: flex; align-items: center; justify-content: center; text-align: center;
+  aspect-ratio: 16 / 9; width: 100%; overflow: hidden;
+  border-radius: var(--radius, 12px);
+  color: var(--on-primary, #fff);
+  background:
+    radial-gradient(120% 120% at 15% 15%, color-mix(in srgb, var(--accent, #6c8cff) 55%, transparent), transparent 60%),
+    linear-gradient(135deg, var(--primary, #3a3a55), color-mix(in srgb, var(--primary, #3a3a55) 60%, #000));
+  font: 500 .85rem/1.3 system-ui, sans-serif; letter-spacing: .02em; padding: 1rem;
+}
+.media-ph[data-shape="square"] { aspect-ratio: 1 / 1; }
+.media-ph[data-shape="portrait"] { aspect-ratio: 3 / 4; }
+.media-ph .media-ph__label { opacity: .85; max-width: 22ch; }
+
+/* FAQ accordion */
+.faq-q { cursor: pointer; width: 100%; text-align: left; display: flex;
+  justify-content: space-between; gap: 1rem; align-items: center; }
+.faq-a { overflow: hidden; max-height: 0; transition: max-height .3s ease; }
+.faq-q[aria-expanded="true"] + .faq-a { max-height: 40rem; }
+
+@media (prefers-reduced-motion: reduce) {
+  html.reveal-ready [data-reveal],
+  html.reveal-ready [data-reveal-group] > * { opacity: 1 !important; transform: none !important; }
+  .card:hover, .btn:hover, .btn-primary:hover { transform: none; }
+  [data-reveal], [data-reveal-group] > *, .card, .btn, .btn-primary, .faq-a { transition: none; }
+}
+"""
+
+# ============================================================
+# CINEMATIC SCROLL INTRO — deterministic scroll-scrubbed "travel-in" hero.
+# A stack of pinned full-screen scenes; each scene's background zooms and its
+# giant headline enters/exits as you scroll through its track, then the page
+# releases into the normal content ("the payoff"). The scroll mechanics live
+# here (guaranteed correct) — the model only writes the scene copy.
+# Each scene's visual is a CSS gradient PLACEHOLDER by default; drop in a real
+# photo/video by setting --scene-img: url('yourphoto.jpg') on .cinema__bg.
+# ============================================================
+CINEMATIC_CSS = """
+/* ===== cinematic scroll intro (auto-appended when enabled) ===== */
+.cinema { position: relative; background: #05070d; }
+.cinema__scene { position: relative; height: var(--scene-len, 190vh); }
+.cinema__stage {
+  position: sticky; top: 0; height: 100vh; overflow: hidden;
+  display: grid; place-items: center; isolation: isolate;
+}
+.cinema__bg {
+  position: absolute; inset: -2%; z-index: -2;
+  background-image: var(--scene-img, var(--scene-grad, linear-gradient(160deg, var(--primary, #222), #000)));
+  background-size: cover; background-position: center;
+  transform: scale(calc(1 + (var(--p, 0) * 0.30)));
+  will-change: transform;
+}
+.cinema__stage::after {  /* legibility scrim */
+  content: ""; position: absolute; inset: 0; z-index: -1;
+  background: radial-gradient(130% 100% at 50% 55%, transparent 28%, rgba(0,0,0,.55) 100%),
+              linear-gradient(180deg, rgba(0,0,0,.45), rgba(0,0,0,.10) 45%, rgba(0,0,0,.65));
+}
+.cinema__content {
+  text-align: center; color: #fff; padding: 2rem; max-width: 24ch;
+  opacity: var(--enter, 1);
+  transform: translateY(calc((1 - var(--enter, 1)) * 42px)) scale(calc(0.98 + var(--enter,1) * 0.02));
+  will-change: opacity, transform;
+}
+.cinema__eyebrow {
+  text-transform: uppercase; letter-spacing: .38em; font-size: .72rem;
+  opacity: .85; margin: 0 0 1rem;
+}
+.cinema__title {
+  font-size: clamp(3rem, 13vw, 9rem); line-height: .9; font-weight: 800;
+  text-transform: uppercase; letter-spacing: -.015em; margin: 0;
+  text-shadow: 0 6px 48px rgba(0,0,0,.55);
+}
+.cinema__caption {
+  margin: 1.25rem auto 0; font-size: clamp(1rem, 1.8vw, 1.3rem);
+  line-height: 1.5; opacity: .92; max-width: 42ch;
+}
+.cinema__cue {
+  position: sticky; bottom: 1.75rem; z-index: 3; display: block; width: max-content;
+  margin: -6rem auto 0; padding: .55rem .9rem; color: #fff; text-decoration: none;
+  font-size: .72rem; letter-spacing: .25em; text-transform: uppercase; opacity: .8;
+  border: 1px solid rgba(255,255,255,.35); border-radius: 999px;
+  animation: cinemaCue 2s ease-in-out infinite;
+}
+@keyframes cinemaCue { 0%,100%{ transform: translateY(0); opacity:.55 } 50%{ transform: translateY(5px); opacity:.95 } }
+.cinema + * { position: relative; z-index: 2; }  /* content sits above the cinema backdrop */
+
+@media (prefers-reduced-motion: reduce) {
+  .cinema__scene { height: 100vh; }
+  .cinema__bg { transform: none !important; }
+  .cinema__content { opacity: 1 !important; transform: none !important; }
+  .cinema__cue { animation: none; }
+}
+"""
+
+CINEMATIC_JS = """
+// Cinematic scroll scrubber — drives each pinned scene's zoom + headline enter/exit.
+(function () {
+  var cinema = document.querySelector('[data-cinema]');
+  if (!cinema) return;
+  var scenes = Array.prototype.slice.call(cinema.querySelectorAll('[data-scene]'));
+  if (!scenes.length) return;
+  var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (reduce) { scenes.forEach(function (s) { s.style.setProperty('--p', 0); s.style.setProperty('--enter', 1); }); return; }
+  var clamp = function (v) { return v < 0 ? 0 : v > 1 ? 1 : v; };
+  var ticking = false;
+  function update() {
+    ticking = false;
+    var vh = window.innerHeight;
+    for (var i = 0; i < scenes.length; i++) {
+      var track = scenes[i];
+      var r = track.getBoundingClientRect();
+      var span = Math.max(1, track.offsetHeight - vh);
+      var p = clamp(-r.top / span);                 // 0 -> 1 across the scene's scroll track
+      track.style.setProperty('--p', p.toFixed(4));
+      var enter = 1;                                 // headline eases in, holds, eases out
+      if (p < 0.16) enter = p / 0.16;
+      else if (p > 0.80) enter = clamp((1 - p) / 0.20);
+      track.style.setProperty('--enter', enter.toFixed(4));
+    }
+  }
+  function onScroll() { if (!ticking) { ticking = true; requestAnimationFrame(update); } }
+  window.addEventListener('scroll', onScroll, { passive: true });
+  window.addEventListener('resize', onScroll);
+  update();
+})();
+"""
+
+
 # ---- small helpers ----
 def _extract_json(text: str) -> dict:
     """Parse JSON from a model reply, tolerating markdown fences / stray prose."""
@@ -166,7 +370,7 @@ def plan_site(claude, brief: str) -> dict:
     system = (
         "You are a senior web designer + information architect. Given a brief, you produce a "
         "concrete, buildable plan for a small static website with a DISTINCTIVE, intentional "
-        "visual identity — never a generic AI template."
+        "visual identity — never a generic AI template.\n\n" + DESIGN_SYSTEM + "\n\n" + SECTION_BLUEPRINTS
     )
     user = f"""BRIEF:
 {brief}
@@ -193,6 +397,119 @@ Produce the site plan by calling the tool. Rules:
 
 
 # ============================================================
+# STAGE 1b — CINEMATIC INTRO SCENES (only when cinematic mode is on)
+# ============================================================
+SCENES_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "scenes": {
+            "type": "array",
+            "description": "5-6 cinematic intro beats that build a sense of arrival.",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "eyebrow": {"type": "string", "description": "tiny uppercase kicker, 1-3 words"},
+                    "title": {"type": "string", "description": "huge punchy headline, 2-4 words"},
+                    "caption": {"type": "string", "description": "one evocative sentence"},
+                    "visual": {"type": "string",
+                               "description": "the ideal photo/video for this beat (used as the placeholder label + a hint for swapping in real footage)"},
+                },
+                "required": ["title", "caption", "visual"],
+            },
+        }
+    },
+    "required": ["scenes"],
+}
+
+
+def plan_cinema_scenes(claude, plan: dict, brief: str) -> list:
+    system = (
+        "You are a creative director scripting a cinematic, scroll-scrubbed website intro — the "
+        "immersive 'travel-in' sequence a visitor scrolls through BEFORE reaching the practical "
+        "content. Big, punchy, emotional, on-brand. Every word earns its place."
+    )
+    user = f"""BRIEF:
+{brief}
+
+Brand: {plan.get('name')} — {plan.get('tagline')}
+Aesthetic: {plan['design'].get('aesthetic')}
+
+Write 5-6 cinematic intro SCENES that build a sense of ARRIVAL: start wide (the world/city/context),
+then move closer and INSIDE this place or experience, then land on an emotional payoff that makes the
+visitor want to act. For each scene give:
+- eyebrow: a tiny uppercase kicker (1-3 words)
+- title: a HUGE punchy headline, 2-4 words (looks great in all-caps)
+- caption: one evocative sentence
+- visual: the ideal photo or video footage for that beat (concrete and specific)
+The last scene should feel like a threshold — "step in / take your seat / let's go".
+Return via the tool."""
+    data = _call_json(claude, system, user, SCENES_SCHEMA, tool_name="emit_scenes", max_tokens=1500)
+    scenes = data.get("scenes", []) or []
+    return scenes[:7]
+
+
+def _render_cinema(scenes: list, colors: dict) -> str:
+    """Assemble the cinematic intro HTML deterministically from scene copy. The scroll
+    mechanics come entirely from CINEMATIC_CSS/JS; here we only place the copy + a per-scene
+    gradient placeholder (swappable for a real image via --scene-img)."""
+    def esc(s):
+        return (str(s or "").replace("&", "&amp;").replace("<", "&lt;")
+                .replace(">", "&gt;").replace('"', "&quot;"))
+    c = colors or {}
+    primary = c.get("primary", "#1e2a4a")
+    accent = c.get("accent", "#45d6ff")
+    surface = c.get("surface", "#111826")
+    # gradient recipes that progress from distant/cool toward arrived/warm+bright
+    recipes = [
+        f"linear-gradient(165deg, {surface}, #05070d 85%)",
+        f"radial-gradient(130% 120% at 50% 15%, {primary}, #05070d 72%)",
+        f"linear-gradient(180deg, {primary}, #05070d)",
+        f"radial-gradient(120% 110% at 50% 55%, {accent}, {primary} 58%, #05070d)",
+        f"linear-gradient(200deg, {accent}, {primary} 55%, #05070d)",
+        f"radial-gradient(130% 130% at 50% 60%, {accent}, {primary} 45%, #000)",
+    ]
+    parts = ['<section class="cinema" data-cinema>']
+    n = len(scenes)
+    for i, s in enumerate(scenes):
+        grad = recipes[min(i, len(recipes) - 1)] if n <= len(recipes) else recipes[i % len(recipes)]
+        eyebrow = f'<p class="cinema__eyebrow">{esc(s.get("eyebrow"))}</p>' if s.get("eyebrow") else ""
+        caption = f'<p class="cinema__caption">{esc(s.get("caption"))}</p>' if s.get("caption") else ""
+        # visual description travels as a comment + aria so it's obvious where real footage goes
+        parts.append(
+            f'  <div class="cinema__scene" data-scene>\n'
+            f'    <div class="cinema__stage">\n'
+            f'      <!-- swap placeholder for real footage: set --scene-img: url(\'photoN.jpg\') below. '
+            f'Ideal shot: {esc(s.get("visual"))} -->\n'
+            f'      <div class="cinema__bg" style="--scene-grad: {grad};" role="img" '
+            f'aria-label="{esc(s.get("visual"))}"></div>\n'
+            f'      <div class="cinema__content">\n'
+            f'        {eyebrow}\n'
+            f'        <h2 class="cinema__title">{esc(s.get("title"))}</h2>\n'
+            f'        {caption}\n'
+            f'      </div>\n'
+            f'    </div>\n'
+            f'  </div>'
+        )
+    parts.append('  <a class="cinema__cue" href="#start">Scroll</a>')
+    parts.append('</section>\n<span id="start" aria-hidden="true"></span>')
+    return "\n".join(parts)
+
+
+def _inject_cinema(html: str, cinema_html: str) -> str:
+    """Insert the cinematic intro right after the site nav (so the sticky nav stays on top),
+    falling back to just after <body>."""
+    m = re.search(r'</nav>', html, re.I)
+    if m:
+        i = m.end()
+        return html[:i] + "\n" + cinema_html + "\n" + html[i:]
+    m = re.search(r'<body[^>]*>', html, re.I)
+    if m:
+        i = m.end()
+        return html[:i] + "\n" + cinema_html + "\n" + html[i:]
+    return cinema_html + "\n" + html
+
+
+# ============================================================
 # STAGE 2 — STYLESHEET
 # ============================================================
 def build_stylesheet(claude, plan: dict) -> tuple:
@@ -202,7 +519,8 @@ def build_stylesheet(claude, plan: dict) -> tuple:
         "You are a front-end engineer with strong visual taste. You write clean, modern, "
         "hand-crafted CSS that reads as intentional design — not a bootstrap-looking template. "
         "You use CSS custom properties, fluid type (clamp), flex/grid, and tasteful detail "
-        "(considered spacing, hover states, subtle motion). Mobile-first and fully responsive."
+        "(considered spacing, hover states, subtle motion). Mobile-first and fully responsive.\n\n"
+        + DESIGN_SYSTEM
     )
     user = f"""Build ONE stylesheet `styles.css` for this site.
 
@@ -222,8 +540,14 @@ Requirements:
   mobile hamburger (.nav-toggle) that shows/hides .nav-links; .btn and .btn-primary buttons;
   .hero; .container (max-width wrapper); .card / .card-grid; .section with generous vertical rhythm;
   a .site-footer; form fields. Add a .nav-links.open rule for the mobile menu.
+- Also style these premium-pattern classes the pages may use: .stat / .stat-num, .testimonial,
+  .pricing-grid / .price-card / .price-card.featured (visually elevate the featured tier),
+  .faq / .faq-q / .faq-a, and a full-width .cta-band closing section.
 - Fluid, responsive, accessible contrast, visible :focus-visible states, prefers-reduced-motion respect.
 - Give it real personality consistent with the aesthetic. NO generic centered-everything AI look.
+- NOTE: a motion layer (scroll-reveal, staggered entrances, hover lift, a .media-ph image placeholder,
+  and FAQ accordion behavior) is AUTOMATICALLY appended after your CSS — do NOT fight it. You may add
+  your own tasteful :hover states, but do not redefine .media-ph or the reveal/opacity behavior.
 
 Return ONLY the CSS (no markdown, no explanation). Then on a NEW LINE after the CSS, output a line
 starting with `CLASS_REFERENCE:` followed by a compact comma-separated list of the main class names you
@@ -242,7 +566,7 @@ defined, so page-builders reuse them exactly."""
 # ============================================================
 # STAGE 3 — PAGES
 # ============================================================
-def build_page(claude, plan: dict, page: dict, class_ref: str) -> str:
+def build_page(claude, plan: dict, page: dict, class_ref: str, cinematic_home: bool = False) -> str:
     d = plan["design"]
     nav_items = "".join(
         f'<a href="{p["filename"]}">{p.get("nav_label", "")}</a>' for p in plan["pages"]
@@ -251,15 +575,26 @@ def build_page(claude, plan: dict, page: dict, class_ref: str) -> str:
     system = (
         "You are a web developer AND a sharp copywriter. You write complete, semantic, accessible "
         "HTML5 pages with REAL, specific, on-brand copy — never lorem ipsum, never vague filler "
-        "like 'we provide quality solutions'. Every headline and paragraph is concrete and useful."
+        "like 'we provide quality solutions'. Every headline and paragraph is concrete and useful.\n\n"
+        + DESIGN_SYSTEM + "\n\n" + SECTION_BLUEPRINTS
     )
+    cinema_note = ""
+    if cinematic_home:
+        cinema_note = (
+            "\n\nIMPORTANT — CINEMATIC INTRO: a full-screen cinematic scroll intro is inserted "
+            "automatically at the very top of this page (right after the nav). So do NOT write your "
+            "own big hero/headline section here. Begin the page body directly with the PRACTICAL "
+            "PAYOFF content — the sections a visitor wants after the immersive intro (e.g. services & "
+            "pricing, social proof, an FAQ, a visit/location + hours block, and a strong final CTA). "
+            "Treat this page as 'the details after the movie'."
+        )
     user = f"""Write the COMPLETE HTML for `{page['filename']}` of this site.
 
 Site: {plan.get('name')} — {plan.get('tagline')}
 Audience: {plan.get('audience')} · Tone: {plan.get('tone')}
 This page's purpose: {page.get('purpose')}
 Sections to include (in order, with real content): {', '.join(page.get('sections', []))}
-Other pages (for nav + internal links): {other_pages}
+Other pages (for nav + internal links): {other_pages}{cinema_note}
 
 Hard requirements:
 - Full document: <!DOCTYPE html>, <html lang="en">, <head> with charset, viewport, a good <title>
@@ -274,6 +609,19 @@ Hard requirements:
 - Real, specific, engaging copy tailored to the brief. Concrete details, plausible specifics.
 - A real footer (.site-footer) with brand + copyright + relevant links.
 - Responsive and accessible. Wrap page content sections in .container where appropriate.
+
+MOTION — add scroll-reveal hooks so the page animates in:
+- Put `data-reveal` on each major section/block you want to fade+rise into view (hero content, section
+  headers, standalone blocks).
+- Put `data-reveal-group` on a container whose CHILDREN should stagger in (e.g. the .card-grid, a
+  pricing-grid, a stat row). Do not also put data-reveal on those same children.
+
+IMAGES — never reference an external or local image file (there are none; they render broken):
+- Do NOT emit <img src="...jpg/png/webp"> or CSS url() to a file. For any photo/illustration slot, use a
+  placeholder block: <div class="media-ph"><span class="media-ph__label">short description of the intended image</span></div>
+  (add data-shape="square" or "portrait" to change its ratio). Inline SVG icons/logos are fine and encouraged.
+
+If the page includes an FAQ, use: <div class="faq"><button class="faq-q" aria-expanded="false">Question<span aria-hidden="true">+</span></button><div class="faq-a"><div class="container">Answer</div></div></div> (the toggle JS is already provided).
 
 Return ONLY the HTML (no markdown fences, no commentary)."""
     html = _strip_code_fence(_call(claude, system, user, max_tokens=4096), "html")
@@ -292,7 +640,8 @@ def self_review(claude, plan: dict, css: str, sample_html: str, used_classes: se
         "You are a meticulous design reviewer. You improve an existing site by writing a small "
         "CSS 'polish layer' that is APPENDED after the base stylesheet (so later rules override "
         "earlier ones via the cascade). You NEVER rewrite the whole sheet and NEVER remove or "
-        "rename classes. You refine within the established aesthetic; you do not redesign."
+        "rename classes. You refine within the established aesthetic; you do not redesign.\n\n"
+        + DESIGN_SYSTEM
     )
     user = f"""Here is a site's base stylesheet and one page. Identify concrete refinements — spacing
 consistency, type hierarchy, contrast, the mobile nav behavior, hover/focus states, and anything that
@@ -351,8 +700,16 @@ Return ONLY the CSS rules (no fences, no explanation)."""
 # ============================================================
 # ORCHESTRATION
 # ============================================================
-MAIN_JS = """// Mobile nav toggle — progressive enhancement.
+MAIN_JS = """// Progressive enhancement: mobile nav, scroll reveals, FAQ accordion, sticky-nav shadow.
+// Flag the document ASAP so reveal CSS only hides content when JS is actually running
+// (no-JS visitors and reduced-motion users always see everything).
+(function () {
+  var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (!reduce) document.documentElement.classList.add('reveal-ready');
+})();
+
 document.addEventListener('DOMContentLoaded', function () {
+  // --- mobile nav toggle ---
   var toggle = document.querySelector('.nav-toggle');
   var links = document.querySelector('.nav-links');
   if (toggle && links) {
@@ -364,8 +721,78 @@ document.addEventListener('DOMContentLoaded', function () {
       if (e.target.tagName === 'A') { links.classList.remove('open'); toggle.setAttribute('aria-expanded', 'false'); }
     });
   }
+
+  // --- sticky-nav shadow on scroll ---
+  var nav = document.querySelector('.site-nav');
+  if (nav) {
+    var onScroll = function () { nav.classList.toggle('scrolled', window.scrollY > 8); };
+    onScroll(); window.addEventListener('scroll', onScroll, { passive: true });
+  }
+
+  // --- scroll-reveal (the "Framer Motion feel", vanilla) ---
+  var targets = document.querySelectorAll('[data-reveal], [data-reveal-group]');
+  if (!('IntersectionObserver' in window) || document.documentElement.classList.contains('reveal-ready') === false) {
+    // no observer support (or reduced motion): just show everything
+    targets.forEach(function (el) { el.classList.add('in-view'); });
+  } else {
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
+        if (entry.isIntersecting) { entry.target.classList.add('in-view'); io.unobserve(entry.target); }
+      });
+    }, { threshold: 0.12, rootMargin: '0px 0px -8% 0px' });
+    targets.forEach(function (el) { io.observe(el); });
+  }
+
+  // --- FAQ accordion ---
+  document.querySelectorAll('.faq-q').forEach(function (q) {
+    q.addEventListener('click', function () {
+      var open = q.getAttribute('aria-expanded') === 'true';
+      q.setAttribute('aria-expanded', open ? 'false' : 'true');
+    });
+  });
 });
 """
+
+
+def _balance_braces(css: str) -> str:
+    """Model-generated CSS occasionally leaves a rule's closing brace off. In a single
+    stylesheet an unclosed brace mid-file swallows every rule after it (including layers we
+    append later). Balancing each segment at its seam contains the damage to that segment so
+    the rest of the sheet — and our appended motion layer — still parses. Only ever ADDS
+    missing closers; never removes."""
+    probe = re.sub(r'/\*.*?\*/', '', css, flags=re.S)          # ignore braces in comments
+    probe = re.sub(r'"(?:[^"\\]|\\.)*"', '""', probe)          # ignore braces in strings
+    probe = re.sub(r"'(?:[^'\\]|\\.)*'", "''", probe)
+    diff = probe.count('{') - probe.count('}')
+    if diff > 0:
+        css = css.rstrip() + "\n" + ("}" * diff) + "\n"
+    return css
+
+
+def _fix_images(html: str, site_dir: str) -> str:
+    """Guarantee no broken images: replace every <img> whose src is a local file that
+    doesn't exist (the agent generates no image assets) with a styled .media-ph placeholder
+    that reuses the img's alt text. External (http/https) and inline data: images are kept."""
+    def _esc(s: str) -> str:
+        return (s.replace("&", "&amp;").replace("<", "&lt;")
+                 .replace(">", "&gt;").replace('"', "&quot;"))
+
+    def repl(m):
+        tag = m.group(0)
+        src_m = re.search(r'src\s*=\s*["\']([^"\']*)["\']', tag, re.I)
+        src = (src_m.group(1) if src_m else "").strip()
+        if src.startswith(("http://", "https://", "data:")):
+            return tag  # real remote / inline image — leave it
+        if src and os.path.isfile(os.path.join(site_dir, src.lstrip("/"))):
+            return tag  # a local file that actually exists
+        alt_m = re.search(r'alt\s*=\s*["\']([^"\']*)["\']', tag, re.I)
+        label = (alt_m.group(1) if alt_m else "").strip() or "image"
+        cls_m = re.search(r'class\s*=\s*["\']([^"\']*)["\']', tag, re.I)
+        extra = (" " + cls_m.group(1).strip()) if cls_m and cls_m.group(1).strip() else ""
+        return (f'<div class="media-ph{_esc(extra)}" role="img" aria-label="{_esc(label)}">'
+                f'<span class="media-ph__label">{_esc(label)}</span></div>')
+
+    return re.sub(r'<img\b[^>]*?/?>', repl, html, flags=re.I)
 
 
 def _serve_script(slug: str, port: int) -> str:
@@ -383,6 +810,27 @@ def _readme(plan: dict, port: int, review_notes: str) -> str:
     pages = "\n".join(f"- `{p['filename']}` — {p.get('purpose', p.get('nav_label',''))}"
                       for p in plan["pages"])
     d = plan["design"]
+    cinema_block = ""
+    scenes = plan.get("cinema_scenes")
+    if scenes:
+        beats = "\n".join(f"{i+1}. **{s.get('title','')}** — ideal footage: {s.get('visual','')}"
+                          for i, s in enumerate(scenes))
+        cinema_block = f"""
+
+## Cinematic intro
+The home page opens with a scroll-scrubbed cinematic intro ({len(scenes)} scenes) that pins full-screen
+and "travels in" as you scroll, then releases into the content. Scenes:
+
+{beats}
+
+**These scenes use gradient placeholders — swap in real footage to make it truly cinematic.**
+In `index.html`, find each `.cinema__bg` and set a real image/video still:
+```html
+<div class="cinema__bg" style="--scene-img: url('scene1.jpg');" ...></div>
+```
+Drop `scene1.jpg` (etc.) into this folder. Each scene already carries the ideal-shot description in an
+HTML comment right above it. The scroll zoom, pinning, and headline timing all keep working unchanged.
+"""
     return f"""# {plan.get('name')}
 
 {plan.get('tagline')}
@@ -407,9 +855,9 @@ bash serve.sh          # then open http://localhost:{port}
 ## Structure
 - `*.html` — the pages
 - `styles.css` — the shared, hand-tuned stylesheet (single source of design truth)
-- `main.js` — small progressive-enhancement script (mobile nav toggle)
+- `main.js` — progressive-enhancement script (mobile nav, scroll-reveal animations, FAQ accordion, sticky-nav shadow)
 - `serve.sh` — local preview server
-
+{cinema_block}
 ## Self-review pass notes
 {review_notes or '(none)'}
 
@@ -421,8 +869,9 @@ bash serve.sh          # then open http://localhost:{port}
 
 def create_website(brief: str, port: int = DEFAULT_PREVIEW_PORT, log: bool = True,
                    claude_client: Anthropic = None, supabase_client=None,
-                   progress=None) -> dict:
-    """Full pipeline. Returns {slug, dir, pages, plan, review_notes}."""
+                   progress=None, cinematic: bool = False) -> dict:
+    """Full pipeline. Returns {slug, dir, pages, plan, review_notes}.
+    cinematic=True prepends a scroll-scrubbed 'travel-in' hero intro to the home page."""
     claude = claude_client or Anthropic(api_key=CLAUDE_API_KEY)
 
     def _p(msg):
@@ -431,6 +880,15 @@ def create_website(brief: str, port: int = DEFAULT_PREVIEW_PORT, log: bool = Tru
 
     _p("Planning site + design tokens…")
     plan = plan_site(claude, brief)
+
+    cinema_html = ""
+    if cinematic:
+        _p("Scripting the cinematic intro…")
+        scenes = plan_cinema_scenes(claude, plan, brief)
+        if scenes:
+            cinema_html = _render_cinema(scenes, plan["design"].get("colors", {}))
+            plan["cinema_scenes"] = scenes  # surfaced in README
+
     slug = plan["slug"]
     site_dir = os.path.join(SITES_DIR, slug)
     # no-clobber: suffix if the slug dir already exists
@@ -443,13 +901,18 @@ def create_website(brief: str, port: int = DEFAULT_PREVIEW_PORT, log: bool = Tru
 
     _p("Building the stylesheet…")
     css, class_ref = build_stylesheet(claude, plan)
+    css = _balance_braces(css)  # contain any unclosed rule to the base sheet
 
     _p(f"Writing {len(plan['pages'])} page(s)…")
     written_pages = []
     first_html = ""
     used_classes = set()
     for i, page in enumerate(plan["pages"]):
-        html = build_page(claude, plan, page, class_ref)
+        is_cinematic_home = bool(cinema_html) and i == 0
+        html = build_page(claude, plan, page, class_ref, cinematic_home=is_cinematic_home)
+        html = _fix_images(html, site_dir)  # no broken images ever ship
+        if is_cinematic_home:
+            html = _inject_cinema(html, cinema_html)  # prepend the scroll intro after the nav
         with open(os.path.join(site_dir, page["filename"]), "w", encoding="utf-8") as f:
             f.write(html)
         written_pages.append(page["filename"])
@@ -460,6 +923,13 @@ def create_website(brief: str, port: int = DEFAULT_PREVIEW_PORT, log: bool = Tru
 
     _p("Self-review polish pass…")
     css, review_notes = self_review(claude, plan, css, first_html, used_classes)
+    css = _balance_braces(css)  # seal the polish layer before appending the motion layer
+
+    # Append the guaranteed motion layer LAST so it wins the cascade (scroll reveals,
+    # stagger, hover polish, .media-ph placeholder styling, FAQ accordion).
+    css = css.rstrip() + "\n" + MOTION_CSS
+    if cinema_html:
+        css = css.rstrip() + "\n" + CINEMATIC_CSS  # cinematic intro styling + scrub
 
     # Coverage guard: every class the pages use must be defined in the final CSS. If any are
     # missing, ask the model to add the missing rules (keeps the pages from rendering unstyled).
@@ -468,12 +938,13 @@ def create_website(brief: str, port: int = DEFAULT_PREVIEW_PORT, log: bool = Tru
     if missing:
         _p(f"Filling {len(missing)} missing style rule(s)…")
         css = _patch_missing_classes(claude, plan, css, missing)
+    css = _balance_braces(css)  # final safety on the whole sheet
 
     # write shared assets
     with open(os.path.join(site_dir, "styles.css"), "w", encoding="utf-8") as f:
         f.write(css)
     with open(os.path.join(site_dir, "main.js"), "w", encoding="utf-8") as f:
-        f.write(MAIN_JS)
+        f.write(MAIN_JS + (CINEMATIC_JS if cinema_html else ""))
     serve_path = os.path.join(site_dir, "serve.sh")
     with open(serve_path, "w", encoding="utf-8") as f:
         f.write(_serve_script(slug, port))
@@ -510,9 +981,18 @@ def _log_to_supabase(brief, result, supabase_client=None):
 # ============================================================
 # CHAT-BRAIN ENTRY POINT
 # ============================================================
-def create_website_for_chat(brief: str, claude_client=None, supabase_client=None) -> str:
+_CINEMATIC_HINTS = ("cinematic", "immersive", "scroll", "flashy", "eye-catching", "eye catching",
+                    "movie", "dramatic", "storytelling", "travel in", "zoom in")
+
+
+def create_website_for_chat(brief: str, claude_client=None, supabase_client=None,
+                            cinematic=None) -> str:
+    # auto-enable the cinematic intro when the brief asks for that kind of energy
+    if cinematic is None:
+        cinematic = any(h in brief.lower() for h in _CINEMATIC_HINTS)
     try:
-        r = create_website(brief, claude_client=claude_client, supabase_client=supabase_client)
+        r = create_website(brief, claude_client=claude_client, supabase_client=supabase_client,
+                           cinematic=cinematic)
     except Exception as e:
         return f"Website build failed: {e}"
     rel = os.path.relpath(r["dir"], os.path.dirname(os.path.abspath(__file__)))
@@ -532,6 +1012,8 @@ def main():
     parser.add_argument("--brief-file", help="Path to a file containing the brief.")
     parser.add_argument("--port", type=int, default=DEFAULT_PREVIEW_PORT,
                         help=f"Local preview port (default {DEFAULT_PREVIEW_PORT}).")
+    parser.add_argument("--cinematic", action="store_true",
+                        help="Prepend a scroll-scrubbed cinematic 'travel-in' intro to the home page.")
     args = parser.parse_args()
 
     for name, val in [("CLAUDE_API_KEY", CLAUDE_API_KEY)]:
@@ -546,7 +1028,8 @@ def main():
         sys.exit("Provide --brief or --brief-file.")
 
     print("Building site…")
-    r = create_website(brief, port=args.port, progress=lambda m: print("  •", m))
+    r = create_website(brief, port=args.port, progress=lambda m: print("  •", m),
+                       cinematic=args.cinematic)
     print(f"\nDone → {r['dir']}")
     print(f"Pages: {', '.join(r['pages'])}")
     print(f"Preview: bash {os.path.relpath(r['dir'])}/serve.sh  (http://localhost:{r['port']})")
