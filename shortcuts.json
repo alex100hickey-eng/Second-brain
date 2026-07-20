@@ -7,5 +7,10 @@
   "screen": "Look at my screen and tell me what's on it.",
   "drafts": "List my drafted overnight runs and their status.",
   "backup": "Back up my system now.",
-  "recap": "What did we talk about last time?"
+  "recap": "What did we talk about last time?",
+  "review": "Give me my weekly review.",
+  "weekly review": "Give me my weekly review of the last 7 days.",
+  "health": "Run a system health check.",
+  "activity": "What did you do today?",
+  "cost": "What's my Claude API cost this week, by feature?"
 }
