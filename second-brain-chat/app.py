@@ -259,6 +259,9 @@ INTERNAL_AGENT_NAMES = {
     "jarvis_file_undo",  # reversible-file-op undo trail for managed tasks
     "council",  # decision-council / feasibility runs — shown in their own dashboard panel
     "jarvis_tasktracker",  # lightweight task-tracker mirror rows (see task_tracker.py)
+    "expansion_finding",  # Self-Expanding Pipeline findings (see expansion_pipeline.py)
+    "system_event",  # Monitoring Agent incident/notice log (see monitor.py)
+    "jarvis_budget_state",  # Monitoring Agent budget-tier transitions (see monitor.py)
 }
 
 SYSTEM_PROMPT = """You are Alex's personal assistant — the brain of his "second brain" system.

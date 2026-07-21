@@ -1,5 +1,7 @@
 # Second Brain / CLARVIS — Handoff Document
 
+> **⚠️ SUPERSEDED — see `handoff-2026-07-21.md`**, the master handoff & complete historical record. This 2026-07-19 doc is kept for its detailed infra/Coolify/gotcha narrative, still largely valid.
+
 **Last updated:** 2026-07-19 (late-night session — third session this day, after the daytime and evening sessions referenced throughout), by Claude. This document is meant to be pasted into or attached in a **new** Claude Code chat so a fresh session can pick up execution with full context. Read it, then verify anything load-bearing against the actual repo/Coolify/Supabase state before acting — status docs like this one drift.
 
 **NAMING: the system is now called "CLARVIS"** (Alex's chosen name, Iron Man J.A.R.V.I.S. homage). So far only the dashboard carries the new branding — the chat page, login page, PWA manifest, and this doc's older sections still say "Jarvis". A full branding pass is an open offer Alex hasn't taken up yet.
