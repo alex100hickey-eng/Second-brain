@@ -228,6 +228,27 @@ class TaskTracker:
             row = self._fetch_raw(task_id)
         return self._row_to_dict(row)
 
+    def link_council(self, task_id, verdict: str, council_ref: str = "") -> dict | None:
+        """Cross-feature link (Priority 3): record the council verdict that evaluated this task as
+        a STRUCTURED history entry (not just prose), carrying an optional reference id to the
+        council row/verdict. So a task's history shows its council verdict, and the two silos are
+        joined by an id rather than living in separate stores blind to each other."""
+        with self._lock:
+            row = self._fetch_raw(task_id)
+            if not row:
+                return None
+            d = self._row_to_dict(row)
+            now = _now_iso()
+            d["history"].append({"type": "council", "verdict": (verdict or "").strip()[:300],
+                                 "council_ref": str(council_ref or ""), "at": now})
+            self._conn.execute(
+                "UPDATE tasks SET updated_at = ?, history = ? WHERE id = ?",
+                (now, json.dumps(d["history"]), task_id),
+            )
+            self._conn.commit()
+            row = self._fetch_raw(task_id)
+        return self._row_to_dict(row)
+
     def recent_for_dashboard(self, limit: int = 8) -> list:
         """Compact rows for the home dashboard's tasks panel. Active tasks first,
         ordered by priority (importance+urgency) then recency; terminal tasks sink."""
@@ -490,6 +511,9 @@ def tool_show_task_history(task_id: int) -> str:
             entry = f"  • {frm} → {h.get('to')}" if frm else f"  • set to {h.get('to')}"
         elif h.get("type") == "created":
             entry = "  • created"
+        elif h.get("type") == "council":
+            ref = f" [{h['council_ref']}]" if h.get("council_ref") else ""
+            entry = f"  • council verdict: {h.get('verdict', '')}{ref}"
         else:
             entry = f"  • note: {h.get('note', '')}"
         if h.get("note") and h.get("type") == "status":

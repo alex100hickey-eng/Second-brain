@@ -544,6 +544,16 @@ def suite_tasks(app, live):
         # persistence across instances
         tt2 = task_tracker.TaskTracker(db)
         check("tasks persist across tracker instances", tt2.get(t["id"])["title"] == "Ship the dashboard")
+
+        # Cross-feature link (Priority 3): a task's history shows its council verdict, by id.
+        tt.link_council(t["id"], verdict="WORTH IT IF you scope it down · feasibility 7/10",
+                        council_ref=f"task:{t['id']}")
+        got = tt.get(t["id"])
+        council_entries = [h for h in got["history"] if h.get("type") == "council"]
+        check("link_council records a structured council entry on the task",
+              len(council_entries) == 1 and "WORTH IT IF" in council_entries[0]["verdict"])
+        check("council entry carries the cross-reference id",
+              council_entries[0]["council_ref"] == f"task:{t['id']}")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

@@ -2425,21 +2425,26 @@ def _extract_feasibility_rating(text: str) -> str:
     return m.group(1).strip() if m else ""
 
 
-def _log_council(kind: str, idea: str, headline: str, full: str) -> None:
+def _log_council(kind: str, idea: str, headline: str, full: str, ref: str = "") -> str:
     """Persist a council/feasibility run so it surfaces on the dashboard. Best-effort:
-    a logging failure never breaks the analysis the user asked for."""
+    a logging failure never breaks the analysis the user asked for. `ref` cross-links the run
+    to what it evaluated (e.g. "task:12") so the silos aren't blind to each other (Priority 3).
+    Returns the inserted row id as a string (or "" on failure)."""
     try:
-        supabase.table("Agent Outputs").insert({
+        res = supabase.table("Agent Outputs").insert({
             "agent_name": "council",
             "output_text": json.dumps({
                 "kind": kind,            # "deliberation" | "feasibility"
                 "idea": idea[:300],
                 "headline": headline[:300],
                 "full": full[:8000],
+                "ref": ref,              # e.g. "task:<id>" — what this verdict evaluated
             }),
         }).execute()
+        return str(res.data[0]["id"]) if res.data else ""
     except Exception as e:
         print(f"Warning: couldn't log council run: {e}")
+        return ""
 
 
 # --- Feasibility Judge — the council's third member ---------------------------
@@ -2492,7 +2497,7 @@ def assess_feasibility(idea: str, intended_outcome: str = "", context: str = "")
     return result
 
 
-def deliberate(idea: str, context: str = "", intended_outcome: str = "") -> str:
+def deliberate(idea: str, context: str = "", intended_outcome: str = "", council_ref: str = "") -> str:
     subject = f"Idea: {idea}" + (f"\nContext: {context}" if context else "")
 
     pro = _council_call(
@@ -2534,7 +2539,7 @@ def deliberate(idea: str, context: str = "", intended_outcome: str = "") -> str:
     ruling = (verdict.splitlines()[0].strip() if verdict else "").lstrip("#* ")
     rating = _extract_feasibility_rating(feasibility)
     headline = " · ".join(x for x in (ruling[:120], f"feasibility {rating}" if rating else "") if x)
-    _log_council("deliberation", idea, headline or "deliberation", result)
+    _log_council("deliberation", idea, headline or "deliberation", result, ref=council_ref)
     return result
 
 
@@ -2548,14 +2553,18 @@ def evaluate_task(task_id: int, intended_outcome: str = "") -> str:
     idea = task["title"]
     context = task.get("description", "")
     tracker.update_status(task_id, "evaluating", note="sent to the decision council")
-    deliberation = deliberate(idea=idea, context=context, intended_outcome=intended_outcome)
+    # Cross-link the two silos by id: the council row records ref="task:<id>" (what it evaluated),
+    # and the task's history gets a STRUCTURED council entry (verdict + council_ref) — so each side
+    # references the other instead of living in a separate store blind to it (Priority 3).
+    deliberation = deliberate(idea=idea, context=context, intended_outcome=intended_outcome,
+                              council_ref=f"task:{task_id}")
     ruling = ""
     m = re.search(r"### Judge's ruling\n(.+)", deliberation)
     if m:
         ruling = m.group(1).strip().splitlines()[0][:200]
     rating = _extract_feasibility_rating(deliberation)
     summary = " · ".join(x for x in (ruling, f"feasibility {rating}" if rating else "") if x) or "council evaluated"
-    tracker.add_note(task_id, f"Council verdict — {summary}")
+    tracker.link_council(task_id, verdict=summary, council_ref=f"task:{task_id}")
     return (f"Ran the council on task #{task_id} (**{idea}**) and set it to **evaluating**. "
             f"The verdict is saved to the task's history.\n\n{deliberation}")
 

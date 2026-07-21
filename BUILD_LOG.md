@@ -972,3 +972,13 @@ before any change: `run_tests.py` 170/1 (whisper say-sample, finding #7), `test_
   schedulable) + status label + SYSTEM_PROMPT mention. distilled_stats for reporting.
 - Tests: new suite_distillation (10 checks) — grounded facts stored, fabricated fact dropped,
   provenance recorded, originals kept, idempotent, recall prefers distilled + excludes raw distilled.
+
+## P3.2 (partial) — Cross-feature awareness: task ↔ council link — [03:15 ET]
+- Joined the task and council silos by id: _log_council now stores ref="task:<id>" (what the
+  verdict evaluated) and returns the row id; deliberate takes council_ref; evaluate_task passes
+  task_ref so the council row references the task, AND records a STRUCTURED council entry on the
+  task via new task_tracker.link_council (verdict + council_ref). show_task_history renders it.
+- Scope note: this is one concrete cross-reference (the clearest of the P3.2 examples). Broader
+  silo-linking (notes/reports ↔ conversations, weekly-review pulling from links) is designed but
+  left for a follow-up (see OVERNIGHT_REPORT) to avoid a rushed multi-store change.
+- Tests: 2 new checks in suite_tasks (structured council entry + cross-reference id).
