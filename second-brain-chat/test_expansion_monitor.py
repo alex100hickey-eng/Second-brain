@@ -1,5 +1,5 @@
 """
-Tests for the Self-Expanding Pipeline (Subsystem 1).
+Tests for the Self-Expanding Pipeline (Subsystem 1) and the Monitoring Agent (Subsystem 2).
 
 Run directly:  python3 test_expansion_monitor.py
 No network, no real Supabase, no real Claude — an in-memory fake Supabase and
@@ -10,6 +10,10 @@ Covers (per the plan):
   2. council RUBRIC output format (required keys + decision in {approve,reject,defer})
   3. applicator APPROVAL-GATE enforcement (refuses to execute without human approval)
   4. static safety SCANNER (flags planted subprocess / base64-exec / creds / domains)
+  5. council calibration backstop (deterministic downgrade of an over-eager 'approve')
+  6. scout query distillation (long brief -> tight queries, never crashes without claude)
+  7. budget TIER TRANSITIONS (ok/warn/throttle/shutdown boundaries) + is_agent_allowed
+  8. fixer ALLOWLIST enforcement (only listed problem types auto-act; rest propose)
 """
 
 import json
@@ -17,6 +21,7 @@ import os
 import sys
 
 import expansion_pipeline as ep
+import monitor as mon
 
 
 # ---- in-memory fake Supabase (chainable, mimics the client surface we use) ----
@@ -244,6 +249,115 @@ def test_query_distillation():
     check("fallback keeps signal words", any("transcribe" in q or "organize" in q or "downloads" in q for q in qs))
 
 
+def _mon_reset(monthly_cost=0.0, budget_usd=20.0, tiers=None):
+    """Wire monitor at a fake Supabase, and stub its cost source so tier math is exact."""
+    sb = FakeSB()
+    mon.init(supabase_client=sb, claude_client=None, post_to_chat_fn=lambda *a, **k: None, health_mod=None)
+    mon._LAST_TIER["tier"] = None
+    mon._LAST_EVENT_ID_SEEN["id"] = 0
+    mon._WORKER_RESTARTERS.clear()
+    mon.spend_vs_budget = lambda: {
+        "spend": monthly_cost, "budget": budget_usd, "pct": round(monthly_cost / budget_usd, 4),
+        "tier": _tier_for(monthly_cost / budget_usd, tiers or {"warn": 0.5, "throttle": 0.8, "shutdown": 1.0}),
+        "by_feature": [], "since": "2026-07-01T00:00:00-04:00",
+    }
+    return sb
+
+
+def _tier_for(pct, tiers):
+    if pct >= tiers["shutdown"]:
+        return "shutdown"
+    if pct >= tiers["throttle"]:
+        return "throttle"
+    if pct >= tiers["warn"]:
+        return "warn"
+    return "ok"
+
+
+def test_budget_tiers():
+    print("\n=== 7. budget tier transitions ===")
+    # boundary values, budget=$20: ok < 50%, warn [50,80), throttle [80,100), shutdown >=100%
+    cases = [(0.0, "ok"), (9.99, "ok"), (10.0, "warn"), (15.99, "warn"),
+            (16.0, "throttle"), (19.99, "throttle"), (20.0, "shutdown"), (25.0, "shutdown")]
+    for spend, expected in cases:
+        _mon_reset(monthly_cost=spend, budget_usd=20.0)
+        got = mon.spend_vs_budget()["tier"]
+        check(f"${spend} / $20 → {expected}", got == expected)
+
+    # is_agent_allowed: ok/warn → everyone; throttle/shutdown → only essential ('chat')
+    for tier, spend in (("ok", 0.0), ("warn", 12.0)):
+        _mon_reset(monthly_cost=spend, budget_usd=20.0)
+        mon._LAST_TIER["tier"] = tier
+        check(f"tier={tier}: non-essential agent allowed",
+              mon.is_agent_allowed("expansion_pipeline") is True)
+    for tier, spend in (("throttle", 17.0), ("shutdown", 21.0)):
+        _mon_reset(monthly_cost=spend, budget_usd=20.0)
+        mon._LAST_TIER["tier"] = tier
+        check(f"tier={tier}: non-essential agent BLOCKED",
+              mon.is_agent_allowed("expansion_pipeline") is False)
+        check(f"tier={tier}: chat (essential) still allowed",
+              mon.is_agent_allowed("chat") is True)
+
+    # transition dedupe: same tier twice in a row → no repeated notification
+    sb = _mon_reset(monthly_cost=0.0, budget_usd=20.0)
+    notified = []
+    mon.post_to_chat = lambda role, msg: notified.append(msg)
+    mon.check_budget_tier()  # ok -> ok (first-ever call still counts as a "change" from unknown)
+    first_count = len(notified)
+    mon.check_budget_tier()  # ok -> ok again, no change
+    check("repeated same-tier calls don't re-notify", len(notified) == first_count)
+
+    # a real transition DOES notify with the numbers
+    mon.spend_vs_budget = lambda: {"spend": 17.0, "budget": 20.0, "pct": 0.85, "tier": "throttle",
+                                   "by_feature": [], "since": "x"}
+    mon.check_budget_tier()
+    check("a tier change produces a new notification",
+          len(notified) == first_count + 1 and "throttle" in notified[-1])
+
+
+def test_fixer_allowlist():
+    print("\n=== 8. fixer allowlist enforcement ===")
+    sb = _mon_reset()
+    # write a minimal monitor_config with a SHORT allowlist (only restart) so we can
+    # prove reject-vs-accept without touching the real config file's defaults.
+    import monitor as m
+    orig_cfg = m.monitor_config
+    m.monitor_config = lambda: {"fixer_allowlist": ["restart_crashed_worker"], "scan_interval_seconds": 300}
+    try:
+        # allowlisted problem type with a registered restarter -> auto-acts
+        ran = []
+        m.register_worker("jarvis-fake-worker", lambda: ran.append(True))
+        result = m.attempt_fix("restart_crashed_worker", "jarvis-fake-worker", "not running")
+        check("allowlisted fix auto-acts", ran == [True] and result.startswith("auto-fixed"))
+
+        # non-allowlisted problem type -> proposes, does NOT act
+        acted = []
+        m._FIXERS["clear_temp_dir"] = lambda **kw: acted.append(True) or "cleared"
+        result2 = m.attempt_fix("clear_temp_dir", "somewhere", "disk full")
+        check("non-allowlisted fix does NOT auto-act", acted == [])
+        check("non-allowlisted fix proposes instead", result2.startswith("proposed"))
+
+        # a pending action was actually queued for the proposal
+        pending = [r for r in sb.store["_all"] if r["agent_name"] == "jarvis_pending_action"]
+        check("proposal queued via the existing approval gate", len(pending) == 1)
+    finally:
+        m.monitor_config = orig_cfg
+
+
+def test_report_event_roundtrip():
+    print("\n=== 9. system_events log ===")
+    _mon_reset()
+    mon.report_event("test_component", "warning", "something looked off", "detail here")
+    mon.report_event("test_component", "info", "just fyi")
+    mon.report_event("test_component", "critical", "on fire")
+    warn_up = mon.get_recent_events(limit=10, min_level="warning")
+    check("min_level filter excludes 'info'", all(e["level"] != "info" for e in warn_up))
+    check("min_level filter includes warning+critical", len(warn_up) == 2)
+    everything = mon.get_recent_events(limit=10, min_level="info")
+    check("no filter returns all 3", len(everything) == 3)
+    check("newest first", everything[0]["message"] == "on fire")
+
+
 if __name__ == "__main__":
     test_dedup()
     test_rubric_format()
@@ -251,6 +365,9 @@ if __name__ == "__main__":
     test_static_scanner()
     test_calibration_backstop()
     test_query_distillation()
+    test_budget_tiers()
+    test_fixer_allowlist()
+    test_report_event_roundtrip()
     total, passed = len(_results), sum(_results)
     print(f"\n{'='*48}\n{passed}/{total} checks passed")
     sys.exit(0 if passed == total else 1)

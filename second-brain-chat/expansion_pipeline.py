@@ -344,6 +344,14 @@ def run_scout(focus_brief: str = "", sources: str = "both",
               cap: int = DEFAULT_SCOUT_CAP) -> str:
     """Run the scouts, dedupe against known URLs, and queue up to `cap` new findings.
     focus_brief defaults to a summary of recent capability gaps if not given."""
+    try:
+        import monitor
+        if not monitor.is_agent_allowed("expansion_pipeline"):
+            return ("Scouts are paused — the budget tier (throttle/shutdown) has paused "
+                    "non-essential automated agents. Check `check_budget` for details.")
+    except Exception:
+        pass  # monitor unavailable shouldn't block scouting
+
     brief = (focus_brief or "").strip() or _default_focus_brief()
     cap = max(1, min(int(cap or DEFAULT_SCOUT_CAP), DEFAULT_SCOUT_CAP))
 
@@ -918,14 +926,10 @@ def _commit_install(plan: dict) -> None:
 
 
 def _report_event(component: str, level: str, message: str, detail: str = "") -> None:
-    """Minimal shim to the (future) system_events log. Subsystem 2 will own this table;
-    until then, best-effort so failures still leave a trail."""
+    """Delegates to the Monitoring Agent's shared system_events log (monitor.py)."""
     try:
-        supabase.table("Agent Outputs").insert(
-            {"agent_name": "system_event", "output_text": json.dumps({
-                "component": component, "level": level, "message": message[:500],
-                "detail": detail[:500], "ts": _now_iso()})}
-        ).execute()
+        import monitor
+        monitor.report_event(component, level, message, detail)
     except Exception:
         pass
 
