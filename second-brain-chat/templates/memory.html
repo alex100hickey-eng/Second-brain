@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<title>Second Brain — Memory</title>
+<title>CLARVIS — Memory</title>
 <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32.png">
 <meta name="theme-color" content="#0a0e14">
 <style>
@@ -115,7 +115,7 @@
       const s = d.stats || {};
       statEl.textContent = `${s.sessions||0} conversations · ${s.messages||0} messages remembered${s.fts ? '' : ' · basic search'}`;
       if (!(d.sessions||[]).length) {
-        listEl.innerHTML = `<div class="empty">No conversations remembered yet.<br>Everything you and Jarvis discuss is stored here automatically.</div>`;
+        listEl.innerHTML = `<div class="empty">No conversations remembered yet.<br>Everything you and CLARVIS discuss is stored here automatically.</div>`;
         return;
       }
       listEl.innerHTML = d.sessions.map(x => card(x)).join('');

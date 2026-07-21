@@ -3472,6 +3472,7 @@ def _dispatch_tool_call(tool_name: str, tool_input: dict) -> str:
 
 # Human-friendly status lines shown live in the UI while each tool runs.
 TOOL_STATUS_LABELS = {
+    "get_word_count": "Counting words…",  # extensions/get_word_count.py (adopted self-expansion tool)
     "get_recent_agent_outputs": "Checking what your agents have found…",
     "log_note": "Saving that note…",
     "remember": "Committing that to memory…",

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<title>Second Brain — Home</title>
+<title>CLARVIS — Home</title>
 <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32.png">
 <meta name="theme-color" content="#0a0e14">
 <style>
@@ -151,7 +151,7 @@
 <body>
 
 <header>
-  <div class="brand"><div class="pulse"></div><span>Second Brain</span></div>
+  <div class="brand"><div class="pulse"></div><span>CLARVIS</span></div>
   <nav>
     <a href="/">Chat</a>
     <a href="/dashboard" class="active">Dashboard</a>
@@ -299,7 +299,7 @@
           ${c.summary ? `<div class="r-sub">${esc(c.summary)}</div>` : ''}
           <div class="r-meta">→ ${esc(c.folder||'?')}${c.tags ? ' · ' + esc(c.tags) : ''} · <span style="font-family:'SF Mono',monospace">${esc(c.filename)}</span></div>
         </div>`),
-      'No captured notes waiting.', 'Ask Jarvis to "capture this as a note" — it stages a file in vault_inbox/ to drag into Obsidian.'));
+      'No captured notes waiting.', 'Ask CLARVIS to "capture this as a note" — it stages a file in vault_inbox/ to drag into Obsidian.'));
 
     // System health indicator
     if (d.health && d.health.checks) {
@@ -328,7 +328,7 @@
           <div class="r-meta">${w.requests} req · estimated from pricing.json (verify)</div></div>
         ${featRows}`;
       panels.push(`<div class="panel"><h2>API Cost</h2>${(t.requests||w.requests) ? body :
-        `<div class="empty">No API usage recorded yet.<div class="hint">Chat with Jarvis and spend shows up here.</div></div>`}</div>`);
+        `<div class="empty">No API usage recorded yet.<div class="hint">Chat with CLARVIS and spend shows up here.</div></div>`}</div>`);
     }
 
     // Monitoring Agent: budget tier + worker status + recent incidents
@@ -363,7 +363,7 @@
           <div class="r-meta">${esc(t)}${a.ms ? ' · ' + a.ms + 'ms' : ''}</div>
         </div>`;
       }),
-      'No tool activity logged yet.', 'Every tool Jarvis runs is recorded here.'));
+      'No tool activity logged yet.', 'Every tool CLARVIS runs is recorded here.'));
 
     // Synthesized reports
     panels.push(panel('Synthesized Reports', (d.reports||[]).length,
@@ -392,7 +392,7 @@
           ${m.summary ? `<div class="r-sub">${esc(m.summary)}</div>` : ''}
           <div class="r-meta">${m.message_count} msg${m.when ? ' · ' + esc(m.when) : ''}</div>
         </div>`),
-      'No conversations remembered yet.', 'Everything you and Jarvis discuss is saved to Memory.'));
+      'No conversations remembered yet.', 'Everything you and CLARVIS discuss is saved to Memory.'));
 
     grid.innerHTML = panels.join('');
     refreshedEl.textContent = d.generated_at ? ('Updated ' + d.generated_at) : '';
