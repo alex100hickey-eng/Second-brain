@@ -799,3 +799,21 @@ before any change: `run_tests.py` 170/1 (whisper say-sample, finding #7), `test_
      never rewrites content. `_is_truncated()` = "no </html>".
 - Tests: 7 new checks in suite_website (detection, idempotent no-op on complete pages, append
   closers, drop mid-tag fragment). Bug + fix to be recorded in handoff open-items history.
+
+## Finding #4 — vault-sync iCloud eviction (DEGRADED) — [01:35 ET]
+- **Part 1 (DONE): make failures visible.** Rewrote `scripts/vault_sync.sh`:
+  - Every run stamps a timestamp + explicit status: IDLE (healthy, no changes) / SYNCED /
+    ERROR — so a healthy do-nothing run is now distinguishable from a broken one (before, both
+    looked like silence).
+  - Detects the iCloud `.git` eviction (`git rev-parse` guard) BEFORE any mutating command, and
+    reports every git failure (path gone / .git evicted / add / commit / push) to the monitor via
+    the new `scripts/report_event.py` — so a vault outage now surfaces in CLARVIS's incident log
+    and dashboard instead of dying silently in the log file.
+  - `report_event.py`: standalone CLI that writes the monitor's `system_event` row shape from any
+    background process (framework python for supabase/dotenv); REPORT_EVENT_DRYRUN=1 for tests.
+  - Verified all branches against a throwaway repo (IDLE / push-fail / .git-eviction) + one real
+    end-to-end info insert (row id 359, "monitoring wiring self-test"). Never touches vault content.
+- **Part 2 (NEEDS-ALEX): `--separate-git-dir` migration.** Deferred — the vault is live in iCloud
+  and likely open in Obsidian, and the required "test commit+push" verification can't be done
+  without either modifying vault content (forbidden) or conditions I can't guarantee. Ready-to-run
+  plan written up in OVERNIGHT_REPORT.md / handoff open-items.
