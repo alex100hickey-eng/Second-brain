@@ -29,8 +29,15 @@ All configuration and secrets live in the gitignored **`.env`** at the project r
 | `CLAUDE_API_KEY`, `SUPABASE_URL`, `SUPABASE_KEY`, `COMPOSIO_API_KEY` | API credentials |
 | `ACCESS_CODE` | Passphrase the chat UI requires (once per browser). Blank = open access. |
 | `FLASK_SECRET_KEY` | Session signing key (keep stable so logins survive restarts) |
+| `VAULT_PATH` | The agent-**writable**, git-synced vault copy (list/read/write_vault_note) |
 | `OBSIDIAN_VAULT_PATH` | The **read-only** Obsidian vault the note-search tools index |
 | `PORT` (5001), `HOST` (127.0.0.1), `FLASK_DEBUG` (0) | Runtime — safe defaults |
+| `JARVIS_RUNTIME` | `local`/`server`/`any` — which tasks this instance's worker claims (auto-detected) |
+| `TAVILY_API_KEY`, `SERPER_API_KEY`, `BRAVE_API_KEY` | Optional web-search providers (else keyless DuckDuckGo) |
+| `EMBED_MODEL_ID`, `MEMORY_SESSION_GAP` | Optional semantic-search model + memory session gap (minutes) |
+| `GITHUB_TOKEN` | **Optional**, read-only. Used only by the Self-Expanding Pipeline's scout (`expansion_pipeline.py`) to raise the GitHub API rate limit when searching repos. Unauthenticated search works too (just rate-limited). A classic PAT needs no scopes (or `public_repo`); a fine-grained token needs only public repository read. Never hardcode it. |
+
+See `.env.example` for the complete, commented list.
 
 ## Obsidian vault search (note tools)
 

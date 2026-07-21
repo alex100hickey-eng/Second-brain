@@ -817,3 +817,12 @@ before any change: `run_tests.py` 170/1 (whisper say-sample, finding #7), `test_
   and likely open in Obsidian, and the required "test commit+push" verification can't be done
   without either modifying vault content (forbidden) or conditions I can't guarantee. Ready-to-run
   plan written up in OVERNIGHT_REPORT.md / handoff open-items.
+
+## Finding #5 — .env.example completeness + GITHUB_TOKEN docs (WRONG) — [01:42 ET]
+- Rewrote `.env.example` to list EVERY variable the code reads, verified by grepping actual
+  `os.environ` usages: added VAULT_PATH, OBSIDIAN_VAULT_PATH, HOST, FLASK_DEBUG, JARVIS_RUNTIME,
+  TAVILY/SERPER/BRAVE keys, EMBED_MODEL_ID, MEMORY_SESSION_GAP, GITHUB_TOKEN (all commented with
+  one-line explanations + defaults). Required vs optional split clearly. No real secret values.
+  (OPENAI_API_KEY only appears as a string inside a test fixture — not a real dependency, omitted.)
+- Documented GITHUB_TOKEN in README config table + handoff Stack section: what reads it
+  (expansion scout repo search), that it's optional, and the minimal scope (public repo read).
