@@ -372,7 +372,7 @@ def suite_website(app, live):
     calls = {"n": 0}
 
     def fake_build(brief, port=8080, log=True, claude_client=None, supabase_client=None,
-                   progress=None, cinematic=False):
+                   progress=None, cinematic=False, on_existing="suffix"):
         calls["n"] += 1
         d = tempfile.mkdtemp(prefix="sbtest_site_")
         return {
@@ -401,6 +401,38 @@ def suite_website(app, live):
     finally:
         wca.create_website = orig_build
         wca._RECENT_BUILDS.clear()
+
+    # Ask-before-rebuild guard (audit finding #12): an existing site on disk must not be silently
+    # duplicated — create_website(on_existing='ask') raises SiteExistsError; the chat wrapper turns
+    # that into a confirmation prompt unless force=True.
+    section("website agent (existing-site rebuild guard)")
+    existing_slug = "sbtest_existing_site"
+    site_path = os.path.join(wca.SITES_DIR, existing_slug)
+    os.makedirs(site_path, exist_ok=True)
+
+    def fake_plan(claude, brief):
+        return {"slug": existing_slug, "name": "Existing", "tagline": "t",
+                "design": {"aesthetic": "x", "colors": {}}, "pages": [{"filename": "index.html"}]}
+
+    orig_plan = wca.plan_site
+    wca.plan_site = fake_plan
+    try:
+        raised = False
+        try:
+            wca.create_website("build the existing site", claude_client=object(), on_existing="ask")
+        except wca.SiteExistsError as se:
+            raised = True
+            check("create_website raises SiteExistsError for an existing slug", se.slug == existing_slug)
+        check("ask mode stops before building a duplicate", raised, "no SiteExistsError raised")
+        # chat wrapper: without force → a confirmation prompt, no build; with force it would proceed
+        wca._RECENT_BUILDS.clear()
+        msg = wca.create_website_for_chat("build the existing site", claude_client=object())
+        check("chat wrapper asks before rebuilding an existing site",
+              "already exists" in msg and "rebuild" in msg.lower(), msg[:120])
+    finally:
+        wca.plan_site = orig_plan
+        wca._RECENT_BUILDS.clear()
+        shutil.rmtree(site_path, ignore_errors=True)
 
     # Completion guard (audit finding #3): cinematic homepages truncated at max_tokens with no
     # </html>; a build must never ship a cut-off document.

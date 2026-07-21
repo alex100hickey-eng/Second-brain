@@ -869,3 +869,17 @@ before any change: `run_tests.py` 170/1 (whisper say-sample, finding #7), `test_
 - #10: Fixed the phantom `jarvis_tasktracker` filter comment (app.py) — clarified it's a defensive
   filter with no current writer (task_tracker.py is local SQLite only), kept for forward-safety
   rather than deleted.
+
+## Finding #11 — intro pricing note (COSMETIC) — [02:05 ET]
+- Kept the conservative $3/$15 Sonnet rate (deliberate). Added an explicit top-level
+  `_intro_pricing_note` in pricing.json: reported Sonnet spend over-reports actual by ~33% until
+  2026-09-01 (intro pricing), and how to set $2/$10 for exact figures. No rate change.
+
+## Finding #12 — inkling-1 duplicate / rebuild guard (COSMETIC) — [02:05 ET]
+- Did NOT delete inkling-1 (Alex's call; listed in OVERNIGHT_REPORT for him to keep/remove).
+- Extended the idempotency guard beyond its 5-min TTL: create_website now takes on_existing=
+  'suffix'|'ask'; in 'ask' mode it raises SiteExistsError (after the cheap planning stage, before
+  the expensive build) when sites/<slug> already exists. create_website_for_chat defaults to 'ask'
+  and returns a confirmation prompt instead of silently building a `<slug>-N` duplicate; a new
+  `force` param (wired into the create_website tool schema + SYSTEM_PROMPT) proceeds after Alex
+  confirms. 4 new offline tests in suite_website. CLI/tests keep the historical 'suffix' behavior.

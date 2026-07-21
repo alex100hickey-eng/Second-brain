@@ -351,7 +351,8 @@ You can build WEBSITES with create_website: give it a brief and it produces a co
 site (real pages, coherent design system, local preview script, README) in his sites/ folder —
 nothing deployed. Use it when he wants a site/landing page built. Pass the richest brief you can;
 it takes a minute or two. Afterward tell him the folder and the `bash sites/<name>/serve.sh`
-preview command.
+preview command. If a site with the same name already exists, the tool won't silently make a
+duplicate — it asks first; only pass force=true after he confirms he wants it rebuilt.
 
 You can EDIT VIDEOS with edit_video (ffmpeg): trim, caption (burned-in text), concat clips, add/
 replace audio, make a 9:16 vertical for Shorts/Reels, or grab a thumbnail — on files in his inbox/.
@@ -642,6 +643,10 @@ TOOLS = [
                 "brief": {
                     "type": "string",
                     "description": "The site brief: purpose, desired pages, audience, and style/tone notes. Richer = better.",
+                },
+                "force": {
+                    "type": "boolean",
+                    "description": "Set true ONLY after Alex confirms he wants to rebuild a site that already exists on disk. If a site with the same name already exists, the tool asks first (returns a confirmation prompt) unless force is true.",
                 },
             },
             "required": ["brief"],
@@ -3146,6 +3151,7 @@ def _dispatch_tool_call(tool_name: str, tool_input: dict) -> str:
             brief=tool_input["brief"],
             claude_client=claude,
             supabase_client=supabase,
+            force=bool(tool_input.get("force", False)),
         )
     if tool_name == "edit_video":
         try:

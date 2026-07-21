@@ -950,11 +950,22 @@ bash serve.sh          # then open http://localhost:{port}
 """
 
 
+class SiteExistsError(Exception):
+    """Raised (in on_existing='ask' mode) when a site for the planned slug already exists in
+    sites/, so the caller can confirm with the user before building a suffixed duplicate —
+    the idempotency guard's TTL only covers the last few minutes (audit finding #12)."""
+    def __init__(self, slug: str, path: str):
+        self.slug, self.path = slug, path
+        super().__init__(f"A site '{slug}' already exists at {path}")
+
+
 def create_website(brief: str, port: int = DEFAULT_PREVIEW_PORT, log: bool = True,
                    claude_client: Anthropic = None, supabase_client=None,
-                   progress=None, cinematic: bool = False) -> dict:
+                   progress=None, cinematic: bool = False, on_existing: str = "suffix") -> dict:
     """Full pipeline. Returns {slug, dir, pages, plan, review_notes}.
-    cinematic=True prepends a scroll-scrubbed 'travel-in' hero intro to the home page."""
+    cinematic=True prepends a scroll-scrubbed 'travel-in' hero intro to the home page.
+    on_existing: 'suffix' (default — build alongside as <slug>-N, the historical behavior for
+    the CLI/tests) or 'ask' (raise SiteExistsError so a caller can confirm before duplicating)."""
     claude = claude_client or Anthropic(api_key=CLAUDE_API_KEY)
 
     def _p(msg):
@@ -974,6 +985,9 @@ def create_website(brief: str, port: int = DEFAULT_PREVIEW_PORT, log: bool = Tru
 
     slug = plan["slug"]
     site_dir = os.path.join(SITES_DIR, slug)
+    # In 'ask' mode, stop before building a duplicate so the caller can confirm with the user.
+    if on_existing == "ask" and os.path.isdir(site_dir):
+        raise SiteExistsError(slug, site_dir)
     # no-clobber: suffix if the slug dir already exists
     n = 1
     while os.path.exists(site_dir):
@@ -1091,7 +1105,7 @@ def _normalize_brief(brief: str) -> str:
 
 
 def create_website_for_chat(brief: str, claude_client=None, supabase_client=None,
-                            cinematic=None) -> str:
+                            cinematic=None, force=False) -> str:
     # auto-enable the cinematic intro when the brief asks for that kind of energy
     if cinematic is None:
         cinematic = any(h in brief.lower() for h in _CINEMATIC_HINTS)
@@ -1116,7 +1130,19 @@ def create_website_for_chat(brief: str, claude_client=None, supabase_client=None
 
         try:
             r = create_website(brief, claude_client=claude_client, supabase_client=supabase_client,
-                               cinematic=cinematic)
+                               cinematic=cinematic, on_existing=("suffix" if force else "ask"))
+        except SiteExistsError as se:
+            when = ""
+            try:
+                when = " (built " + time.strftime("%Y-%m-%d %H:%M",
+                        time.localtime(os.path.getmtime(se.path))) + ")"
+            except OSError:
+                pass
+            return (f"A site called **{se.slug}** already exists at `sites/{se.slug}/`{when}. "
+                    "I didn't rebuild it, to avoid leaving a duplicate on disk. Want me to build "
+                    "a fresh copy anyway (it'll be saved alongside as "
+                    f"`{se.slug}-N/`), or would you rather update the existing one? Say "
+                    "\"rebuild it\" and I'll go ahead.")
         except Exception as e:
             return (f"Website build failed: {e}\n\n"
                     "Nothing was saved. This is usually a transient model/network hiccup — "

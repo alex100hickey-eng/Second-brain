@@ -2,6 +2,7 @@
   "_README": "COST-TRACKING PRICE TABLE — PLEASE VERIFY THESE NUMBERS. Prices are USD per 1,000,000 tokens (per-MTok), split into input and output. Cost tracking (observability.py) multiplies each Claude API call's token usage by these rates to estimate spend on the dashboard. Local models (whisper.cpp transcription, model2vec embeddings) are FREE — they run on-device and cost nothing. These figures were seeded 2026-07-20 from Anthropic's published pricing at that time; confirm the current numbers at https://platform.claude.com/docs/en/pricing and edit below. The app currently calls claude-sonnet-5 for everything.",
   "_verify_at": "https://platform.claude.com/docs/en/pricing",
   "_seeded_on": "2026-07-20",
+  "_intro_pricing_note": "DELIBERATELY CONSERVATIVE: claude-sonnet-5 is priced here at the STANDARD $3/$15 rate, but Anthropic's intro pricing of $2/$10 is in effect through 2026-08-31. So until 2026-09-01, reported Sonnet spend OVER-reports actual spend by ~33%. This over-estimate is intentional (better to overstate cost than understate it); set input=2.00/output=10.00 below if you want exact figures before then.",
   "_units": "USD per 1,000,000 tokens",
   "currency": "USD",
   "per_million": true,
