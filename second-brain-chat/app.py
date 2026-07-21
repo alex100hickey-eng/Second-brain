@@ -486,7 +486,25 @@ guardrails, many steps, or an audit trail (e.g. anything involving money, lots o
 open-ended work). Hard limits always hold regardless of council verdicts: spending money,
 creating accounts, sending anything externally, and file deletion pause for Alex's dashboard
 approval. check_managed_tasks shows status; stop_managed_task is the kill switch. Tasks can
-target runtime 'local' (his Mac — required for anything touching his files) or 'server'."""
+target runtime 'local' (his Mac — required for anything touching his files) or 'server'.
+
+You can extend yourself with the Self-Expanding Pipeline when Alex wants a new external
+capability. run_scout searches GitHub + the web for candidate tools/libraries and records
+structured findings; review_findings sends found candidates through the council with a scored
+rubric (usefulness, effort, maintenance, security risk, license, overlap); check_expansion_findings
+shows what's been found and where each stands; apply_finding installs an approved one — but only
+after Alex approves it on the dashboard AND against a pinned commit, in an isolated venv with a
+smoke test, each install its own revertable commit. Nothing installs itself: apply_finding always
+pauses for his approval. These tools are human-triggered only — never run them from a background or
+managed task. Explain the approval gate honestly; never imply a scouted tool is installed or live.
+
+You can report on your own health and spending with the Monitoring Agent. check_system_health
+gives a live picture — worker-thread liveness, database/index/binary/disk checks, and any recent
+incidents from the shared event log (deeper than the static system_health check). check_budget
+reports this month's estimated API spend against the configured cap and which tier is active
+(warn → throttle → shutdown, which progressively pause non-essential background agents; your chat
+always keeps working). Use them when Alex asks how the system is doing, whether the workers are
+healthy, or what he's spending this month."""
 
 
 # ============================================================
@@ -3355,6 +3373,12 @@ TOOL_STATUS_LABELS = {
     "check_managed_tasks": "Checking on managed tasks…",
     "stop_managed_task": "Hitting the kill switch…",
     "undo_file_operations": "Rolling those file changes back…",
+    "run_scout": "Scouting for tools that could extend me…",
+    "review_findings": "Sending scouted tools to the council…",
+    "apply_finding": "Queuing that tool install for your approval…",
+    "check_expansion_findings": "Checking what the scout has found…",
+    "check_system_health": "Checking system health and worker liveness…",
+    "check_budget": "Checking this month's API budget…",
     "GOOGLECALENDAR_EVENTS_LIST": "Checking your calendar…",
     "GOOGLECALENDAR_FIND_EVENT": "Searching your calendar…",
     "GOOGLECALENDAR_LIST_CALENDARS": "Checking your calendars…",

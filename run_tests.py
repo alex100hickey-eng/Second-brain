@@ -1052,6 +1052,19 @@ def suite_observability(app, live):
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
+    # --- modular-tool hygiene (audit finding #6): every native tool carries a UI status
+    # label, and the expansion/monitor tools are described in the system prompt. This guards
+    # the "sacred pattern" (schema + function + routing + label + prompt mention) from silent drift.
+    native_tools = [t["name"] for t in app.TOOLS
+                    if not t["name"].startswith(("GOOGLECALENDAR_", "GMAIL_"))]
+    missing_label = [n for n in native_tools if n not in app.TOOL_STATUS_LABELS]
+    check("every native tool has a TOOL_STATUS_LABELS entry", not missing_label, str(missing_label))
+    described = [n for n in ("run_scout", "review_findings", "apply_finding",
+                             "check_expansion_findings", "check_system_health", "check_budget")
+                 if n in app.SYSTEM_PROMPT]
+    check("expansion + monitor tools are named in SYSTEM_PROMPT", len(described) == 6,
+          f"named: {described}")
+
     # --- thread-local attribution context ---
     obs.set_trigger("drafter")
     check("current_trigger reflects the set trigger", obs.current_trigger() == "drafter")

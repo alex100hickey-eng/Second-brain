@@ -826,3 +826,13 @@ before any change: `run_tests.py` 170/1 (whisper say-sample, finding #7), `test_
   (OPENAI_API_KEY only appears as a string inside a test fixture — not a real dependency, omitted.)
 - Documented GITHUB_TOKEN in README config table + handoff Stack section: what reads it
   (expansion scout repo search), that it's optional, and the minimal scope (public repo read).
+
+## Finding #6 — six tools missing labels + prompt mentions (COSMETIC) — [01:50 ET]
+- Added TOOL_STATUS_LABELS entries for run_scout, review_findings, apply_finding,
+  check_expansion_findings, check_system_health, check_budget (was falling back to a generic
+  "Working on it…").
+- Added two SYSTEM_PROMPT paragraphs describing the Self-Expanding Pipeline tools and the
+  Monitoring Agent tools (none were named before).
+- Added a regression guard in suite_observability: every native tool must have a status label,
+  and all six expansion/monitor tools must be named in SYSTEM_PROMPT — so the "sacred pattern"
+  can't silently drift again.
