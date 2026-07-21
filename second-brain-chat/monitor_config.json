@@ -1,0 +1,9 @@
+{
+  "_comment": "Edit this to change what the fixer may do automatically. Anything not listed here always proposes a fix and waits for your dashboard approval.",
+  "fixer_allowlist": [
+    "restart_crashed_worker",
+    "clear_temp_dir",
+    "retry_transient_api"
+  ],
+  "scan_interval_seconds": 300
+}

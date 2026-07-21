@@ -948,6 +948,11 @@ def _managed_worker(post_to_chat) -> None:
                         print(f"Warning: couldn't post managed-task result to chat: {e}")
         except Exception as e:
             print(f"Warning: managed worker cycle failed: {e}")
+            try:
+                import monitor
+                monitor.report_event("jarvis-managed-worker", "error", "worker cycle failed", str(e))
+            except Exception:
+                pass
         time.sleep(8)
 
 

@@ -1,0 +1,12 @@
+{
+  "_comment": "PLACEHOLDER NUMBERS -- Alex: set monthly_budget_usd to your real monthly cap before relying on this.",
+  "monthly_budget_usd": 20.0,
+  "tiers": {
+    "warn": 0.5,
+    "throttle": 0.8,
+    "shutdown": 1.0
+  },
+  "essential_features": [
+    "chat"
+  ]
+}

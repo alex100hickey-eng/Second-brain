@@ -3004,6 +3004,10 @@ def _task_worker() -> None:
                     print(f"Background task {row['id']} finished: {task['status']}")
         except Exception as e:
             print(f"Warning: task worker cycle failed: {e}")
+            try:
+                monitor.report_event("jarvis-task-worker", "error", "worker cycle failed", str(e))
+            except Exception:
+                pass
         time.sleep(8)
 
 
@@ -3236,6 +3240,10 @@ def _dispatch_tool_call(tool_name: str, tool_input: dict) -> str:
         return expansion_pipeline.apply_finding(finding_id=tool_input["finding_id"])
     if tool_name == "check_expansion_findings":
         return expansion_pipeline.check_expansion_findings(limit=tool_input.get("limit", 12))
+    if tool_name == "check_system_health":
+        return monitor.check_system_health()
+    if tool_name == "check_budget":
+        return monitor.budget_status_text()
     if tool_name in EXTENSION_FUNCS:
         try:
             return str(EXTENSION_FUNCS[tool_name](**tool_input))
@@ -3465,6 +3473,7 @@ def get_dashboard_data() -> dict:
         "background_tasks": get_background_tasks(),
         "managed_tasks": task_manager.get_managed_tasks(),
         "expansion": expansion_pipeline.get_expansion_findings(),
+        "monitor": monitor.get_monitor_dashboard_data(),
     }
 
 
@@ -3653,6 +3662,7 @@ def get_home_data() -> dict:
         "drafts": _safe(lambda: run_drafter.dashboard_rows(8), []),
         "memory": _safe(lambda: MEMORY.list_sessions(limit=5), []),
         "expansion": _safe(expansion_pipeline.get_expansion_findings, {"counts": {}, "recent": []}),
+        "monitor": _safe(monitor.get_monitor_dashboard_data, {}),
         "captured": _safe(lambda: note_capture.list_pending(8), []),
         "activity": _safe(lambda: observability.get_observability().recent_tools(12), []),
         "cost": _safe(lambda: observability.get_observability().cost_summary(), {}),
@@ -3699,6 +3709,19 @@ expansion_pipeline.init(
     feasibility_fn=feasibility_judge,
 )
 TOOLS.extend(expansion_pipeline.TOOL_SCHEMAS)
+
+# Monitoring Agent (health + cost) — lives in monitor.py, extends observability.py's
+# cost tracking with budget tiers and health.py's static check with worker liveness
+# + a shared system_events log. Runs its own periodic scan (daemon thread).
+import monitor  # noqa: E402 — needs claude/supabase/health above to exist first
+
+monitor.init(supabase_client=supabase, claude_client=claude,
+            post_to_chat_fn=save_chat_message, health_mod=health)
+monitor.register_worker("jarvis-managed-worker",
+                        lambda: task_manager.start_managed_worker(post_to_chat=save_chat_message))
+monitor.register_worker("jarvis-task-worker", start_task_worker)
+TOOLS.extend(monitor.TOOL_SCHEMAS)
+monitor.start_monitor(post_to_chat_fn=save_chat_message)
 
 
 # ============================================================
