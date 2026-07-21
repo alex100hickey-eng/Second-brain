@@ -31,11 +31,20 @@ Document shape expected by reindex():
 import os
 import re
 import json
+import math
 import hashlib
 import sqlite3
 import threading
+from datetime import datetime, timezone
 
 import embeddings
+
+# Retrieval-ranking knobs (Priority 3 tuning). Relevance dominates; recency is a gentle
+# secondary nudge so a fresh doc edges out a stale one of similar relevance — never overturns
+# a clearly better match. Near-identical results are collapsed so one topic doesn't hog the list.
+RECENCY_WEIGHT = 0.15      # 0 = pure relevance; 1 = pure recency
+_RECENCY_HALFLIFE_DAYS = 30.0
+_DEDUPE_JACCARD = 0.82     # token-overlap above this = treat as the same result
 
 DEFAULT_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "semantic_index.db")
 
@@ -216,7 +225,69 @@ class SemanticIndex:
         if source_types:
             wanted = set(source_types)
             results = [r for r in results if r["source_type"] in wanted]
-        return results[:limit]
+        return self._rerank(results, limit)
+
+    # ---------------------------------------------------------------- ranking
+    @staticmethod
+    def _tokens(text: str) -> set:
+        return set(t for t in re.findall(r"[a-z0-9]+", (text or "").lower()) if len(t) > 2)
+
+    def _dedupe(self, results: list) -> list:
+        """Collapse near-identical results. Input is score-sorted, so the first occurrence of a
+        topic is the best-scored — later near-duplicates are dropped. Two results are 'the same'
+        if they share a ref, or their title+snippet token sets overlap above the Jaccard cutoff."""
+        kept, kept_sigs, seen_refs = [], [], set()
+        for r in results:
+            ref = (r.get("ref") or "").strip()
+            if ref and (r["source_type"], ref) in seen_refs:
+                continue
+            sig = self._tokens((r.get("title") or "") + " " + (r.get("snippet") or ""))
+            dup = False
+            for prev in kept_sigs:
+                union = sig | prev
+                if union and len(sig & prev) / len(union) >= _DEDUPE_JACCARD:
+                    dup = True
+                    break
+            if dup:
+                continue
+            kept.append(r)
+            kept_sigs.append(sig)
+            if ref:
+                seen_refs.add((r["source_type"], ref))
+        return kept
+
+    def _recency_factor(self, updated) -> float:
+        """Map a document's 'updated' stamp to a [0,1] recency score (recent → ~1, old → →0)
+        via exponential decay. Unknown/unparseable timestamps get a neutral-low 0.3 so they
+        aren't unfairly boosted or buried."""
+        if not updated:
+            return 0.3
+        try:
+            dt = datetime.fromisoformat(str(updated).replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            age_days = (datetime.now(timezone.utc) - dt).total_seconds() / 86400.0
+        except (ValueError, TypeError):
+            return 0.3
+        return math.exp(-max(age_days, 0.0) / _RECENCY_HALFLIFE_DAYS)
+
+    def _rerank(self, results: list, limit: int) -> list:
+        """Dedupe, then re-rank by a blend of (relevance, recency) so the single best match
+        across ALL sources surfaces first and stale near-duplicates don't crowd it out."""
+        if not results:
+            return results
+        deduped = self._dedupe(results)
+        scores = [r["score"] for r in deduped]
+        lo, hi = min(scores), max(scores)
+        span = (hi - lo) or 1.0
+        for r in deduped:
+            base = (r["score"] - lo) / span  # normalize relevance to [0,1] within the candidates
+            rec = self._recency_factor(r.get("updated"))
+            r["_rank"] = base * (1 - RECENCY_WEIGHT) + rec * RECENCY_WEIGHT
+        deduped.sort(key=lambda r: r["_rank"], reverse=True)
+        for r in deduped:
+            r.pop("_rank", None)
+        return deduped[:limit]
 
     def _semantic_search(self, query: str, k: int) -> list:
         ids, matrix = self._load_matrix()

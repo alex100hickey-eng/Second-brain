@@ -945,3 +945,16 @@ before any change: `run_tests.py` 170/1 (whisper say-sample, finding #7), `test_
   authoritative "final" event ("streaming works"). Fallback path covered by suite_streaming.
 - New instance workers quiet (0 incidents since restart). Test artifact left on disk (not deleted
   per rules): synthesized/20260721-overnight-test-note.md — listed in OVERNIGHT_REPORT for cleanup.
+
+---
+
+# PRIORITY 3 — Smarter brain — 2026-07-21
+
+## P3.3 — Retrieval tuning — [02:55 ET]
+- Added a re-rank layer to semantic_index.SemanticIndex.search(): _dedupe (collapse near-identical
+  hits by shared ref or ≥0.82 token-Jaccard, keeping the higher-scored), _recency_factor (exp decay,
+  30-day half-life; unknown→neutral 0.3), and _rerank (blend normalized relevance with recency at
+  weight 0.15 so relevance dominates and recency only breaks near-ties). The single best match across
+  all sources now surfaces first and stale duplicates don't crowd the list.
+- Tests: new suite_retrieval (7 checks) — dedupe collapse+keep-best, recency ordering, tie-break by
+  recency, strong-relevance-beats-weak-recent, and a known-answer fixture query surfacing the right note.

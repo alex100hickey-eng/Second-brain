@@ -1501,6 +1501,63 @@ def suite_taskman(app, live):
         tm._call = saved_call
 
 
+def suite_retrieval(app, live):
+    """Retrieval tuning (Priority 3): dedupe near-identical hits, recency weighting, and a
+    re-rank so the single best match across all sources surfaces first. Known-answer queries."""
+    section("retrieval tuning (dedupe + recency + re-rank)")
+    import semantic_index as si
+    from datetime import datetime, timezone, timedelta
+
+    tmp = tempfile.mkdtemp(prefix="sbtest_retr_")
+    idx = si.SemanticIndex(db_path=os.path.join(tmp, "idx.db"))
+    try:
+        now = datetime.now(timezone.utc)
+        recent = (now - timedelta(days=1)).isoformat()
+        old = (now - timedelta(days=200)).isoformat()
+
+        # 1) dedupe collapses near-identical results, keeping the higher-scored (first-seen).
+        res = [
+            {"source_type": "note", "title": "Leg day workout plan", "snippet": "squats deadlifts lunges for legs", "ref": "a.md", "updated": recent, "score": 0.9},
+            {"source_type": "note", "title": "Leg day workout plan", "snippet": "squats deadlifts lunges for legs", "ref": "b.md", "updated": recent, "score": 0.7},
+            {"source_type": "report", "title": "Camera buying guide", "snippet": "mirrorless vs dslr sensor size", "ref": "c.md", "updated": old, "score": 0.6},
+        ]
+        deduped = idx._dedupe(res)
+        check("dedupe collapses near-identical results", len(deduped) == 2, str(len(deduped)))
+        check("dedupe keeps the higher-scored of a duplicate pair", deduped[0]["score"] == 0.9)
+
+        # 2) recency factor: recent > old; unknown is neutral-low.
+        check("recency factor rewards recent over old", idx._recency_factor(recent) > idx._recency_factor(old))
+        check("unknown timestamp gets a neutral-low factor", 0.2 < idx._recency_factor("") < 0.4)
+
+        # 3) re-rank: between two equally-relevant docs, the recent one wins.
+        tie = [
+            {"source_type": "note", "title": "Sprint mechanics A", "snippet": "knee drive stride", "ref": "x", "updated": old, "score": 0.8},
+            {"source_type": "note", "title": "Sprint mechanics B", "snippet": "arm swing posture", "ref": "y", "updated": recent, "score": 0.8},
+        ]
+        check("recency breaks ties (recent first)", idx._rerank(tie, 5)[0]["ref"] == "y")
+
+        # 4) re-rank: a clearly stronger relevance still beats a weak-but-recent result.
+        rel = [
+            {"source_type": "note", "title": "Best match", "snippet": "exactly what you asked", "ref": "best", "updated": old, "score": 0.95},
+            {"source_type": "note", "title": "Weak recent", "snippet": "barely related", "ref": "weak", "updated": recent, "score": 0.30},
+        ]
+        check("strong relevance still outranks a weak-but-recent result",
+              idx._rerank(rel, 5)[0]["ref"] == "best")
+
+        # 5) integration: a known-answer query against fixture data surfaces the right doc first.
+        idx.reindex([
+            {"source_type": "note", "source_id": "n1", "title": "Protein intake for muscle", "text": "how much protein per day to build muscle creatine whey", "ref": "n1.md", "updated": recent},
+            {"source_type": "note", "source_id": "n2", "title": "Sprint start blocks", "text": "block settings reaction time drive phase sprinting", "ref": "n2.md", "updated": recent},
+            {"source_type": "report", "source_id": "r1", "title": "Camera comparison", "text": "mirrorless sensor lens mount autofocus", "ref": "r1.md", "updated": old},
+        ])
+        hits = idx.search("how much protein to build muscle", limit=3)
+        check("known-answer query surfaces the right note first",
+              bool(hits) and hits[0]["title"] == "Protein intake for muscle",
+              str([h["title"] for h in hits]))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def suite_streaming(app, live):
     """Chat streaming degrades cleanly: if the streaming API call fails mid-response, the turn
     is retried once as a non-streaming call and the message is recovered, not lost (Priority 2)."""
@@ -1651,6 +1708,7 @@ SUITES = {
     "taskman": suite_taskman,
     "streaming": suite_streaming,
     "jobs": suite_jobs,
+    "retrieval": suite_retrieval,
 }
 
 
