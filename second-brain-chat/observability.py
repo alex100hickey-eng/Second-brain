@@ -245,6 +245,32 @@ class Observability:
         return {"today": agg(today_since), "week": agg(week_since), "by_feature": by_feature,
                 "pricing_note": "Estimated from ../pricing.json — verify those rates."}
 
+    # ---- reads: monthly rollup (added for the budget/tier monitor) ----
+    def _month_start_iso(self) -> str:
+        n = _now()
+        return n.replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
+
+    def monthly_summary(self) -> dict:
+        """This calendar month's spend, total + by feature/agent. Used by the budget
+        tier engine — never call this from a hot path, it's a small aggregate query."""
+        since = self._month_start_iso()
+        with self._lock:
+            total = self._conn.execute(
+                "SELECT COUNT(*) n, COALESCE(SUM(cost),0) c FROM api_usage WHERE ts >= ?",
+                (since,)
+            ).fetchone()
+            by_feat_rows = self._conn.execute(
+                "SELECT feature, COUNT(*) n, COALESCE(SUM(cost),0) c FROM api_usage "
+                "WHERE ts >= ? GROUP BY feature ORDER BY c DESC", (since,)
+            ).fetchall()
+        return {
+            "since": since,
+            "requests": total["n"],
+            "cost": round(total["c"], 4),
+            "by_feature": [{"feature": r["feature"], "requests": r["n"], "cost": round(r["c"], 4)}
+                           for r in by_feat_rows],
+        }
+
 
 # ---- singleton --------------------------------------------------------------
 _OBS = None

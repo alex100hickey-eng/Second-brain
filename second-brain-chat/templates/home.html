@@ -249,6 +249,28 @@
         </div>`),
       'No council runs yet.', 'Ask "run this through the council" or "is this feasible: …".'));
 
+    // Expansion pipeline (Scout → Council → Applicator)
+    {
+      const ex = d.expansion || {counts:{}, recent:[]};
+      const counts = ex.counts || {};
+      const order = ['found','under_review','approved','installed','deferred','rejected','failed'];
+      const summary = order.filter(s => counts[s]).map(s => `${counts[s]} ${s.replace('_',' ')}`).join(' · ');
+      const total = Object.values(counts).reduce((a,b) => a+b, 0);
+      const body = (summary ? `<div class="r-meta" style="padding:2px 0 6px">${esc(summary)}</div>` : '') +
+        rows(ex.recent||[], f => {
+          const dec = f.decision ? ` <span class="pill">${esc(f.decision)}</span>` : '';
+          const risk = (f.security_risk!=null) ? ` · risk ${esc(String(f.security_risk))}/5` : '';
+          return `
+        <div class="row">
+          <div class="r-title"><span class="status-dot st-${esc(f.status)}"></span>${f.url ? `<a href="${esc(f.url)}" target="_blank" rel="noopener">${esc(f.name||f.url)}</a>` : esc(f.name||'(unnamed)')}${dec}</div>
+          <div class="r-sub">${esc(f.what||'')}</div>
+          <div class="r-meta">#${f.id} · ${esc(f.source||'?')} · ${esc((f.status||'').replace('_',' '))}${risk}</div>
+        </div>`;
+        });
+      panels.push(panel('Expansion Pipeline', total, body,
+        'No findings yet.', 'Say "run the scouts" to discover tools; then "review findings" and "apply finding N".'));
+    }
+
     // Agent outputs
     panels.push(panel('Recent Agent Activity', (d.agent_outputs||[]).length,
       rows(d.agent_outputs||[], a => `
@@ -307,6 +329,27 @@
         ${featRows}`;
       panels.push(`<div class="panel"><h2>API Cost</h2>${(t.requests||w.requests) ? body :
         `<div class="empty">No API usage recorded yet.<div class="hint">Chat with Jarvis and spend shows up here.</div></div>`}</div>`);
+    }
+
+    // Monitoring Agent: budget tier + worker status + recent incidents
+    if (d.monitor) {
+      const m = d.monitor;
+      const b = m.budget || {};
+      const tierColor = {ok:'#39d98a', warn:'#e2b93b', throttle:'#ff9f43', shutdown:'#ff6b6b'}[b.tier] || '#6b7688';
+      const workers = Object.entries(m.worker_status || {});
+      const workerRows = workers.map(([name, alive]) => `
+        <div class="row"><div class="r-title">
+          <span style="color:${alive ? '#39d98a' : '#ff6b6b'}">${alive ? '✓' : '✗'}</span> ${esc(name)}
+        </div></div>`).join('');
+      const eventRows = (m.recent_events || []).slice(0, 6).map(e => `
+        <div class="row"><div class="r-title">${esc((e.level||'').toUpperCase())} · ${esc(e.component||'?')}</div>
+          <div class="r-sub">${esc(e.message||'')}</div></div>`).join('');
+      const body = `
+        <div class="row"><div class="r-title">Budget: <span style="color:${tierColor}">${esc((b.tier||'ok').toUpperCase())}</span></div>
+          <div class="r-meta">$${(b.spend||0).toFixed(2)} / $${(b.budget||0).toFixed(2)} this month (${((b.pct||0)*100).toFixed(0)}%)</div></div>
+        ${workerRows}
+        ${eventRows}`;
+      panels.push(`<div class="panel"><h2>Budget &amp; Incidents ${m.incident_count ? `<span class="count">${m.incident_count}</span>` : ''}</h2>${body}</div>`);
     }
 
     // Recent activity (tool audit log)
