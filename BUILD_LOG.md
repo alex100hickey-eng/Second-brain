@@ -883,3 +883,10 @@ before any change: `run_tests.py` 170/1 (whisper say-sample, finding #7), `test_
   and returns a confirmation prompt instead of silently building a `<slug>-N` duplicate; a new
   `force` param (wired into the create_website tool schema + SYSTEM_PROMPT) proceeds after Alex
   confirms. 4 new offline tests in suite_website. CLI/tests keep the historical 'suffix' behavior.
+
+## Doc updates — handoff reflects reality + operational logs (COSMETIC) — [02:10 ET]
+- Updated handoff §4 Current State: audit-fix run, thread-safety fix + quiet workers, durable
+  app.log, and a documented list of all operational logs (were undocumented — audit note).
+- Updated handoff §5: recorded the resolved audit findings (incl. the cinematic truncation bug the
+  audit flagged as missing from the "comprehensive" handoff), and turned open-item 4 into a
+  ready-to-run `--separate-git-dir` migration plan for the vault (Alex-run, backup-first).
