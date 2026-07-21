@@ -1,0 +1,31 @@
+{
+  "_README": "COST-TRACKING PRICE TABLE — PLEASE VERIFY THESE NUMBERS. Prices are USD per 1,000,000 tokens (per-MTok), split into input and output. Cost tracking (observability.py) multiplies each Claude API call's token usage by these rates to estimate spend on the dashboard. Local models (whisper.cpp transcription, model2vec embeddings) are FREE — they run on-device and cost nothing. These figures were seeded 2026-07-20 from Anthropic's published pricing at that time; confirm the current numbers at https://platform.claude.com/docs/en/pricing and edit below. The app currently calls claude-sonnet-5 for everything.",
+  "_verify_at": "https://platform.claude.com/docs/en/pricing",
+  "_seeded_on": "2026-07-20",
+  "_units": "USD per 1,000,000 tokens",
+  "currency": "USD",
+  "per_million": true,
+  "models": {
+    "claude-sonnet-5": {
+      "input": 3.00,
+      "output": 15.00,
+      "_note": "Standard pricing. Intro pricing of $2.00 input / $10.00 output was in effect through 2026-08-31 — if you're reading this before then, the real rate is lower; adjust if you want exact figures. This is the model the app actually uses."
+    },
+    "claude-opus-4-8": {
+      "input": 5.00,
+      "output": 25.00,
+      "_note": "Not currently used by the app; here for completeness in case you switch models."
+    },
+    "claude-haiku-4-5": {
+      "input": 1.00,
+      "output": 5.00,
+      "_note": "Not currently used by the app."
+    }
+  },
+  "cache_multipliers": {
+    "_note": "Rough multipliers vs the input rate, for prompt-caching. cache_read ~0.1x input, cache_write (5-min TTL) ~1.25x input. Applied if the API reports cache token usage.",
+    "cache_read": 0.1,
+    "cache_write": 1.25
+  },
+  "default_model_if_unknown": "claude-sonnet-5"
+}

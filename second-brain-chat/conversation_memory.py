@@ -91,6 +91,23 @@ def _tokens(text: str) -> list:
     return [w for w in words if len(w) > 2 and w not in _STOPWORDS]
 
 
+def _semantic_rerank(query: str, results: list) -> list:
+    """Re-rank keyword candidates by meaning using the local embedding model, if present.
+    Soft-imports embeddings so this module stays standalone/testable — if the model or
+    package is unavailable, the input (keyword order) is returned unchanged."""
+    if not results:
+        return results
+    try:
+        import embeddings  # local, fail-soft
+        return embeddings.rerank(
+            query, results,
+            text_of=lambda r: f"{r.get('title','')} {r.get('summary','')} {r.get('snippet','')}",
+            kw_of=lambda r: r.get("score", 0),
+        )
+    except Exception:
+        return results
+
+
 class ConversationMemory:
     def __init__(self, db_path: str = DEFAULT_DB, summarizer=None):
         self.db_path = db_path
@@ -282,10 +299,16 @@ class ConversationMemory:
     # ---------------------------------------------------------------- search
     def search(self, query: str, limit: int = 6) -> list:
         """Return matching sessions with the best-matching snippet from each.
-        Result: [{session_id, title, summary, when, ended_at, message_count, snippet, role}]."""
+        Result: [{session_id, title, summary, when, ended_at, message_count, snippet, role}].
+        Keyword recall finds candidates; if the local embedding model is available the
+        candidate set is SEMANTICALLY re-ranked (so meaning-based recall wins), with the
+        keyword order preserved as the graceful fallback."""
         toks = _tokens(query)
         if not toks:
             return []
+        # Over-fetch candidates so the semantic re-rank has room to reorder.
+        raw_limit = limit
+        limit = max(limit, 12)
         hits = {}  # session_id -> {"snippet", "role", "score", "mid"}
         with self._lock:
             rows = []
@@ -343,7 +366,8 @@ class ConversationMemory:
                 "role": h["role"],
                 "score": h["score"],
             })
-        return out
+        out = _semantic_rerank(query, out)
+        return out[:raw_limit]
 
     def _snippet(self, content: str, toks: list, width: int = 160) -> str:
         content_flat = re.sub(r"\s+", " ", content).strip()
@@ -461,6 +485,33 @@ class ConversationMemory:
                 "SELECT COUNT(*) n, COALESCE(SUM(message_count),0) m FROM sessions WHERE message_count > 0"
             ).fetchone()
         return {"sessions": s["n"], "messages": s["m"], "fts": self._fts}
+
+    def export_documents(self, limit: int = 500, max_msgs: int = 30) -> list:
+        """Export each session as one indexable document (for the unified semantic index):
+        {source_id, title, summary, text, when}. The text blends the title, summary, and a
+        sample of the actual messages so meaning-based search can reach real content, not
+        just the summary. Cheap enough for a personal history."""
+        with self._lock:
+            srows = self._conn.execute(
+                "SELECT * FROM sessions WHERE message_count > 0 ORDER BY id DESC LIMIT ?", (limit,)
+            ).fetchall()
+            docs = []
+            for s in srows:
+                msgs = self._conn.execute(
+                    "SELECT role, content FROM messages WHERE session_id = ? ORDER BY id LIMIT ?",
+                    (s["id"], max_msgs),
+                ).fetchall()
+                convo = " ".join(f"{m['role']}: {m['content']}" for m in msgs)
+                title = s["title"] or self._untitled(s["id"])
+                text = " ".join(p for p in (title, s["summary"], convo) if p)
+                docs.append({
+                    "source_id": f"session:{s['id']}",
+                    "title": title,
+                    "summary": s["summary"],
+                    "text": text,
+                    "when": _humanize(s["ended_at"]),
+                })
+        return docs
 
 
 # ================================================================ singleton ==

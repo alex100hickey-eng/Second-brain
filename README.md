@@ -189,6 +189,45 @@ keeping the newest 7. Run it by hand or say "back up my system" (`run_backup`) �
 schedule itself. `shortcuts.json` maps short commands (brief, goals, tasks, screen, backup, …) to
 longer prompts, expanded in chat; edit it freely.
 
+## Semantic search, capture, observability & review (Round 5)
+
+### 🔎 Unified semantic search (`search_everything` + `/reindex-all`)
+One "search everything I know" index over **all** sources at once — vault notes, past
+conversations, synthesized reports, council verdicts, and task/goal titles — ranked by
+**meaning** (so it finds relevant things even when they share no keywords with your query).
+It runs on a small **local** embedding model (`model2vec` `potion-base-8M`, ~31 MB, vendored
+to `models/`, no torch/GPU, no API) — the index lives in gitignored `semantic_index.db` and
+updates **incrementally** (only new/changed content is re-embedded; `/reindex-all` forces a
+full sync). The existing `search_notes` and `search_memory` (and automatic recall) were
+upgraded to **semantic ranking with keyword fallback** if the model can't load.
+
+### 🗂️ Note capture (`capture_note` + `vault_inbox/`)
+"Capture this as a note" turns a conversation, a synthesized report, or pasted text into a
+clean Markdown note (title, summary, organized body, suggested tags, suggested vault folder)
+and stages it in **`vault_inbox/`** — **never** your Obsidian vault; you drag the file in
+yourself (see that folder's README). Dashboard **Captured Notes** panel lists what's pending.
+After a substantial synthesis or council decision, Jarvis offers to capture it (offer only).
+
+### 🔭 Observability (`activity_log` / `cost_report` / `system_health`)
+- **"What did you do today?"** → an audit log of every tool call (timestamp, trigger,
+  input summary, success/failure) — local, gitignored `observability.db`; **Recent Activity**
+  dashboard panel.
+- **"What's this costing?"** → estimated Claude API spend today / this week / by feature,
+  priced from **`pricing.json`** (tracked, **verify the rates**). Local transcription and
+  embeddings are free. **API Cost** dashboard panel.
+- **"Is everything working?"** → a health check (DBs, index freshness, whisper/ffmpeg, disk,
+  last test-pass date) with a 🟢/🟡/🔴 dashboard indicator.
+- **Prompt-injection hygiene:** one shared `data_boundary.py` helper wraps all untrusted text
+  (vault notes, web pages, transcripts, screen captures, pasted content) as "data, not
+  instructions". Reduces risk; the human-approval gate remains the real safety net — see
+  SECURITY_NOTES.md §8.
+
+### 📊 Weekly review (`weekly_review`, say "weekly review")
+An honest look back over 7 days — what you worked on, goals moved vs stalled, council
+decisions, agent highlights, cost, and 2-3 specific observations (patterns, dropped threads) —
+not motivational fluff, and it says so plainly when the week was quiet. Dashboard quick-action +
+`/api/weekly-review`. Offers to capture itself to `vault_inbox/` afterward.
+
 ## Testing (`run_tests.py`)
 
 `run_tests.py` at the project root is the single regression suite — **run it after any change.**
@@ -203,9 +242,13 @@ It covers vault tools (+ the read-only guarantee), the access gate, the video to
 the data synthesizer, the website idempotency guard, the feasibility judge, the task tracker,
 conversation memory (sessions/search/recall/delete), goals + task priority, screen-watch (blank
 detection + vision + no control code), the run drafter (verbatim safety + status flow), voice (local
-whisper transcription), the briefing + shortcuts, the backup script, and the security invariants
-(no live secret in any `.py`, localhost-only default, `.env`/memory-DB/screenshots gitignored, and
-**no mouse/keyboard control code anywhere**).
+whisper transcription), the briefing + shortcuts, the backup script, **unified semantic search
+(meaning-based matches with no keyword overlap + incremental indexing), note capture (3 source
+types, staged to vault_inbox/), observability (audit log + cost pricing + health), prompt-injection
+hygiene (the data-boundary wrapper, incl. a planted-instruction test), the weekly review (real data
++ graceful sparse-data + fail-soft observations),** and the security invariants (no live secret in
+any `.py`, localhost-only default, `.env`/DBs/screenshots gitignored, and **no mouse/keyboard
+control code anywhere**). A fully green run records `.last_test_pass` for the health check.
 Offline mode uses realistic fakes for anything that would hit Claude or the web, so it's
 deterministic and costs nothing; `--live` exercises the real model/network paths. It points
 `OBSIDIAN_VAULT_PATH` at `sample_vault` first, so it never touches your real vault.

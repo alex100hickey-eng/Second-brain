@@ -11,6 +11,12 @@ lxml              # bs4 parser backend
 # Video toolkit (caption rendering)
 Pillow            # renders caption PNGs overlaid via ffmpeg
 
+# Unified semantic search (Round 5) — local, torch-free embeddings
+numpy             # vector math for the semantic index
+model2vec         # static sentence embeddings (potion-base-8M, ~31 MB, no torch/GPU)
+# Model weights vendored at models/potion-base-8M/ (gitignored). Auto-downloads on first
+# use if absent. Static model => runs on Python 3.14 where torch has no wheels.
+
 # --- System dependencies (NOT pip — install with brew) ---
 #   brew install ffmpeg        # frame sampling, all video editing (ffmpeg + ffprobe)
 #   brew install whisper-cpp   # local audio transcription (whisper-cli binary)
