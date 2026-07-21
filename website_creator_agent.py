@@ -626,7 +626,16 @@ IMAGES — never reference an external or local image file (there are none; they
 If the page includes an FAQ, use: <div class="faq"><button class="faq-q" aria-expanded="false">Question<span aria-hidden="true">+</span></button><div class="faq-a"><div class="container">Answer</div></div></div> (the toggle JS is already provided).
 
 Return ONLY the HTML (no markdown fences, no commentary)."""
-    html = _strip_code_fence(_call(claude, system, user, max_tokens=4096), "html")
+    # Cinematic homepages carry the payoff sections (services/pricing/proof/FAQ/CTA) below an
+    # auto-injected intro — they're the longest pages and the ones the audit caught truncating at
+    # 4096. Give them a generous ceiling; regenerate once if the model still runs out of room.
+    budget = 8000 if cinematic_home else 4096
+    html = _strip_code_fence(_call(claude, system, user, max_tokens=budget), "html")
+    if _is_truncated(html):
+        retry = _strip_code_fence(_call(claude, system, user, max_tokens=8000), "html")
+        # Take the retry if it completed, or at least if it got further before running out.
+        if not _is_truncated(retry) or len(retry) > len(html):
+            html = retry
     return html
 
 
@@ -813,6 +822,35 @@ def _ensure_script(html: str) -> str:
     return html + "\n" + tag
 
 
+def _is_truncated(html: str) -> bool:
+    """A page whose model output ran into max_tokens stops mid-document with no closing
+    </html>. That's the truncation signature the audit found on cinematic homepages."""
+    return not re.search(r'</html>', html or "", re.I)
+
+
+def _ensure_complete_html(html: str) -> str:
+    """Guarantee the page is a COMPLETE document. Cinematic homepages (and occasionally
+    ordinary pages) can truncate at the model's max_tokens — the output stops mid-tag with no
+    </body>/</html>, so the browser renders a cut-off page. Mirroring _balance_braces, this is a
+    deterministic best-effort repair: it only trims a trailing INCOMPLETE tag and APPENDS the
+    missing document-closing tags — it never rewrites content. Idempotent: a page that already
+    has </html> is returned unchanged. (The upstream fix is a bigger token budget + a regenerate
+    retry in build_page; this is the last-resort guarantee, the same role _balance_braces plays
+    for the stylesheet.)"""
+    if not _is_truncated(html):
+        return html
+    repaired = (html or "").rstrip()
+    # If it ends mid-tag (an unmatched '<' after the last '>'), drop the partial tag so we
+    # don't leave a broken `<div cla…` fragment visible.
+    lt, gt = repaired.rfind("<"), repaired.rfind(">")
+    if lt > gt:
+        repaired = repaired[:lt].rstrip()
+    if not re.search(r"</body>", repaired, re.I):
+        repaired += "\n</body>"
+    repaired += "\n</html>\n"
+    return repaired
+
+
 def _fix_images(html: str, site_dir: str) -> str:
     """Guarantee no broken images: replace every <img> whose src is a local file that
     doesn't exist (the agent generates no image assets) with a styled .media-ph placeholder
@@ -955,6 +993,7 @@ def create_website(brief: str, port: int = DEFAULT_PREVIEW_PORT, log: bool = Tru
     for i, page in enumerate(plan["pages"]):
         is_cinematic_home = bool(cinema_html) and i == 0
         html = build_page(claude, plan, page, class_ref, cinematic_home=is_cinematic_home)
+        html = _ensure_complete_html(html)   # never ship a truncated document (audit finding #3)
         html = _fix_images(html, site_dir)   # no broken images ever ship
         html = _link_effects(html)           # load the guaranteed effect layer as its own sheet
         html = _ensure_script(html)          # guarantee main.js loads (esp. the cinematic home)

@@ -787,3 +787,15 @@ before any change: `run_tests.py` 170/1 (whisper say-sample, finding #7), `test_
   - Guardrail enforcement fails CLOSED: unparseable council reply → BLOCK, deny → BLOCK,
     allow → allowed (proves it isn't blindly blocking). Council model call stubbed.
 - Result: `--only taskman` → 21/21. No temp dirs, scratch, or escape probe left behind.
+
+## Finding #3 — cinematic homepage truncation (DEGRADED) — [01:25 ET]
+- `build_page` cinematic homepages built at max_tokens=4096 truncated mid-tag (no </html>).
+- Fix (three layers, mirroring the _balance_braces philosophy of best-effort completion):
+  1. Cinematic homepages now build at max_tokens=8000 (regular pages stay 4096).
+  2. `build_page` regenerates once at 8000 if the first result is truncated, keeping whichever
+     got further.
+  3. New deterministic `_ensure_complete_html()` in the build loop guarantees every written page
+     is a complete document — trims a trailing incomplete tag and appends missing </body></html>,
+     never rewrites content. `_is_truncated()` = "no </html>".
+- Tests: 7 new checks in suite_website (detection, idempotent no-op on complete pages, append
+  closers, drop mid-tag fragment). Bug + fix to be recorded in handoff open-items history.

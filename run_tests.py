@@ -386,6 +386,25 @@ def suite_website(app, live):
         wca.create_website = orig_build
         wca._RECENT_BUILDS.clear()
 
+    # Completion guard (audit finding #3): cinematic homepages truncated at max_tokens with no
+    # </html>; a build must never ship a cut-off document.
+    section("website agent (truncation completion guard)")
+    complete = "<!DOCTYPE html><html><head><title>x</title></head><body><h1>Hi</h1></body></html>"
+    check("_is_truncated: complete page is NOT flagged", wca._is_truncated(complete) is False)
+    check("_ensure_complete_html leaves a complete page unchanged",
+          wca._ensure_complete_html(complete) == complete)
+    truncated = ('<!DOCTYPE html><html><head><title>x</title></head><body>\n'
+                 '  <section class="hero"><h1>Welcome</h1><p>Great co')  # cut mid-tag/word
+    check("_is_truncated: truncated page IS flagged", wca._is_truncated(truncated) is True)
+    repaired = wca._ensure_complete_html(truncated)
+    check("completion guard appends </html>", "</html>" in repaired)
+    check("completion guard appends </body>", "</body>" in repaired.lower())
+    check("repaired page is no longer flagged truncated", wca._is_truncated(repaired) is False)
+    # A page truncated in the MIDDLE of a tag drops the partial tag, not just closes it.
+    mid_tag = '<!DOCTYPE html><html><body><div class="ca'
+    fixed = wca._ensure_complete_html(mid_tag)
+    check("mid-tag truncation drops the incomplete tag", 'class="ca' not in fixed and "</html>" in fixed)
+
     if live:
         section("website agent [live] — one small real build")
         r = wca.create_website_for_chat("A single-page site for a student note-taking app called Inkling. Keep it minimal.")
