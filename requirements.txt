@@ -1,3 +1,8 @@
+# Deploying from the repo root (Coolify/nixpacks base dir = /): the chat app's
+# requirements are a superset (flask, gunicorn, composio, …) — pull them in so one
+# `pip install -r requirements.txt` at the root covers the whole system.
+-r second-brain-chat/requirements.txt
+
 # Core
 anthropic
 supabase
