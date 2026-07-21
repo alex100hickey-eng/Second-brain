@@ -932,3 +932,16 @@ before any change: `run_tests.py` 170/1 (whisper say-sample, finding #7), `test_
 - Tests: new suite_jobs (10 checks) — enqueue/claim/complete, persistence across a simulated
   restart, interrupted-job requeue, worker runs a handler to done + announces it, no-handler→failed,
   counts. suite_streaming stubs monitor.report_event so it stays side-effect-free.
+
+## Priority 2 — end-to-end verification against the running app — [02:50 ET]
+- Restarted app (PID 83159) with all P1+P2 changes. Startup self-check ran at boot (printed to
+  scripts/app.log; Supabase reachability now checks green). App healthy (302 gate).
+- **Startup check:** /api/home now carries a "startup" bucket (overall degraded = optional keys
+  unset, as expected).
+- **Job queue:** enqueued a real synthesis-organize job into the shared jobs.db → the running
+  app's worker claimed it (queued→running→done in ~15s), saved a report, posted "✅ Background job
+  #1 … finished" into the chat thread, and it shows in the /api/home "jobs" bucket (counts done:1).
+- **Streaming:** a real /chat turn returned word-by-word text delta events followed by the
+  authoritative "final" event ("streaming works"). Fallback path covered by suite_streaming.
+- New instance workers quiet (0 incidents since restart). Test artifact left on disk (not deleted
+  per rules): synthesized/20260721-overnight-test-note.md — listed in OVERNIGHT_REPORT for cleanup.
