@@ -82,6 +82,7 @@ _DEFAULT_MONITOR_CONFIG = {
                "listed here always proposes a fix and waits for your dashboard approval.",
     "fixer_allowlist": ["restart_crashed_worker", "clear_temp_dir", "retry_transient_api"],
     "scan_interval_seconds": 300,
+    "incident_window_hours": 6,
 }
 
 _DEFAULT_BUDGET_CONFIG = {
@@ -138,10 +139,16 @@ def report_event(component: str, level: str, message: str, detail: str = "") -> 
         pass
 
 
-def get_recent_events(limit: int = 40, min_level: str = "info") -> list:
-    """[{"id", **event}], newest first."""
+def get_recent_events(limit: int = 40, min_level: str = "info",
+                      max_age_hours: float = None) -> list:
+    """[{"id", **event}], newest first. `max_age_hours` drops events older than the
+    window so a long-quiet system stops surfacing stale incidents (an event with an
+    unparseable timestamp is kept — never silently hide a report)."""
     order = {"info": 0, "warning": 1, "error": 2, "critical": 3}
     floor = order.get(min_level, 0)
+    cutoff = None
+    if max_age_hours is not None:
+        cutoff = datetime.now(ZoneInfo("America/New_York")) - timedelta(hours=max_age_hours)
     rows = (
         supabase.table("Agent Outputs").select("*")
         .eq("agent_name", "system_event").order("id", desc=True)
@@ -154,6 +161,12 @@ def get_recent_events(limit: int = 40, min_level: str = "info") -> list:
         except (json.JSONDecodeError, TypeError):
             continue
         if order.get(e.get("level"), 0) >= floor:
+            if cutoff is not None:
+                try:
+                    if datetime.fromisoformat(e.get("ts", "")) < cutoff:
+                        continue
+                except (ValueError, TypeError):
+                    pass  # unparseable ts — keep the event
             out.append({"id": row["id"], **e})
         if len(out) >= limit:
             break
@@ -184,7 +197,9 @@ def run_health_scan() -> dict:
     workers = _worker_liveness()
     dead = [n for n, ok in workers.items() if not ok]
 
-    recent_bad = get_recent_events(limit=20, min_level="error")
+    recent_bad = get_recent_events(
+        limit=20, min_level="error",
+        max_age_hours=monitor_config().get("incident_window_hours", 6))
 
     incidents = []
     for name in dead:

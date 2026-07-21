@@ -357,6 +357,25 @@ def test_report_event_roundtrip():
     check("no filter returns all 3", len(everything) == 3)
     check("newest first", everything[0]["message"] == "on fire")
 
+    # Incident window: an old error must age out of the scan so a long-quiet
+    # system goes back to healthy instead of showing stale "degraded" forever.
+    sb = _mon_reset()
+    mon.report_event("old_component", "error", "ancient failure")
+    old_row = sb.store["_all"][-1]
+    ev = json.loads(old_row["output_text"])
+    ev["ts"] = "2026-07-01T00:00:00-04:00"  # far outside any window
+    old_row["output_text"] = json.dumps(ev)
+    mon.report_event("new_component", "error", "fresh failure")
+    windowed = mon.get_recent_events(limit=10, min_level="error", max_age_hours=12)
+    check("aged-out error is excluded from the window", all(e["message"] != "ancient failure" for e in windowed))
+    check("fresh error stays inside the window", any(e["message"] == "fresh failure" for e in windowed))
+    unwindowed = mon.get_recent_events(limit=10, min_level="error")
+    check("no window (default) still returns everything", len(unwindowed) == 2)
+    ev["ts"] = "not-a-date"
+    old_row["output_text"] = json.dumps(ev)
+    windowed2 = mon.get_recent_events(limit=10, min_level="error", max_age_hours=12)
+    check("unparseable ts is kept, never hidden", any(e["message"] == "ancient failure" for e in windowed2))
+
 
 if __name__ == "__main__":
     test_dedup()

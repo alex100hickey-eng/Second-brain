@@ -144,7 +144,13 @@ c7b8e88 Finding #2: suite_taskman — regression tests for Task Manager safety
 
 ## 7. For the next run / your attention
 
-**Ready-to-run: move the vault's `.git` out of iCloud (finding #4, part 2).** Do this with Obsidian
+> **UPDATE 2026-07-21 morning: part 2 is already done — no migration needed.** The vault's `.git`
+> is a 52-byte pointer file to `~/.second-brain-vault.git` (outside iCloud) and has been since
+> 2026-07-19 00:04. The recurring `fatal: error reading .git` failures were iCloud evicting the tiny
+> *pointer file* itself, which self-heals when iCloud re-materializes it; part 1's monitor reporting
+> now surfaces those windows when they happen. The script below would be a no-op — skip it.
+
+**~~Ready-to-run: move the vault's `.git` out of iCloud (finding #4, part 2).~~** Do this with Obsidian
 CLOSED and iCloud idle:
 ```bash
 VAULT="$HOME/Library/Mobile Documents/com~apple~CloudDocs/Obsidian/Second brain"
