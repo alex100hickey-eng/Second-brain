@@ -163,7 +163,42 @@ def login():
 # client, summaries, vision) records token usage + cost against the current feature/trigger
 # for the observability layer. Fail-soft: recording never breaks a call.
 claude = observability.wrap_client(Anthropic(api_key=CLAUDE_API_KEY))
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+
+# ---- Thread-safe Supabase access --------------------------------------------
+# The supabase-py client multiplexes over a single httpx/HTTP-2 connection and is
+# NOT safe to share across threads. This app runs several threads against the same
+# datastore at once — the Flask request handler, the background-task worker, the
+# managed-task worker, and the monitor's periodic scan. Sharing one client between
+# them corrupted the connection: worker cycles were failing every few minutes with
+# `[Errno 35] Resource temporarily unavailable` and h2 state-machine errors
+# (`Invalid input StreamInputs.SEND_HEADERS in state 5`) — the audit's finding #1.
+#
+# Fix: hand each thread its OWN client. This proxy is a drop-in stand-in for a
+# Supabase client — every attribute access (`.table(...)`, `.rpc(...)`, …) is
+# forwarded to a client stored in thread-local storage, created lazily the first
+# time a given thread touches it. The worker/monitor threads are long-lived, so
+# each builds its client once; request threads are pooled by Werkzeug. No call
+# site changes — code keeps calling `supabase.table(...)` unchanged.
+class _ThreadLocalSupabase:
+    def __init__(self, factory):
+        self._factory = factory
+        self._local = threading.local()
+
+    @property
+    def _client(self):
+        c = getattr(self._local, "client", None)
+        if c is None:
+            c = self._factory()
+            self._local.client = c
+        return c
+
+    def __getattr__(self, name):
+        # Only reached for names not resolved normally (i.e. not _factory/_local).
+        return getattr(self._client, name)
+
+
+supabase = _ThreadLocalSupabase(lambda: create_client(SUPABASE_URL, SUPABASE_KEY))
 composio = Composio(provider=AnthropicProvider(), api_key=COMPOSIO_API_KEY)
 
 

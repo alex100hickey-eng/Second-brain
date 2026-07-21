@@ -749,3 +749,27 @@ watches the watcher. Four parts, all local + gitignored:
 - **`run_tests.py`: 171 passed / 0 failed offline** (was 112 in round 4; +59 across the new
   semantic, capture, observability, injection, and weekly suites). All prior suites still green.
   A green run now records `.last_test_pass` for the health check to report.
+
+---
+
+# OVERNIGHT RUN — Audit fixes + reliability — 2026-07-21
+
+Driven by `AUDIT_FINDINGS.md` (12 findings). Priority 1 = fix every finding. Baseline
+before any change: `run_tests.py` 170/1 (whisper say-sample, finding #7), `test_expansion_monitor.py`
+53/53, `test_vault_tools.py` 18/18. App PID 78382 on 127.0.0.1:5001, monitor "degraded".
+
+## Finding #1 — worker thread-safety (DEGRADED) — [01:04 ET]
+- **Root cause (confirmed):** one `supabase = create_client(...)` (app.py:166) shared across
+  the Flask request handler, the background-task worker, the managed-task worker, and the
+  monitor scan thread. supabase-py multiplexes over a single httpx/HTTP-2 connection and is
+  not thread-safe; concurrent use corrupted it — `[Errno 35] Resource temporarily unavailable`
+  and h2 `SEND_HEADERS in state 5`. Measured **before**: 30 worker incidents (15 per worker)
+  over the 00:00–00:58 window on PID 78382.
+- **Fix:** `_ThreadLocalSupabase` proxy replaces the shared client. Every attribute access
+  forwards to a per-thread client held in `threading.local()`, created lazily on first touch.
+  Long-lived worker/monitor threads build one client each; no call site changed (all ~35
+  `supabase.table(...)` chains work unchanged). Proxy logic unit-verified (4 threads + main →
+  5 distinct clients, intra-thread reuse). App restarted → PID 82083, gate 302, workers live.
+- **Also:** app stdout now redirects to durable `scripts/app.log` (was a temp-dir scratchpad
+  file that vanishes on cleanup — audit's "undocumented reality" note).
+- **Verification:** watching `system_event` rows id>358 for 30+ min (see OVERNIGHT_REPORT.md).
