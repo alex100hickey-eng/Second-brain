@@ -271,6 +271,29 @@
         'No findings yet.', 'Say "run the scouts" to discover tools; then "review findings" and "apply finding N".'));
     }
 
+    // Money pipeline (Scouts → Council → Planner)
+    {
+      const mo = d.money || {counts:{}, recent:[]};
+      const counts = mo.counts || {};
+      const order = ['found','under_review','pursue','planned','deferred','rejected'];
+      const summary = order.filter(s => counts[s]).map(s => `${counts[s]} ${s.replace('_',' ')}`).join(' · ');
+      const total = Object.values(counts).reduce((a,b) => a+b, 0);
+      const body = (summary ? `<div class="r-meta" style="padding:2px 0 6px">${esc(summary)}</div>` : '') +
+        rows(mo.recent||[], f => {
+          const dec = f.decision ? ` <span class="pill">${esc(f.decision)}</span>` : '';
+          const econ = (f.profit!=null && f.cost!=null) ? ` · ~$${esc(String(f.profit))} vs $${esc(String(f.cost))}/mo` : '';
+          const axes = (f.plausibility!=null) ? ` · plaus ${esc(String(f.plausibility))}/5 · auto ${esc(String(f.autonomy))}/5` : '';
+          return `
+        <div class="row">
+          <div class="r-title"><span class="status-dot st-${esc(f.status)}"></span>${f.url ? `<a href="${esc(f.url)}" target="_blank" rel="noopener">${esc(f.name||f.url)}</a>` : esc(f.name||'(unnamed)')}${dec}</div>
+          <div class="r-sub">${esc(f.method||'')}</div>
+          <div class="r-meta">#${f.id} · ${esc(f.source||'?')} · ${esc((f.status||'').replace('_',' '))}${axes}${econ}</div>
+        </div>`;
+        });
+      panels.push(panel('Money Pipeline', total, body,
+        'No ideas yet.', 'Say "run the money scouts" to hunt income ideas; then "review money ideas" and "develop idea N".'));
+    }
+
     // Agent outputs
     panels.push(panel('Recent Agent Activity', (d.agent_outputs||[]).length,
       rows(d.agent_outputs||[], a => `

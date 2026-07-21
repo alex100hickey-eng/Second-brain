@@ -326,6 +326,7 @@ INTERNAL_AGENT_NAMES = {
     "jarvis_tasktracker",  # defensive: no code writes this today (task_tracker.py is local
                            # SQLite only, no Supabase) — kept so any future mirror rows stay hidden
     "expansion_finding",  # Self-Expanding Pipeline findings (see expansion_pipeline.py)
+    "money_idea",  # Money Pipeline ideas (see money_pipeline.py)
     "system_event",  # Monitoring Agent incident/notice log (see monitor.py)
     "jarvis_budget_state",  # Monitoring Agent budget-tier transitions (see monitor.py)
 }
@@ -3444,6 +3445,18 @@ def _dispatch_tool_call(tool_name: str, tool_input: dict) -> str:
         return expansion_pipeline.apply_finding(finding_id=tool_input["finding_id"])
     if tool_name == "check_expansion_findings":
         return expansion_pipeline.check_expansion_findings(limit=tool_input.get("limit", 12))
+    if tool_name == "run_money_scouts":
+        return money_pipeline.run_money_scouts(
+            focus_brief=tool_input.get("focus_brief", ""),
+            sources=tool_input.get("sources", "all"),
+            cap=tool_input.get("cap", 10),
+        )
+    if tool_name == "review_money_ideas":
+        return money_pipeline.review_money_ideas(limit=tool_input.get("limit", 10))
+    if tool_name == "develop_money_idea":
+        return money_pipeline.develop_money_idea(idea_id=tool_input["idea_id"])
+    if tool_name == "check_money_ideas":
+        return money_pipeline.check_money_ideas(limit=tool_input.get("limit", 12))
     if tool_name == "check_system_health":
         return monitor.check_system_health()
     if tool_name == "check_budget":
@@ -3530,6 +3543,10 @@ TOOL_STATUS_LABELS = {
     "review_findings": "Sending scouted tools to the council…",
     "apply_finding": "Queuing that tool install for your approval…",
     "check_expansion_findings": "Checking what the scout has found…",
+    "run_money_scouts": "Sending five scouts hunting for income ideas…",
+    "review_money_ideas": "Scoring ideas on plausibility, autonomy, and profit…",
+    "develop_money_idea": "Drafting the launch plan…",
+    "check_money_ideas": "Checking the money pipeline…",
     "check_system_health": "Checking system health and worker liveness…",
     "check_budget": "Checking this month's API budget…",
     "GOOGLECALENDAR_EVENTS_LIST": "Checking your calendar…",
@@ -3716,6 +3733,7 @@ def get_dashboard_data() -> dict:
         "background_tasks": get_background_tasks(),
         "managed_tasks": task_manager.get_managed_tasks(),
         "expansion": expansion_pipeline.get_expansion_findings(),
+        "money": money_pipeline.get_money_ideas(),
         "monitor": monitor.get_monitor_dashboard_data(),
     }
 
@@ -3905,6 +3923,7 @@ def get_home_data() -> dict:
         "drafts": _safe(lambda: run_drafter.dashboard_rows(8), []),
         "memory": _safe(lambda: MEMORY.list_sessions(limit=5), []),
         "expansion": _safe(expansion_pipeline.get_expansion_findings, {"counts": {}, "recent": []}),
+        "money": _safe(money_pipeline.get_money_ideas, {"counts": {}, "recent": []}),
         "monitor": _safe(monitor.get_monitor_dashboard_data, {}),
         "captured": _safe(lambda: note_capture.list_pending(8), []),
         "activity": _safe(lambda: observability.get_observability().recent_tools(12), []),
@@ -3955,6 +3974,24 @@ expansion_pipeline.init(
     feasibility_fn=feasibility_judge,
 )
 TOOLS.extend(expansion_pipeline.TOOL_SCHEMAS)
+
+# Money Pipeline (Scouts → Council → Planner) — lives in money_pipeline.py, the
+# revenue twin of the expansion pipeline: five scouts hunt income methods, the
+# council scores plausibility/autonomy/profit-vs-cost, the planner drafts launch
+# plans. Paper only — execution always goes through the human approval gate.
+import money_pipeline  # noqa: E402 — needs the objects above to exist first
+
+money_pipeline.init(
+    claude_client=claude,
+    supabase_client=supabase,
+    tool_dispatcher=handle_tool_call,
+    council_call_fn=_council_call,
+    log_council_fn=_log_council,
+    tools_list=TOOLS,
+    excluded_tools=BACKGROUND_EXCLUDED_TOOLS,
+    feasibility_fn=feasibility_judge,
+)
+TOOLS.extend(money_pipeline.TOOL_SCHEMAS)
 
 # Monitoring Agent (health + cost) — lives in monitor.py, extends observability.py's
 # cost tracking with budget tiers and health.py's static check with worker liveness
