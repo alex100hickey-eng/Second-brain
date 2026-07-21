@@ -605,6 +605,18 @@
         fullText += ev.delta;
         bubble.innerHTML = renderMarkdown(fullText);
         chat.scrollTop = chat.scrollHeight;
+      } else if (ev.type === 'replace' || ev.type === 'final') {
+        // Streaming fell back to (or finished with) an authoritative full text. Replace whatever
+        // streamed so the bubble always matches what the server saved — corrects partial text
+        // left by a mid-stream failure; a no-op visually when streaming succeeded normally.
+        removeThinking();
+        removeToolStatus();
+        if (typeof ev.text === 'string') {
+          if (!bubble) bubble = addMessage('assistant', '');
+          fullText = ev.text;
+          bubble.innerHTML = renderMarkdown(fullText);
+          chat.scrollTop = chat.scrollHeight;
+        }
       } else if (ev.type === 'status') {
         removeThinking();
         status.textContent = 'Working...';

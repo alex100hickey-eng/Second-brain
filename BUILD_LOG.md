@@ -905,3 +905,14 @@ before any change: `run_tests.py` 170/1 (whisper say-sample, finding #7), `test_
   reports it to the monitor, and adds a "startup" bucket to /api/home for the dashboard panel.
 - Tests: 6 new checks in suite_observability incl. a simulated missing REQUIRED dep (→ critical +
   listed) and a missing OPTIONAL dep (→ degrades, not critical).
+
+## P2.2 — Response streaming with clean fallback — [02:30 ET]
+- Streaming already existed (claude.messages.stream → NDJSON deltas + per-tool status labels,
+  including post-tool continuation). Added the missing reliability piece: if the streaming call
+  fails MID-response, stream_chat now retries that turn once as a non-streaming messages.create
+  so the reply is never lost, and emits a "replace" event (cumulative authoritative text) plus a
+  "final" event at end-of-message. /chat's generate() persists the authoritative text. index.html
+  handles "replace"/"final" by setting the bubble to the authoritative text (no-op on success,
+  self-correcting after a fallback). Streaming failures are reported to the monitor.
+- Tests: new suite_streaming (5 checks) — happy-path deltas+final, and a simulated mid-stream
+  failure recovering the full message via the non-streaming fallback.

@@ -1500,6 +1500,71 @@ def suite_taskman(app, live):
         tm._call = saved_call
 
 
+def suite_streaming(app, live):
+    """Chat streaming degrades cleanly: if the streaming API call fails mid-response, the turn
+    is retried once as a non-streaming call and the message is recovered, not lost (Priority 2)."""
+    section("chat streaming (word-by-word + clean fallback)")
+
+    class _Blk:
+        def __init__(self, text): self.type, self.text = "text", text
+
+    class _Resp:
+        def __init__(self, text, stop="end_turn"):
+            self.content = [_Blk(text)]
+            self.stop_reason = stop
+
+    class _StreamCtx:
+        def __init__(self, deltas, final):
+            self._deltas, self._final = deltas, final
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        @property
+        def text_stream(self):
+            for d in self._deltas:
+                yield d
+        def get_final_message(self): return self._final
+
+    class _Msgs:
+        def __init__(self, mode): self.mode = mode
+        def stream(self, **kw):
+            if self.mode == "ok":
+                return _StreamCtx(["Hello ", "there ", "Alex."], _Resp("Hello there Alex."))
+            raise RuntimeError("simulated stream drop")
+        def create(self, **kw):
+            return _Resp("Recovered full reply after the stream dropped.")
+
+    class _FakeClaude:
+        def __init__(self, mode): self.messages = _Msgs(mode)
+
+    saved_claude = app.claude
+    saved_bsp = app.build_system_prompt
+    app.build_system_prompt = lambda recall="": "SYSTEM"
+    try:
+        # 1) Happy path: deltas stream, then an authoritative 'final' arrives.
+        app.claude = _FakeClaude("ok")
+        events = list(app.stream_chat([{"role": "user", "content": "hi"}]))
+        deltas = [e for e in events if e["type"] == "text"]
+        finals = [e for e in events if e["type"] == "final"]
+        check("streaming yields word-by-word text deltas", len(deltas) >= 2, str(deltas))
+        check("streaming ends with an authoritative final event",
+              len(finals) == 1 and finals[0]["text"] == "Hello there Alex.", str(finals))
+
+        # 2) Fallback path: stream raises → non-streaming recovery, message not lost.
+        app.claude = _FakeClaude("fail")
+        events = list(app.stream_chat([{"role": "user", "content": "hi"}]))
+        types = [e["type"] for e in events]
+        repl = [e for e in events if e["type"] == "replace"]
+        finals = [e for e in events if e["type"] == "final"]
+        check("streaming failure falls back (emits a replace event)", len(repl) == 1, str(types))
+        check("fallback recovers the full message text",
+              repl and "Recovered full reply" in repl[0]["text"], str(repl))
+        check("fallback still ends with a final authoritative event",
+              len(finals) == 1 and "Recovered full reply" in finals[0]["text"], str(finals))
+    finally:
+        app.claude = saved_claude
+        app.build_system_prompt = saved_bsp
+
+
 SUITES = {
     "vault": suite_vault,
     "gate": suite_gate,
@@ -1523,6 +1588,7 @@ SUITES = {
     "injection": suite_injection,
     "security": suite_security,
     "taskman": suite_taskman,
+    "streaming": suite_streaming,
 }
 
 

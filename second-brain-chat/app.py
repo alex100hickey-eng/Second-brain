@@ -3403,24 +3403,53 @@ def stream_chat(messages: list, recall_text: str = ""):
     """Runs the Claude tool-use loop, yielding events as they happen:
     {"type": "text", "delta": ...}    — a chunk of the reply as it's written
     {"type": "status", "label": ...}  — what tool is being used right now
+    {"type": "replace", "text": ...}  — streaming failed mid-turn; here's the full text so far
+                                        (from the non-streaming fallback) to replace what streamed
+    {"type": "final", "text": ...}    — the authoritative complete reply (end of message)
     `recall_text` is the automatic long-term-memory recall block for this turn.
+
+    Degrades cleanly: if the streaming API call fails mid-response, this turn is retried once as
+    a single non-streaming `messages.create`, so the message is never lost — the client is told
+    to replace whatever partial text streamed with the recovered full text.
     """
     system_prompt = build_system_prompt(recall_text)  # fresh memories every request
     observability.set_trigger("user")  # this loop serves Alex's live chat
+    turns_text = []  # authoritative text per turn, joined for the final/replace events
     while True:
         with observability.feature("chat"):
-            with claude.messages.stream(
-                model="claude-sonnet-5",
-                max_tokens=1024,
-                system=system_prompt,
-                tools=TOOLS,
-                messages=messages,
-            ) as stream:
-                for text in stream.text_stream:
-                    yield {"type": "text", "delta": text}
-                response = stream.get_final_message()
+            try:
+                with claude.messages.stream(
+                    model="claude-sonnet-5",
+                    max_tokens=1024,
+                    system=system_prompt,
+                    tools=TOOLS,
+                    messages=messages,
+                ) as stream:
+                    for text in stream.text_stream:
+                        yield {"type": "text", "delta": text}
+                    response = stream.get_final_message()
+                turns_text.append("".join(b.text for b in response.content if b.type == "text"))
+            except Exception as e:
+                # Streaming broke mid-response — fall back to a single non-streaming call so the
+                # reply isn't lost, and tell the client to replace any partial text it received.
+                print(f"Warning: chat streaming failed ({e}); falling back to non-streaming.")
+                try:
+                    monitor.report_event("chat", "warning",
+                                         "streaming failed; used non-streaming fallback", str(e))
+                except Exception:
+                    pass
+                response = claude.messages.create(
+                    model="claude-sonnet-5",
+                    max_tokens=1024,
+                    system=system_prompt,
+                    tools=TOOLS,
+                    messages=messages,
+                )
+                turns_text.append("".join(b.text for b in response.content if b.type == "text"))
+                yield {"type": "replace", "text": "".join(turns_text)}
 
         if response.stop_reason != "tool_use":
+            yield {"type": "final", "text": "".join(turns_text)}
             return
 
         # Model wants to use one or more tools
@@ -4020,16 +4049,23 @@ def chat():
 
     def generate():
         reply_parts = []
+        authoritative = None  # set by a "final"/"replace" event — the recovered/complete text
         try:
             for event in stream_chat(messages, recall_text=recall_text):
-                if event.get("type") == "text":
+                etype = event.get("type")
+                if etype == "text":
                     reply_parts.append(event["delta"])
+                elif etype in ("final", "replace"):
+                    authoritative = event.get("text", authoritative)
                 yield json.dumps(event) + "\n"
         except Exception as e:
             yield json.dumps({"type": "error", "message": str(e)}) + "\n"
         finally:
-            if reply_parts:
-                save_chat_message("assistant", "".join(reply_parts))
+            # Save the authoritative text if we got one (so a mid-stream fallback is persisted
+            # correctly), otherwise the concatenated deltas.
+            final_text = authoritative if authoritative is not None else "".join(reply_parts)
+            if final_text:
+                save_chat_message("assistant", final_text)
 
     return Response(
         stream_with_context(generate()),
