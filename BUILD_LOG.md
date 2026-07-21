@@ -749,6 +749,20 @@ watches the watcher. Four parts, all local + gitignored:
 - **`run_tests.py`: 171 passed / 0 failed offline** (was 112 in round 4; +59 across the new
   semantic, capture, observability, injection, and weekly suites). All prior suites still green.
   A green run now records `.last_test_pass` for the health check to report.
+- **Injection hygiene** verified: the boundary helper wraps every untrusted entry point (vault
+  notes, scraped web, transcripts, screen captures, captured material) with BEGIN/END delimiters
+  and the "data, not instructions" framing; the plant-an-instruction test confirms the framing.
+- **Security invariants** all green: no live secret values in any `.py`, localhost-only default,
+  debug off, `.env`/DBs/screenshots gitignored + untracked, and no mouse/keyboard control code.
+- **Read-only vault guarantee** re-confirmed byte-for-byte after every note tool call.
+- **Live pass** (`--live`) exercised the real model/network paths (small website build, video
+  vision, synthesis, feasibility differentiation) without regressions.
+
+> **Note (added 2026-07-21):** this engineering log runs through Round 5. The four subsystems
+> built/finished on 2026-07-20/21 — the **Task Manager** (`task_manager.py`), the **HUD rebuild**,
+> the **Self-Expanding Pipeline** (`expansion_pipeline.py`), and the **Monitoring Agent**
+> (`monitor.py`) — are documented in the handoffs (`handoff-2026-07-21.md` is the canonical
+> index), not here. The 2026-07-21 audit-fix run is logged in the "OVERNIGHT RUN" section below.
 
 ---
 
@@ -845,3 +859,13 @@ before any change: `run_tests.py` 170/1 (whisper say-sample, finding #7), `test_
   in the sandbox instead of showing the phantom 1 failure.
 - Corrected the handoff's wrong root-cause sentence ("whisper model file absent" → the real cause:
   `say` silence under a sandboxed shell; model file is present and transcribes real speech).
+
+## Findings #8/#9/#10 — doc & code drift (COSMETIC) — [02:00 ET]
+- #8: Corrected handoff figures — "46 chat tools" → "66 tool schemas (56 native + 10 Composio)",
+  "~3,700 lines" → "~4,100 lines" (app.py is 4,145 as of tonight).
+- #9: Completed the truncated Round-5 "final verification" section in BUILD_LOG (injection/security/
+  vault/live bullets) and added a pointer note that Task Manager/HUD/expansion/monitor live in the
+  handoffs, with this file's overnight section below.
+- #10: Fixed the phantom `jarvis_tasktracker` filter comment (app.py) — clarified it's a defensive
+  filter with no current writer (task_tracker.py is local SQLite only), kept for forward-safety
+  rather than deleted.
