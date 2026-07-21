@@ -958,3 +958,17 @@ before any change: `run_tests.py` 170/1 (whisper say-sample, finding #7), `test_
   all sources now surfaces first and stale duplicates don't crowd the list.
 - Tests: new suite_retrieval (7 checks) — dedupe collapse+keep-best, recency ordering, tie-break by
   recency, strong-relevance-beats-weak-recent, and a known-answer fixture query surfacing the right note.
+
+## P3.1 — Memory distillation — [03:05 ET]
+- conversation_memory.py: new `distilled_facts` table + a `distilled` flag on sessions (migrated).
+  `distill(distiller, older_than_days, max_sessions)` compresses OLD, already-summarized
+  conversations into durable structured facts (preference/decision/topic/goal/open_thread) with
+  PROVENANCE (source session ids). Originals are KEPT (compression for recall, not deletion).
+  Anti-fabrication: a fact is stored only if its evidence/fact tokens trace back to the source
+  digest (≥50% overlap) — untraceable "facts" are dropped. Idempotent (each session distilled once).
+- Recall now PREFERS distilled facts: recall_for_prompt injects matching distilled facts first,
+  then raw snippets from NON-distilled sessions (relevant_context gained exclude_distilled).
+- app.py: `_distill_facts` distiller (grounded-extraction prompt) + `distill_memory` tool (manual;
+  schedulable) + status label + SYSTEM_PROMPT mention. distilled_stats for reporting.
+- Tests: new suite_distillation (10 checks) — grounded facts stored, fabricated fact dropped,
+  provenance recorded, originals kept, idempotent, recall prefers distilled + excludes raw distilled.

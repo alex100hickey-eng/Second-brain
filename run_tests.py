@@ -1501,6 +1501,69 @@ def suite_taskman(app, live):
         tm._call = saved_call
 
 
+def suite_distillation(app, live):
+    """Memory distillation (Priority 3): compress old conversations into durable facts with
+    provenance; keep originals; never fabricate; recall prefers distilled facts."""
+    section("memory distillation (compress old chats → durable facts)")
+    import conversation_memory as cm
+    import sqlite3
+    tmp = tempfile.mkdtemp(prefix="sbtest_distill_")
+    db = os.path.join(tmp, "mem.db")
+    m = cm.ConversationMemory(db, summarizer=lambda msgs: (
+        "YouTube plan", "Alex wants to grow a YouTube channel about sprint mechanics; decided to post weekly clips."))
+    try:
+        m.log("user", "I want to grow a YouTube channel about sprint mechanics.")
+        m.log("assistant", "Post weekly clips; niche down to track athletes.")
+        sid = m._open_session_row()["id"]
+        m.summarize_session(sid, force=True)
+        # Backdate + close so it's old enough to distill.
+        c = sqlite3.connect(db)
+        c.execute("UPDATE sessions SET ended_at='2020-01-01T00:00:00+00:00', closed=1 WHERE id=?", (sid,))
+        c.commit(); c.close()
+
+        # Fake distiller: one grounded fact (traceable) + one fabricated (untraceable) → the
+        # fabricated one must be dropped.
+        def fake_distiller(digest):
+            return [
+                {"category": "goal", "fact": "Alex wants to grow a YouTube channel about sprint mechanics.",
+                 "evidence": "grow a YouTube channel about sprint mechanics"},
+                {"category": "decision", "fact": "Post weekly clips niched to track athletes.",
+                 "evidence": "post weekly clips"},
+                {"category": "preference", "fact": "Alex loves deep-sea scuba diving in Fiji.",
+                 "evidence": "scuba diving Fiji Maldives ocean reef"},  # nothing to do with the digest
+            ]
+        res = m.distill(fake_distiller, older_than_days=1)
+        check("distillation processes the old session", res["distilled_sessions"] == 1, str(res))
+        check("grounded facts are stored", res["facts_added"] == 2, str(res))
+        check("fabricated (untraceable) fact is dropped", res["dropped"] == 1, str(res))
+
+        facts = m.distilled_context("youtube sprint channel")
+        check("distilled facts are retrievable by query", bool(facts) and "YouTube" in facts[0]["fact"])
+        import json as _json
+        check("distilled facts carry provenance (source session ids)",
+              facts and sid in _json.loads(facts[0]["session_ids"]))
+
+        # Originals are KEPT (compression for recall, not deletion).
+        check("original session + messages are kept", m.get_session(sid) is not None
+              and len(m.get_session(sid)["messages"]) == 2)
+        check("the session is marked distilled", sid in m._distilled_session_ids())
+
+        # Idempotent: a second distill run finds nothing new.
+        res2 = m.distill(fake_distiller, older_than_days=1)
+        check("distillation is idempotent (no re-distill)", res2["distilled_sessions"] == 0, str(res2))
+
+        # Recall prefers distilled facts; the raw distilled session is excluded from raw recall.
+        cm._MEM = m  # point the module singleton at our fixture for recall_for_prompt
+        recall = cm.recall_for_prompt("how's my youtube channel plan")
+        check("recall surfaces the distilled facts", "Durable facts distilled" in recall and "YouTube" in recall)
+        # sid is the only session and it's distilled, so raw recall (exclude_distilled) is empty.
+        raw_only = m.relevant_context("youtube channel", exclude_distilled=True)
+        check("exclude_distilled drops the distilled session from raw recall", raw_only == "", repr(raw_only[:80]))
+    finally:
+        cm._MEM = None
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def suite_retrieval(app, live):
     """Retrieval tuning (Priority 3): dedupe near-identical hits, recency weighting, and a
     re-rank so the single best match across all sources surfaces first. Known-answer queries."""
@@ -1709,6 +1772,7 @@ SUITES = {
     "streaming": suite_streaming,
     "jobs": suite_jobs,
     "retrieval": suite_retrieval,
+    "distillation": suite_distillation,
 }
 
 

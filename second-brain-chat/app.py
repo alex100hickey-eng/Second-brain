@@ -239,6 +239,35 @@ def _summarize_conversation(msgs: list) -> tuple:
     return title, summary
 
 
+def _distill_facts(digest: str) -> list:
+    """Distiller for conversation_memory.distill (Priority 3): extract durable facts from a digest
+    of OLD conversation summaries. Returns [{category, fact, evidence}]. Instructed to extract ONLY
+    what the text supports — the memory layer additionally DROPS any fact whose evidence doesn't
+    trace back to the source, so nothing is fabricated into long-term memory."""
+    prompt = (
+        "Below is a digest of summaries from Alex's past conversations with his assistant. "
+        "Extract the DURABLE facts worth remembering long-term: stated preferences, decisions "
+        "made, recurring topics/projects, goals, and open threads. Do NOT invent anything — only "
+        "extract what the digest actually supports. For each fact include a short 'evidence' "
+        "quote/paraphrase from the digest it came from.\n\n"
+        "Return ONLY a JSON array: "
+        '[{"category":"preference|decision|topic|goal|open_thread","fact":"<one sentence>",'
+        '"evidence":"<short quote from the digest>"}]. Empty array [] if nothing durable.\n\n'
+        f"Digest:\n{digest[:8000]}"
+    )
+    msg = claude.messages.create(model="claude-sonnet-5", max_tokens=1200,
+                                 messages=[{"role": "user", "content": prompt}])
+    text = "".join(b.text for b in msg.content if b.type == "text").strip()
+    m = re.search(r"\[.*\]", text, re.S)
+    if not m:
+        return []
+    try:
+        data = json.loads(m.group(0))
+        return data if isinstance(data, list) else []
+    except (json.JSONDecodeError, TypeError):
+        return []
+
+
 MEMORY = conversation_memory.get_memory(summarizer=_summarize_conversation)
 # On startup, close + summarize any session left open by a previous run/crash.
 try:
@@ -410,7 +439,11 @@ context is surfaced to you automatically when it applies (under "Relevant past c
 below when present) — use it naturally, as if you simply remember. When he explicitly asks
 what you two discussed before, or you need context from an older conversation not in the
 current thread, use search_memory to look it up. He can browse and delete this history on the
-Memory page.
+Memory page. You can also DISTILL old conversations into durable facts with distill_memory — it
+compresses conversations older than a few days into stated preferences, decisions, recurring
+topics, goals, and open threads, kept with provenance (originals are preserved), and afterward your
+recall prefers these distilled facts. Use it when he asks to tidy/compress what you remember; it
+never invents a fact that isn't grounded in a real conversation.
 
 You can SEE ALEX'S SCREEN on request with watch_screen: it captures his current screen and lets
 you answer a question about it ("what's on my screen?", "what's this error?", "summarize this
@@ -1307,6 +1340,26 @@ TOOLS = [
                 "limit": {"type": "integer", "description": "Max sessions to return. Default 5."},
             },
             "required": ["query"],
+        },
+    },
+    {
+        "name": "distill_memory",
+        "description": (
+            "Compress OLD conversations into durable structured facts (stated preferences, "
+            "decisions, recurring topics, goals, open threads) stored in long-term memory WITH "
+            "provenance (which sessions they came from). Originals are kept — this is compression "
+            "for sharper recall, not deletion, and afterward recall prefers these distilled facts "
+            "over raw old transcripts. Only touches conversations older than a few days that haven't "
+            "been distilled yet, and never invents a fact that can't be traced to real content. Use "
+            "when Alex asks to 'distill/compress my memory' or 'clean up what you remember'; it can "
+            "also be run on a schedule."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "older_than_days": {"type": "integer",
+                    "description": "Only distill conversations older than this many days (default 3)."},
+            },
         },
     },
     {
@@ -3303,6 +3356,18 @@ def _dispatch_tool_call(tool_name: str, tool_input: dict) -> str:
     if tool_name == "search_memory":
         return conversation_memory.tool_search_memory(
             query=tool_input["query"], limit=tool_input.get("limit", 5))
+    if tool_name == "distill_memory":
+        result = MEMORY.distill(_distill_facts,
+                                older_than_days=int(tool_input.get("older_than_days", 3)))
+        if result["distilled_sessions"] == 0:
+            return ("No conversations old enough (and not already distilled) to compress right now. "
+                    f"So far I've distilled {MEMORY.distilled_stats()['distilled_sessions']} "
+                    f"session(s) into {MEMORY.distilled_stats()['facts']} durable fact(s).")
+        note = (f" (dropped {result['dropped']} that didn't trace back to real content)"
+                if result.get("dropped") else "")
+        return (f"Distilled {result['distilled_sessions']} older conversation(s) into "
+                f"{result['facts_added']} durable fact(s){note}. Originals are kept; recall will "
+                f"now prefer these. Total distilled facts: {MEMORY.distilled_stats()['facts']}.")
     if tool_name == "watch_screen":
         return screen_watch.watch_screen(
             claude,
@@ -3412,6 +3477,7 @@ TOOL_STATUS_LABELS = {
     "show_task_history": "Opening that task's history…",
     "evaluate_task": "Sending that task to the council…",
     "search_memory": "Searching our past conversations…",
+    "distill_memory": "Distilling old conversations into durable facts…",
     "watch_screen": "Taking a look at your screen…",
     "draft_run": "Drafting an overnight run (gathering context + council)…",
     "list_drafted_runs": "Checking your drafted runs…",

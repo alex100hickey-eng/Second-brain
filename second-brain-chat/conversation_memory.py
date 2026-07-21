@@ -143,6 +143,24 @@ class ConversationMemory:
                 )"""
             )
             c.execute("CREATE INDEX IF NOT EXISTS idx_msg_session ON messages(session_id)")
+            # Memory distillation (Priority 3): durable structured facts compressed from old
+            # conversations, kept ALONGSIDE the originals (this is compression for recall, not
+            # deletion). Each fact carries provenance — the session ids it was distilled from.
+            c.execute(
+                """CREATE TABLE IF NOT EXISTS distilled_facts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    category TEXT DEFAULT '',
+                    fact TEXT NOT NULL,
+                    session_ids TEXT DEFAULT '',
+                    created_at TEXT NOT NULL
+                )"""
+            )
+            # Mark which sessions have been folded into distilled facts, so recall can prefer
+            # the distilled version over the raw transcript. Added via migration for old DBs.
+            try:
+                c.execute("ALTER TABLE sessions ADD COLUMN distilled INTEGER NOT NULL DEFAULT 0")
+            except sqlite3.OperationalError:
+                pass  # column already exists
             # Try to stand up an FTS5 mirror for fast search; fall back to LIKE if the
             # SQLite build has no FTS5.
             try:
@@ -392,12 +410,16 @@ class ConversationMemory:
         return f"Session #{sid}"
 
     # ------------------------------------------------------ automatic recall
-    def relevant_context(self, query: str, limit: int = 3, exclude_session_id: int = None) -> str:
+    def relevant_context(self, query: str, limit: int = 3, exclude_session_id: int = None,
+                         exclude_distilled: bool = False) -> str:
         """A compact block of the most relevant PAST conversation for a new message —
         injected into the system prompt so Jarvis just 'remembers'. Empty string when
-        nothing relevant, so the prompt isn't padded with noise."""
-        results = [r for r in self.search(query, limit=limit + 2)
-                   if r["session_id"] != exclude_session_id and r["score"] >= 2]
+        nothing relevant, so the prompt isn't padded with noise. exclude_distilled skips
+        sessions already folded into distilled facts (recall prefers the distilled version)."""
+        skip = self._distilled_session_ids() if exclude_distilled else set()
+        results = [r for r in self.search(query, limit=limit + 4)
+                   if r["session_id"] != exclude_session_id and r["score"] >= 2
+                   and r["session_id"] not in skip]
         if not results:
             return ""
         lines = []
@@ -409,6 +431,94 @@ class ConversationMemory:
                 gist = gist[:220] + "…"
             lines.append(f"- ({when}) {r['title']}: {gist}")
         return "\n".join(lines)
+
+    # --------------------------------------------------- memory distillation
+    def _distilled_session_ids(self) -> set:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id FROM sessions WHERE distilled = 1").fetchall()
+        return {r["id"] for r in rows}
+
+    def distill(self, distiller, older_than_days: int = 3, max_sessions: int = 25) -> dict:
+        """Compress old, already-summarized conversations into durable structured facts.
+
+        `distiller(digest_text)` -> list of {"category","fact","evidence"} (evidence is a short
+        quote/paraphrase the fact came from). Originals are KEPT — this is compression for recall.
+        Anti-fabrication: a fact is stored only if its evidence/fact tokens actually trace back to
+        the source digest (>=50% overlap); otherwise it's dropped. Provenance (the source session
+        ids) is recorded on every stored fact. Idempotent: each session is distilled at most once."""
+        cutoff = _now() - timedelta(days=older_than_days)
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM sessions WHERE closed = 1 AND summary != '' AND distilled = 0 "
+                "ORDER BY id LIMIT ?", (max_sessions,)).fetchall()
+        sessions = []
+        for r in rows:
+            ended = _parse(r["ended_at"])
+            if ended and ended <= cutoff:
+                sessions.append(r)
+        if not sessions:
+            return {"distilled_sessions": 0, "facts_added": 0, "dropped": 0}
+
+        sid_list = [r["id"] for r in sessions]
+        digest = "\n".join(f"[session {r['id']} — {r['title'] or 'untitled'}] {r['summary']}"
+                           for r in sessions)
+        try:
+            facts = distiller(digest) or []
+        except Exception as e:
+            print(f"conversation_memory: distillation model call failed ({e})")
+            return {"distilled_sessions": 0, "facts_added": 0, "dropped": 0, "error": str(e)}
+
+        digest_tokens = set(_tokens(digest))
+        now_iso = _now_iso()
+        added, dropped = 0, 0
+        with self._lock:
+            for f in facts:
+                fact = (f.get("fact") or "").strip()
+                if not fact:
+                    continue
+                # traceability: prefer the evidence quote, else the fact itself, must overlap source
+                key = set(_tokens(f.get("evidence") or "")) or set(_tokens(fact))
+                overlap = len(key & digest_tokens) / (len(key) or 1)
+                if overlap < 0.5:  # can't trace it back to real conversation → don't invent memory
+                    dropped += 1
+                    continue
+                self._conn.execute(
+                    "INSERT INTO distilled_facts (category, fact, session_ids, created_at) "
+                    "VALUES (?,?,?,?)",
+                    (str(f.get("category", ""))[:60], fact[:600], json.dumps(sid_list), now_iso))
+                added += 1
+            self._conn.executemany(
+                "UPDATE sessions SET distilled = 1 WHERE id = ?", [(s,) for s in sid_list])
+            self._conn.commit()
+        return {"distilled_sessions": len(sid_list), "facts_added": added, "dropped": dropped}
+
+    def distilled_context(self, query: str, limit: int = 3) -> list:
+        """The distilled facts most relevant to a query (keyword overlap). Preferred over raw
+        transcripts in recall once a conversation has been distilled."""
+        toks = [t for t in _tokens(query) if len(t) > 2]
+        if not toks:
+            return []
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM distilled_facts ORDER BY id DESC LIMIT 300").fetchall()
+        scored = []
+        for r in rows:
+            hay = ((r["category"] or "") + " " + r["fact"]).lower()
+            s = sum(hay.count(t) for t in toks)
+            if s > 0:
+                scored.append((s, r))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [{"category": r["category"], "fact": r["fact"],
+                 "session_ids": r["session_ids"], "created_at": r["created_at"]}
+                for _s, r in scored[:limit]]
+
+    def distilled_stats(self) -> dict:
+        with self._lock:
+            n = self._conn.execute("SELECT COUNT(*) c FROM distilled_facts").fetchone()["c"]
+            s = self._conn.execute(
+                "SELECT COUNT(*) c FROM sessions WHERE distilled = 1").fetchone()["c"]
+        return {"facts": n, "distilled_sessions": s}
 
     def last_closed_summary(self, within_days: int = 3) -> dict | None:
         """The most recent closed, summarized session (for a morning briefing's
@@ -559,10 +669,23 @@ def tool_search_memory(query: str, limit: int = 5) -> str:
 
 
 def recall_for_prompt(user_message: str, exclude_session_id: int = None) -> str:
-    """Compact recall block for automatic system-prompt injection (or '')."""
+    """Compact recall block for automatic system-prompt injection (or '').
+    Prefers durable DISTILLED facts, then falls back to raw transcript snippets from
+    conversations that haven't been distilled yet."""
     try:
-        return get_memory().relevant_context(user_message, limit=3,
-                                              exclude_session_id=exclude_session_id)
+        mem = get_memory()
+        parts = []
+        facts = mem.distilled_context(user_message, limit=3)
+        if facts:
+            parts.append("Durable facts distilled from past conversations:")
+            parts += [f"- [{f['category'] or 'note'}] {f['fact']}" for f in facts]
+        raw = mem.relevant_context(user_message, limit=3,
+                                   exclude_session_id=exclude_session_id, exclude_distilled=True)
+        if raw:
+            if parts:
+                parts.append("")
+            parts.append(raw)
+        return "\n".join(parts)
     except Exception as e:
         print(f"conversation_memory: recall failed ({e})")
         return ""
