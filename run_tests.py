@@ -1156,6 +1156,32 @@ def suite_observability(app, live):
     ht = health.health_text()
     check("health_text renders a readable rundown", "System health" in ht)
 
+    # --- startup self-check (Priority 2): structured report + simulated missing required dep ---
+    rep = health.run_startup_check(supabase_client=None)
+    check("startup check returns a structured report",
+          set(("overall", "checks", "missing_required", "notices")).issubset(rep) and len(rep["checks"]) >= 8)
+    check("startup check reports env vars", any(c["name"].startswith("env:") for c in rep["checks"]))
+    check("startup report text renders", "Startup self-check" in health.startup_report_text(rep))
+    # Simulate a missing REQUIRED dependency → overall critical + it's listed in missing_required.
+    saved = os.environ.pop("CLAUDE_API_KEY", None)
+    try:
+        bad = health.run_startup_check(supabase_client=None)
+        check("missing required dep → overall critical", bad["overall"] == "critical", bad["overall"])
+        check("missing required dep is listed in missing_required",
+              any("CLAUDE_API_KEY" in m for m in bad["missing_required"]), str(bad["missing_required"]))
+    finally:
+        if saved is not None:
+            os.environ["CLAUDE_API_KEY"] = saved
+    # A missing OPTIONAL dep degrades gracefully (a notice), never critical on its own.
+    saved_opt = os.environ.pop("TAVILY_API_KEY", None)
+    try:
+        deg = health.run_startup_check(supabase_client=None)
+        check("missing optional dep does not force critical", deg["overall"] != "critical", deg["overall"])
+    finally:
+        if saved_opt is not None:
+            os.environ["TAVILY_API_KEY"] = saved_opt
+    health.run_startup_check(supabase_client=None)  # restore a clean cached report for other suites
+
 
 def suite_injection(app, live):
     section("prompt-injection hygiene (untrusted content wrapped as data)")

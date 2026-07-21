@@ -890,3 +890,18 @@ before any change: `run_tests.py` 170/1 (whisper say-sample, finding #7), `test_
 - Updated handoff §5: recorded the resolved audit findings (incl. the cinematic truncation bug the
   audit flagged as missing from the "comprehensive" handoff), and turned open-item 4 into a
   ready-to-run `--separate-git-dir` migration plan for the vault (Alex-run, backup-first).
+
+---
+
+# PRIORITY 2 — Reliability & speed — 2026-07-21
+
+## P2.1 — Startup self-check — [02:20 ET]
+- Extended health.py (not duplicated) with a boot-time dependency check: required env vars
+  (CLAUDE/SUPABASE — missing = critical) vs optional (COMPOSIO/ACCESS_CODE/search keys/GITHUB —
+  missing = graceful notice), plus DBs, semantic index, embedding model load, whisper/ffmpeg,
+  disk, and Supabase reachability. Returns a structured report {overall, checks, missing_required,
+  notices}; cached via get_last_startup_report().
+- Wired into app boot: prints a readable summary to app.log, surfaces missing-required loudly +
+  reports it to the monitor, and adds a "startup" bucket to /api/home for the dashboard panel.
+- Tests: 6 new checks in suite_observability incl. a simulated missing REQUIRED dep (→ critical +
+  listed) and a missing OPTIONAL dep (→ degrades, not critical).

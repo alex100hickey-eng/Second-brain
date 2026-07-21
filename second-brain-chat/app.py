@@ -3735,6 +3735,7 @@ def get_home_data() -> dict:
         "activity": _safe(lambda: observability.get_observability().recent_tools(12), []),
         "cost": _safe(lambda: observability.get_observability().cost_summary(), {}),
         "health": _safe(health.run_health_check, {}),
+        "startup": _safe(health.get_last_startup_report, {}),
         "generated_at": datetime.now(LOCAL_TZ).strftime("%-I:%M:%S %p"),
     }
 
@@ -3790,6 +3791,26 @@ monitor.register_worker("jarvis-managed-worker",
 monitor.register_worker("jarvis-task-worker", start_task_worker)
 TOOLS.extend(monitor.TOOL_SCHEMAS)
 monitor.start_monitor(post_to_chat_fn=save_chat_message)
+
+# Startup self-check — verify every dependency the system needs BEFORE a request hits a
+# missing one mid-conversation. Prints a readable summary to the log and caches a structured
+# report for the dashboard/health panel. A missing REQUIRED dep prints a loud error (the app
+# keeps running so the healthy parts still work, but the problem is now visible up front) and
+# is reported to the monitor's incident log; missing OPTIONAL deps degrade with a notice.
+try:
+    _startup = health.run_startup_check(supabase_client=supabase)
+    print(health.startup_report_text(_startup), flush=True)
+    if _startup.get("missing_required"):
+        print("!!! STARTUP: required dependencies missing — "
+              + ", ".join(_startup["missing_required"]) + " !!!", flush=True)
+        try:
+            monitor.report_event("startup", "critical",
+                                 "missing required dependencies at boot",
+                                 ", ".join(_startup["missing_required"]))
+        except Exception:
+            pass
+except Exception as e:
+    print(f"Warning: startup self-check failed to run: {e}", flush=True)
 
 
 # ============================================================

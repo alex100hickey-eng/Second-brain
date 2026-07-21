@@ -150,6 +150,120 @@ def health_text() -> str:
     return "\n".join(lines)
 
 
+# ============================================================
+# STARTUP SELF-CHECK — run once at app boot. Verifies every dependency the system
+# needs BEFORE a request hits a missing one mid-conversation. Reuses the checks above
+# (DBs / index / binaries / disk) and adds env-var, Supabase-reachability, and embedding-
+# model checks. A missing REQUIRED dependency is a loud critical; a missing OPTIONAL one
+# degrades gracefully with a visible notice. The structured report is cached so the
+# dashboard/health panel can show it.
+# ============================================================
+
+# Vars the app genuinely cannot run without (chat brain + datastore).
+REQUIRED_ENV = ["CLAUDE_API_KEY", "SUPABASE_URL", "SUPABASE_KEY"]
+# Vars that gate specific features or hardening — missing = degraded, not dead.
+OPTIONAL_ENV = {
+    "COMPOSIO_API_KEY": "Google Calendar + Gmail tools disabled",
+    "ACCESS_CODE": "chat gate OPEN — anyone reaching the port can use the brain (set one!)",
+    "FLASK_SECRET_KEY": "sessions won't survive a restart (a random key is used)",
+    "GITHUB_TOKEN": "expansion scout uses unauthenticated GitHub (lower rate limit)",
+    "TAVILY_API_KEY": "web search falls back to keyless DuckDuckGo",
+    "SERPER_API_KEY": "web search falls back to keyless DuckDuckGo",
+    "BRAVE_API_KEY": "web search falls back to keyless DuckDuckGo",
+}
+
+_LAST_STARTUP_REPORT = None
+
+
+def _check_env() -> list:
+    checks = []
+    for var in REQUIRED_ENV:
+        present = bool(os.environ.get(var))
+        checks.append({"name": f"env: {var}", "ok": present,
+                       "status": "set" if present else "MISSING (required)",
+                       "detail": "" if present else "the app cannot function without this"})
+    for var, consequence in OPTIONAL_ENV.items():
+        present = bool(os.environ.get(var))
+        # A missing ACCESS_CODE is a security concern — surface it as a warning, others as info.
+        ok = True if present else None
+        checks.append({"name": f"env: {var}", "ok": ok,
+                       "status": "set" if present else "not set",
+                       "detail": "" if present else consequence})
+    return checks
+
+
+def _check_supabase(supabase_client) -> dict:
+    if supabase_client is None:
+        return {"name": "Supabase reachability", "ok": None, "status": "not checked",
+                "detail": "no client passed to the startup check"}
+    try:
+        supabase_client.table("Agent Outputs").select("id").limit(1).execute()
+        return {"name": "Supabase reachability", "ok": True, "status": "reachable",
+                "detail": "query round-tripped"}
+    except Exception as e:
+        return {"name": "Supabase reachability", "ok": False, "status": "UNREACHABLE",
+                "detail": str(e)[:200]}
+
+
+def _check_embedding_model() -> dict:
+    try:
+        import embeddings
+        if embeddings.available():
+            return {"name": "embedding model", "ok": True, "status": "loaded",
+                    "detail": f"model2vec {embeddings.MODEL_ID}"}
+        return {"name": "embedding model", "ok": None, "status": "unavailable",
+                "detail": "semantic search falls back to keyword ranking (still works)"}
+    except Exception as e:
+        return {"name": "embedding model", "ok": None, "status": "unavailable",
+                "detail": str(e)[:200]}
+
+
+def run_startup_check(supabase_client=None) -> dict:
+    """Full boot-time dependency check. Returns a structured report and caches it.
+    overall: healthy | degraded | critical. missing_required lists dead-stop problems."""
+    global _LAST_STARTUP_REPORT
+    checks = []
+    checks += _check_env()
+    for name, path in _DBS.items():
+        checks.append(_check_db(name, path))
+    checks.append(_check_index())
+    checks.append(_check_embedding_model())
+    checks.append(_check_binary("whisper-cli", "brew install whisper-cpp"))
+    checks.append(_check_binary("ffmpeg", "brew install ffmpeg"))
+    checks.append(_check_disk_for_backups())
+    checks.append(_check_supabase(supabase_client))
+
+    missing_required = [c["name"] for c in checks if c["ok"] is False]
+    notices = [f"{c['name']}: {c['detail']}" for c in checks
+               if c["ok"] is None and c.get("detail")]
+    has_fail = bool(missing_required)
+    has_warn = any(c["ok"] is None for c in checks)
+    overall = "critical" if has_fail else ("degraded" if has_warn else "healthy")
+    report = {"overall": overall, "checks": checks, "missing_required": missing_required,
+              "notices": notices, "generated_at": _now().isoformat()}
+    _LAST_STARTUP_REPORT = report
+    return report
+
+
+def get_last_startup_report() -> dict:
+    return _LAST_STARTUP_REPORT or {}
+
+
+def startup_report_text(report: dict = None) -> str:
+    """Readable boot summary for the log / dashboard."""
+    report = report or _LAST_STARTUP_REPORT or run_startup_check()
+    icon = {"healthy": "🟢", "degraded": "🟡", "critical": "🔴"}[report["overall"]]
+    lines = [f"{icon} Startup self-check: {report['overall'].upper()}"]
+    if report["missing_required"]:
+        lines.append("  ✗ MISSING REQUIRED: " + ", ".join(report["missing_required"])
+                     + "  — expect failures until fixed.")
+    for c in report["checks"]:
+        mark = {True: "✓", False: "✗", None: "•"}[c["ok"]]
+        detail = f" — {c['detail']}" if c.get("detail") else ""
+        lines.append(f"  {mark} {c['name']}: {c['status']}{detail}")
+    return "\n".join(lines)
+
+
 def record_test_pass(detail: str = "") -> None:
     """Called by run_tests.py after a fully green run."""
     try:
