@@ -27,6 +27,9 @@ WHAT'S COVERED
   backup     — backup script syntax/retention + jarvis-launch never invokes claude
   security   — no live secrets in code, localhost-only, .env/memory-db/screenshots gitignored,
                and NO mouse/keyboard control code anywhere
+  taskman    — Task Manager safety: _safe_path attack battery, sandbox three-way block
+               (secret/network/out-of-scratch) + benign pass, move/undo round-trip,
+               guardrail enforcement fails closed (stubbed council)
 
 OFFLINE DESIGN: anything that would call the Claude API or scrape the web is replaced
 with a realistic fake/stub, so the default run is deterministic and costs nothing.
@@ -1179,6 +1182,207 @@ def suite_security(app, live):
     check("no mouse/keyboard control code in any .py file", not offenders, str(offenders))
 
 
+# --- in-memory stand-in for the Supabase client, just enough for the undo log --
+class _FakeRes:
+    def __init__(self, data):
+        self.data = data
+
+
+class _FakeTable:
+    def __init__(self, db, name):
+        self.db, self.name = db, name
+        self.mode = None
+        self.payload = None
+        self.filters = []
+        self.desc = False
+        self._limit = None
+
+    def insert(self, payload):
+        self.mode, self.payload = "insert", payload
+        return self
+
+    def select(self, *a):
+        self.mode = "select"
+        return self
+
+    def update(self, payload):
+        self.mode, self.payload = "update", payload
+        return self
+
+    def eq(self, col, val):
+        self.filters.append((col, val))
+        return self
+
+    def order(self, col, desc=False):
+        self.desc = desc
+        return self
+
+    def limit(self, n):
+        self._limit = n
+        return self
+
+    def _match(self, row):
+        return all(row.get(c) == v for c, v in self.filters)
+
+    def execute(self):
+        if self.mode == "insert":
+            self.db._id += 1
+            row = {"id": self.db._id}
+            row.update(self.payload)
+            self.db.rows.append(row)
+            return _FakeRes([dict(row)])
+        if self.mode == "select":
+            data = [dict(r) for r in self.db.rows if self._match(r)]
+            data.sort(key=lambda r: r["id"], reverse=self.desc)
+            if self._limit:
+                data = data[: self._limit]
+            return _FakeRes(data)
+        if self.mode == "update":
+            n = 0
+            for r in self.db.rows:
+                if self._match(r):
+                    r.update(self.payload)
+                    n += 1
+            return _FakeRes([])
+        return _FakeRes([])
+
+
+class _FakeSupabase:
+    def __init__(self):
+        self.rows, self._id = [], 0
+
+    def table(self, name):
+        return _FakeTable(self, name)
+
+
+def suite_taskman(app, live):
+    """The Task Manager is the most dangerous subsystem (autonomous multi-step
+    execution). Its safety properties were only ever verified in one-off session
+    scripts (audit finding #2). This ports them into the regression bar so a future
+    refactor can't silently weaken them. All checks are offline and leave no residue."""
+    section("task manager safety (path guards / sandbox / undo / guardrail fail-closed)")
+    import task_manager as tm
+
+    # 1. _safe_path attack battery — 8 blocked, 2 allowed (audit-verified set).
+    blocked = [
+        "/etc/hosts", "~/.ssh/id_rsa", "~/Library", "~/second-brain",
+        "~/Downloads/../../../etc/passwd", "~/../../etc", "~/.zshrc", "/tmp",
+    ]
+    for p in blocked:
+        try:
+            tm._safe_path(p)
+            check(f"_safe_path blocks {p}", False, "was allowed")
+        except ValueError:
+            check(f"_safe_path blocks {p}", True)
+    for p in ("~/Downloads", "~/Desktop"):
+        try:
+            tm._safe_path(p)
+            check(f"_safe_path allows {p}", True)
+        except ValueError as e:
+            check(f"_safe_path allows {p}", False, str(e))
+
+    # 2. move / undo round-trip against an in-memory undo log (no network, no residue).
+    home = os.path.expanduser("~")
+    workdir = tempfile.mkdtemp(dir=home, prefix="jarvis_taskman_test_")
+    saved_sb = tm.supabase
+    try:
+        tm.supabase = _FakeSupabase()
+        src = os.path.join(workdir, "a.txt")
+        with open(src, "w") as f:
+            f.write("hello")
+        dst_dir = os.path.join(workdir, "sub")
+        ctx = {"row_id": 4242}
+        msg = tm.fs_move(ctx, src, os.path.join(dst_dir, "b.txt"))
+        moved = os.path.join(dst_dir, "b.txt")
+        check("fs_move relocates the file", os.path.isfile(moved) and not os.path.exists(src), msg)
+        undo_msg = tm.undo_file_operations(4242)
+        check("undo_file_operations restores the original",
+              os.path.isfile(src) and not os.path.exists(moved), undo_msg)
+        # A second undo is a no-op (already undone) — proves idempotent undo.
+        again = tm.undo_file_operations(4242)
+        check("second undo is a no-op", "0 file operation" in again or "Rolled back 0" in again, again)
+    finally:
+        tm.supabase = saved_sb
+        shutil.rmtree(workdir, ignore_errors=True)
+
+    # 3. sandbox three-way block + a benign pass (macOS sandbox-exec).
+    if sys.platform != "darwin" or shutil.which("sandbox-exec") is None:
+        skip("sandbox three-way block", "needs macOS sandbox-exec")
+    else:
+        import re as _re
+        row_id = 99991
+        scratch = tm._scratch_dir(row_id)
+        ctx = {"row_id": row_id, "scratch": scratch}
+        rh = home  # real home, needed to name paths the sandbox profile denies
+        try:
+            benign = (
+                'TOOL_SCHEMA = {"name": "add_nums"}\n'
+                "def add_nums(a, b):\n    return a + b\n"
+            )
+            out = tm.sandbox_test_tool(ctx, "add_nums", benign, '{"a": 2, "b": 3}')
+            check("sandbox runs a benign tool (exit 0, correct output)",
+                  "exit=0" in out and "5" in out, out[:200])
+
+            secret = (
+                'TOOL_SCHEMA = {"name": "read_secret"}\n'
+                "def read_secret():\n"
+                f"    return open({rh + '/.zshrc'!r}).read()[:20]\n"
+            )
+            out = tm.sandbox_test_tool(ctx, "read_secret", secret)
+            check("sandbox blocks reading ~/.zshrc", "exit=0" not in out, out[:200])
+
+            net = (
+                'TOOL_SCHEMA = {"name": "reach_net"}\n'
+                "def reach_net():\n"
+                "    import socket\n"
+                "    s = socket.socket(); s.settimeout(5); s.connect((\"1.1.1.1\", 80))\n"
+                "    return \"connected\"\n"
+            )
+            out = tm.sandbox_test_tool(ctx, "reach_net", net)
+            check("sandbox blocks outbound network", "exit=0" not in out, out[:200])
+
+            probe = rh + "/Desktop/.jarvis_sandbox_escape_probe"
+            escape = (
+                'TOOL_SCHEMA = {"name": "escape_write"}\n'
+                "def escape_write():\n"
+                f"    open({probe!r}, \"w\").write(\"x\"); return \"wrote\"\n"
+            )
+            out = tm.sandbox_test_tool(ctx, "escape_write", escape)
+            check("sandbox blocks out-of-scratch write",
+                  "exit=0" not in out and not os.path.exists(probe), out[:200])
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+            # belt-and-suspenders: the escape write must never have landed
+            try:
+                os.remove(rh + "/Desktop/.jarvis_sandbox_escape_probe")
+            except OSError:
+                pass
+
+    # 4. guardrail enforcement fails CLOSED — stub the council model call.
+    saved_call = tm._call
+    try:
+        task_no_rails = {"goal": "tidy up", "guardrails": []}
+        r = tm._check_guardrails(task_no_rails, "fs_move", {"src": "a", "dst": "b"})
+        check("no applied guardrails → allowed", r["allow"] is True, str(r))
+
+        task_rails = {"goal": "tidy up", "guardrails": [
+            {"apply": True, "guardrail": "no deleting", "strictness": "high", "details": "never delete"}]}
+
+        tm._call = lambda *a, **k: "this is not json at all"
+        r = tm._check_guardrails(task_rails, "fs_move", {})
+        check("unparseable council reply → BLOCK (fail closed)", r["allow"] is False, str(r))
+
+        tm._call = lambda *a, **k: '{"allow": false, "reason": "guardrail forbids it"}'
+        r = tm._check_guardrails(task_rails, "fs_move", {})
+        check("council says deny → BLOCK", r["allow"] is False, str(r))
+
+        tm._call = lambda *a, **k: '{"allow": true, "reason": "fine"}'
+        r = tm._check_guardrails(task_rails, "fs_move", {})
+        check("council says allow → allowed (not blindly blocking)", r["allow"] is True, str(r))
+    finally:
+        tm._call = saved_call
+
+
 SUITES = {
     "vault": suite_vault,
     "gate": suite_gate,
@@ -1201,6 +1405,7 @@ SUITES = {
     "observability": suite_observability,
     "injection": suite_injection,
     "security": suite_security,
+    "taskman": suite_taskman,
 }
 
 

@@ -773,3 +773,17 @@ before any change: `run_tests.py` 170/1 (whisper say-sample, finding #7), `test_
 - **Also:** app stdout now redirects to durable `scripts/app.log` (was a temp-dir scratchpad
   file that vanishes on cleanup — audit's "undocumented reality" note).
 - **Verification:** watching `system_event` rows id>358 for 30+ min (see OVERNIGHT_REPORT.md).
+
+## Finding #2 — Task Manager regression tests (DEGRADED) — [01:15 ET]
+- New `suite_taskman` in `run_tests.py` (21 checks, offline, no residue). Ports the audit's
+  verified safety battery so a refactor can't silently weaken the most dangerous subsystem:
+  - `_safe_path` attack battery: 8 blocked (/etc/hosts, ~/.ssh, ~/Library, the repo, 2
+    traversals, ~/.zshrc, /tmp) + 2 allowed (~/Downloads, ~/Desktop).
+  - Sandbox three-way block via real `sandbox-exec` (secret read of ~/.zshrc / outbound
+    network / out-of-scratch write to ~/Desktop all denied) + a benign tool passing (exit 0).
+    Skips cleanly off-darwin.
+  - `fs_move` → `undo_file_operations` round-trip against an in-memory fake Supabase (no
+    network), plus idempotent second-undo.
+  - Guardrail enforcement fails CLOSED: unparseable council reply → BLOCK, deny → BLOCK,
+    allow → allowed (proves it isn't blindly blocking). Council model call stubbed.
+- Result: `--only taskman` → 21/21. No temp dirs, scratch, or escape probe left behind.
