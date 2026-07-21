@@ -31,6 +31,11 @@ second-brain-chat/semantic_index.db
 second-brain-chat/semantic_index.db-journal
 second-brain-chat/semantic_index.db-wal
 second-brain-chat/semantic_index.db-shm
+# Background job queue state (local, persists across restarts) — state, not source
+second-brain-chat/jobs.db
+second-brain-chat/jobs.db-journal
+second-brain-chat/jobs.db-wal
+second-brain-chat/jobs.db-shm
 # Vendored local embedding model (potion-base-8M, ~31 MB) — re-downloadable via requirements
 models/potion-base-8M/
 # Local test-suite last-green-run marker (state, not source)

@@ -43,6 +43,7 @@ never touches the real Obsidian vault, and it drives the same code paths the cha
 import os
 import re
 import sys
+import time
 import shutil
 import tempfile
 import subprocess
@@ -1539,6 +1540,9 @@ def suite_streaming(app, live):
     saved_claude = app.claude
     saved_bsp = app.build_system_prompt
     app.build_system_prompt = lambda recall="": "SYSTEM"
+    # Stub the monitor so the fallback path doesn't write a real system_event row to Supabase.
+    saved_report = app.monitor.report_event
+    app.monitor.report_event = lambda *a, **k: None
     try:
         # 1) Happy path: deltas stream, then an authoritative 'final' arrives.
         app.claude = _FakeClaude("ok")
@@ -1563,6 +1567,63 @@ def suite_streaming(app, live):
     finally:
         app.claude = saved_claude
         app.build_system_prompt = saved_bsp
+        app.monitor.report_event = saved_report
+
+
+def suite_jobs(app, live):
+    """Background job queue: enqueue/claim/complete, persistence across a simulated restart,
+    interrupted-job requeue, and the budget-gated worker (Priority 2)."""
+    section("background job queue (persistence + worker)")
+    import job_queue as jq
+
+    tmp = tempfile.mkdtemp(prefix="sbtest_jobs_")
+    dbp = os.path.join(tmp, "jobs.db")
+    try:
+        q = jq.JobQueue(db_path=dbp)
+        jid = q.enqueue("website", {"brief": "a coffee cart site"}, label="coffee site")
+        check("enqueue returns a job id", isinstance(jid, int) and jid > 0)
+        check("new job is queued", q.get(jid)["status"] == "queued")
+
+        # Persistence across a 'restart': a fresh JobQueue on the same DB still sees the job.
+        q2 = jq.JobQueue(db_path=dbp)
+        check("job survives a simulated restart (persisted)", q2.get(jid)["status"] == "queued")
+
+        claimed = q2.claim_next()
+        check("claim_next returns the queued job and marks it running",
+              claimed and claimed["id"] == jid and q2.get(jid)["status"] == "running")
+        check("claim_next returns None when nothing is queued", q2.claim_next() is None)
+
+        # A job left 'running' when the app dies is requeued on next boot.
+        q3 = jq.JobQueue(db_path=dbp)
+        n = q3.requeue_interrupted()
+        check("interrupted (running) job is requeued on restart",
+              n == 1 and q3.get(jid)["status"] == "queued")
+
+        # Run it through the actual worker with a stub handler; result is recorded + announced.
+        # (jid is queued again after requeue_interrupted above.)
+        finished = []
+        jq.start_job_worker(q3, {"website": lambda p: f"built: {p['brief']}"},
+                            on_finish=lambda job: finished.append(job))
+        deadline = time.time() + 10
+        while time.time() < deadline and q3.get(jid)["status"] not in ("done", "failed"):
+            time.sleep(0.2)
+        done = q3.get(jid)
+        check("worker runs the job to done with the handler's result",
+              done["status"] == "done" and "built: a coffee cart site" in (done["result"] or ""),
+              done.get("status"))
+        check("on_finish announced the completed job", any(f["id"] == jid for f in finished))
+
+        # A failing handler marks the job failed (doesn't crash the worker).
+        fid = q3.enqueue("boom", {}, label="explodes")
+        deadline = time.time() + 10
+        while time.time() < deadline and q3.get(fid)["status"] not in ("done", "failed"):
+            time.sleep(0.2)
+        check("job with no handler is marked failed", q3.get(fid)["status"] == "failed")
+
+        counts = q3.counts()
+        check("counts summarize job states", counts.get("done", 0) >= 1 and counts.get("failed", 0) >= 1, str(counts))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 SUITES = {
@@ -1589,6 +1650,7 @@ SUITES = {
     "security": suite_security,
     "taskman": suite_taskman,
     "streaming": suite_streaming,
+    "jobs": suite_jobs,
 }
 
 

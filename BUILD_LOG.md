@@ -916,3 +916,19 @@ before any change: `run_tests.py` 170/1 (whisper say-sample, finding #7), `test_
   self-correcting after a fallback). Streaming failures are reported to the monitor.
 - Tests: new suite_streaming (5 checks) — happy-path deltas+final, and a simulated mid-stream
   failure recovering the full message via the non-streaming fallback.
+
+## P2.3 — Background job queue — [02:45 ET]
+- New `job_queue.py`: SQLite-backed (`jobs.db`, gitignored), thread-local connections, extends the
+  daemon-worker pattern. JobQueue: enqueue/claim_next (atomic CAS)/mark_done/mark_failed/list/counts/
+  requeue_interrupted/take_unsurfaced_finished. start_job_worker runs a registry of handlers,
+  respects the budget gate (monitor.is_agent_allowed → requeue+backoff under throttle), and reports
+  failures to the monitor.
+- app.py wiring: JOB_QUEUE + handlers (website, synthesis) + worker started with budget gate +
+  _announce_job (posts the result into the chat thread on completion) + requeue_interrupted on boot
+  + registered with the monitor for liveness. Tools: run_in_background (returns "Started job #N")
+  and list_jobs, with status labels + a SYSTEM_PROMPT paragraph. Dashboard: /api/home "jobs" bucket.
+- Persistence: jobs survive an app restart (jobs.db); a job left 'running' by a crash is requeued
+  on next boot.
+- Tests: new suite_jobs (10 checks) — enqueue/claim/complete, persistence across a simulated
+  restart, interrupted-job requeue, worker runs a handler to done + announces it, no-handler→failed,
+  counts. suite_streaming stubs monitor.report_event so it stays side-effect-free.

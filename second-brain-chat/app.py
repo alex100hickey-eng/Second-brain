@@ -102,6 +102,7 @@ if _PROJECT_ROOT_DIR not in _sys.path:
     _sys.path.insert(0, _PROJECT_ROOT_DIR)
 import data_synthesizer_agent  # noqa: E402
 import website_creator_agent  # noqa: E402
+import job_queue  # noqa: E402 — persistent background job queue for long-running work
 import video_toolkit  # noqa: E402
 import run_drafter  # noqa: E402 — drafts overnight-build prompts (DRAFTS ONLY, never launches)
 # Where drafted agent scripts get written. Sibling to this file's folder, inside
@@ -353,6 +354,13 @@ nothing deployed. Use it when he wants a site/landing page built. Pass the riche
 it takes a minute or two. Afterward tell him the folder and the `bash sites/<name>/serve.sh`
 preview command. If a site with the same name already exists, the tool won't silently make a
 duplicate — it asks first; only pass force=true after he confirms he wants it rebuilt.
+
+For long jobs (building a website, synthesizing a big report) you can run them in the BACKGROUND
+with run_in_background instead of the synchronous tool, so the chat stays responsive. Use it when
+he says "in the background" / "while I do something else", or the job will take a while. It returns
+a job number immediately, and the finished result is posted into this conversation automatically
+when it's done (jobs survive an app restart and show on the dashboard Jobs panel). Use list_jobs to
+check status. For a quick one-off, just run the synchronous tool directly.
 
 You can EDIT VIDEOS with edit_video (ffmpeg): trim, caption (burned-in text), concat clips, add/
 replace audio, make a 9:16 vertical for Shorts/Reels, or grab a thumbnail — on files in his inbox/.
@@ -650,6 +658,43 @@ TOOLS = [
                 },
             },
             "required": ["brief"],
+        },
+    },
+    {
+        "name": "run_in_background",
+        "description": (
+            "Run a long operation on the background job queue so the chat stays responsive. Use "
+            "this INSTEAD of the synchronous tool when Alex says 'in the background', 'while I do "
+            "something else', or the job will take a while. Supported job_type: 'website' (params: "
+            "{brief}) or 'synthesis' (params: {topic, optional raw_material, optional mode}). Returns "
+            "immediately with a job number; the finished result is posted into this conversation "
+            "automatically when it's done, and shows on the dashboard Jobs panel meanwhile. For a "
+            "quick request, just use the synchronous tool instead."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "job_type": {"type": "string", "enum": ["website", "synthesis"],
+                             "description": "Which kind of long job to run."},
+                "params": {"type": "object",
+                           "description": "Job parameters: website→{brief}; synthesis→{topic, raw_material?, mode?}."},
+                "label": {"type": "string", "description": "Short human label for the dashboard (optional)."},
+            },
+            "required": ["job_type", "params"],
+        },
+    },
+    {
+        "name": "list_jobs",
+        "description": (
+            "Show recent background jobs and their status (queued/running/done/failed) with "
+            "timestamps. Use when Alex asks 'how's that job', 'what's running', or wants a result "
+            "from something he sent to the background."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "description": "How many recent jobs to show (default 10)."},
+            },
         },
     },
     {
@@ -3146,6 +3191,29 @@ def _dispatch_tool_call(tool_name: str, tool_input: dict) -> str:
             claude_client=claude,
             supabase_client=supabase,
         )
+    if tool_name == "run_in_background":
+        jtype = tool_input["job_type"]
+        params = tool_input.get("params") or {}
+        label = tool_input.get("label") or jtype
+        # Validate required params up front so the model gets a clear error, not a silent failure.
+        if jtype == "website" and not params.get("brief"):
+            return "A 'website' job needs params.brief (what to build)."
+        if jtype == "synthesis" and not params.get("topic"):
+            return "A 'synthesis' job needs params.topic (what to research/organize)."
+        job_id = JOB_QUEUE.enqueue(jtype, params, label=label,
+                                   trigger=observability.current_trigger())
+        return (f"Started background job #{job_id} ({label}). It's running now — I'll post the "
+                f"result here when it's done, and you can check progress on the dashboard Jobs panel "
+                f"or ask me to 'list jobs'.")
+    if tool_name == "list_jobs":
+        jobs = JOB_QUEUE.list_jobs(limit=int(tool_input.get("limit", 10)))
+        if not jobs:
+            return "No background jobs yet."
+        lines = [f"Background jobs ({', '.join(f'{k}:{v}' for k, v in JOB_QUEUE.counts().items())}):"]
+        for j in jobs:
+            when = j.get("finished_at") or j.get("started_at") or j.get("created_at") or ""
+            lines.append(f"  #{j['id']} [{j['status']}] {j.get('label') or j['type']} — {when[:19]}")
+        return "\n".join(lines)
     if tool_name == "create_website":
         return website_creator_agent.create_website_for_chat(
             brief=tool_input["brief"],
@@ -3359,6 +3427,8 @@ TOOL_STATUS_LABELS = {
     "read_vault_note": "Reading your notes…",
     "write_vault_note": "Writing to your vault…",
     "synthesize_data": "Researching and synthesizing a report…",
+    "run_in_background": "Starting that as a background job…",
+    "list_jobs": "Checking your background jobs…",
     "create_website": "Designing and building your site…",
     "edit_video": "Editing your video…",
     "analyze_video": "Watching and transcribing your video…",
@@ -3765,6 +3835,8 @@ def get_home_data() -> dict:
         "cost": _safe(lambda: observability.get_observability().cost_summary(), {}),
         "health": _safe(health.run_health_check, {}),
         "startup": _safe(health.get_last_startup_report, {}),
+        "jobs": _safe(lambda: {"counts": JOB_QUEUE.counts(), "recent": JOB_QUEUE.list_jobs(10)},
+                      {"counts": {}, "recent": []}),
         "generated_at": datetime.now(LOCAL_TZ).strftime("%-I:%M:%S %p"),
     }
 
@@ -3820,6 +3892,64 @@ monitor.register_worker("jarvis-managed-worker",
 monitor.register_worker("jarvis-task-worker", start_task_worker)
 TOOLS.extend(monitor.TOOL_SCHEMAS)
 monitor.start_monitor(post_to_chat_fn=save_chat_message)
+
+# ============================================================
+# BACKGROUND JOB QUEUE — long-running work (website builds, data synthesis) runs on a
+# persistent, restart-surviving queue instead of blocking a chat turn. Extends the daemon-worker
+# pattern; respects the budget gate; announces completions back into the conversation.
+# ============================================================
+JOB_QUEUE = job_queue.JobQueue()
+
+
+def _job_website(params: dict) -> str:
+    return website_creator_agent.create_website_for_chat(
+        brief=params["brief"], claude_client=claude, supabase_client=supabase,
+        force=bool(params.get("force", False)))
+
+
+def _job_synthesis(params: dict) -> str:
+    return data_synthesizer_agent.synthesize_for_chat(
+        topic=params["topic"], raw_material=params.get("raw_material"),
+        mode=params.get("mode", "auto"), claude_client=claude, supabase_client=supabase)
+
+
+JOB_HANDLERS = {"website": _job_website, "synthesis": _job_synthesis}
+
+
+def _announce_job(job: dict) -> None:
+    """When a background job finishes, drop the result into the chat thread so it surfaces
+    naturally on Alex's next interaction (same mechanism background tasks use)."""
+    if not job:
+        return
+    label = job.get("label") or job.get("type")
+    if job.get("status") == "done":
+        body = (job.get("result") or "").strip()
+        msg = f"✅ Background job #{job['id']} ({label}) finished:\n\n{body}"
+    else:
+        msg = (f"⚠️ Background job #{job['id']} ({label}) failed: "
+               f"{(job.get('error') or 'unknown error').splitlines()[0]}")
+    try:
+        save_chat_message("assistant", msg)
+    except Exception as e:
+        print(f"Warning: couldn't announce job #{job.get('id')}: {e}")
+
+
+_requeued = JOB_QUEUE.requeue_interrupted()  # any job left running by a prior crash/restart
+if _requeued:
+    print(f"Job queue: requeued {_requeued} interrupted job(s) from the last run.", flush=True)
+
+
+def start_job_worker() -> None:
+    job_queue.start_job_worker(
+        JOB_QUEUE, JOB_HANDLERS,
+        is_allowed=monitor.is_agent_allowed,
+        on_finish=_announce_job,
+        report_event=monitor.report_event,
+    )
+
+
+start_job_worker()
+monitor.register_worker("jarvis-job-worker", start_job_worker)
 
 # Startup self-check — verify every dependency the system needs BEFORE a request hits a
 # missing one mid-conversation. Prints a readable summary to the log and caches a structured
