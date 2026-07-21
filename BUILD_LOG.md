@@ -836,3 +836,12 @@ before any change: `run_tests.py` 170/1 (whisper say-sample, finding #7), `test_
 - Added a regression guard in suite_observability: every native tool must have a status label,
   and all six expansion/monitor tools must be named in SYSTEM_PROMPT — so the "sacred pattern"
   can't silently drift again.
+
+## Finding #7 — whisper test guard (COSMETIC) — [01:55 ET]
+- Added `_audio_duration()` (ffprobe) to run_tests.py; suite_voice now probes the `say`-generated
+  sample and SKIPs the transcription check (with a clear message) when the audio is <0.5s — i.e.
+  when `say` emits a silent header-only file under a sandboxed/headless shell (confirmed: 0.01s
+  here). This is a harness artifact, not a whisper regression. Offline suite is now fully green
+  in the sandbox instead of showing the phantom 1 failure.
+- Corrected the handoff's wrong root-cause sentence ("whisper model file absent" → the real cause:
+  `say` silence under a sandboxed shell; model file is present and transcribes real speech).
