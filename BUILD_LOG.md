@@ -1003,3 +1003,29 @@ before any change: `run_tests.py` 170/1 (whisper say-sample, finding #7), `test_
   (job-queue test artifact). sites/inkling-1 was already deleted last session.
 - Baseline at session start: 244/0 (run_tests.py) + 57/57 (expansion/monitor) + 43/43 (money) +
   18/18 (vault tools), tree clean at 556a086 == origin/main.
+
+## Phase 2 — Deployment finished: hardened auth + HTTPS + PWA + phone proof — [12:15 ET]
+- Pre-flight (committed a1654d3): login_limiter.py — per-IP lockout (5 fails/15 min) + global
+  backstop (20 fails any-IP) checked BEFORE password compare (lockout reveals nothing; even the
+  right code gets 429 during one); success clears history; trip reports a warning system_event.
+  ProxyFix behind TRUSTED_PROXY_COUNT (server=1) so the limiter sees real client IPs via Traefik;
+  session cookie HttpOnly + SameSite=Lax + env-driven Secure. 12 new checks (suite loginlimit).
+  SECURITY_NOTES §9 documents the internet-facing auth model (Alex chose public-HTTPS over
+  Tailscale). .env.example gained TRUSTED_PROXY_COUNT + SESSION_COOKIE_SECURE.
+- PWA (6998471): home.html + memory.html gained the manifest/apple-touch/app-capable tags the
+  other pages had. Icons/manifest were already CLARVIS-branded.
+- HTTPS: Alex drove Coolify (I navigated, he credentialed): domain →
+  https://clarvis.178.156.209.40.sslip.io, env TRUSTED_PROXY_COUNT=1 + SESSION_COOKIE_SECURE=1,
+  redeploy. Let's Encrypt issued despite Coolify's sslip.io rate-limit warning (cert valid to
+  2026-10-20, auto-renew). http→https 302; old UUID hostname retired (404).
+- Deploy-queue incident: THREE builds ended up concurrent on the 2-vCPU box (webhook 15:37,
+  zombie webhook 15:25 silent 30+ min, my forced manual 15:47) — box thrashed, terminal
+  unresponsive, logs frozen. Cancelled the zombie and the wedged manual; the surviving webhook
+  build finished (23m56s vs normal ~3m) and deployed 6998471 WITH the new domain/env. Lesson
+  confirmed: frozen log ≠ dead build; also never let parallel builds pile up on CPX11.
+- Live proof: phone (home wifi, public internet): HTTPS login ✓, chat ✓, dashboard ✓, PWA
+  installed to home screen ✓ (no service worker — always loads current deploy). Lockout live:
+  5×200 then 429 on attempt 6 from the Mac's IP; warning incident on dashboard.
+- Mac stays the home node (iMessage/screen/say/whisper); server is the always-on brain.
+  Deferred: GITHUB_TOKEN env (optional, Alex when ready), budget cap (re-raise in Phase 4),
+  deep mobile layout polish (Phase 5 with Alex driving).
