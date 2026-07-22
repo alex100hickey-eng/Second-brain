@@ -982,3 +982,24 @@ before any change: `run_tests.py` 170/1 (whisper say-sample, finding #7), `test_
   silo-linking (notes/reports ↔ conversations, weekly-review pulling from links) is designed but
   left for a follow-up (see OVERNIGHT_REPORT) to avoid a rushed multi-store change.
 - Tests: 2 new checks in suite_tasks (structured council entry + cross-reference id).
+
+---
+
+# MASTER BUILD — Jarvis becomes the real assistant — 2026-07-22
+
+## Phase 1 — Vault sync self-heal (migration was already done) — [11:25 ET]
+- Finding #4 part 2 (--separate-git-dir) was already done 2026-07-19 — vault .git is a 52-byte
+  pointer to ~/.second-brain-vault.git. The master-build plan's migration step was a no-op; skipped.
+- REAL bug found live: iCloud evicts CONTENT files (APFS dataless flag) — today's 11:06 run failed
+  `git add` with EDEADLK ("Resource deadlock avoided") on Schedule/brief-2026-07-22.md; launchd
+  last-exit 1. Three more briefs (07-19/20/21) were also dataless.
+- Fix: vault_sync.sh now detects dataless files (`find -flags +dataless`), requests download via
+  `brctl download`, waits up to 60s for materialization (report_event + skip run if stuck), THEN
+  runs git. Header comment corrected (migration done; pointer-file + content eviction both handled).
+- Proof: 11:16 launchd run pushed today's brief (5bf8291 → GitHub); 11:19 manual run of the new
+  script materialized all 3 evicted files in ~5s then IDLE; 11:24 launchd kickstart ran the new
+  script exit 0. Vault clean, main == origin/main.
+- Cleanup (Alex-approved this session): deleted synthesized/20260721-overnight-test-note.md
+  (job-queue test artifact). sites/inkling-1 was already deleted last session.
+- Baseline at session start: 244/0 (run_tests.py) + 57/57 (expansion/monitor) + 43/43 (money) +
+  18/18 (vault tools), tree clean at 556a086 == origin/main.
