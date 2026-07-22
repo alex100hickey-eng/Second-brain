@@ -146,6 +146,15 @@
     border-radius: 6px; padding: 3px 10px; font-size: 12px; cursor: pointer; }
   .mini-btn:hover { background: var(--accent-dim); }
 
+  .notify-form { display: flex; flex-wrap: wrap; gap: 14px 20px; align-items: center;
+    padding-top: 4px; }
+  .notify-form label { display: flex; align-items: center; gap: 6px; font-size: 13px;
+    color: var(--text-dim); }
+  .notify-form input[type="time"], .notify-form input[type="number"] {
+    background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
+    border-radius: 6px; padding: 4px 8px; font-size: 13px; }
+  .notify-form input[type="checkbox"] { width: 16px; height: 16px; }
+
   @media (max-width: 560px) {
     main { padding: 14px 10px 50px; }
     .grid { grid-template-columns: 1fr; }
@@ -177,6 +186,19 @@
 
   <div class="grid" id="grid">
     <div class="loading">Loading your command deck…</div>
+  </div>
+
+  <div class="panel" id="notify-panel" style="margin-top:18px">
+    <h2>Notifications</h2>
+    <div class="notify-form">
+      <label>Quiet hours <input type="time" id="nf-quiet-start"> to <input type="time" id="nf-quiet-end"></label>
+      <label>Max per day <input type="number" id="nf-max" min="1" max="50" style="width:60px"></label>
+      <label>Morning brief <input type="time" id="nf-morning"> <button class="mini-btn" data-clear="nf-morning" type="button">off</button></label>
+      <label>Evening review <input type="time" id="nf-evening"> <button class="mini-btn" data-clear="nf-evening" type="button">off</button></label>
+      <label><input type="checkbox" id="nf-enabled"> Enabled</label>
+      <button class="mini-btn" id="nf-save">Save</button>
+      <span id="nf-status" class="r-meta"></span>
+    </div>
   </div>
 
   <div class="refreshed" id="refreshed" style="margin-top:18px"></div>
@@ -499,6 +521,42 @@
       load();
     } catch (err) { btn.disabled = false; }
   });
+
+  // Notification settings panel — loads/saves independently of the main refresh loop.
+  async function loadNotifySettings() {
+    try {
+      const cfg = await (await fetch('/api/notifications')).json();
+      document.getElementById('nf-quiet-start').value = cfg.quiet_start || '';
+      document.getElementById('nf-quiet-end').value = cfg.quiet_end || '';
+      document.getElementById('nf-max').value = cfg.max_per_day || 8;
+      document.getElementById('nf-morning').value = cfg.morning_brief || '';
+      document.getElementById('nf-evening').value = cfg.evening_review || '';
+      document.getElementById('nf-enabled').checked = !!cfg.enabled;
+    } catch (err) { /* leave defaults on failure */ }
+  }
+  document.querySelectorAll('[data-clear]').forEach(btn => {
+    btn.addEventListener('click', () => { document.getElementById(btn.dataset.clear).value = ''; });
+  });
+  document.getElementById('nf-save').addEventListener('click', async () => {
+    const status = document.getElementById('nf-status');
+    status.textContent = 'Saving…';
+    try {
+      await fetch('/api/notifications', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          quiet_start: document.getElementById('nf-quiet-start').value,
+          quiet_end: document.getElementById('nf-quiet-end').value,
+          max_per_day: parseInt(document.getElementById('nf-max').value, 10) || 8,
+          morning_brief: document.getElementById('nf-morning').value,
+          evening_review: document.getElementById('nf-evening').value,
+          enabled: document.getElementById('nf-enabled').checked,
+        }),
+      });
+      status.textContent = 'Saved.';
+      setTimeout(() => { status.textContent = ''; }, 2000);
+    } catch (err) { status.textContent = 'Save failed.'; }
+  });
+  loadNotifySettings();
 
   document.getElementById('refresh-btn').addEventListener('click', load);
   load();

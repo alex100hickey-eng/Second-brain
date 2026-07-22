@@ -241,3 +241,25 @@ The server deployment is now treated as internet-facing. Model chosen with Alex
 - **HTTPS**: Coolify/Let's Encrypt, done in the Coolify UI by Alex (Claude never
   holds those credentials). Until HTTPS is verified, treat the site as untrusted
   transport — don't type the access code over plain http from outside the LAN.
+
+---
+
+## 10. Proactive push channel (ntfy) — 2026-07-22 (master build, Phase 4)
+
+CLARVIS can now send nudges to Alex's phone via ntfy.sh. New surface, new notes:
+
+- **The topic NAME is the only secret** (bearer-style: anyone who knows it can post
+  to and subscribe to the channel). It's a long random string in `NTFY_TOPIC`
+  (.env locally, Coolify env on the server) — never committed, never printed in
+  chat/logs; the nudge ledger stores titles, not the topic.
+- **What leaves the system:** short nudge text (e.g. a task title + due time) transits
+  ntfy.sh's servers. Nudge bodies are deliberately minimal — no message contents, no
+  email bodies, just the obligation line. If even that feels like too much exposure,
+  `NTFY_SERVER` can point at a self-hosted ntfy instance later.
+- **Rate/abuse posture:** sends happen only through `proactive.send_nudge`, which
+  enforces quiet hours, a hard daily cap, and a never-twice key; every attempt
+  (sent/skipped/failed + why) is logged as a `jarvis_nudge` row. The worker runs
+  server-side every 15 min; a delivery failure reports to the monitor, never crashes.
+- **No inbound path:** CLARVIS only PUBLISHES. Nothing subscribes to or executes
+  anything from the topic — a hostile poster could annoy Alex's phone (rotate the
+  topic in both places if that ever happens) but cannot reach CLARVIS itself.

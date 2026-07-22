@@ -1052,3 +1052,25 @@ before any change: `run_tests.py` 170/1 (whisper say-sample, finding #7), `test_
   filtered. Calendar live: 40 events baselined silently.
 - School connector: it's summer (Alex) — paste/forward inbox covers one-offs until fall.
 - test_intake.py: 42 checks. Full regression 255/0 + 42 + 43 + 57.
+
+## Phase 4 — Proactive engine: Jarvis comes to you — [14:40 ET]
+- proactive.py: awareness pass (deterministic triggers — due-within-24h items from intake
+  events + task "(due …)" titles, intake pile-up batching, morning-brief/evening-review
+  one-shots) → ntfy.sh delivery under hard respect rules: quiet hours (default 22:00–08:00,
+  midnight-wrap correct), max/day cap (8), never-nudge-twice keys, enabled switch, and
+  no-topic = nothing can ever send. Every attempt logged as a jarvis_nudge row (sent/
+  skipped/failed + why). Config in a shared Supabase row — same settings everywhere.
+- Wiring: 4 tools (check_notifications / set_notification_rules / run_awareness_now /
+  test_nudge) + labels + SYSTEM_PROMPT; /api/notifications GET/POST; dashboard
+  "Notifications" settings panel (quiet hours, cap, brief/review times, enabled).
+  Worker: always-on on the SERVER runtime (15-min interval, monitor-registered);
+  manual-only on the Mac unless PROACTIVE_LOCAL=1 (dedupe keys make a race harmless).
+- Two real bugs found by the live proof and fixed with regression checks: emoji in HTTP
+  headers crashed urllib (latin-1) → _header_safe UTF-8 round-trip; macOS Python missing
+  root CAs → explicit certifi SSL context.
+- LIVE PROOF on Alex's phone (ntfy app, private random topic): test nudge received ✓;
+  forced awareness pass sent 4 real nudges — including TODAY'S dentist appointment
+  (high priority, ≤3h) — all received ✓. Channel: Alex subscribed in ~2 min.
+- SECURITY_NOTES §10: topic-as-secret, minimal nudge bodies, publish-only (no inbound
+  execution path), self-host option via NTFY_SERVER.
+- test_proactive.py: 27 checks. Full suite 255/0.
