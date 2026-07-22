@@ -147,30 +147,40 @@ def _fetch_new(cursor_rowid: int, cap: int = BATCH_CAP) -> list:
     return out
 
 
+CONTEXT_MSGS = 5   # same-chat context lines shown to the extractor per message
+
+
 def scan_once(cap: int = BATCH_CAP) -> str:
-    """One poll cycle: read new messages, push through intake. Returns a summary."""
+    """One poll cycle: read new messages IN ORDER, push through intake with
+    same-chat conversation context (so 'bet, let's do it' resolves to the plan it
+    confirms). The cursor advances only through what was actually processed, so a
+    backlog is worked off across polls, never skipped. Returns a summary."""
     if not available():
         return "iMessage database not readable here (home-node only)."
     cursor = _load_cursor()
-    if cursor == 0:
-        # First run: start at the tip minus the recent window, not year one.
-        con = _connect()
-        max_rowid = con.execute("SELECT COALESCE(MAX(ROWID), 0) FROM message").fetchone()[0]
-        con.close()
-        recent = _fetch_new(0, cap=10_000_000)   # bounded by SKIP_OLDER_DAYS anyway
-        msgs = recent[-cap:]
-        new_cursor = max_rowid
-    else:
-        msgs = _fetch_new(cursor, cap)
-        new_cursor = msgs[-1]["rowid"] if msgs else cursor
+    msgs = _fetch_new(cursor, cap)
+    new_cursor = msgs[-1]["rowid"] if msgs else cursor
     ingested, noise, empty = 0, 0, 0
+    history = {}   # chat key -> recent [(who, text)] within this batch
     for m in msgs:
+        chat_key = m["chat"] or m["sender"]
         if not m["text"]:
             empty += 1
             continue
+        who = "ME (Alex)" if m["from_me"] else m["sender"]
+        ctx_lines = history.get(chat_key, [])
+        context = ""
+        if ctx_lines:
+            context = ("Recent context in this conversation (for resolving references "
+                       "only — do NOT extract items from context lines themselves):\n"
+                       + "\n".join(f"  {w}: {t[:160]}" for w, t in ctx_lines[-CONTEXT_MSGS:])
+                       + "\n\nNEW MESSAGE (extract from this one):\n")
         label = m["sender"] + (f" in '{m['chat']}'" if m["chat"] and "chat" not in
                                str(m["chat"]).lower() else "")
-        res = intake.record_raw("imessage", m["guid"], label, m["ts"], m["text"])
+        res = intake.record_raw("imessage", m["guid"], label, m["ts"],
+                                context + f"{who}: {m['text']}",
+                                preview=f"{who}: {m['text']}")
+        history.setdefault(chat_key, []).append((who, m["text"]))
         if res.get("recorded"):
             ingested += 1
         elif res.get("reason") == "noise":

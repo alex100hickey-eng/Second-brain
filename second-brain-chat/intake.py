@@ -39,6 +39,7 @@ Wired by init() from app.py — no clients are created here (testable with fakes
 """
 
 import json
+import re
 import threading
 from datetime import datetime, timezone
 
@@ -174,7 +175,12 @@ INTAKE_PROMPT_RULES = (
     "Return [] for greetings, banter, reactions, memes, group-chat noise, marketing,\n"
     "newsletters, receipts for things already done, and anything already in the past.\n"
     "Each item's text must be SELF-CONTAINED (who/what/when) — it will be read without\n"
-    "the original message. Use null for unknown due dates; never invent one."
+    "the original message. Use null for unknown due dates; never invent one.\n"
+    "Lines marked 'ME (Alex)' are Alex himself: his promises are commitments; his\n"
+    "questions to others are NOT asks on him. When the new message CONFIRMS a plan\n"
+    "proposed in the conversation context ('bet', 'let's do it', 'done', 'in the\n"
+    "calendar'), extract the CONFIRMED plan with its time/place pulled from context.\n"
+    "An unanswered question TO Alex ('are you free this weekend?') is an ask."
 )
 
 _EXTRACT_SYSTEM = (
@@ -223,21 +229,53 @@ def extract_items(source: str, sender: str, text: str, when: str = "") -> list:
 # Recording — the one door every source walks through
 # ============================================================
 
+def _dup_item(item: dict, recent_events: list) -> bool:
+    """True when an equivalent item was already ingested recently (same due day +
+    strong token overlap) — one plan discussed across several messages should
+    surface ONCE, not once per message."""
+    words = set(re.findall(r"[a-z0-9']+", item.get("text", "").lower())) - _STOPWORDS
+    if not words:
+        return False
+    due_day = (item.get("due") or "")[:10]
+    for r in recent_events:
+        for other in r["event"].get("items", []):
+            if (other.get("due") or "")[:10] != due_day:
+                continue
+            owords = set(re.findall(r"[a-z0-9']+", other.get("text", "").lower())) - _STOPWORDS
+            if not owords:
+                continue
+            overlap = len(words & owords) / len(words | owords)
+            if overlap >= 0.45:
+                return True
+    return False
+
+
+_STOPWORDS = {"a", "an", "the", "to", "of", "on", "at", "in", "for", "with", "and",
+              "or", "is", "are", "was", "will", "alex", "alex's", "he", "his", "him",
+              "they", "them", "this", "that", "it", "up", "s"}
+
+
 def record_raw(source: str, source_ref: str, sender: str, ts: str, text: str,
-               items: list = None) -> dict:
+               items: list = None, preview: str = None) -> dict:
     """Ingest one raw thing. Extracts (unless items given), noise-filters, dedupes.
+    `preview` overrides what's shown on the dashboard (e.g. just the message, when
+    `text` also carries conversation context for the extractor).
     Returns {"recorded": bool, "reason"/"row_id"/...}."""
     source_ref = str(source_ref)
     if source_ref in _seen(source):
         return {"recorded": False, "reason": "duplicate"}
     if items is None:
         items = extract_items(source, sender, text, when=ts)
+    if items:
+        recent = _load_events(50)
+        items = [i for i in items if not _dup_item(i, recent)]
     if not items:
-        _remember_seen(source, [source_ref])   # remember noise → never re-extract it
+        _remember_seen(source, [source_ref])   # remember noise/dups → never re-extract
         return {"recorded": False, "reason": "noise"}
     event = {
         "source": source, "source_ref": source_ref, "sender": (sender or "")[:120],
-        "ts": ts or _now_iso(), "preview": (text or "")[:PREVIEW_CHARS],
+        "ts": ts or _now_iso(),
+        "preview": (preview if preview is not None else (text or ""))[:PREVIEW_CHARS],
         "items": items,
     }
     row_id = _insert_event(event)          # if this raises, next poll retries the message
@@ -360,6 +398,15 @@ def scan_calendar(days_ahead: int = 14, cap: int = 40) -> str:
     except Exception as e:
         return f"Calendar scan failed: {e}"
     events = _dig_list(data, ("items", "events", "results"))
+    # FIRST run = silent baseline: everything already on the calendar is something
+    # Alex already knows about — remember the ids, create no events. Only invites/
+    # changes that appear AFTER the baseline become intake.
+    if not _seen("calendar"):
+        refs = [str(ev.get("id") or ev.get("eventId")) for ev in events[:cap]
+                if isinstance(ev, dict) and (ev.get("id") or ev.get("eventId"))]
+        _remember_seen("calendar", refs)
+        return (f"Calendar baselined: {len(refs)} existing upcoming event(s) noted — "
+                f"only NEW invites/changes will become intake from now on.")
     new = 0
     for ev in events[:cap]:
         if not isinstance(ev, dict):

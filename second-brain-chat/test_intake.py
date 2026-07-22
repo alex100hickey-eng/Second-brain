@@ -213,6 +213,25 @@ def test_triage():
     check("unknown id handled", "No intake event" in intake.accept_intake(99999))
 
 
+def test_cross_message_dedupe():
+    print("\n=== 3b. cross-message near-duplicate merge ===")
+    sb = _reset(claude=FakeClaude(json.dumps(
+        [{"type": "event", "text": "Alex meeting with +12036069549 on Friday at 3:30pm",
+          "due": "2026-07-24T15:30"}])))
+    r1 = intake.record_raw("imessage", "d1", "them", "", "you around Friday? 330?")
+    check("first mention of the plan is recorded", r1.get("recorded"))
+    intake.claude = FakeClaude(json.dumps(
+        [{"type": "event", "text": "Meeting with contact +12036069549 Friday 3:30",
+          "due": "2026-07-24T15:30"}]))
+    r2 = intake.record_raw("imessage", "d2", "ME", "", "Works for me")
+    check("same plan from a later message is merged away",
+          r2 == {"recorded": False, "reason": "noise"} and len(_events(sb)) == 1)
+    intake.claude = FakeClaude(json.dumps(
+        [{"type": "event", "text": "Dinner with grandma Saturday", "due": "2026-07-25"}]))
+    r3 = intake.record_raw("imessage", "d3", "them", "", "dinner sat w gma")
+    check("a different plan still records", r3.get("recorded") and len(_events(sb)) == 2)
+
+
 def test_capture_inbox():
     print("\n=== 4. capture_inbox (paste/forward fallback) ===")
     sb = _reset(claude=FakeClaude(json.dumps(
@@ -273,23 +292,35 @@ def test_scan_gmail():
 
 
 def test_scan_calendar():
-    print("\n=== 6. scan_calendar: deterministic, dedupe ===")
-    payload = json.dumps({"data": {"items": [
+    print("\n=== 6. scan_calendar: first-run baseline, then new-only ===")
+    base = [
         {"id": "ev1", "summary": "Dentist",
          "start": {"dateTime": "2026-07-24T15:00:00-04:00"},
          "organizer": {"email": "mom@family.com"}},
         {"id": "ev2", "summary": "Regatta", "start": {"date": "2026-08-02"}},
-    ]}})
-    sb = _reset(dispatcher=lambda s, a: payload)
+    ]
+    state = {"events": list(base)}
+
+    def dispatcher(slug, args):
+        return json.dumps({"data": {"items": state["events"]}})
+
+    sb = _reset(dispatcher=dispatcher)
     out = intake.scan_calendar()
-    evs = _events(sb)
-    check("both events ingested without extraction", len(evs) == 2 and "2 new" in out)
-    check("items are type=event with the start as due",
-          all(e["event"]["items"][0]["type"] == "event" for e in evs)
-          and any("2026-08-02" in (e["event"]["items"][0]["due"] or "") for e in evs))
-    check("organizer dict flattened", any("mom@family.com" == e["event"]["sender"] for e in evs))
+    check("FIRST run baselines silently — no events created",
+          "baselined: 2" in out and _events(sb) == [])
+    state["events"].append({"id": "ev3", "summary": "Band at Milestone",
+                            "start": {"dateTime": "2026-07-26T16:00:00-04:00"},
+                            "organizer": {"email": "mom@family.com"}})
     out2 = intake.scan_calendar()
-    check("re-scan ingests nothing new", "0 new" in out2 and len(_events(sb)) == 2)
+    evs = _events(sb)
+    check("only the NEW invite becomes intake", len(evs) == 1 and "1 new" in out2
+          and "Milestone" in evs[0]["event"]["items"][0]["text"])
+    check("item is type=event with start as due",
+          evs[0]["event"]["items"][0]["type"] == "event"
+          and "2026-07-26" in (evs[0]["event"]["items"][0]["due"] or ""))
+    check("organizer dict flattened", evs[0]["event"]["sender"] == "mom@family.com")
+    out3 = intake.scan_calendar()
+    check("re-scan ingests nothing new", "0 new" in out3 and len(_events(sb)) == 1)
 
 
 def test_attributed_decode():
@@ -321,6 +352,7 @@ if __name__ == "__main__":
     test_record_and_dedupe()
     test_extraction_hygiene()
     test_triage()
+    test_cross_message_dedupe()
     test_capture_inbox()
     test_scan_gmail()
     test_scan_calendar()

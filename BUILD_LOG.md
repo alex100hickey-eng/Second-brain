@@ -1029,3 +1029,26 @@ before any change: `run_tests.py` 170/1 (whisper say-sample, finding #7), `test_
 - Mac stays the home node (iMessage/screen/say/whisper); server is the always-on brain.
   Deferred: GITHUB_TOKEN env (optional, Alex when ready), budget cap (re-raise in Phase 4),
   deep mobile layout polish (Phase 5 with Alex driving).
+
+## Phase 3 — Unified intake layer, built + live-tuned on real data — [13:45 ET]
+- intake.py: one normalized stream (Supabase intake_event rows) for everything arriving in
+  Alex's life. Extraction behind the untrusted-content boundary; noise filter; per-source
+  seen-cache dedupe; cross-message near-dup merge (one plan discussed over 5 texts = ONE
+  event); accept→tasks / dismiss triage; capture_intake paste/forward inbox; Gmail scanner
+  (promos/social excluded); Calendar scanner with FIRST-RUN BASELINE (existing events are
+  not news — only new invites/changes become intake).
+- imessage_intake.py: Mac-home-node reader, strictly read-only (mode=ro, enforced by test),
+  attributedBody typedstream decode, in-order cursor (backlog worked off, never skipped),
+  same-chat conversation context so confirmations resolve ("bet let's do it" → the plan).
+- Wiring: 7 tools + labels + SYSTEM_PROMPT; dashboard triage panel FIRST on /dashboard with
+  one-tap Accept→tasks / Dismiss (/api/intake/act); watcher budget-gated + monitor-registered.
+- LIVE tuning with Alex on his real last-3-days window (168 messages): first pass surfaced
+  a backfill cap bug (only newest 25 processed, cursor jumped to tip) and a calendar
+  first-run flood (40 existing events ingested) — both fixed same-session. Final: 145
+  messages → 19 events / ~100 noise-filtered. Real catches: TODAY'S dentist appt 3:15pm,
+  registration-copy ask, Friday 3:30 confirmed, Greenwich Saturday, training-session ask.
+  Known tuning gaps (FRICTION candidates): confirmed Thursday 6:30 run missed; unanswered
+  "available this weekend?" missed. Gmail live: 2 mails, both robot-noise, correctly
+  filtered. Calendar live: 40 events baselined silently.
+- School connector: it's summer (Alex) — paste/forward inbox covers one-offs until fall.
+- test_intake.py: 42 checks. Full regression 255/0 + 42 + 43 + 57.
