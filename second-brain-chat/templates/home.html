@@ -207,6 +207,33 @@
     const panels = [];
 
     // Tasks
+    // Intake triage — what arrived in Alex's world (texts/email/calendar/pastes),
+    // with extracted obligations. One tap: Accept → tasks, or Dismiss. FIRST panel
+    // on purpose: this is where "Jarvis is the organized one" lives.
+    {
+      const ik = d.intake || {counts:{}, recent:[]};
+      const cnew = (ik.counts||{}).new || 0;
+      const summary = `${cnew} waiting · ${ik.arrived_today||0} arrived today`;
+      const srcIcon = {imessage:'💬', gmail:'✉️', calendar:'📅', inbox:'📥'};
+      const body = `<div class="r-meta" style="padding:2px 0 6px">${esc(summary)}</div>` +
+        rows((ik.recent||[]).filter(r => r.status==='new'), r => {
+          const items = (r.items||[]).map(i =>
+            `<div class="r-sub">• <span class="pill">${esc(i.type)}</span> ${esc(i.text)}${i.due ? ` <b>(due ${esc(i.due)})</b>` : ''}</div>`).join('');
+          return `
+        <div class="row">
+          <div class="r-title">${srcIcon[r.source]||'•'} ${esc(r.sender||r.source)}</div>
+          ${items}
+          <div class="intake-actions" data-id="${r.id}">
+            <button class="mini-btn" data-act="accept">Accept → tasks</button>
+            <button class="mini-btn" data-act="dismiss">Dismiss</button>
+          </div>
+          <div class="r-meta">#${r.id} · ${esc(r.source)} · ${when(r.ts)}</div>
+        </div>`;
+        });
+      panels.push(panel('Intake — needs your triage', cnew, body,
+        'Nothing waiting — intake is clear.', 'New texts, emails, and calendar changes land here with their obligations extracted. Paste anything in chat with "capture this" to file it.'));
+    }
+
     panels.push(panel('Tasks', (d.tasks||[]).length,
       rows(d.tasks||[], t => `
         <div class="row">
@@ -451,6 +478,23 @@
       await fetch(`/api/drafts/${id}/status`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status }),
+      });
+      load();
+    } catch (err) { btn.disabled = false; }
+  });
+
+  // Intake triage controls: accept (items → tasks) / dismiss. Read-only at the
+  // source — accepting only writes into OUR task tracker.
+  grid.addEventListener('click', async (e) => {
+    const btn = e.target.closest('.intake-actions button');
+    if (!btn) return;
+    const id = parseInt(btn.closest('.intake-actions').dataset.id, 10);
+    const action = btn.dataset.act;
+    btn.disabled = true; btn.textContent = '…';
+    try {
+      await fetch('/api/intake/act', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, action }),
       });
       load();
     } catch (err) { btn.disabled = false; }
