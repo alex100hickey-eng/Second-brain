@@ -1074,3 +1074,14 @@ before any change: `run_tests.py` 170/1 (whisper say-sample, finding #7), `test_
 - SECURITY_NOTES §10: topic-as-secret, minimal nudge bodies, publish-only (no inbound
   execution path), self-host option via NTFY_SERVER.
 - test_proactive.py: 27 checks. Full suite 255/0.
+
+## Phase 6 (lite) — friction loop + daily scout — [~14:00 ET]
+- FRICTION.md (the polish ledger) + log_friction tool (schema/function/dispatch/label/
+  prompt — the sacred pattern) + POLISH_PROMPT.md, the reusable weekly polish-run prompt
+  that reads FRICTION.md + audit log/incidents and fixes the top items.
+- Expansion scout is now ON daily: "scout" job handler + an hourly scheduler thread
+  (server-only, after 6am local, once/day, state in Supabase via intake state rows;
+  doubly budget-gated). Findings land in the review UI; council/apply stay human-gated;
+  nothing auto-applies (structural).
+- DEFERRED to next session (20% budget wall): Phase 5 entirely (latency/voice/UI pass),
+  tedious-task templates (need Alex's top-5 list), deeper cross-feature linking.
