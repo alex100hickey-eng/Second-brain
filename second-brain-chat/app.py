@@ -90,6 +90,7 @@ import note_capture  # noqa: E402 — turn content into filed Markdown notes (st
 import observability  # noqa: E402 — tool audit log + cost tracking (local, gitignored)
 import health  # noqa: E402 — system health check (read-only)
 import data_boundary  # noqa: E402 — shared untrusted-content wrapper (prompt-injection hygiene)
+import login_limiter  # noqa: E402 — brute-force lockout for the internet-facing login gate
 # Where uploaded / dropped videos live for the analyze_video tool.
 INBOX_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "inbox")
 os.makedirs(INBOX_DIR, exist_ok=True)
@@ -132,6 +133,27 @@ app.permanent_session_lifetime = timedelta(days=31)
 # Cap uploads (video files) at 500 MB so a bad upload can't exhaust memory/disk.
 app.config["MAX_CONTENT_LENGTH"] = 500 * 1024 * 1024
 
+# Session-cookie hygiene for the internet-facing deployment. HTTPONLY blocks JS
+# access to the session cookie; SAMESITE=Lax blocks cross-site POSTs from riding
+# the session. SECURE (HTTPS-only cookie) must be OFF for local http://127.0.0.1
+# use, so it's env-driven: set SESSION_COOKIE_SECURE=1 in Coolify once HTTPS is on.
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+app.config["SESSION_COOKIE_SECURE"] = os.environ.get("SESSION_COOKIE_SECURE", "0").lower() in ("1", "true", "yes")
+
+# Behind Coolify's Traefik proxy, remote_addr is the proxy and the real client IP
+# arrives in X-Forwarded-For. Trusting that header blindly would let anyone spoof an
+# IP locally, so ProxyFix is applied only when TRUSTED_PROXY_COUNT says how many
+# proxies sit in front (server: 1; local Mac: unset/0 = headers ignored).
+_TRUSTED_PROXIES = int(os.environ.get("TRUSTED_PROXY_COUNT", "0") or 0)
+if _TRUSTED_PROXIES:
+    from werkzeug.middleware.proxy_fix import ProxyFix
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=_TRUSTED_PROXIES, x_proto=_TRUSTED_PROXIES, x_host=_TRUSTED_PROXIES)
+
+# Brute-force protection: 5 wrong codes from an IP → that IP locked 15 min;
+# 20 wrong codes across all IPs → everyone locked 15 min (distributed guessing).
+LOGIN_LIMITER = login_limiter.LoginLimiter()
+
 
 @app.before_request
 def require_login():
@@ -152,11 +174,27 @@ def login():
         return redirect("/")
     error = None
     if request.method == "POST":
+        ip = request.remote_addr or "unknown"
+        ok, retry_after = LOGIN_LIMITER.allowed(ip)
+        if not ok:
+            # Locked out: reject BEFORE comparing, so attempts reveal nothing.
+            mins = retry_after // 60 + 1
+            return render_template("login.html",
+                                   error=f"Too many attempts. Try again in {mins} min."), 429
         attempt = request.form.get("password", "")
         if hmac.compare_digest(attempt.encode(), ACCESS_CODE.encode()):
+            LOGIN_LIMITER.record_success(ip)
             session.permanent = True
             session["authed"] = True
             return redirect("/")
+        count, tripped = LOGIN_LIMITER.record_failure(ip)
+        if tripped:
+            try:
+                monitor.report_event("login", "warning",
+                                     f"login lockout tripped after {count} failed attempts",
+                                     f"ip={ip}")
+            except Exception:
+                pass  # incident reporting never blocks the login path
         time.sleep(0.8)  # slow down brute-force attempts
         error = "Wrong password."
     return render_template("login.html", error=error)

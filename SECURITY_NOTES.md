@@ -215,3 +215,29 @@ All Round-5 additions are local-only and sit behind the same `ACCESS_CODE` gate 
 (`/reindex-all` and `/api/weekly-review` are new but gated). New local DBs
 (`observability.db`, `semantic_index.db`) and the vendored embedding model are gitignored;
 `vault_inbox/` note files are gitignored (they can hold pasted content), its README is tracked.
+
+---
+
+## 9. Internet-facing deployment auth model — 2026-07-22 (master build, Phase 2)
+
+The server deployment is now treated as internet-facing. Model chosen with Alex
+(over a Tailscale-private alternative): **public HTTPS + hardened login.**
+
+- **Brute-force lockout** (`second-brain-chat/login_limiter.py`): 5 wrong codes from
+  one IP within 15 min → that IP locked out 15 min; 20 wrong codes across ANY IPs →
+  ALL logins locked 15 min (blunts distributed guessing). Lockout is checked BEFORE
+  the password compare, so attempts during a lockout reveal nothing — even the right
+  code gets 429. A successful login clears that IP's history. Tripping a lockout
+  writes a warning `system_event`, so brute-force noise surfaces on the dashboard.
+  State is in-process (single gunicorn worker); move to shared storage if workers scale.
+- **Real client IPs behind the proxy**: `TRUSTED_PROXY_COUNT=1` on the server enables
+  ProxyFix for X-Forwarded-For/-Proto (Coolify/Traefik). Unset locally — trusting
+  those headers without a proxy would let clients spoof IPs.
+- **Cookie hygiene**: session cookie is HttpOnly + SameSite=Lax everywhere;
+  `SESSION_COOKIE_SECURE=1` on the server once HTTPS is live (stays 0 locally).
+- **Unchanged invariants**: ACCESS_CODE only in env; constant-time compare + 0.8s
+  wrong-attempt delay; debug off; gunicorn (never the Werkzeug dev server) on the
+  server; 31-day signed sessions via stable FLASK_SECRET_KEY.
+- **HTTPS**: Coolify/Let's Encrypt, done in the Coolify UI by Alex (Claude never
+  holds those credentials). Until HTTPS is verified, treat the site as untrusted
+  transport — don't type the access code over plain http from outside the LAN.

@@ -229,6 +229,75 @@ def suite_gate(app, live):
     check("authed session can reach /api/*", r.status_code == 200)
 
 
+def suite_loginlimit(app, live):
+    section("login limiter (brute-force lockout for the internet-facing gate)")
+    import login_limiter as ll
+
+    clock = [1000.0]
+    lim = ll.LoginLimiter(now=lambda: clock[0])
+
+    ok, _ = lim.allowed("1.2.3.4")
+    check("fresh IP is allowed", ok)
+    for _ in range(4):
+        lim.record_failure("1.2.3.4")
+    ok, _ = lim.allowed("1.2.3.4")
+    check("4 failures: still below the threshold, allowed", ok)
+    count, tripped = lim.record_failure("1.2.3.4")
+    check("5th failure trips the lockout (reported exactly once)", tripped and count == 5)
+    _, tripped2 = lim.record_failure("1.2.3.4")
+    check("further failures during lockout do not re-trip", not tripped2)
+    ok, retry = lim.allowed("1.2.3.4")
+    check("locked IP is refused with a retry_after", (not ok) and retry > 0)
+    ok, _ = lim.allowed("5.6.7.8")
+    check("other IPs are unaffected by a per-IP lockout", ok)
+    clock[0] += 1000  # past both the lockout and the failure window
+    ok, _ = lim.allowed("1.2.3.4")
+    check("lockout expires after lockout_seconds", ok)
+
+    lim2 = ll.LoginLimiter(now=lambda: clock[0])
+    lim2.record_failure("9.9.9.9")
+    lim2.record_failure("9.9.9.9")
+    lim2.record_success("9.9.9.9")
+    for _ in range(4):
+        lim2.record_failure("9.9.9.9")
+    ok, _ = lim2.allowed("9.9.9.9")
+    check("a correct login clears that IP's failure history", ok)
+
+    lim3 = ll.LoginLimiter(now=lambda: clock[0])
+    tripped_any = False
+    for i in range(20):  # 20 failures spread over 20 DIFFERENT IPs
+        _, t = lim3.record_failure(f"10.0.0.{i}")
+        tripped_any = tripped_any or t
+    ok, _ = lim3.allowed("11.11.11.11")
+    check("global backstop locks everyone after distributed failures", tripped_any and not ok)
+
+    lim4 = ll.LoginLimiter(now=lambda: clock[0])
+    for _ in range(4):
+        lim4.record_failure("2.2.2.2")
+    clock[0] += 1000
+    count, tripped = lim4.record_failure("2.2.2.2")
+    check("old failures age out of the window", count == 1 and not tripped)
+
+    # Integration: the real /login route enforces the lockout (fresh limiter so
+    # earlier suites' wrong-password posts don't bleed in; restored afterwards).
+    if app.ACCESS_CODE:
+        app.app.config["TESTING"] = True
+        saved = app.LOGIN_LIMITER
+        app.LOGIN_LIMITER = ll.LoginLimiter(max_failures=3, lockout_seconds=60)
+        try:
+            c = app.app.test_client()
+            for _ in range(3):
+                c.post("/login", data={"password": "wrong-code-xyz"})
+            r = c.post("/login", data={"password": "wrong-code-xyz"})
+            check("locked-out login POST returns 429", r.status_code == 429)
+            r = c.post("/login", data={"password": app.ACCESS_CODE})
+            check("even the RIGHT code is refused during a lockout", r.status_code == 429)
+        finally:
+            app.LOGIN_LIMITER = saved
+    else:
+        skip("login 429 integration", "ACCESS_CODE not set — gate disabled in this env")
+
+
 def suite_toolkit(app, live):
     section("video toolkit (ffmpeg edit ops)")
     if not _have("ffmpeg"):
@@ -1759,6 +1828,7 @@ def suite_jobs(app, live):
 SUITES = {
     "vault": suite_vault,
     "gate": suite_gate,
+    "loginlimit": suite_loginlimit,
     "toolkit": suite_toolkit,
     "pipeline": suite_pipeline,
     "synth": suite_synth,
