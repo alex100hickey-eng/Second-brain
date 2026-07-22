@@ -1085,3 +1085,18 @@ before any change: `run_tests.py` 170/1 (whisper say-sample, finding #7), `test_
   nothing auto-applies (structural).
 - DEFERRED to next session (20% budget wall): Phase 5 entirely (latency/voice/UI pass),
   tedious-task templates (need Alex's top-5 list), deeper cross-feature linking.
+
+## Phase 5.1 — Latency pass — [16:45 ET]
+- Measured (raw-socket timing against the running app): ~2.5-3.5s of DEAD AIR before any
+  byte; streaming itself was genuine (verified with a long generation) — the cost was
+  pre-work (history load + recall + BLOCKING user-msg save + memories fetch) followed by
+  TTFT inflated by ~70 uncached tool schemas re-sent every turn (55,955 input tokens/turn).
+- Fixes: (1) /chat now yields a "Thinking…" status event as its FIRST byte (~1ms) and does
+  the pre-work behind it; (2) user-message save moved off the critical path (daemon thread);
+  (3) Anthropic prompt caching: build_system_blocks splits system into static (cached) +
+  dynamic (memories/recall, fresh) blocks and _cached_tools puts a cache point on the last
+  tool schema — both the streaming call and the non-streaming fallback use them.
+- Proof (observability ledger): cache_write=39,442 once, then cache_read=39,442/turn with
+  only ~16.9k fresh input tokens (was 55,955). First token now ~1.8s (was 2.5-3.5s), ack at
+  ~1ms. ~60%+ per-turn input-cost cut (cache reads bill at 10%). Full suite 255/0.
+- Optional next: history-prefix caching / trim limit=40 → ~20 (halves the fresh 16.9k).

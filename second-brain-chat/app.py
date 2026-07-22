@@ -1706,6 +1706,37 @@ def build_system_prompt(recall_text: str = "") -> str:
     return prompt
 
 
+def build_system_blocks(recall_text: str = "") -> list:
+    """The system prompt as TWO blocks for Anthropic prompt caching (latency pass):
+    a big STATIC block (SYSTEM_PROMPT — identical every turn, cache_control on it) and
+    a small DYNAMIC block (memories + recall — fresh every request, never cached).
+    Combined with a cache point on the last tool schema, the ~70 tool definitions +
+    the static prompt are read from cache instead of re-processed each turn, which is
+    most of the send→first-token time (and of the per-turn input cost)."""
+    dynamic = ""
+    memories = load_memories()
+    dynamic += ("Saved memories:\n" + "\n".join(f"- {m}" for m in memories)
+                if memories else "Saved memories: none yet.")
+    if recall_text:
+        dynamic += (
+            "\n\nRelevant past conversations (your long-term memory — use these to "
+            "recall context Alex may expect you to remember; don't announce that you "
+            "looked them up, just remember):\n" + recall_text
+        )
+    return [
+        {"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}},
+        {"type": "text", "text": dynamic},
+    ]
+
+
+def _cached_tools() -> list:
+    """TOOLS with a cache point on the last schema → the whole tools array becomes a
+    cached prefix. Non-destructive copy; TOOLS itself is never mutated."""
+    if not TOOLS:
+        return TOOLS
+    return TOOLS[:-1] + [{**TOOLS[-1], "cache_control": {"type": "ephemeral"}}]
+
+
 # ============================================================
 # APPROVAL LAYER — consequential actions get queued here instead of
 # executing. Alex approves or denies them on the dashboard; only an
@@ -3676,7 +3707,8 @@ def stream_chat(messages: list, recall_text: str = ""):
     a single non-streaming `messages.create`, so the message is never lost — the client is told
     to replace whatever partial text streamed with the recovered full text.
     """
-    system_prompt = build_system_prompt(recall_text)  # fresh memories every request
+    system_blocks = build_system_blocks(recall_text)  # static block cached; memories fresh
+    tools_cached = _cached_tools()
     observability.set_trigger("user")  # this loop serves Alex's live chat
     turns_text = []  # authoritative text per turn, joined for the final/replace events
     while True:
@@ -3685,8 +3717,8 @@ def stream_chat(messages: list, recall_text: str = ""):
                 with claude.messages.stream(
                     model="claude-sonnet-5",
                     max_tokens=1024,
-                    system=system_prompt,
-                    tools=TOOLS,
+                    system=system_blocks,
+                    tools=tools_cached,
                     messages=messages,
                 ) as stream:
                     for text in stream.text_stream:
@@ -3705,8 +3737,8 @@ def stream_chat(messages: list, recall_text: str = ""):
                 response = claude.messages.create(
                     model="claude-sonnet-5",
                     max_tokens=1024,
-                    system=system_prompt,
-                    tools=TOOLS,
+                    system=system_blocks,
+                    tools=tools_cached,
                     messages=messages,
                 )
                 turns_text.append("".join(b.text for b in response.content if b.type == "text"))
@@ -4537,18 +4569,27 @@ def chat():
     data = request.get_json()
     user_message = _expand_shortcut(data.get("message", ""))
 
-    history = load_chat_history()
-    messages = _normalize_for_api(history + [{"role": "user", "content": user_message}])
-    # Automatic long-term recall: pull relevant snippets from PAST conversations before
-    # saving this message (so the current turn isn't matched against itself).
-    try:
-        recall_text = conversation_memory.recall_for_prompt(user_message)
-    except Exception as e:
-        print(f"Warning: recall failed: {e}")
-        recall_text = ""
-    save_chat_message("user", user_message)
-
     def generate():
+        # First byte ~instantly: the UI flips to "thinking" while the pre-work
+        # (history load, recall, memories) happens BEHIND this event instead of
+        # in front of the whole response (latency pass: was ~1s of dead air).
+        yield json.dumps({"type": "status", "label": "Thinking…"}) + "\n"
+
+        history = load_chat_history()
+        messages = _normalize_for_api(history + [{"role": "user", "content": user_message}])
+        # Automatic long-term recall: pull relevant snippets from PAST conversations
+        # before saving this message (so the current turn isn't matched against itself).
+        try:
+            recall_text = conversation_memory.recall_for_prompt(user_message)
+        except Exception as e:
+            print(f"Warning: recall failed: {e}")
+            recall_text = ""
+        # Persist the user message off the critical path — a Supabase round-trip that
+        # used to block the first token. (Worst case on a crash mid-turn: this message
+        # is missing from server history; the UI already showed it locally.)
+        threading.Thread(target=save_chat_message, args=("user", user_message),
+                         daemon=True).start()
+
         reply_parts = []
         authoritative = None  # set by a "final"/"replace" event — the recovered/complete text
         try:
