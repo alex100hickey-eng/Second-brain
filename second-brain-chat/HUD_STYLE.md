@@ -28,12 +28,18 @@ near-black navy. The tint/glow alphas all derive from the primary's RGB
 | Bright accent       | `#9bf2fa`   | Highlights, active states, emphasis strokes/text            |
 | White               | `#e8fdff`   | **Reserved for key numbers only** — never body text or UI   |
 
-The page background is a radial gradient from `#123a6e` at the center to
-`#010a20` at the edges:
+The page background is a radial gradient from `#123a6e` to `#010a20`,
+**centered on the core reactor** (deck 760,440 ≈ 47.5% 44%), so the light
+blue glow sits behind the reactor and fades to dark navy at the edges:
 
 ```css
-background: radial-gradient(ellipse at center, #123a6e 0%, #010a20 100%);
+background: radial-gradient(ellipse at 47.5% 44%, #123a6e 0%, #010a20 100%);
 ```
+
+**No full-page grid overlay.** The background stays clean navy; the only
+grid in the HUD is the perspective floor strip (`HUD.floorGrid`) hugging
+the bottom edge of the frame. The scanline overlay keeps its 3px banding
+only.
 
 **No other colors anywhere.** No greens, ambers, reds, greys, or off-brand
 blues — not for status, not for errors, not for charts. Convey state through

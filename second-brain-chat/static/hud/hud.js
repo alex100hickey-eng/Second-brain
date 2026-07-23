@@ -530,10 +530,11 @@
     }
     if (opts.baseline) {
       // the ref baseline floats a clear gap below the bars, bars never touch it
-      el('line', { x1: 8, y1: H + 9, x2: W - 2, y2: H + 9,
+      el('line', { x1: opts.baseline.cap === false ? 2 : 8, y1: H + 9, x2: W - 2, y2: H + 9,
         class: 'hud-stroke', 'stroke-width': 1 }, s);
-      el('circle', { cx: 4.5, cy: H + 9, r: 3.2, fill: 'none',
-        class: 'hud-stroke', 'stroke-width': 1.2 }, s);
+      if (opts.baseline.cap !== false)
+        el('circle', { cx: 4.5, cy: H + 9, r: 3.2, fill: 'none',
+          class: 'hud-stroke', 'stroke-width': 1.2 }, s);
     }
     return s;
   };
@@ -606,23 +607,119 @@
   };
 
   /* ============================================================
-     DashedSquare — "target box" ornament: four corner brackets
-     around an inner dashed square (ref: top-left, above gauges).
-     opts: {size=64, bracket=14, role}
+     DashedSquare — dashed-outline box ornament.
+     cornerStyle: 'brackets' (L strokes outside the dashes),
+                  'squares'  (solid squares sitting on the corners),
+                  'none'     (plain broken-line box, e.g. the EQ frame).
+     opts: {size|width+height, bracket, inset, dash, cornerStyle, role}
      ============================================================ */
   HUD.dashedSquare = function (opts) {
     opts = opts || {};
-    const S = opts.size || 64, bl = opts.bracket || S * 0.22, inset = S * 0.14;
-    const s = svg(S, S);
+    const W = opts.width || opts.size || 64, H = opts.height || opts.size || 64;
+    const corner = opts.cornerStyle || 'brackets';
+    const inset = opts.inset != null ? opts.inset : Math.min(W, H) * 0.14;
+    const s = svg(W, H, { style: 'overflow: visible' });
     if (opts.role) s.dataset.role = opts.role;
-    el('rect', { x: inset, y: inset, width: S - inset * 2, height: S - inset * 2,
-      class: 'hud-stroke', 'stroke-width': 1.2, 'stroke-dasharray': '5 4' }, s);
-    const g = el('g', { class: 'hud-stroke-bright', 'stroke-width': 1.5,
-      'stroke-linecap': 'round' }, s);
-    const o = 1;
-    [`M ${o} ${bl} V ${o} H ${bl}`, `M ${S - bl} ${o} H ${S - o} V ${bl}`,
-     `M ${S - o} ${S - bl} V ${S - o} H ${S - bl}`, `M ${bl} ${S - o} H ${o} V ${S - bl}`]
-      .forEach(d => el('path', { d }, g));
+    el('rect', { x: inset, y: inset, width: W - inset * 2, height: H - inset * 2,
+      class: 'hud-stroke', 'stroke-width': 1.2, 'stroke-dasharray': opts.dash || '5 4' }, s);
+    if (corner === 'brackets') {
+      const bl = opts.bracket || Math.min(W, H) * 0.22, o = 1;
+      const g = el('g', { class: 'hud-stroke-bright', 'stroke-width': 1.5,
+        'stroke-linecap': 'round' }, s);
+      [`M ${o} ${bl} V ${o} H ${bl}`, `M ${W - bl} ${o} H ${W - o} V ${bl}`,
+       `M ${W - o} ${H - bl} V ${H - o} H ${W - bl}`, `M ${bl} ${H - o} H ${o} V ${H - bl}`]
+        .forEach(d => el('path', { d }, g));
+    } else if (corner === 'squares') {
+      // solid squares centered on the dashed rect's corners (actual-ref style)
+      const q = Math.min(W, H) * 0.18;
+      [[inset, inset], [W - inset, inset], [inset, H - inset], [W - inset, H - inset]]
+        .forEach(([cx, cy]) => el('rect', { x: cx - q / 2, y: cy - q / 2, width: q, height: q,
+          fill: 'var(--hud-accent)', class: 'hud-glow' }, s));
+    }
+    return s;
+  };
+
+  /* ============================================================
+     DiagCandles — 45-degree circuit rails carrying rounded capsule
+     bars, dot-terminated (actual-ref ornament right of the square).
+     opts: {size=110, role}
+     ============================================================ */
+  HUD.diagCandles = function (opts) {
+    opts = opts || {};
+    const S = opts.size || 110;
+    const s = svg(S, S, { style: 'overflow: visible' });
+    if (opts.role) s.dataset.role = opts.role;
+    // rails as [x1,y1,x2,y2, capsule-ts...] climbing to the upper right
+    const rails = [
+      [6, S - 10, S - 30, 26, [0.30, 0.62]],
+      [30, S - 2, S - 4, 40, [0.22, 0.50, 0.76]]
+    ];
+    rails.forEach(([x1, y1, x2, y2, caps]) => {
+      el('line', { x1, y1, x2, y2, class: 'hud-stroke', 'stroke-width': 1 }, s);
+      [[x1, y1], [x2, y2]].forEach(([cx, cy]) =>
+        el('circle', { cx, cy, r: 3, fill: 'var(--hud-cyan)', class: 'hud-glow' }, s));
+      const ang = Math.atan2(y2 - y1, x2 - x1) * 180 / Math.PI;
+      caps.forEach((t, i) => {
+        const cx = x1 + (x2 - x1) * t, cy = y1 + (y2 - y1) * t;
+        const len = 24, w = 8;
+        el('rect', { x: cx - len / 2, y: cy - w / 2, width: len, height: w,
+          rx: w / 2, transform: `rotate(${ang} ${cx} ${cy})`,
+          fill: i % 2 ? 'var(--hud-blue)' : 'var(--hud-cyan)',
+          class: i % 2 ? '' : 'hud-glow' }, s);
+      });
+    });
+    // one plain thin companion trace, dot-tipped
+    el('line', { x1: S * 0.02, y1: S * 0.72, x2: S * 0.52, y2: S * 0.22,
+      class: 'hud-stroke-dim', 'stroke-width': 1 }, s);
+    el('circle', { cx: S * 0.52, cy: S * 0.22, r: 2.4, fill: 'var(--hud-cyan)' }, s);
+    return s;
+  };
+
+  /* ============================================================
+     HatchStripes — pack of parallel 45-degree stripes, alternating
+     royal-blue thick / cyan thin (actual-ref accent block).
+     opts: {count=7, gap=8, len=56, role}
+     ============================================================ */
+  HUD.hatchStripes = function (opts) {
+    opts = opts || {};
+    const n = opts.count || 7, gap = opts.gap || 8, L = opts.len || 56;
+    const W = n * gap + L, H = L;
+    const s = svg(W, H);
+    if (opts.role) s.dataset.role = opts.role;
+    for (let i = 0; i < n; i++) {
+      const thick = i % 2 === 0;
+      // trim alternate stripes for the ragged pack edge of the ref
+      const trim = (i % 3) * L * 0.12;
+      el('line', { x1: i * gap + trim, y1: H - trim, x2: i * gap + L - trim, y2: trim,
+        stroke: thick ? 'var(--hud-blue)' : 'var(--hud-cyan)',
+        'stroke-width': thick ? 4 : 2,
+        class: thick ? '' : 'hud-glow' }, s);
+    }
+    return s;
+  };
+
+  /* ============================================================
+     FloorGrid — perspective floor strip for the bottom edge: the
+     ONLY grid in the HUD (background elsewhere stays clean navy).
+     opts: {width=1600, height=170, vanishX}
+     ============================================================ */
+  HUD.floorGrid = function (opts) {
+    opts = opts || {};
+    const W = opts.width || 1600, H = opts.height || 170;
+    const vp = opts.vanishX == null ? W / 2 : opts.vanishX;
+    const s = svg(W, H);
+    // fade the strip out toward its top so it melts into the background
+    s.style.maskImage = 'linear-gradient(180deg, transparent 0%, black 55%)';
+    s.style.webkitMaskImage = 'linear-gradient(180deg, transparent 0%, black 55%)';
+    const g = el('g', { stroke: 'var(--hud-cyan-25)', 'stroke-width': 1 }, s);
+    const n = 23;
+    for (let i = 0; i < n; i++) {
+      const t = i - (n - 1) / 2;
+      el('line', { x1: vp + t * (W * 0.62 / n), y1: 0,
+        x2: vp + t * (W * 1.55 / n), y2: H, opacity: 0.45 }, g);
+    }
+    [0.08, 0.20, 0.35, 0.53, 0.73, 0.92].forEach(f =>
+      el('line', { x1: 0, y1: H * f, x2: W, y2: H * f, opacity: 0.12 + 0.4 * f }, g));
     return s;
   };
 
@@ -709,8 +806,10 @@
       if (gaps.indexOf(cc) !== -1) continue;
       const v = (r * 31 + cc * 7) % 11;
       if (v > 8) continue;              // empty cells — the ref matrix breathes
-      el('rect', { x: cc * cell, y: r * cell, width: sz, height: sz,
+      const rect = el('rect', { x: cc * cell, y: r * cell, width: sz, height: sz,
         fill: v < 3 ? 'var(--hud-accent)' : v < 6 ? 'var(--hud-cyan-45)' : 'var(--hud-cyan-12)' }, s);
+      // fade: columns dim as the matrix reaches toward the reactor
+      if (opts.fade) rect.setAttribute('opacity', (1 - 0.82 * (cc / (cols - 1))).toFixed(2));
     }
     return s;
   };

@@ -35,7 +35,8 @@
 .hud-body {
   margin: 0;
   min-height: 100vh;
-  background: radial-gradient(ellipse at center, var(--hud-bg-center) 0%, var(--hud-bg-edge) 100%);
+  /* glow sits on the core reactor (deck 760,440), not the page center */
+  background: radial-gradient(ellipse at 47.5% 44%, var(--hud-bg-center) 0%, var(--hud-bg-edge) 100%);
   color: var(--hud-cyan);
   font-family: 'Share Tech Mono', ui-monospace, Menlo, monospace;
   -webkit-font-smoothing: antialiased;
@@ -122,11 +123,11 @@
   inset: 0;
   pointer-events: none;
   z-index: 50;
+  /* scanline banding only — NO full-page grid; the only grid in the HUD is
+     the perspective floor strip at the bottom edge (HUD.floorGrid) */
   background-image:
-    repeating-linear-gradient(0deg, rgba(79, 212, 232, 0.05) 0 1px, transparent 1px 3px),
-    linear-gradient(rgba(79, 212, 232, 0.05) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(79, 212, 232, 0.05) 1px, transparent 1px);
-  background-size: 100% 3px, 44px 44px, 44px 44px;
+    repeating-linear-gradient(0deg, rgba(79, 212, 232, 0.05) 0 1px, transparent 1px 3px);
+  background-size: 100% 3px;
   mix-blend-mode: screen;
 }
 .hud-scanlines::after {
