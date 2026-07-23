@@ -66,6 +66,10 @@ html, body { height: 100%; margin: 0; background: #03102C; overflow: hidden; }
     <stop offset="50%" stop-color="#2E8FE0" stop-opacity=".22"/>
     <stop offset="100%" stop-color="#2E8FE0" stop-opacity="0"/>
   </linearGradient>
+  <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+    <feGaussianBlur stdDeviation="3.5" result="b"/>
+    <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+  </filter>
   <linearGradient id="coneFace" x1="0" y1="0" x2="1" y2="0">
     <stop offset="0%" stop-color="#123E7C"/>
     <stop offset="45%" stop-color="#3FA8E8"/>
@@ -113,7 +117,7 @@ html, body { height: 100%; margin: 0; background: #03102C; overflow: hidden; }
 
 <!-- ================= TOP-LEFT: DONUTS + CAPTION + DOT MATRIX ================= -->
 <g id="donuts"></g>
-<text x="36" y="236" font-size="13" letter-spacing="2" class="txt">HUD INTERFACE TECHNOLOGY</text>
+<text x="36" y="236" font-size="13" letter-spacing="1.5" class="txt">Hud interface technology</text>
 <g id="dotmatrixTL"></g>
 
 <!-- ================= LEFT: 3D CONE on elliptical base ================= -->
@@ -124,8 +128,9 @@ html, body { height: 100%; margin: 0; background: #03102C; overflow: hidden; }
   <path d="M 150 430 L 130 592 L 168 592 Z" fill="rgba(230,250,255,.65)"/>
   <path class="ln2" stroke-width="1" d="M 150 430 L 92 588 M 150 430 L 208 588 M 150 430 V 592"/>
   <ellipse cx="150" cy="592" rx="58" ry="12" class="ln2" stroke-width="1" fill="none"/>
-  <text x="26" y="470" font-size="12" class="txtd">8.235687</text>
-  <path class="ln2" stroke-width="1" d="M 96 466 h 40"/>
+  <text x="20" y="540" font-size="12" class="txtd" transform="rotate(-90 20 540)">8.235687</text>
+  <path class="ln2" stroke-width="1" d="M 150 430 V 404 h 60"/>
+  <circle cx="214" cy="404" r="3.5" class="node" stroke-width="1"/>
 </g>
 
 <!-- ================= LEFT: 100% SEGMENTED RING BRACKET ================= -->
@@ -154,7 +159,7 @@ html, body { height: 100%; margin: 0; background: #03102C; overflow: hidden; }
   <text x="76" y="652" font-size="10" letter-spacing="2" class="txtd">VITALS // LIVE</text>
   <text x="76" y="676" font-size="9" class="txtd">1.276</text>
   <text x="212" y="726" font-size="9" class="txtd">0.0015741</text>
-  <path class="ln2" stroke-width="1.5"
+  <path class="ln" stroke-width="2" opacity=".85"
         d="M 68 700 h 26 l 9 -13 l 9 24 l 7 -40 l 9 48 l 7 -27 l 7 9 h 24 l 9 -11 l 9 20 l 7 -34 l 9 40 l 7 -23 l 7 9 h 46"/>
   <path class="ecg-sweep" stroke="#CFF2FF" stroke-width="2" fill="none"
         d="M 68 700 h 26 l 9 -13 l 9 24 l 7 -40 l 9 48 l 7 -27 l 7 9 h 24 l 9 -11 l 9 20 l 7 -34 l 9 40 l 7 -23 l 7 9 h 46"/>
@@ -162,7 +167,12 @@ html, body { height: 100%; margin: 0; background: #03102C; overflow: hidden; }
   <g class="lnB" stroke-width="2.5">
     <path d="M 76 728 l 8 7 l -8 7 M 88 728 l 8 7 l -8 7 M 100 728 l 8 7 l -8 7"/>
   </g>
+  <rect x="290" y="660" width="7" height="26" fill="rgba(63,187,239,.6)"/>
+  <rect x="301" y="668" width="7" height="18" fill="rgba(120,210,250,.8)"/>
 </g>
+<!-- upper-left edge dot column -->
+<g id="edgeDotsL"></g>
+<rect x="20" y="20" width="11" height="11" fill="rgba(120,210,250,.8)"/>
 
 <!-- ================= HEX PANEL A — 75% (donuts + bars + hexagon) ================= -->
 <g id="hexA"></g>
@@ -224,14 +234,14 @@ html, body { height: 100%; margin: 0; background: #03102C; overflow: hidden; }
     <circle cx="823" cy="428" r="130" class="ln2" stroke-width="1" stroke-dasharray="2 8"/>
   </g>
   <g class="spin-inner">
-    <g class="lnB" stroke-width="8">
+    <g class="lnB" stroke-width="8" filter="url(#glow)">
       <path d="M 823 326 A 102 102 0 0 1 911 377" opacity=".85"/>
       <path d="M 917 476 A 102 102 0 0 1 833 530" opacity=".5"/>
       <path d="M 764 512 A 102 102 0 0 1 722 440" opacity=".7"/>
     </g>
     <circle cx="823" cy="428" r="84" class="ln2" stroke-width="1" stroke-dasharray="1 6"/>
   </g>
-  <g class="core-pulse">
+  <g class="core-pulse" filter="url(#glow)">
     <circle cx="823" cy="428" r="62" fill="url(#coreGlow)"/>
     <circle cx="823" cy="428" r="40" class="ln" stroke-width="1" opacity=".75"/>
     <circle cx="823" cy="428" r="12" fill="#FFFFFF"/>
@@ -257,10 +267,18 @@ html, body { height: 100%; margin: 0; background: #03102C; overflow: hidden; }
     <circle cx="768" cy="94" r="3" fill="#CFF2FF"/>
     <circle cx="740" cy="122" r="2.5" fill="#7FDCFB"/>
   </g>
-  <path class="fillS" stroke="#7FDCFB" stroke-width="1.5" d="M 1032 150 L 1098 178 L 1032 206 Z"/>
+  <path class="fillS" stroke="#7FDCFB" stroke-width="1.5" d="M 1032 150 L 1098 178 L 1032 206 Z"
+        filter="url(#glow)"/>
   <text x="1030" y="252" font-size="14" class="txt">99%</text>
   <path class="ln2" stroke-width="1" d="M 1024 246 h -70 l -28 22 H 810"/>
   <circle cx="806" cy="268" r="4" class="node" stroke-width="1"/>
+</g>
+<!-- below-banner row: three small squares + dot row (per the art) -->
+<g>
+  <rect x="446" y="168" width="22" height="22" class="ln" stroke-width="1.5" fill="none"/>
+  <rect x="484" y="168" width="22" height="22" class="ln2" stroke-width="1.5" fill="none"/>
+  <rect x="522" y="168" width="22" height="22" class="ln2" stroke-width="1.5" fill="rgba(63,187,239,.15)"/>
+  <g id="bannerDots"></g>
 </g>
 <g>
   <circle cx="695" cy="190" r="34" class="ln2" stroke-width="1"/>
@@ -279,10 +297,11 @@ html, body { height: 100%; margin: 0; background: #03102C; overflow: hidden; }
   <path class="ln" stroke-width="1.5" fill="rgba(63,187,239,.08)"
         d="M 1256 76 H 1408 l 24 20 v 40 H 1284 l -28 -24 Z"/>
   <g id="stripes"></g>
-  <path class="fillS" stroke="#7FDCFB" stroke-width="1.5" d="M 1438 232 L 1462 168 L 1500 224 Z"/>
+  <path class="fillS" stroke="#7FDCFB" stroke-width="1.5" d="M 1438 232 L 1462 168 L 1500 224 Z"
+        filter="url(#glow)"/>
   <path class="ln2" stroke-width="1" d="M 1462 168 L 1470 214"/>
   <g id="dotcolTR"></g>
-  <g transform="translate(1290, 300)">
+  <g transform="translate(1290, 262)" filter="url(#glow)">
     <path d="M 0 0 L 0 -46 A 46 46 0 1 1 -46 0 Z" fill="rgba(63,187,239,.42)"
           stroke="#3FBBEF" stroke-width="1.5"/>
     <path d="M -9 -9 L -9 -55 A 46 46 0 0 0 -55 -9 Z" fill="rgba(191,240,255,.6)"
@@ -328,7 +347,7 @@ html, body { height: 100%; margin: 0; background: #03102C; overflow: hidden; }
 </g>
 
 <!-- ================= RIGHT-LOW: CHEVRONS + PLANE 75% ================= -->
-<g transform="translate(1112, 648)">
+<g transform="translate(1112, 648)" filter="url(#glow)">
   <path class="chev" d="M 0 0 l 16 14 l -16 14" fill="none" stroke="#7FDCFB" stroke-width="5"/>
   <path class="chev" d="M 28 0 l 16 14 l -16 14" fill="none" stroke="#7FDCFB" stroke-width="5"/>
   <path class="chev" d="M 56 0 l 16 14 l -16 14" fill="none" stroke="#7FDCFB" stroke-width="5"/>
@@ -338,7 +357,7 @@ html, body { height: 100%; margin: 0; background: #03102C; overflow: hidden; }
 <g>
   <path class="ln" stroke-width="1.5" d="M 1296 640 h -18 v 160 h 18 M 1452 640 h 18 v 160 h -18"/>
   <text x="1296" y="676" font-size="13" class="txt">75%</text>
-  <path class="fillS" stroke="#CFF2FF" stroke-width="1"
+  <path class="fillS" stroke="#CFF2FF" stroke-width="1" filter="url(#glow)"
         d="M 1330 758 l 74 -42 l -24 58 l -13 -16 l -16 21 Z"/>
   <path d="M 1398 686 A 34 34 0 0 1 1420 744" fill="none" stroke="#7FDCFB" stroke-width="3"/>
 </g>
@@ -449,11 +468,17 @@ html, body { height: 100%; margin: 0; background: #03102C; overflow: hidden; }
   // ---- petals (irregular shards) ----
   const jit = [0, 4, -4, 3, 5, -3, 4, -5, 2, -4, 5, -2];
   for (let i = 0; i < 12; i++) {
-    const big = i % 3 !== 2;
-    const r0 = big ? 216 : 200, r1 = big ? 162 : 170, w0 = big ? 29 : 21, w1 = big ? 19 : 14;
+    // three petal families: reach, width, and brightness all vary like the art
+    const fam = i % 3;
+    const r0 = fam === 0 ? 228 : fam === 1 ? 214 : 198;
+    const r1 = fam === 0 ? 168 : fam === 1 ? 160 : 168;
+    const w0 = fam === 0 ? 30 : fam === 1 ? 26 : 20;
+    const w1 = fam === 0 ? 20 : fam === 1 ? 17 : 13;
+    const bright = i % 4 === 0;
     put('blades', 'path', {
       d: `M ${-w0} ${-r0} L ${w0} ${-r0} L ${w1} ${-r1} L ${-w1} ${-r1} Z`,
-      fill: 'rgba(120,210,250,0.13)', stroke: '#5FCBF6', 'stroke-width': 1.2,
+      fill: bright ? 'rgba(140,220,252,0.30)' : 'rgba(120,210,250,0.12)',
+      stroke: bright ? '#8FE0FC' : '#5FCBF6', 'stroke-width': bright ? 1.6 : 1.1,
       transform: `rotate(${i * 30 + jit[i]} 823 428) translate(823 428)` });
   }
   // ---- TL donuts ----
@@ -636,6 +661,14 @@ html, body { height: 100%; margin: 0; background: #03102C; overflow: hidden; }
   for (let i = 0; i < 7; i++)
     put('pagedots', 'circle', { cx: 716 + i * 18, cy: 985, r: i === 2 ? 5 : 3.5,
       fill: i === 2 ? '#CFF2FF' : 'rgba(63,187,239,.45)' });
+  // ---- below-banner dot row ----
+  for (let i = 0; i < 12; i++)
+    put('bannerDots', 'circle', { cx: 450 + i * 16, cy: 214, r: 3,
+      fill: i % 4 ? 'rgba(63,187,239,.35)' : '#5FCBF6' });
+  // ---- upper-left edge dot column ----
+  for (let r = 0; r < 9; r++) for (let c = 0; c < 2; c++)
+    put('edgeDotsL', 'rect', { x: 20 + c * 11, y: 268 + r * 13, width: 5, height: 5,
+      fill: (r + c) % 3 ? 'rgba(63,187,239,.3)' : 'rgba(63,187,239,.8)' });
 </script>
 </body>
 </html>
