@@ -7,42 +7,37 @@
 <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32.png">
 <link rel="manifest" href="/static/manifest.json">
 <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
-<meta name="theme-color" content="#041028">
+<meta name="theme-color" content="#010A20">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="CLARVIS">
 <style>
 /* ============================================================
-   CLARVIS HUD — pixel-faithful recreation of the reference art, v3.
-   Built from the hi-res crops: 3D cone, hexagon panels, tech-frame
-   vitals, binary blocks, capsule bars, turbine floor gauge — and the
-   PERSPECTIVE FLOOR that gives the scene its depth.
-   Visuals only (stage 1); functionality returns in stage 2.
+   CLARVIS HUD — v5: rebuilt against the HI-RES reference
+   (extracted from Alex's diff report) with sampled colors.
+   Their palette is turquoise-cyan on near-black navy with a
+   strong center glow. Visuals only; stage 2 adds function.
    ============================================================ */
-html, body { height: 100%; margin: 0; background: #03102C; overflow: hidden; }
+html, body { height: 100%; margin: 0; background: #010A20; overflow: hidden; }
 #scene { width: 100vw; height: 100vh; height: 100dvh; display: block; }
 
-.spin-slow   { transform-origin: 823px 428px; animation: rot 150s linear infinite; }
-.spin-blades { transform-origin: 823px 428px; animation: rot 100s linear infinite reverse; }
-.spin-mid    { transform-origin: 823px 428px; animation: rot 64s linear infinite; }
-.spin-inner  { transform-origin: 823px 428px; animation: rot 40s linear infinite reverse; }
-.turb-spin   { transform-origin: 1010px 885px; animation: rot 70s linear infinite; }
+.spin-slow   { transform-origin: 760px 440px; animation: rot 150s linear infinite; }
+.spin-blades { transform-origin: 760px 440px; animation: rot 100s linear infinite reverse; }
+.spin-mid    { transform-origin: 760px 440px; animation: rot 64s linear infinite; }
+.spin-inner  { transform-origin: 760px 440px; animation: rot 40s linear infinite reverse; }
+.spin-micro  { transform-origin: 760px 440px; animation: rot 30s linear infinite; }
+.turb-spin   { transform-origin: 655px 880px; animation: rot 80s linear infinite; }
 @keyframes rot { to { transform: rotate(360deg); } }
-.core-pulse { transform-origin: 823px 428px; animation: pulse 3.4s ease-in-out infinite; }
+.core-pulse { transform-origin: 760px 440px; animation: pulse 3.4s ease-in-out infinite; }
 @keyframes pulse { 50% { transform: scale(1.05); opacity: .94; } }
-.sweep1 { transform-origin: 754px 109px; animation: rot 5s linear infinite; }
-.sweep2 { transform-origin: 695px 190px; animation: rot 8s linear infinite reverse; }
-.ecg-sweep { stroke-dasharray: 70 560; animation: ecg 3.4s linear infinite; }
-@keyframes ecg { from { stroke-dashoffset: 630; } to { stroke-dashoffset: 0; } }
+.emblem-spin { transform-origin: 658px 135px; animation: rot 24s linear infinite reverse; }
+.ecg-sweep { stroke-dasharray: 60 500; animation: ecg 3.4s linear infinite; }
+@keyframes ecg { from { stroke-dashoffset: 560; } to { stroke-dashoffset: 0; } }
 .chev { animation: chevflow 1.6s linear infinite; }
-.chev:nth-child(2) { animation-delay: .18s; } .chev:nth-child(3) { animation-delay: .36s; }
-.chev:nth-child(4) { animation-delay: .54s; } .chev:nth-child(5) { animation-delay: .72s; }
 @keyframes chevflow { 0%, 100% { opacity: .3; } 30% { opacity: 1; } }
 .blink-soft { animation: bl 3s ease-in-out infinite; }
 @keyframes bl { 50% { opacity: .4; } }
-.loader-spin { transform-origin: 1143px 862px; animation: rot 6s linear infinite; }
-.ringbr-a { transform-origin: 330px 500px; animation: rot 26s linear infinite; }
-.ringbr-b { transform-origin: 330px 500px; animation: rot 20s linear infinite reverse; }
+.dish-spin { transform-origin: 1092px 862px; animation: rot 12s linear infinite; }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
 </style>
 </head>
@@ -50,383 +45,360 @@ html, body { height: 100%; margin: 0; background: #03102C; overflow: hidden; }
 <svg id="scene" viewBox="0 0 1600 1000" preserveAspectRatio="xMidYMid meet"
      xmlns="http://www.w3.org/2000/svg" font-family="ui-monospace, Menlo, monospace">
 <defs>
-  <radialGradient id="bgGlow" cx="50%" cy="42%" r="75%">
-    <stop offset="0%" stop-color="#0D3F86"/>
-    <stop offset="42%" stop-color="#082657"/>
-    <stop offset="100%" stop-color="#020C22"/>
+  <radialGradient id="bgGlow" cx="47%" cy="45%" r="72%">
+    <stop offset="0%" stop-color="#2F6AA8"/>
+    <stop offset="34%" stop-color="#123A6E"/>
+    <stop offset="70%" stop-color="#071B40"/>
+    <stop offset="100%" stop-color="#010A20"/>
   </radialGradient>
   <radialGradient id="coreGlow" cx="50%" cy="50%" r="50%">
     <stop offset="0%" stop-color="#FFFFFF"/>
-    <stop offset="22%" stop-color="#BFF0FF" stop-opacity=".96"/>
-    <stop offset="58%" stop-color="#39C8F5" stop-opacity=".5"/>
-    <stop offset="100%" stop-color="#39C8F5" stop-opacity="0"/>
+    <stop offset="24%" stop-color="#CFF8FF" stop-opacity=".96"/>
+    <stop offset="60%" stop-color="#4FD4E8" stop-opacity=".5"/>
+    <stop offset="100%" stop-color="#4FD4E8" stop-opacity="0"/>
   </radialGradient>
-  <linearGradient id="horizonGlow" x1="0" y1="0" x2="0" y2="1">
-    <stop offset="0%" stop-color="#2E8FE0" stop-opacity="0"/>
-    <stop offset="50%" stop-color="#2E8FE0" stop-opacity=".22"/>
-    <stop offset="100%" stop-color="#2E8FE0" stop-opacity="0"/>
+  <linearGradient id="coneFace" x1="0" y1="0" x2="1" y2="0">
+    <stop offset="0%" stop-color="#0E3A74"/>
+    <stop offset="45%" stop-color="#3FB6E6"/>
+    <stop offset="55%" stop-color="#D8FAFF"/>
+    <stop offset="100%" stop-color="#15549E"/>
   </linearGradient>
   <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
     <feGaussianBlur stdDeviation="3.5" result="b"/>
     <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
   </filter>
-  <linearGradient id="coneFace" x1="0" y1="0" x2="1" y2="0">
-    <stop offset="0%" stop-color="#123E7C"/>
-    <stop offset="45%" stop-color="#3FA8E8"/>
-    <stop offset="55%" stop-color="#BFF0FF"/>
-    <stop offset="100%" stop-color="#1B5AA8"/>
-  </linearGradient>
   <style>
-    .ln   { stroke: #3FBBEF; fill: none; }
-    .lnB  { stroke: #7FDCFB; fill: none; }
-    .ln2  { stroke: rgba(63,187,239,.45); fill: none; }
-    .fillT{ fill: rgba(63,187,239,.12); }
-    .fillS{ fill: rgba(120,210,250,.55); }
-    .txt  { fill: #CFF2FF; }
-    .txtd { fill: rgba(150,215,245,.7); }
-    .node { fill: #072353; stroke: #3FBBEF; }
-    .floor{ stroke: #2E7FD9; }
+    .ln   { stroke: #4FD4E8; fill: none; }
+    .lnB  { stroke: #9BF2FA; fill: none; }
+    .ln2  { stroke: rgba(79,212,232,.42); fill: none; }
+    .fillT{ fill: rgba(60,170,220,.13); }
+    .fillS{ fill: rgba(120,230,250,.6); }
+    .txt  { fill: #D9F8FF; }
+    .txtd { fill: rgba(150,225,245,.7); }
+    .node { fill: #06203F; stroke: #4FD4E8; }
   </style>
 </defs>
 
-<!-- ================= BACKGROUND + FLOOR (the depth layer) ================= -->
+<!-- ================= BACKGROUND + FLOOR ================= -->
 <rect width="1600" height="1000" fill="url(#bgGlow)"/>
 <g id="floor"></g>
-<rect x="0" y="722" width="1600" height="40" fill="url(#horizonGlow)"/>
 
-<!-- ================= PERIMETER FRAMES (double-line, stepped) ================= -->
-<g class="ln" stroke-width="2">
-  <path d="M 16 210 V 30 Q 16 16 30 16 H 350 l 26 26 H 480"/>
-  <path d="M 34 210 V 44 H 340 l 26 26 H 470" stroke-opacity=".45" stroke-width="1"/>
-  <path d="M 1120 16 H 1300 l 20 20 h 90 l 18 18 h 90 l 16 16 H 1584 V 210"/>
-  <path d="M 1140 34 H 1292 l 20 20 h 90 l 18 18 h 84 l 14 14 h 108" stroke-opacity=".45" stroke-width="1"/>
-  <path d="M 16 790 V 970 Q 16 984 30 984 H 330 l 24 -22 H 560"/>
-  <path d="M 34 800 V 966 H 336 l 24 -22 H 520" stroke-opacity=".45" stroke-width="1"/>
-  <path d="M 1584 790 V 970 Q 1584 984 1570 984 H 1260 l -24 -22 H 1060"/>
-  <path d="M 1566 800 V 966 H 1266 l -24 -22 H 1100" stroke-opacity=".45" stroke-width="1"/>
+<!-- ================= PCB-TRACE PERIMETER (their border language) ================= -->
+<g class="ln2" stroke-width="1.5">
+  <path d="M 40 96 h 210 l 34 -34 h 180 M 250 96 l 30 30 h 120"/>
+  <path d="M 470 30 h 260 l 24 24 M 1060 22 h 180 l 26 26 h 140"/>
+  <path d="M 1450 26 h 90 l 20 20 v 120 M 1560 190 l -22 22 v 90"/>
+  <path d="M 24 260 v 210 l 16 16 v 180 M 24 720 v 180 l 20 20 h 160"/>
+  <path d="M 1576 330 v 160 l -18 18 v 210 M 1576 780 v 140 l -24 24 h -180"/>
+  <path d="M 300 976 h 240 l 22 -22 M 900 976 h 260 l 24 -24"/>
 </g>
-<g class="ln" stroke-width="1.5">
-  <path d="M 1584 240 V 400 l -22 24 v 90 l 22 24 V 760"/>
-  <path d="M 1560 260 V 396 l -20 22 v 84 l 20 22 V 740" stroke-opacity=".4" stroke-width="1"/>
+<g>
+  <circle cx="464" cy="62" r="5" class="node" stroke-width="1.5"/>
+  <circle cx="754" cy="54" r="5" class="node" stroke-width="1.5"/>
+  <circle cx="1406" cy="48" r="5" class="node" stroke-width="1.5"/>
+  <circle cx="1540" cy="26" r="4" class="node" stroke-width="1.5"/>
+  <circle cx="40" cy="96" r="4" class="node" stroke-width="1.5"/>
+  <circle cx="40" cy="466" r="4" class="node" stroke-width="1.5"/>
+  <circle cx="1576" cy="326" r="4" class="node" stroke-width="1.5"/>
+  <circle cx="544" cy="954" r="4" class="node" stroke-width="1.5"/>
+  <circle cx="1184" cy="952" r="4" class="node" stroke-width="1.5"/>
 </g>
-<rect x="378" y="40" width="16" height="16" class="ln" stroke-width="1.5" fill="none"/>
-<rect x="410" y="72" width="11" height="11" class="ln2" stroke-width="1.5" fill="none"/>
-<!-- big quarter disc anchoring the bottom-right corner (per the wide crop) -->
-<path d="M 1600 1000 L 1600 906 A 94 94 0 0 0 1506 1000 Z" fill="rgba(63,187,239,.4)"
-      stroke="#3FBBEF" stroke-width="1.5"/>
 
-<!-- ================= TOP-LEFT: DONUTS + CAPTION + DOT MATRIX ================= -->
+<!-- ================= TOP-LEFT: AUDIO BARS + DASHED BRACKET + CANDLES ================= -->
+<g id="tlbars"></g>
+<g>
+  <rect x="316" y="44" width="60" height="62" class="ln2" stroke-width="1.5"
+        stroke-dasharray="6 5" fill="none"/>
+  <path class="ln" stroke-width="2" d="M 310 38 h 14 M 310 38 v 14 M 382 38 h -14 M 382 38 v 14
+        M 310 112 h 14 M 310 112 v -14 M 382 112 h -14 M 382 112 v -14"/>
+</g>
+<g id="candles"></g>
+
+<!-- ================= DONUTS 30/50/70 with dot connectors ================= -->
 <g id="donuts"></g>
-<text x="36" y="236" font-size="13" letter-spacing="1.5" class="txt">Hud interface technology</text>
-<g id="dotmatrixTL"></g>
+<text x="178" y="204" font-size="14" letter-spacing="1.5" class="txt">Hud interface technology</text>
 
-<!-- ================= LEFT: 3D CONE on elliptical base ================= -->
+<!-- ================= WIDE DOT MATRIX + PROGRESS ================= -->
+<g id="dotmatrix"></g>
 <g>
-  <ellipse cx="150" cy="592" rx="118" ry="26" class="ln2" stroke-width="1.5"
-           fill="rgba(63,187,239,.10)"/>
-  <path d="M 150 430 L 92 588 A 90 18 0 0 0 208 588 Z" fill="url(#coneFace)" opacity=".9"/>
-  <path d="M 150 430 L 130 592 L 168 592 Z" fill="rgba(230,250,255,.65)"/>
-  <path class="ln2" stroke-width="1" d="M 150 430 L 92 588 M 150 430 L 208 588 M 150 430 V 592"/>
-  <ellipse cx="150" cy="592" rx="58" ry="12" class="ln2" stroke-width="1" fill="none"/>
-  <text x="20" y="540" font-size="12" class="txtd" transform="rotate(-90 20 540)">8.235687</text>
-  <path class="ln2" stroke-width="1" d="M 150 430 V 404 h 60"/>
-  <circle cx="214" cy="404" r="3.5" class="node" stroke-width="1"/>
+  <rect x="215" y="300" width="141" height="16" class="ln2" stroke-width="1" fill="none"/>
+  <g id="progbar"></g>
 </g>
 
-<!-- ================= LEFT: 100% SEGMENTED RING BRACKET ================= -->
+<!-- ================= CONE + LABELS ================= -->
 <g>
-  <g class="ringbr-a">
-    <path class="ln" stroke-width="3" d="M 330 434 A 66 66 0 0 1 388 468" stroke-dasharray="8 7"/>
-    <path class="ln" stroke-width="3" d="M 330 566 A 66 66 0 0 1 272 532" stroke-dasharray="8 7"/>
-  </g>
-  <g class="ringbr-b">
-    <path class="lnB" stroke-width="6" d="M 276 466 A 62 62 0 0 1 306 440"/>
-    <path class="lnB" stroke-width="6" d="M 384 534 A 62 62 0 0 1 354 560"/>
-  </g>
-  <rect x="288" y="478" width="84" height="44" class="ln fillT" stroke-width="1.5"/>
-  <text x="298" y="509" font-size="22" class="txt">100%</text>
-  <path class="ln2" stroke-width="1" d="M 396 500 h 56 l 30 -24 h 60"/>
-  <circle cx="546" cy="476" r="4" class="node" stroke-width="1"/>
-  <text x="404" y="446" font-size="12" class="txtd">3,2932.31</text>
-  <text x="404" y="464" font-size="10" class="txtd">0.291.320</text>
+  <ellipse cx="150" cy="462" rx="76" ry="17" class="ln2" stroke-width="1.5"
+           fill="rgba(79,212,232,.10)"/>
+  <path d="M 150 330 L 106 458 A 58 12 0 0 0 194 458 Z" fill="url(#coneFace)" opacity=".92"/>
+  <path d="M 150 330 L 136 462 L 163 462 Z" fill="rgba(235,252,255,.7)"/>
+  <path class="ln2" stroke-width="1" d="M 150 330 L 106 458 M 150 330 L 194 458"/>
+  <text x="134" y="318" font-size="11" class="txtd">5.232145</text>
+  <text x="36" y="440" font-size="11" class="txtd">8.235687</text>
+  <path class="ln2" stroke-width="1" d="M 150 330 V 306 h 52"/>
+  <circle cx="206" cy="306" r="3.5" class="node" stroke-width="1"/>
 </g>
 
-<!-- ================= LEFT: VITALS TECH-FRAME ================= -->
+<!-- ================= 100% SEGMENTED RING ================= -->
 <g>
-  <path class="ln" stroke-width="1.5" fill="rgba(63,187,239,.06)"
-        d="M 56 624 h 44 l 10 -9 h 196 l 16 14 v 32 l -9 9 v 50 l 9 9 v 16 l -16 14 H 116 l -13 -11 H 62 l -14 -13 V 638 Z"/>
-  <path class="ln2" stroke-width="1" d="M 66 632 h 240 M 66 748 h 240" stroke-opacity=".5"/>
-  <text x="76" y="652" font-size="10" letter-spacing="2" class="txtd">VITALS // LIVE</text>
-  <text x="76" y="676" font-size="9" class="txtd">1.276</text>
-  <text x="212" y="726" font-size="9" class="txtd">0.0015741</text>
-  <path class="ln" stroke-width="2" opacity=".85"
-        d="M 68 700 h 26 l 9 -13 l 9 24 l 7 -40 l 9 48 l 7 -27 l 7 9 h 24 l 9 -11 l 9 20 l 7 -34 l 9 40 l 7 -23 l 7 9 h 46"/>
-  <path class="ecg-sweep" stroke="#CFF2FF" stroke-width="2" fill="none"
-        d="M 68 700 h 26 l 9 -13 l 9 24 l 7 -40 l 9 48 l 7 -27 l 7 9 h 24 l 9 -11 l 9 20 l 7 -34 l 9 40 l 7 -23 l 7 9 h 46"/>
-  <path d="M 316 700 l 12 -5 v 10 Z" fill="#7FDCFB"/>
+  <g class="ln" stroke-width="3">
+    <path d="M 292 396 A 62 62 0 0 1 402 421" stroke-dasharray="9 7"/>
+    <path d="M 398 466 A 62 62 0 0 1 288 441" stroke-dasharray="9 7"/>
+  </g>
+  <path class="lnB" stroke-width="6" d="M 284 414 A 60 60 0 0 1 302 392" filter="url(#glow)"/>
+  <path class="lnB" stroke-width="6" d="M 406 448 A 60 60 0 0 1 388 470" filter="url(#glow)"/>
+  <rect x="308" y="412" width="76" height="38" class="ln fillT" stroke-width="1.5"/>
+  <text x="316" y="439" font-size="19" class="txt">100%</text>
+  <path class="ln2" stroke-width="1" d="M 388 404 l 30 -24 h 58"/>
+  <circle cx="480" cy="380" r="4" class="node" stroke-width="1"/>
+</g>
+
+<!-- ================= VITALS TECH-FRAME ================= -->
+<g>
+  <path class="ln" stroke-width="1.5" fill="rgba(60,170,220,.07)"
+        d="M 136 520 h 36 l 9 -8 h 150 l 13 12 v 26 l -8 8 v 40 l 8 8 v 13 l -13 11 H 182 l -11 -9 H 142 l -12 -11 V 531 Z"/>
+  <rect x="140" y="528" width="34" height="52" fill="rgba(6,32,63,.8)"/>
+  <text x="184" y="542" font-size="9" letter-spacing="2" class="txtd">VITALS</text>
+  <text x="146" y="556" font-size="8" class="txtd">1.276</text>
+  <path class="ln" stroke-width="2" opacity=".9"
+        d="M 146 590 h 22 l 8 -11 l 8 20 l 6 -33 l 8 40 l 6 -22 l 6 7 h 20 l 8 -9 l 8 16 l 6 -28 l 8 33 l 6 -19 l 6 7 h 38"/>
+  <path class="ecg-sweep" stroke="#E8FDFF" stroke-width="2" fill="none"
+        d="M 146 590 h 22 l 8 -11 l 8 20 l 6 -33 l 8 40 l 6 -22 l 6 7 h 20 l 8 -9 l 8 16 l 6 -28 l 8 33 l 6 -19 l 6 7 h 38"/>
+  <path d="M 314 590 l 11 -5 v 10 Z" fill="#9BF2FA"/>
+  <text x="238" y="614" font-size="8" class="txtd">0.0015741</text>
   <g class="lnB" stroke-width="2.5">
-    <path d="M 76 728 l 8 7 l -8 7 M 88 728 l 8 7 l -8 7 M 100 728 l 8 7 l -8 7"/>
+    <path d="M 146 610 l 7 6 l -7 6 M 157 610 l 7 6 l -7 6 M 168 610 l 7 6 l -7 6"/>
   </g>
-  <rect x="290" y="660" width="7" height="26" fill="rgba(63,187,239,.6)"/>
-  <rect x="301" y="668" width="7" height="18" fill="rgba(120,210,250,.8)"/>
 </g>
-<!-- upper-left edge dot column -->
-<g id="edgeDotsL"></g>
-<rect x="20" y="20" width="11" height="11" fill="rgba(120,210,250,.8)"/>
 
-<!-- ================= HEX PANEL A — 75% (donuts + bars + hexagon) ================= -->
+<!-- ================= HEX PANELS ================= -->
 <g id="hexA"></g>
-<g id="schemticks"></g>
-
-<!-- ================= BOTTOM-LEFT SUITE ================= -->
-<!-- capsule bar columns on the left edge -->
-<g id="capsules"></g>
-<!-- bracket square with 4 corner dots -->
-<g>
-  <path class="ln" stroke-width="2" d="M 132 772 h 20 M 132 772 v 20 M 216 772 h -20 M 216 772 v 20
-        M 132 856 h 20 M 132 856 v -20 M 216 856 h -20 M 216 856 v -20"/>
-  <circle cx="148" cy="788" r="4" fill="#3FBBEF"/>
-  <circle cx="200" cy="788" r="4" fill="#3FBBEF"/>
-  <circle cx="148" cy="840" r="4" fill="#3FBBEF"/>
-  <circle cx="200" cy="840" r="4" fill="#3FBBEF"/>
-</g>
-<!-- dash matrix, segmented bar, dot row, slash row -->
-<g id="dashmatrix"></g>
-<g id="widebar"></g>
-<g id="dotrow"></g>
-<g id="slashrow"></g>
-<!-- square maze + film strip -->
-<path class="ln" stroke-width="2" fill="none"
-      d="M 40 866 h 104 v 100 h -82 v -80 h 60 v 60 h -38 v -38 h 17"/>
-<g id="filmstrip"></g>
-<!-- HEX PANEL B — 100% -->
 <g id="hexB"></g>
-<!-- stacked dash columns -->
-<g id="stacks"></g>
-<!-- binary circuit block -->
+
+<!-- ================= BL: BRACKET-DASH SQ + SEG BAR + DOTS + DASHES + BINARY ================= -->
 <g>
-  <rect x="600" y="796" width="250" height="78" class="ln2 fillT" stroke-width="1"/>
-  <g class="txtd" font-size="9">
-    <text x="610" y="812">0.0100111011001110</text>
-    <text x="610" y="826">0.0110100100011101</text>
-    <text x="610" y="840">0.0101110010010110</text>
-    <text x="610" y="854">0.0010011101100101</text>
+  <path class="ln" stroke-width="2" d="M 124 634 h 16 M 124 634 v 16 M 178 634 h -16 M 178 634 v 16
+        M 124 688 h 16 M 124 688 v -16 M 178 688 h -16 M 178 688 v -16"/>
+  <rect x="138" y="648" width="26" height="26" class="ln2" stroke-width="1"
+        stroke-dasharray="4 3" fill="none"/>
+</g>
+<g id="segbar"></g>
+<g id="dotrow"></g>
+<g id="dashrow"></g>
+<g>
+  <rect x="356" y="676" width="180" height="58" class="ln2 fillT" stroke-width="1"/>
+  <g class="txtd" font-size="7.5">
+    <text x="364" y="690">0.010011101100111</text>
+    <text x="364" y="702">0.011010010001110</text>
+    <text x="364" y="714">0.010111001001011</text>
+    <text x="364" y="726">0.001001110110010</text>
   </g>
   <g class="ln" stroke-width="1.5">
-    <path d="M 762 810 h 44 M 762 810 v 22 h 30 M 792 832 v 18 h 24 M 762 850 h 12"/>
-    <circle cx="810" cy="810" r="3" fill="#3FBBEF" stroke="none"/>
-    <circle cx="816" cy="850" r="3" fill="#3FBBEF" stroke="none"/>
+    <path d="M 476 688 h 40 M 476 688 v 18 h 26 M 502 706 v 16 h 22"/>
+    <circle cx="520" cy="688" r="3" fill="#4FD4E8" stroke="none"/>
+    <circle cx="528" cy="722" r="3" fill="#4FD4E8" stroke="none"/>
   </g>
-  <text x="600" y="892" font-size="10" class="txtd">0.01010011101100111000010010100101011</text>
+  <text x="356" y="750" font-size="9" class="txtd">0.0101001110110011100001001010010101</text>
 </g>
 
-<!-- ================= CENTER RETICLE (823, 428) ================= -->
+<!-- ================= LEFT EDGE: STRIP + TALL SLIDERS + RINGS ================= -->
+<path class="ln2" stroke-width="1.5" d="M 30 398 v 160 l 8 10 v 190 l -8 10 v 170"/>
+<g id="sliders"></g>
 <g>
-  <circle cx="823" cy="428" r="290" fill="url(#coreGlow)" opacity=".13"/>
+  <circle cx="70" cy="900" r="15" class="ln" stroke-width="3"/>
+  <circle cx="70" cy="900" r="6" fill="#E8FDFF" filter="url(#glow)"/>
+  <circle cx="112" cy="928" r="11" class="ln2" stroke-width="3" stroke-dasharray="5 4"/>
+</g>
+<!-- stacked bar columns + spectrum -->
+<g id="stacks"></g>
+<g id="spectrum"></g>
+
+<!-- ================= CENTER MANDALA (760, 440) ================= -->
+<g>
+  <circle cx="760" cy="440" r="286" fill="url(#coreGlow)" opacity=".14"/>
   <g class="spin-slow">
-    <circle cx="823" cy="428" r="252" class="ln2" stroke-width="1"/>
+    <circle cx="760" cy="440" r="238" class="ln2" stroke-width="1"/>
     <g id="oticks"></g>
-    <circle cx="823" cy="428" r="230" class="ln2" stroke-width="1" stroke-dasharray="3 9"/>
+    <g id="dotring"></g>
   </g>
   <g class="spin-blades"><g id="blades"></g></g>
   <g class="spin-mid">
-    <circle cx="823" cy="428" r="146" class="ln" stroke-width="1.5" stroke-dasharray="62 12 6 12"/>
-    <circle cx="823" cy="428" r="130" class="ln2" stroke-width="1" stroke-dasharray="2 8"/>
+    <circle cx="760" cy="440" r="150" class="ln" stroke-width="1.5" stroke-dasharray="58 12 6 12"/>
+    <g id="microseg"></g>
+    <circle cx="760" cy="440" r="128" class="ln2" stroke-width="1" stroke-dasharray="2 7"/>
   </g>
+  <g class="spin-micro"><g id="spokes"></g></g>
   <g class="spin-inner">
-    <g class="lnB" stroke-width="8" filter="url(#glow)">
-      <path d="M 823 326 A 102 102 0 0 1 911 377" opacity=".85"/>
-      <path d="M 917 476 A 102 102 0 0 1 833 530" opacity=".5"/>
-      <path d="M 764 512 A 102 102 0 0 1 722 440" opacity=".7"/>
+    <g class="lnB" stroke-width="7" filter="url(#glow)">
+      <path d="M 760 342 A 98 98 0 0 1 845 391" opacity=".85"/>
+      <path d="M 851 486 A 98 98 0 0 1 770 538" opacity=".5"/>
+      <path d="M 703 517 A 98 98 0 0 1 663 448" opacity=".7"/>
     </g>
-    <circle cx="823" cy="428" r="84" class="ln2" stroke-width="1" stroke-dasharray="1 6"/>
+    <circle cx="760" cy="440" r="80" class="ln2" stroke-width="1" stroke-dasharray="1 5"/>
+    <circle cx="760" cy="440" r="64" class="ln" stroke-width="1" stroke-dasharray="14 5 3 5" opacity=".7"/>
   </g>
   <g class="core-pulse" filter="url(#glow)">
-    <circle cx="823" cy="428" r="62" fill="url(#coreGlow)"/>
-    <circle cx="823" cy="428" r="40" class="ln" stroke-width="1" opacity=".75"/>
-    <circle cx="823" cy="428" r="12" fill="#FFFFFF"/>
+    <circle cx="760" cy="440" r="58" fill="url(#coreGlow)"/>
+    <circle cx="760" cy="440" r="36" class="ln" stroke-width="1" opacity=".75"/>
+    <circle cx="760" cy="440" r="11" fill="#FFFFFF"/>
     <g class="lnB" stroke-width="1.5" opacity=".9">
-      <path d="M 823 398 V 380 M 823 458 V 476 M 793 428 H 775 M 853 428 H 871"/>
+      <path d="M 760 412 V 396 M 760 468 V 484 M 732 440 H 716 M 788 440 H 804"/>
     </g>
   </g>
 </g>
 
-<!-- ================= TOP BANNER + RADARS + TRIANGLES ================= -->
+<!-- ================= TOP BANNER: TRAPEZOID + EMBLEM + DATA BARS ================= -->
 <g>
-  <path class="ln" stroke-width="1.5" fill="rgba(63,187,239,.05)"
-        d="M 430 92 L 470 66 H 900 l 30 24 H 1064 l 30 26 v 34 H 940 l -28 -22 H 560 l -36 -28 Z"/>
-  <g id="hatchA"></g>
-  <g id="hatchB"></g>
-  <g>
-    <circle cx="754" cy="109" r="40" class="ln" stroke-width="1.5"/>
-    <circle cx="754" cy="109" r="28" class="ln2" stroke-width="1"/>
-    <path class="ln2" stroke-width="1" d="M 714 109 H 794 M 754 69 V 149"/>
-    <g class="sweep1">
-      <path d="M 754 109 L 754 71 A 38 38 0 0 1 782 79 Z" fill="rgba(127,220,251,.4)"/>
-    </g>
-    <circle cx="768" cy="94" r="3" fill="#CFF2FF"/>
-    <circle cx="740" cy="122" r="2.5" fill="#7FDCFB"/>
+  <path class="ln" stroke-width="2" fill="rgba(60,170,220,.05)"
+        d="M 560 64 H 930 l 48 140 H 610 Z" transform="skewX(-8)" transform-origin="745 133"/>
+  <g class="emblem-spin">
+    <circle cx="658" cy="135" r="44" class="ln2" stroke-width="1"/>
+    <circle cx="658" cy="135" r="34" class="ln" stroke-width="2" stroke-dasharray="22 8 6 8"/>
+    <circle cx="658" cy="135" r="22" class="ln2" stroke-width="1" stroke-dasharray="3 5"/>
+    <circle cx="658" cy="135" r="10" class="lnB" stroke-width="2"/>
   </g>
-  <path class="fillS" stroke="#7FDCFB" stroke-width="1.5" d="M 1032 150 L 1098 178 L 1032 206 Z"
-        filter="url(#glow)"/>
-  <text x="1030" y="252" font-size="14" class="txt">99%</text>
-  <path class="ln2" stroke-width="1" d="M 1024 246 h -70 l -28 22 H 810"/>
-  <circle cx="806" cy="268" r="4" class="node" stroke-width="1"/>
+  <g id="databars"></g>
+  <circle cx="856" cy="176" r="7" class="ln" stroke-width="1.5"/>
+  <circle cx="876" cy="176" r="7" class="ln2" stroke-width="1.5"/>
+  <path class="fillS" stroke="#9BF2FA" stroke-width="1.5" filter="url(#glow)"
+        d="M 918 150 L 972 174 L 918 198 Z"/>
 </g>
-<!-- below-banner row: three small squares + dot row (per the art) -->
+<!-- 99% / 20% labels + dotted rows -->
 <g>
-  <rect x="446" y="168" width="22" height="22" class="ln" stroke-width="1.5" fill="none"/>
-  <rect x="484" y="168" width="22" height="22" class="ln2" stroke-width="1.5" fill="none"/>
-  <rect x="522" y="168" width="22" height="22" class="ln2" stroke-width="1.5" fill="rgba(63,187,239,.15)"/>
-  <g id="bannerDots"></g>
-</g>
-<g>
-  <circle cx="695" cy="190" r="34" class="ln2" stroke-width="1"/>
-  <circle cx="695" cy="190" r="22" class="ln2" stroke-width="1" stroke-dasharray="3 6"/>
-  <g class="sweep2">
-    <path d="M 695 190 L 695 158 A 32 32 0 0 1 717 166 Z" fill="rgba(127,220,251,.25)"/>
-  </g>
-  <circle cx="704" cy="178" r="2.5" fill="#7FDCFB"/>
+  <text x="948" y="222" font-size="14" class="txt">99%</text>
+  <text x="1042" y="226" font-size="12" class="txtd">20%</text>
+  <g id="dotted99"></g>
 </g>
 
-<!-- ================= TOP-RIGHT CLUSTER ================= -->
+<!-- ================= TOP-RIGHT: HEX GRID + HP RING + STRIPES + CAPSULE BAR ================= -->
+<g id="hexgrid"></g>
 <g>
-  <text x="1132" y="106" font-size="16" letter-spacing="2" class="txt">HP</text>
-  <circle cx="1178" cy="100" r="9" class="ln" stroke-width="1.5"/>
-  <circle cx="1204" cy="100" r="9" class="ln2" stroke-width="1.5"/>
-  <path class="ln" stroke-width="1.5" fill="rgba(63,187,239,.08)"
-        d="M 1256 76 H 1408 l 24 20 v 40 H 1284 l -28 -24 Z"/>
+  <text x="1072" y="80" font-size="16" letter-spacing="1" class="txt">HP</text>
+  <circle cx="1122" cy="92" r="30" class="ln" stroke-width="2" stroke-dasharray="120 40"/>
+  <text x="1104" y="98" font-size="13" class="txt">99%</text>
+  <circle cx="1156" cy="118" r="8" class="ln2" stroke-width="2" stroke-dasharray="4 3"/>
+  <text x="1140" y="140" font-size="9" class="txtd">0.0032</text>
+  <text x="1108" y="52" font-size="9" class="txtd">0101001100011001</text>
+</g>
+<g>
+  <path class="ln" stroke-width="1.5" fill="rgba(60,170,220,.08)"
+        d="M 948 146 H 1056 l 18 16 v 30 H 968 l -20 -18 Z"/>
   <g id="stripes"></g>
-  <path class="fillS" stroke="#7FDCFB" stroke-width="1.5" d="M 1438 232 L 1462 168 L 1500 224 Z"
-        filter="url(#glow)"/>
-  <path class="ln2" stroke-width="1" d="M 1462 168 L 1470 214"/>
-  <g id="dotcolTR"></g>
-  <g transform="translate(1290, 262)" filter="url(#glow)">
-    <path d="M 0 0 L 0 -46 A 46 46 0 1 1 -46 0 Z" fill="rgba(63,187,239,.42)"
-          stroke="#3FBBEF" stroke-width="1.5"/>
-    <path d="M -9 -9 L -9 -55 A 46 46 0 0 0 -55 -9 Z" fill="rgba(191,240,255,.6)"
-          stroke="#CFF2FF" stroke-width="1.5"/>
-  </g>
-  <rect x="1544" y="252" width="30" height="62" class="ln" stroke-width="1.5" fill="none"/>
-  <rect x="1552" y="244" width="14" height="8" class="ln" stroke-width="1.5" fill="none"/>
-  <rect x="1549" y="282" width="20" height="27" fill="rgba(63,187,239,.5)"/>
-  <rect x="1549" y="292" width="20" height="17" fill="rgba(120,210,250,.75)"/>
+</g>
+<g>
+  <rect x="1174" y="72" width="200" height="24" rx="12" class="ln" stroke-width="1.5" fill="none"/>
+  <g id="capsegs"></g>
+  <circle cx="1394" cy="84" r="9" class="ln2" stroke-width="1.5"/>
 </g>
 
-<!-- ================= RIGHT-MID: COMPASS + GEAR + SIGNAL + CORE SYS ================= -->
+<!-- ================= RIGHT: PIE + BATTERY ================= -->
 <g>
-  <circle cx="1214" cy="369" r="52" class="ln" stroke-width="1.5"/>
+  <g transform="translate(1236, 292)" filter="url(#glow)">
+    <path d="M 0 0 L 0 -54 A 54 54 0 1 1 -54 0 Z" fill="rgba(79,212,232,.4)"
+          stroke="#4FD4E8" stroke-width="1.5"/>
+    <path d="M -10 -10 L -10 -64 A 54 54 0 0 0 -64 -10 Z" fill="rgba(216,250,255,.65)"
+          stroke="#D9F8FF" stroke-width="1.5"/>
+  </g>
+  <text x="1300" y="268" font-size="12" class="txt">35%</text>
+  <path class="ln2" stroke-width="1" d="M 1294 262 h -34"/>
+  <rect x="1324" y="250" width="42" height="94" rx="6" class="ln" stroke-width="2" fill="none"/>
+  <rect x="1336" y="242" width="18" height="8" class="ln" stroke-width="2" fill="none"/>
+  <g id="batsegs"></g>
+  <text x="1330" y="366" font-size="11" class="txtd">75%</text>
+</g>
+
+<!-- ================= RIGHT-MID: BIG COMPASS + BRACKET PANEL ================= -->
+<g>
+  <circle cx="1090" cy="442" r="78" class="ln" stroke-width="1.5"/>
   <g id="compassticks"></g>
-  <circle cx="1214" cy="369" r="9" class="ln" stroke-width="1.5"/>
-  <path class="lnB" stroke-width="2" d="M 1214 369 L 1248 335"/>
-  <path d="M 1248 335 l -7 -1 l 9 -9 l 1 10 Z" fill="#CFF2FF"/>
-  <g id="gearring"></g>
-  <circle cx="1362" cy="377" r="11" class="ln" stroke-width="1.5"/>
-  <circle cx="1362" cy="377" r="3.5" fill="#CFF2FF"/>
-  <g class="ln" stroke-width="1.5">
-    <path d="M 1500 408 a 26 26 0 0 1 36 0 M 1494 396 a 38 38 0 0 1 48 0 M 1506 420 a 14 14 0 0 1 24 0"/>
-    <circle cx="1518" cy="428" r="3" fill="#3FBBEF" stroke="none"/>
-  </g>
-  <rect x="1100" y="467" width="332" height="150" class="ln2 fillT" stroke-width="1"/>
-  <text x="1114" y="491" font-size="10" letter-spacing="2" class="txtd">CORE SYS // DUAL MODULE</text>
-  <g transform="translate(1190, 552)">
-    <ellipse rx="34" ry="13" class="ln" stroke-width="1" transform="rotate(30)"/>
-    <ellipse rx="34" ry="13" class="ln" stroke-width="1" transform="rotate(-30)"/>
-    <ellipse rx="34" ry="13" class="ln2" stroke-width="1" transform="rotate(90)"/>
-    <circle r="4" fill="#CFF2FF"/>
-  </g>
-  <g transform="translate(1330, 552)">
-    <circle r="30" class="ln2" stroke-width="1"/>
-    <circle r="21" class="ln" stroke-width="1" stroke-dasharray="24 8"/>
-    <circle r="11" class="ln" stroke-width="1"/>
-    <circle r="3.5" fill="#CFF2FF"/>
-  </g>
-  <rect x="1490" y="480" width="18" height="18" class="ln" stroke-width="1.5" fill="none"/>
-  <circle cx="1499" cy="540" r="12" class="ln" stroke-width="1.5"/>
-  <g id="edgeDotsR"></g>
-</g>
-
-<!-- ================= RIGHT-LOW: CHEVRONS + PLANE 75% ================= -->
-<g transform="translate(1112, 648)" filter="url(#glow)">
-  <path class="chev" d="M 0 0 l 16 14 l -16 14" fill="none" stroke="#7FDCFB" stroke-width="5"/>
-  <path class="chev" d="M 28 0 l 16 14 l -16 14" fill="none" stroke="#7FDCFB" stroke-width="5"/>
-  <path class="chev" d="M 56 0 l 16 14 l -16 14" fill="none" stroke="#7FDCFB" stroke-width="5"/>
-  <path class="chev" d="M 84 0 l 16 14 l -16 14" fill="none" stroke="#7FDCFB" stroke-width="5"/>
-  <path class="chev" d="M 112 0 l 16 14 l -16 14" fill="none" stroke="#7FDCFB" stroke-width="5"/>
+  <path class="ln2" stroke-width="1" d="M 1000 442 H 1180 M 1090 352 V 532"/>
+  <circle cx="1090" cy="442" r="12" class="ln" stroke-width="1.5"/>
+  <path class="lnB" stroke-width="2.5" d="M 1090 442 L 1136 396" filter="url(#glow)"/>
+  <path d="M 1136 396 l -8 -2 l 10 -10 l 2 11 Z" fill="#E8FDFF"/>
 </g>
 <g>
-  <path class="ln" stroke-width="1.5" d="M 1296 640 h -18 v 160 h 18 M 1452 640 h 18 v 160 h -18"/>
-  <text x="1296" y="676" font-size="13" class="txt">75%</text>
-  <path class="fillS" stroke="#CFF2FF" stroke-width="1" filter="url(#glow)"
-        d="M 1330 758 l 74 -42 l -24 58 l -13 -16 l -16 21 Z"/>
-  <path d="M 1398 686 A 34 34 0 0 1 1420 744" fill="none" stroke="#7FDCFB" stroke-width="3"/>
+  <path class="ln" stroke-width="1.5" fill="none"
+        d="M 1222 372 h 150 q 14 0 14 14 v 120 q 0 14 -14 14 h -150 q -14 0 -14 -14 v -120 q 0 -14 14 -14 Z"/>
+  <g id="gearring"></g>
+  <g transform="translate(1330, 420)">
+    <path d="M 0 0 L 0 -22 A 22 22 0 1 1 -19 11 Z" fill="rgba(79,212,232,.45)"
+          stroke="#4FD4E8" stroke-width="1"/>
+  </g>
+  <g id="brkbars"></g>
 </g>
 
-<!-- ================= BOTTOM-CENTER: TURBINE GAUGE ON THE FLOOR ================= -->
+<!-- ================= RIGHT: FLOWER TRIPLE PANEL + LONG CHEVRONS ================= -->
+<g>
+  <path class="ln" stroke-width="1.5" d="M 990 618 h -14 v 66 h 14 M 1252 618 h 14 v 66 h -14"/>
+  <g id="ringspiral"></g>
+  <g id="flower"></g>
+  <g id="dotburst"></g>
+</g>
+<g id="chevrons"></g>
+
+<!-- ================= RIGHT: 75% PLANE PANEL ================= -->
+<g>
+  <path class="ln" stroke-width="1.5" fill="rgba(60,170,220,.06)"
+        d="M 1290 668 H 1420 l 26 24 V 830 l -20 18 H 1290 Z"/>
+  <text x="1302" y="700" font-size="13" class="txt">75%</text>
+  <path class="fillS" stroke="#D9F8FF" stroke-width="1" filter="url(#glow)"
+        d="M 1318 790 l 66 -38 l -21 52 l -12 -14 l -14 19 Z"/>
+  <path d="M 1382 716 A 30 30 0 0 1 1402 768" fill="none" stroke="#9BF2FA" stroke-width="3"/>
+  <g id="planebars"></g>
+</g>
+
+<!-- ================= BOTTOM: TURBINE + RING ROW + ICON ROW + DISH ================= -->
 <g>
   <g class="turb-spin"><g id="turbblades"></g></g>
-  <circle cx="1010" cy="885" r="188" class="ln2" stroke-width="1" stroke-dasharray="4 10"/>
-  <circle cx="1010" cy="885" r="120" class="ln" stroke-width="2" stroke-dasharray="90 24 40 24"/>
+  <circle cx="655" cy="880" r="168" class="ln2" stroke-width="1" stroke-dasharray="4 9"/>
+  <circle cx="655" cy="880" r="108" class="ln" stroke-width="2" stroke-dasharray="80 22 36 22"/>
   <g id="turbticks"></g>
-  <circle cx="1010" cy="885" r="52" class="ln2" stroke-width="1"/>
-  <ellipse cx="1010" cy="885" rx="34" ry="22" class="ln fillT" stroke-width="1.5"/>
-  <text x="1010" y="890" font-size="15" class="txt" text-anchor="middle"
-        transform="rotate(-90 1010 885)">100%</text>
+  <ellipse cx="655" cy="880" rx="30" ry="20" class="ln fillT" stroke-width="1.5"/>
+  <text x="655" y="885" font-size="14" class="txt" text-anchor="middle"
+        transform="rotate(-90 655 880)">100%</text>
 </g>
-<!-- row of small ring gauges sitting on the floor -->
 <g id="ringrow"></g>
-<!-- audio spectrum bars on the floor -->
-<g id="spectrum"></g>
-
-<!-- ================= BOTTOM-RIGHT: RADAR-DISH LOADER + RULER + CAPSULE ================= -->
 <g>
-  <g class="loader-spin"><g id="loaderseg"></g></g>
-  <circle cx="1143" cy="862" r="34" class="ln2" stroke-width="1" stroke-dasharray="2 6"/>
-  <g class="lnB" stroke-width="2">
-    <path d="M 1130 872 a 18 14 -40 0 1 22 -14 M 1136 866 l 14 -16"/>
-    <circle cx="1152" cy="848" r="2.5" fill="#7FDCFB" stroke="none"/>
-    <path d="M 1128 874 h 18"/>
+  <path class="ln" stroke-width="1.5" d="M 636 700 h -12 v 44 h 12 M 856 700 h 12 v 44 h -12"/>
+  <circle cx="668" cy="722" r="13" class="ln" stroke-width="2" stroke-dasharray="10 5"/>
+  <circle cx="722" cy="722" r="13" class="ln" stroke-width="1.5"/>
+  <circle cx="722" cy="722" r="5" fill="#9BF2FA"/>
+  <circle cx="776" cy="722" r="13" class="ln2" stroke-width="1.5"/>
+  <path class="ln2" stroke-width="1" d="M 763 722 h 26 M 776 709 v 26"/>
+  <circle cx="828" cy="722" r="13" class="ln2" stroke-width="2" stroke-dasharray="3 4"/>
+</g>
+<g>
+  <g class="dish-spin">
+    <path d="M 1092 862 L 1092 794 A 68 68 0 0 1 1140 814 Z" fill="rgba(155,242,250,.35)"/>
   </g>
-  <g id="ruler"></g>
-  <path class="ln" stroke-width="1.5" d="M 1284 900 h -14 v 48 h 14 M 1478 900 h 14 v 48 h -14"/>
-  <rect x="1291" y="909" width="180" height="30" rx="4" class="ln" stroke-width="1.5" fill="none"/>
-  <rect x="1297" y="915" width="130" height="18" rx="2" fill="rgba(63,187,239,.55)"/>
-  <text x="1300" y="900" font-size="11" class="txtd">100%</text>
+  <g id="dishring"></g>
+  <circle cx="1092" cy="862" r="46" class="ln2" stroke-width="1.5" stroke-dasharray="5 6"/>
+  <circle cx="1092" cy="862" r="26" class="ln2" stroke-width="1" stroke-dasharray="2 5"/>
+  <circle cx="1092" cy="862" r="6" fill="#D9F8FF" filter="url(#glow)"/>
 </g>
-
-<!-- ================= PAGINATION DOTS ================= -->
-<g id="pagedots"></g>
-
-<!-- ================= CIRCUIT TRACES + NODES ================= -->
-<g class="ln2" stroke-width="1">
-  <path d="M 332 300 l 60 40 H 560 l 30 30"/>
-  <path d="M 268 592 H 420 l 60 -36 H 600"/>
-  <path d="M 588 700 H 700 l 40 40 v 50"/>
-  <path d="M 1162 369 H 1080 l -40 34"/>
-  <path d="M 1100 540 H 1010 l -36 -30"/>
-  <path d="M 1143 806 V 770 l -30 -30"/>
-  <path d="M 430 100 l -34 34 H 300"/>
-  <path d="M 662 486 l 40 40 v 30"/>
-</g>
+<!-- music note + 100% capsule -->
 <g>
-  <circle cx="594" cy="373" r="4" class="node" stroke-width="1"/>
-  <circle cx="604" cy="556" r="4" class="node" stroke-width="1"/>
-  <circle cx="740" cy="792" r="4" class="node" stroke-width="1"/>
-  <circle cx="1036" cy="403" r="4" class="node" stroke-width="1"/>
-  <circle cx="970" cy="510" r="4" class="node" stroke-width="1"/>
-  <circle cx="296" cy="134" r="4" class="node" stroke-width="1"/>
-  <circle cx="702" cy="560" r="4" class="node" stroke-width="1"/>
+  <path class="ln" stroke-width="2" d="M 1332 918 v -26 l 14 -5 v 26" fill="none"/>
+  <circle cx="1327" cy="918" r="5" fill="#4FD4E8"/>
+  <circle cx="1341" cy="913" r="5" fill="#4FD4E8"/>
+  <path class="ln" stroke-width="1.5" d="M 1366 892 h -12 v 52 h 12 M 1500 892 h 12 v 52 h -12"/>
+  <rect x="1372" y="900" width="122" height="34" rx="4" class="ln" stroke-width="1.5" fill="none"/>
+  <rect x="1377" y="905" width="88" height="24" rx="2" fill="rgba(79,212,232,.55)"/>
+  <text x="1385" y="923" font-size="14" fill="#03182E" font-weight="bold">100%</text>
 </g>
 
+<!-- ================= RIGHT EDGE OCTAGON ================= -->
+<path class="ln2" stroke-width="1.5"
+      d="M 1440 120 l 60 -40 h 60 M 1560 300 l -40 40 v 80 M 1520 700 l 40 40 v 80"/>
+
+<!-- micro labels + markers -->
 <g class="txtd" font-size="12">
-  <text x="380" y="212" class="blink-soft">+</text>
-  <text x="1216" y="300">+</text>
-  <text x="560" y="782" class="blink-soft">+</text>
-  <text x="1078" y="160">+</text>
-  <text x="948" y="640">+</text>
-  <text x="636" y="248" font-size="9">SCN.04</text>
-  <text x="962" y="672" font-size="9">LNK.77</text>
-  <text x="452" y="540" font-size="9">MDL.19</text>
+  <text x="470" y="250" class="blink-soft">+</text>
+  <text x="1010" y="320">+</text>
+  <text x="540" y="770" class="blink-soft">+</text>
+  <text x="990" y="560">+</text>
+  <text x="586" y="238" font-size="9">SCN.04</text>
+  <text x="906" y="640" font-size="9">LNK.77</text>
+  <text x="416" y="500" font-size="9">MDL.19</text>
 </g>
 </svg>
 
@@ -441,234 +413,297 @@ html, body { height: 100%; margin: 0; background: #03102C; overflow: hidden; }
   };
   const P = (cx, cy, r, a) => [cx + r * Math.sin(a), cy - r * Math.cos(a)];
 
-  // ================= FLOOR: perspective grid =================
-  // Horizon at y=740; vanishing point above it so verticals converge.
+  // ---- floor: perspective grid (their floor is subtle, dark steel blue) ----
   (function floor() {
-    const VP = { x: 800, y: 640 }, HY = 740;
-    const ys = [740, 752, 768, 790, 818, 852, 892, 938, 990];
+    const VP = { x: 740, y: 660 }, HY = 758;
+    const ys = [758, 770, 786, 808, 836, 870, 910, 956];
     ys.forEach((y, i) => put('floor', 'line', { x1: 0, y1: y, x2: 1600, y2: y,
-      stroke: '#2E7FD9', 'stroke-width': i === 0 ? 1.5 : 1,
-      opacity: i === 0 ? .35 : .10 + i * .012 }));
-    for (let xb = -400; xb <= 2000; xb += 133) {
+      stroke: '#1E4A80', 'stroke-width': i === 0 ? 1.5 : 1,
+      opacity: i === 0 ? .5 : .22 + i * .015 }));
+    for (let xb = -500; xb <= 2100; xb += 130) {
       const t = (HY - VP.y) / (1000 - VP.y);
       const xh = VP.x + (xb - VP.x) * t;
       put('floor', 'line', { x1: xh, y1: HY, x2: xb, y2: 1000,
-        stroke: '#2E7FD9', 'stroke-width': 1, opacity: .13 });
+        stroke: '#1E4A80', 'stroke-width': 1, opacity: .2 });
     }
   })();
 
-  // ---- center reticle ticks ----
-  for (let i = 0; i < 78; i++) {
-    const a = i / 78 * 2 * Math.PI;
-    const [x1, y1] = P(823, 428, i % 6 === 0 ? 234 : 242, a);
-    const [x2, y2] = P(823, 428, 252, a);
-    put('oticks', 'line', { x1, y1, x2, y2, stroke: '#3FBBEF',
-      'stroke-width': i % 6 === 0 ? 2 : 1, opacity: i % 6 === 0 ? .85 : .4 });
-  }
-  // ---- petals (irregular shards) ----
-  const jit = [0, 4, -4, 3, 5, -3, 4, -5, 2, -4, 5, -2];
-  for (let i = 0; i < 12; i++) {
-    // three petal families: reach, width, and brightness all vary like the art
-    const fam = i % 3;
-    const r0 = fam === 0 ? 228 : fam === 1 ? 214 : 198;
-    const r1 = fam === 0 ? 168 : fam === 1 ? 160 : 168;
-    const w0 = fam === 0 ? 30 : fam === 1 ? 26 : 20;
-    const w1 = fam === 0 ? 20 : fam === 1 ? 17 : 13;
-    const bright = i % 4 === 0;
-    put('blades', 'path', {
-      d: `M ${-w0} ${-r0} L ${w0} ${-r0} L ${w1} ${-r1} L ${-w1} ${-r1} Z`,
-      fill: bright ? 'rgba(140,220,252,0.30)' : 'rgba(120,210,250,0.12)',
-      stroke: bright ? '#8FE0FC' : '#5FCBF6', 'stroke-width': bright ? 1.6 : 1.1,
-      transform: `rotate(${i * 30 + jit[i]} 823 428) translate(823 428)` });
-  }
-  // ---- TL donuts ----
-  [[51, 190, 40], [125, 183, 50], [199, 176, 70]].forEach(([cx, cy, pct]) => {
-    const C = 2 * Math.PI * 27;
-    put('donuts', 'circle', { cx, cy, r: 27, fill: 'none',
-      stroke: 'rgba(63,187,239,.25)', 'stroke-width': 7 });
-    put('donuts', 'circle', { cx, cy, r: 27, fill: 'none', stroke: '#3FBBEF',
-      'stroke-width': 7, 'stroke-linecap': 'round',
-      'stroke-dasharray': `${C * pct / 100} ${C}`, transform: `rotate(-90 ${cx} ${cy})` });
-    put('donuts', 'text', { x: cx - 15, y: cy + 4, 'font-size': 12, fill: '#CFF2FF' }, pct + '%');
+  // ---- TL audio bars ----
+  const tlh = [26, 44, 18, 52, 34, 46, 22, 58, 38, 30, 48, 24, 40, 18, 34, 26, 44, 20];
+  tlh.forEach((h, i) => put('tlbars', 'rect', { x: 44 + i * 11, y: 82 - h, width: 6, height: h,
+    fill: i % 3 ? 'rgba(79,212,232,.55)' : '#6FE6F2' }));
+  // ---- candlestick cluster ----
+  [[420, 58, 30], [438, 50, 44], [456, 64, 22], [474, 46, 40], [492, 56, 30]].forEach(([x, y, h]) => {
+    put('candles', 'line', { x1: x + 4, y1: y - 10, x2: x + 4, y2: y + h + 10,
+      stroke: 'rgba(79,212,232,.5)', 'stroke-width': 1 });
+    put('candles', 'rect', { x, y, width: 8, height: h, fill: 'rgba(111,230,242,.65)' });
   });
-  put('donuts', 'path', { d: 'M 78 187 L 98 184 M 152 180 L 172 178',
-    stroke: 'rgba(63,187,239,.45)', 'stroke-width': 1 });
-  // ---- TL dot matrix ----
-  for (let r = 0; r < 5; r++) for (let c = 0; c < 13; c++)
-    put('dotmatrixTL', 'rect', { x: 38 + c * 15, y: 258 + r * 15, width: 7, height: 7,
-      fill: (r * 13 + c) % 6 < 4 ? 'rgba(63,187,239,.8)' : 'rgba(63,187,239,.2)' });
 
-  // ================= HEX PANELS (donut column + bars + % + hexagon) =================
+  // ---- donuts 30/50/70 with dot connectors ----
+  [[91, 152, 30], [211, 150, 50], [329, 148, 70]].forEach(([cx, cy, pct], idx) => {
+    const C = 2 * Math.PI * 33;
+    put('donuts', 'circle', { cx, cy, r: 33, fill: 'none',
+      stroke: 'rgba(79,212,232,.25)', 'stroke-width': 12 });
+    put('donuts', 'circle', { cx, cy, r: 33, fill: 'none', stroke: '#4FD4E8',
+      'stroke-width': 12, 'stroke-dasharray': `${C * pct / 100} ${C}`,
+      transform: `rotate(-90 ${cx} ${cy})` });
+    put('donuts', 'text', { x: cx - 17, y: cy + 5, 'font-size': 14, fill: '#D9F8FF' }, pct + '%');
+    if (idx < 2) {
+      put('donuts', 'line', { x1: cx + 36, y1: cy, x2: cx + 76, y2: cy,
+        stroke: 'rgba(79,212,232,.5)', 'stroke-width': 1.5 });
+      put('donuts', 'circle', { cx: cx + 56, cy, r: 5, fill: '#4FD4E8' });
+    }
+  });
+
+  // ---- wide noisy dot matrix ----
+  for (let r = 0; r < 6; r++) for (let c = 0; c < 30; c++) {
+    const v = (r * 31 + c * 7) % 9;
+    put('dotmatrix', 'rect', { x: 70 + c * 11.5, y: 226 + r * 12, width: 6, height: 6,
+      fill: v < 3 ? '#5FDCEF' : v < 6 ? 'rgba(79,212,232,.4)' : 'rgba(79,212,232,.12)' });
+  }
+  for (let i = 0; i < 9; i++)
+    put('progbar', 'rect', { x: 219 + i * 15, y: 304, width: 10, height: 8,
+      fill: i < 6 ? 'rgba(111,230,242,.7)' : 'rgba(79,212,232,.15)' });
+
+  // ---- hex panels ----
   function hexPanel(id, x, y, w, h, pct, hexR) {
     put(id, 'rect', { x, y, width: w, height: h, class: 'ln2 fillT', 'stroke-width': 1 });
     [.72, .45, .86].forEach((f, i) => {
-      const cy = y + 30 + i * 36, C = 2 * Math.PI * 13;
-      put(id, 'circle', { cx: x + 30, cy, r: 13, fill: 'none',
-        stroke: 'rgba(63,187,239,.3)', 'stroke-width': 5 });
-      put(id, 'circle', { cx: x + 30, cy, r: 13, fill: 'none', stroke: '#3FBBEF',
+      const cy = y + 28 + i * 34, C = 2 * Math.PI * 12;
+      put(id, 'circle', { cx: x + 28, cy, r: 12, fill: 'none',
+        stroke: 'rgba(79,212,232,.3)', 'stroke-width': 5 });
+      put(id, 'circle', { cx: x + 28, cy, r: 12, fill: 'none', stroke: '#4FD4E8',
         'stroke-width': 5, 'stroke-dasharray': `${C * f} ${C}`,
-        transform: `rotate(-90 ${x + 30} ${cy})` });
+        transform: `rotate(-90 ${x + 28} ${cy})` });
     });
-    [56, 40, 48].forEach((len, i) =>
-      put(id, 'line', { x1: x + 56, y1: y + 24 + i * 13, x2: x + 56 + len, y2: y + 24 + i * 13,
-        stroke: i === 1 ? '#7FDCFB' : 'rgba(63,187,239,.6)', 'stroke-width': 4 }));
-    put(id, 'text', { x: x + 58, y: y + 92, 'font-size': 20, fill: '#CFF2FF' }, pct);
-    const hx = x + w - hexR - 26, hy = y + h / 2;
+    [52, 38, 45].forEach((len, i) =>
+      put(id, 'line', { x1: x + 52, y1: y + 22 + i * 12, x2: x + 52 + len, y2: y + 22 + i * 12,
+        stroke: i === 1 ? '#9BF2FA' : 'rgba(79,212,232,.6)', 'stroke-width': 4 }));
+    put(id, 'text', { x: x + 54, y: y + 86, 'font-size': 19, fill: '#D9F8FF' }, pct);
+    const hx = x + w - hexR - 22, hy = y + h / 2;
     let d = '';
     for (let i = 0; i < 6; i++) {
       const a = Math.PI / 3 * i + Math.PI / 6;
       d += (i ? 'L' : 'M') + (hx + hexR * Math.cos(a)) + ' ' + (hy + hexR * Math.sin(a)) + ' ';
     }
-    put(id, 'path', { d: d + 'Z', fill: 'none', stroke: '#3FBBEF', 'stroke-width': 1.5 });
+    put(id, 'path', { d: d + 'Z', fill: 'none', stroke: '#4FD4E8', 'stroke-width': 1.5 });
     put(id, 'circle', { cx: hx, cy: hy, r: hexR * .55, fill: 'none',
-      stroke: 'rgba(63,187,239,.6)', 'stroke-width': 1 });
+      stroke: 'rgba(79,212,232,.6)', 'stroke-width': 1 });
     put(id, 'line', { x1: hx - hexR * .8, y1: hy, x2: hx + hexR * .8, y2: hy,
-      stroke: 'rgba(63,187,239,.5)', 'stroke-width': 1 });
+      stroke: 'rgba(79,212,232,.5)', 'stroke-width': 1 });
     put(id, 'line', { x1: hx, y1: hy - hexR * .8, x2: hx, y2: hy + hexR * .8,
-      stroke: 'rgba(63,187,239,.5)', 'stroke-width': 1 });
-    put(id, 'circle', { cx: hx, cy: hy, r: 9, fill: '#CFF2FF' });
-    put(id, 'text', { x: hx - 34, y: y + h - 12, 'font-size': 10,
-      fill: 'rgba(150,215,245,.7)' }, '0.002157');
+      stroke: 'rgba(79,212,232,.5)', 'stroke-width': 1 });
+    put(id, 'circle', { cx: hx, cy: hy, r: 8, fill: '#D9F8FF' });
+    put(id, 'text', { x: hx - 32, y: y + h - 10, 'font-size': 9,
+      fill: 'rgba(150,225,245,.7)' }, '0.002157');
   }
-  hexPanel('hexA', 400, 606, 260, 148, '75%', 42);
-  hexPanel('hexB', 236, 872, 260, 118, '100%', 36);
-  // ruler under hex panel A
-  for (let i = 0; i < 15; i++)
-    put('schemticks', 'line', { x1: 404 + i * 17, y1: 764, x2: 404 + i * 17, y2: 771,
-      stroke: 'rgba(63,187,239,.5)', 'stroke-width': 1 });
+  hexPanel('hexA', 368, 520, 240, 128, '75%', 38);
+  hexPanel('hexB', 124, 716, 230, 116, '100%', 34);
 
-  // ================= BOTTOM-LEFT SUITE =================
-  // capsule bar columns (3 pill stacks, left edge)
-  for (let c = 0; c < 3; c++) {
-    const x = 40 + c * 24, filled = [7, 5, 8][c];
-    for (let i = 0; i < 9; i++)
-      put('capsules', 'rect', { x, y: 636 + i * 15, width: 13, height: 10, rx: 4,
-        fill: i >= 9 - filled ? (i > 6 ? '#5FCBF6' : 'rgba(63,187,239,.55)')
-                              : 'rgba(63,187,239,.12)' });
-  }
-  // dash matrix 3 x 16
-  for (let r = 0; r < 3; r++) for (let c = 0; c < 16; c++)
-    put('dashmatrix', 'rect', { x: 350 + c * 20, y: 786 + r * 15, width: 12, height: 7,
-      fill: (r * 16 + c) % 5 < 3 ? 'rgba(63,187,239,.55)' : 'rgba(63,187,239,.15)' });
-  // segmented bar + frame
-  for (let i = 0; i < 14; i++)
-    put('widebar', 'rect', { x: 244 + i * 22, y: 744, width: 15, height: 13,
-      fill: i < 9 ? 'rgba(63,187,239,.7)' : 'rgba(63,187,239,.18)' });
-  put('widebar', 'rect', { x: 240, y: 740, width: 316, height: 21, fill: 'none',
-    stroke: 'rgba(63,187,239,.45)', 'stroke-width': 1 });
-  // dot row + slash row
+  // ---- seg bar + dot row + dash row ----
   for (let i = 0; i < 12; i++)
-    put('dotrow', 'circle', { cx: 250 + i * 18, cy: 776, r: 3.5,
-      fill: i % 4 ? 'rgba(63,187,239,.4)' : '#5FCBF6' });
-  for (let i = 0; i < 14; i++)
-    put('slashrow', 'line', { x1: 250 + i * 14, y1: 850, x2: 242 + i * 14, y2: 862,
-      stroke: i % 5 === 0 ? '#7FDCFB' : 'rgba(63,187,239,.5)', 'stroke-width': 2 });
-  // film strip
-  for (let i = 0; i < 6; i++)
-    put('filmstrip', 'rect', { x: 20, y: 856 + i * 20, width: 8, height: 12,
-      fill: 'rgba(63,187,239,.4)' });
-  // stacked dash columns
-  const stacks = [12, 7, 15, 9, 13];
-  stacks.forEach((n, c) => {
-    for (let i = 0; i < n; i++)
-      put('stacks', 'rect', { x: 516 + c * 17, y: 986 - i * 7, width: 11, height: 4,
-        fill: i % 4 === 3 ? '#5FCBF6' : 'rgba(63,187,239,.5)' });
+    put('segbar', 'rect', { x: 196 + i * 19, y: 638, width: 13, height: 11,
+      fill: i < 8 ? 'rgba(111,230,242,.7)' : 'rgba(79,212,232,.15)' });
+  put('segbar', 'rect', { x: 192, y: 634, width: 234, height: 19, fill: 'none',
+    stroke: 'rgba(79,212,232,.45)', 'stroke-width': 1 });
+  for (let i = 0; i < 11; i++)
+    put('dotrow', 'circle', { cx: 200 + i * 16, cy: 668, r: 3,
+      fill: i % 4 ? 'rgba(79,212,232,.4)' : '#6FE6F2' });
+  for (let i = 0; i < 12; i++)
+    put('dashrow', 'line', { x1: 200 + i * 13, y1: 690, x2: 193 + i * 13, y2: 700,
+      stroke: i % 5 === 0 ? '#9BF2FA' : 'rgba(79,212,232,.5)', 'stroke-width': 2 });
+
+  // ---- tall sliders ----
+  [[52, 570, 250, 7], [74, 600, 260, 5], [96, 640, 200, 8]].forEach(([x, y, h, seg]) => {
+    put('sliders', 'rect', { x, y, width: 10, height: h, fill: 'none',
+      stroke: 'rgba(79,212,232,.4)', 'stroke-width': 1 });
+    for (let i = 0; i < seg; i++)
+      put('sliders', 'rect', { x: x + 2, y: y + h - 14 - i * 24, width: 6, height: 16,
+        fill: i < seg - 1 ? 'rgba(111,230,242,.7)' : '#9BF2FA' });
   });
 
-  // ================= TOP BANNER hatches, stripes, TR dots =================
-  for (let i = 0; i < 20; i++)
-    put('hatchA', 'line', { x1: 470 + i * 12, y1: 88, x2: 462 + i * 12, y2: 130,
-      stroke: i % 5 === 0 ? '#7FDCFB' : 'rgba(63,187,239,.45)', 'stroke-width': 2 });
-  for (let i = 0; i < 16; i++)
-    put('hatchB', 'line', { x1: 816 + i * 12, y1: 88, x2: 808 + i * 12, y2: 130,
-      stroke: i % 5 === 0 ? '#7FDCFB' : 'rgba(63,187,239,.45)', 'stroke-width': 2 });
-  for (let i = 0; i < 9; i++)
-    put('stripes', 'line', { x1: 1282 + i * 16, y1: 84, x2: 1266 + i * 16, y2: 128,
-      stroke: i % 2 ? '#5FCBF6' : 'rgba(63,187,239,.35)', 'stroke-width': 5 });
-  for (let r = 0; r < 6; r++) for (let c = 0; c < 3; c++)
-    put('dotcolTR', 'rect', { x: 1120 + c * 12, y: 130 + r * 12, width: 5, height: 5,
-      fill: (r + c) % 3 ? 'rgba(63,187,239,.25)' : 'rgba(63,187,239,.8)' });
+  // ---- stacks + spectrum ----
+  [10, 6, 13, 8, 11].forEach((n, c) => {
+    for (let i = 0; i < n; i++)
+      put('stacks', 'rect', { x: 178 + c * 15, y: 964 - i * 7, width: 10, height: 4,
+        fill: i % 4 === 3 ? '#6FE6F2' : 'rgba(79,212,232,.5)' });
+  });
+  const spec = [8, 16, 11, 26, 19, 38, 26, 46, 33, 22, 40, 17, 30, 12, 21, 9, 15, 24, 10, 18];
+  spec.forEach((h, i) => put('spectrum', 'rect',
+    { x: 408 + i * 10, y: 962 - h, width: 5, height: h,
+      fill: i % 4 === 1 ? '#6FE6F2' : 'rgba(79,212,232,.5)' }));
 
-  // ---- compass ticks + gear ring + right edge dots ----
-  for (let i = 0; i < 36; i++) {
-    const a = i / 36 * 2 * Math.PI;
-    const [x1, y1] = P(1214, 369, i % 9 === 0 ? 40 : 45, a);
-    const [x2, y2] = P(1214, 369, 51, a);
-    put('compassticks', 'line', { x1, y1, x2, y2, stroke: '#3FBBEF',
-      'stroke-width': 1, opacity: i % 9 === 0 ? .9 : .4 });
-  }
-  for (let i = 0; i < 10; i++) {
-    const a0 = i / 10 * 360, a1 = a0 + 26;
-    const [x0, y0] = P(1362, 377, 34, a0 * Math.PI / 180);
-    const [x1, y1] = P(1362, 377, 34, a1 * Math.PI / 180);
-    put('gearring', 'path', { d: `M ${x0} ${y0} A 34 34 0 0 1 ${x1} ${y1}`,
-      fill: 'none', stroke: i % 2 ? '#5FCBF6' : 'rgba(63,187,239,.4)', 'stroke-width': 10 });
-  }
-  for (let r = 0; r < 5; r++)
-    put('edgeDotsR', 'rect', { x: 1494, y: 580 + r * 12, width: 6, height: 6,
-      fill: r % 2 ? 'rgba(63,187,239,.3)' : 'rgba(63,187,239,.8)' });
-
-  // ================= TURBINE GAUGE =================
-  // 8 fan blades, two gaps (like the art's broken ring)
-  for (let i = 0; i < 8; i++) {
-    if (i === 2 || i === 5) continue;
-    const a0 = i * 45 + 4, a1 = a0 + 34;
-    const r0 = 188, r1 = 132;
-    const p0 = P(1010, 885, r0, a0 * Math.PI / 180), p1 = P(1010, 885, r0, a1 * Math.PI / 180);
-    const p2 = P(1010, 885, r1, (a1 - 4) * Math.PI / 180), p3 = P(1010, 885, r1, (a0 + 4) * Math.PI / 180);
-    put('turbblades', 'path', {
-      d: `M ${p0[0]} ${p0[1]} A ${r0} ${r0} 0 0 1 ${p1[0]} ${p1[1]} L ${p2[0]} ${p2[1]} A ${r1} ${r1} 0 0 0 ${p3[0]} ${p3[1]} Z`,
-      fill: 'rgba(90,190,245,.28)', stroke: '#4FC7F2', 'stroke-width': 1 });
+  // ---- mandala generated layers ----
+  for (let i = 0; i < 72; i++) {
+    const a = i / 72 * 2 * Math.PI;
+    const [x1, y1] = P(760, 440, i % 6 === 0 ? 222 : 228, a);
+    const [x2, y2] = P(760, 440, 238, a);
+    put('oticks', 'line', { x1, y1, x2, y2, stroke: '#4FD4E8',
+      'stroke-width': i % 6 === 0 ? 2 : 1, opacity: i % 6 === 0 ? .85 : .4 });
   }
   for (let i = 0; i < 48; i++) {
     const a = i / 48 * 2 * Math.PI;
-    const [x1, y1] = P(1010, 885, 96, a);
-    const [x2, y2] = P(1010, 885, i % 4 === 0 ? 78 : 86, a);
-    put('turbticks', 'line', { x1, y1, x2, y2, stroke: '#3FBBEF',
+    const [cx, cy] = P(760, 440, 208, a);
+    put('dotring', 'circle', { cx, cy, r: 2, fill: i % 4 ? 'rgba(79,212,232,.45)' : '#6FE6F2' });
+  }
+  const jit = [0, 4, -4, 3, 5, -3, 4, -5, 2, -4, 5, -2];
+  for (let i = 0; i < 12; i++) {
+    const fam = i % 3;
+    const r0 = fam === 0 ? 200 : fam === 1 ? 188 : 176;
+    const r1 = fam === 0 ? 150 : fam === 1 ? 144 : 150;
+    const w0 = fam === 0 ? 27 : fam === 1 ? 23 : 18;
+    const w1 = fam === 0 ? 18 : fam === 1 ? 15 : 12;
+    const bright = i % 4 === 0;
+    put('blades', 'path', {
+      d: `M ${-w0} ${-r0} L ${w0} ${-r0} L ${w1} ${-r1} L ${-w1} ${-r1} Z`,
+      fill: bright ? 'rgba(140,235,252,0.30)' : 'rgba(120,220,250,0.12)',
+      stroke: bright ? '#9BF2FA' : '#5FDCEF', 'stroke-width': bright ? 1.6 : 1.1,
+      transform: `rotate(${i * 30 + jit[i]} 760 440) translate(760 440)` });
+  }
+  for (let i = 0; i < 24; i++) {
+    const a0 = i / 24 * 360 + 2, a1 = a0 + 11;
+    const [x0, y0] = P(760, 440, 140, a0 * Math.PI / 180);
+    const [x1, y1] = P(760, 440, 140, a1 * Math.PI / 180);
+    put('microseg', 'path', { d: `M ${x0} ${y0} A 140 140 0 0 1 ${x1} ${y1}`,
+      fill: 'none', stroke: i % 2 ? '#4FD4E8' : 'rgba(79,212,232,.35)', 'stroke-width': 5 });
+  }
+  for (let i = 0; i < 12; i++) {
+    const a = i / 12 * 2 * Math.PI;
+    const [x1, y1] = P(760, 440, 92, a);
+    const [x2, y2] = P(760, 440, 116, a);
+    put('spokes', 'line', { x1, y1, x2, y2, stroke: 'rgba(79,212,232,.5)', 'stroke-width': 2 });
+  }
+
+  // ---- banner data bars (two columns of dashes) ----
+  for (let r = 0; r < 12; r++) {
+    const w1 = 30 + ((r * 37) % 45), w2 = 22 + ((r * 23) % 38);
+    put('databars', 'rect', { x: 724, y: 86 + r * 9, width: w1, height: 4,
+      fill: r % 3 ? 'rgba(79,212,232,.55)' : '#6FE6F2' });
+    put('databars', 'rect', { x: 724 + 62, y: 86 + r * 9, width: w2, height: 4,
+      fill: r % 4 ? 'rgba(79,212,232,.4)' : '#6FE6F2' });
+  }
+  // ---- dotted rows under 99%/20% ----
+  for (let i = 0; i < 14; i++)
+    put('dotted99', 'circle', { cx: 948 + i * 9, cy: 232, r: 1.8,
+      fill: 'rgba(79,212,232,.6)' });
+
+  // ---- hex grid (honeycomb) ----
+  (function hexgrid() {
+    const R = 13, ox = 962, oy = 96;
+    for (let r = 0; r < 2; r++) for (let c = 0; c < 5; c++) {
+      const cx = ox + c * (R * 1.74) + (r % 2 ? R * .87 : 0), cy = oy + r * (R * 1.5);
+      let d = '';
+      for (let i = 0; i < 6; i++) {
+        const a = Math.PI / 3 * i + Math.PI / 6;
+        d += (i ? 'L' : 'M') + (cx + R * Math.cos(a)) + ' ' + (cy + R * Math.sin(a)) + ' ';
+      }
+      const filled = (r * 5 + c) % 3 === 0;
+      put('hexgrid', 'path', { d: d + 'Z', fill: filled ? 'rgba(79,212,232,.35)' : 'none',
+        stroke: '#4FD4E8', 'stroke-width': 1 });
+    }
+  })();
+  // ---- stripes + capsule segments + battery segments ----
+  for (let i = 0; i < 7; i++)
+    put('stripes', 'line', { x1: 972 + i * 15, y1: 152, x2: 958 + i * 15, y2: 186,
+      stroke: i % 2 ? '#6FE6F2' : 'rgba(79,212,232,.35)', 'stroke-width': 5 });
+  for (let i = 0; i < 14; i++)
+    put('capsegs', 'rect', { x: 1182 + i * 13, y: 78, width: 8, height: 12,
+      fill: i < 9 ? 'rgba(111,230,242,.65)' : 'rgba(79,212,232,.15)' });
+  for (let i = 0; i < 5; i++)
+    put('batsegs', 'rect', { x: 1330, y: 328 - i * 15, width: 30, height: 10,
+      fill: i < 4 ? 'rgba(111,230,242,.7)' : 'rgba(79,212,232,.2)' });
+
+  // ---- compass ticks ----
+  for (let i = 0; i < 48; i++) {
+    const a = i / 48 * 2 * Math.PI;
+    const [x1, y1] = P(1090, 442, i % 12 === 0 ? 62 : 68, a);
+    const [x2, y2] = P(1090, 442, 76, a);
+    put('compassticks', 'line', { x1, y1, x2, y2, stroke: '#4FD4E8',
+      'stroke-width': 1, opacity: i % 12 === 0 ? .9 : .4 });
+  }
+  // ---- bracket panel: gear ring + bars ----
+  for (let i = 0; i < 10; i++) {
+    const a0 = i / 10 * 360, a1 = a0 + 24;
+    const [x0, y0] = P(1268, 428, 28, a0 * Math.PI / 180);
+    const [x1, y1] = P(1268, 428, 28, a1 * Math.PI / 180);
+    put('gearring', 'path', { d: `M ${x0} ${y0} A 28 28 0 0 1 ${x1} ${y1}`,
+      fill: 'none', stroke: i % 2 ? '#6FE6F2' : 'rgba(79,212,232,.4)', 'stroke-width': 8 });
+  }
+  [18, 30, 12, 24].forEach((h, i) => put('brkbars', 'rect',
+    { x: 1236 + i * 12, y: 500 - h, width: 7, height: h, fill: 'rgba(111,230,242,.6)' }));
+
+  // ---- flower triple panel ----
+  for (let i = 0; i < 10; i++) {
+    const a0 = i / 10 * 360, a1 = a0 + 22;
+    const [x0, y0] = P(1030, 650, 24, a0 * Math.PI / 180);
+    const [x1, y1] = P(1030, 650, 24, a1 * Math.PI / 180);
+    put('ringspiral', 'path', { d: `M ${x0} ${y0} A 24 24 0 0 1 ${x1} ${y1}`,
+      fill: 'none', stroke: i % 2 ? '#4FD4E8' : 'rgba(79,212,232,.3)', 'stroke-width': 6 });
+  }
+  put('flower', 'circle', { cx: 1120, cy: 650, r: 26, fill: 'none',
+    stroke: 'rgba(79,212,232,.5)', 'stroke-width': 1 });
+  for (let i = 0; i < 7; i++) {
+    const a = i / 6 * 2 * Math.PI;
+    const cx = i === 6 ? 1120 : 1120 + 13 * Math.cos(a);
+    const cy = i === 6 ? 650 : 650 + 13 * Math.sin(a);
+    put('flower', 'circle', { cx, cy, r: 13, fill: 'none',
+      stroke: '#4FD4E8', 'stroke-width': 1 });
+  }
+  for (let i = 0; i < 16; i++) {
+    const a = i / 16 * 2 * Math.PI;
+    const [cx, cy] = P(1210, 650, 20, a);
+    put('dotburst', 'circle', { cx, cy, r: 2.2, fill: i % 2 ? 'rgba(79,212,232,.5)' : '#6FE6F2' });
+  }
+  put('dotburst', 'circle', { cx: 1210, cy: 650, r: 8, fill: 'none',
+    stroke: '#4FD4E8', 'stroke-width': 1.5 });
+
+  // ---- long chevrons ----
+  for (let i = 0; i < 10; i++) {
+    const el = put('chevrons', 'path', { d: `M ${986 + i * 26} 706 l 15 13 l -15 13`,
+      fill: 'none', stroke: '#9BF2FA', 'stroke-width': 4, class: 'chev' });
+    el.style.animationDelay = (i * 0.14) + 's';
+  }
+  // ---- plane panel bars ----
+  [12, 22, 16].forEach((h, i) => put('planebars', 'rect',
+    { x: 1398 + i * 11, y: 700 - h, width: 6, height: h, fill: 'rgba(111,230,242,.6)' }));
+
+  // ---- turbine ----
+  for (let i = 0; i < 8; i++) {
+    if (i === 2 || i === 6) continue;
+    const a0 = i * 45 + 4, a1 = a0 + 34;
+    const r0 = 168, r1 = 118;
+    const p0 = P(655, 880, r0, a0 * Math.PI / 180), p1 = P(655, 880, r0, a1 * Math.PI / 180);
+    const p2 = P(655, 880, r1, (a1 - 4) * Math.PI / 180), p3 = P(655, 880, r1, (a0 + 4) * Math.PI / 180);
+    put('turbblades', 'path', {
+      d: `M ${p0[0]} ${p0[1]} A ${r0} ${r0} 0 0 1 ${p1[0]} ${p1[1]} L ${p2[0]} ${p2[1]} A ${r1} ${r1} 0 0 0 ${p3[0]} ${p3[1]} Z`,
+      fill: 'rgba(90,205,240,.28)', stroke: '#5FDCEF', 'stroke-width': 1 });
+  }
+  for (let i = 0; i < 48; i++) {
+    const a = i / 48 * 2 * Math.PI;
+    const [x1, y1] = P(655, 880, 86, a);
+    const [x2, y2] = P(655, 880, i % 4 === 0 ? 70 : 78, a);
+    put('turbticks', 'line', { x1, y1, x2, y2, stroke: '#4FD4E8',
       'stroke-width': 1, opacity: i % 4 === 0 ? .8 : .4 });
   }
-  // ---- ring row on the floor ----
-  const ringDefs = [[622, 938, 13, .8], [668, 934, 17, .55], [720, 930, 15, .7],
-                    [772, 928, 19, .45], [826, 930, 14, .85]];
-  ringDefs.forEach(([cx, cy, r, f]) => {
+  // ---- ring row ----
+  [[330, 800, 12, .8], [376, 796, 16, .5], [428, 792, 14, .7], [480, 790, 18, .4], [534, 792, 13, .85]]
+  .forEach(([cx, cy, r, f]) => {
     const C = 2 * Math.PI * r;
     put('ringrow', 'circle', { cx, cy, r, fill: 'none',
-      stroke: 'rgba(63,187,239,.3)', 'stroke-width': 5 });
-    put('ringrow', 'circle', { cx, cy, r, fill: 'none', stroke: '#4FC7F2',
+      stroke: 'rgba(79,212,232,.3)', 'stroke-width': 5 });
+    put('ringrow', 'circle', { cx, cy, r, fill: 'none', stroke: '#5FDCEF',
       'stroke-width': 5, 'stroke-dasharray': `${C * f} ${C}`,
-      transform: `rotate(${cx % 360} ${cx} ${cy})` });
-    put('ringrow', 'circle', { cx, cy, r: 3, fill: '#CFF2FF' });
+      transform: `rotate(${(cx * 3) % 360} ${cx} ${cy})` });
+    put('ringrow', 'circle', { cx, cy, r: 3, fill: '#D9F8FF' });
   });
-  // ---- spectrum bars on the floor ----
-  const spec = [8, 18, 12, 30, 22, 44, 30, 52, 38, 26, 46, 20, 34, 14, 24, 10];
-  spec.forEach((h, i) => put('spectrum', 'rect',
-    { x: 1216 + i * 9, y: 856 - h, width: 5, height: h,
-      fill: i % 4 === 1 ? '#5FCBF6' : 'rgba(63,187,239,.55)' }));
-
-  // ---- BR loader segments ----
-  for (let i = 0; i < 12; i++) {
-    const a0 = i / 12 * 360 + 3, a1 = a0 + 24;
-    const [x0, y0] = P(1143, 862, 52, a0 * Math.PI / 180);
-    const [x1, y1] = P(1143, 862, 52, a1 * Math.PI / 180);
-    put('loaderseg', 'path', { d: `M ${x0} ${y0} A 52 52 0 0 1 ${x1} ${y1}`,
-      fill: 'none', stroke: i % 3 === 2 ? 'rgba(63,187,239,.3)' : '#3FBBEF', 'stroke-width': 8 });
+  // ---- dish ring segments ----
+  for (let i = 0; i < 14; i++) {
+    const a0 = i / 14 * 360 + 2, a1 = a0 + 20;
+    const [x0, y0] = P(1092, 862, 68, a0 * Math.PI / 180);
+    const [x1, y1] = P(1092, 862, 68, a1 * Math.PI / 180);
+    put('dishring', 'path', { d: `M ${x0} ${y0} A 68 68 0 0 1 ${x1} ${y1}`,
+      fill: 'none', stroke: i % 3 === 2 ? 'rgba(79,212,232,.3)' : '#4FD4E8', 'stroke-width': 7 });
   }
-  // ---- ruler ----
-  for (let i = 0; i < 16; i++)
-    put('ruler', 'line', { x1: 1252 + i * 14, y1: 878, x2: 1252 + i * 14,
-      y2: i % 4 === 0 ? 890 : 886, stroke: 'rgba(63,187,239,.55)', 'stroke-width': 1 });
-  // ---- pagination dots ----
-  for (let i = 0; i < 7; i++)
-    put('pagedots', 'circle', { cx: 716 + i * 18, cy: 985, r: i === 2 ? 5 : 3.5,
-      fill: i === 2 ? '#CFF2FF' : 'rgba(63,187,239,.45)' });
-  // ---- below-banner dot row ----
-  for (let i = 0; i < 12; i++)
-    put('bannerDots', 'circle', { cx: 450 + i * 16, cy: 214, r: 3,
-      fill: i % 4 ? 'rgba(63,187,239,.35)' : '#5FCBF6' });
-  // ---- upper-left edge dot column ----
-  for (let r = 0; r < 9; r++) for (let c = 0; c < 2; c++)
-    put('edgeDotsL', 'rect', { x: 20 + c * 11, y: 268 + r * 13, width: 5, height: 5,
-      fill: (r + c) % 3 ? 'rgba(63,187,239,.3)' : 'rgba(63,187,239,.8)' });
 </script>
 </body>
 </html>
