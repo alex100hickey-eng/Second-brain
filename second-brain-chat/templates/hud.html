@@ -11,7 +11,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="CLARVIS">
-<link rel="stylesheet" href="/static/hud/hud.css?v=7">
+<link rel="stylesheet" href="/static/hud/hud.css?v=8">
 <style>
   html, body { height: 100%; margin: 0; overflow: hidden; }
   /* fixed-proportion HUD stage, scaled to fit the viewport */
@@ -30,7 +30,7 @@
 
 <script src="/static/vendor/gsap.min.js"></script>
 <script src="/static/vendor/d3.min.js"></script>
-<script src="/static/hud/hud.js?v=7"></script>
+<script src="/static/hud/hud.js?v=8"></script>
 <script>
   const deck = document.getElementById('deck');
   function fit() {
@@ -76,15 +76,38 @@
   atC(HUD.coreReactor({ size: 560 }), 760, 440, 'core-reactor');
   label('SCN.04', 588, 236); label('LNK.77', 908, 636); label('MDL.19', 418, 498);
 
-  /* ===== TOP-LEFT: audio equalizer + 30/50/70 gauges + label + matrix ===== */
-  at(HUD.equalizer({ bars: 18, height: 60, role: 'audio' }), 42, 20);
-  atC(HUD.radialGauge({ size: 92, value: 30, role: 'g1' }), 96, 152);
-  atC(HUD.radialGauge({ size: 92, value: 50, role: 'g2' }), 216, 150);
-  atC(HUD.radialGauge({ size: 92, value: 70, role: 'g3' }), 334, 148);
-  label('HUD INTERFACE TECHNOLOGY', 150, 198);
-  at(HUD.dotMatrix({ rows: 6, cols: 24, cell: 11 }), 70, 224);
-  at(HUD.statReadout({ label: 'SIGNAL', value: '5.232145', size: 18, role: 'signal' }), 116, 296);
-  at(HUD.dataBar({ width: 150, segments: 9, value: 66, role: 'prog' }), 116, 340);
+  /* ===== TOP-LEFT: EQ + baseline, dashed square, candlesticks, 30/50/70 donuts, matrix, signal ===== */
+  at(HUD.equalizer({ bars: 23, barWidth: 5, gap: 3, height: 64, mixed: true,
+    baseline: { left: 26 }, role: 'audio' }), 42, 22);
+  // connector fan: EQ baseline → dashed square (upper) / under the square into the candles (lower)
+  at(HUD.circuitTrace({ width: 280, height: 56, start: 'none',
+    paths: ['M 0 33 H 66 l 26 -26 H 116', 'M 0 33 H 96 l 8 8 H 196 l 26 -26 H 268'] }), 232, 54);
+  at(HUD.dashedSquare({ size: 64 }), 352, 26);
+  at(HUD.candlesticks({ width: 100, height: 68, role: 'candles' }), 446, 30);
+  atC(HUD.donutGauge({ size: 76, value: 30, role: 'g1' }), 96, 146);
+  atC(HUD.donutGauge({ size: 76, value: 50, role: 'g2' }), 211, 144);
+  atC(HUD.donutGauge({ size: 76, value: 70, role: 'g3' }), 326, 143);
+  // gauge-to-gauge links with bright node dots at the midpoints
+  at(HUD.circuitTrace({ width: 42, height: 8, node: false,
+    paths: ['M 1 4 H 41'] }), 133, 141);
+  atC(HUD.nodeDot({ r: 4 }), 154, 145);
+  at(HUD.circuitTrace({ width: 42, height: 8, node: false,
+    paths: ['M 1 4 H 41'] }), 248, 140);
+  atC(HUD.nodeDot({ r: 4 }), 269, 144);
+  label('HUD INTERFACE TECHNOLOGY', 132, 196);
+  at(HUD.dotMatrix({ rows: 6, cols: 28, cell: 12, gapCols: [7, 15] }), 60, 224);
+  (function signalRow() {
+    // ref renders 5.232145 as a micro decimal readout (dim mono), not a key number
+    const sig = document.createElement('div');
+    sig.className = 'lbl'; sig.style.position = 'static'; sig.style.fontSize = '11px';
+    sig.textContent = '5.232145'; sig.dataset.role = 'signal';
+    at(row([
+      sig,
+      HUD.circuitTrace({ width: 26, height: 10, start: 'circle', end: 'none',
+        paths: ['M 5 5 H 24'] }),
+      HUD.dataBar({ width: 156, segments: 12, value: 66, flat: true, role: 'prog' })
+    ], 4), 92, 292);
+  })();
 
   /* ===== LEFT-MID: 100% ring + readout + VITALS panel ===== */
   atC(HUD.radialGauge({ size: 128, value: 100, role: 'ring100' }), 346, 434);

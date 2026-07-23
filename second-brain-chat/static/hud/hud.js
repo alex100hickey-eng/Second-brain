@@ -276,8 +276,9 @@
     el('rect', { x: 0.5, y: 8.5, width: W - 1, height: H - 12, class: 'hud-stroke-dim', 'stroke-width': 1, fill: 'none' }, s);
     for (let i = 0; i < segs; i++) {
       const filled = i < on;
+      // flat: uniform cyan fill, no accent tip cell (ref: 5.232145 slot bar)
       el('rect', { x: pad + i * (sw + gap), y: 12, width: sw, height: H - 19,
-        fill: filled ? (i === on - 1 ? 'var(--hud-accent)' : 'var(--hud-cyan-70)') : 'var(--hud-cyan-12)',
+        fill: filled ? (!opts.flat && i === on - 1 ? 'var(--hud-accent)' : 'var(--hud-cyan-70)') : 'var(--hud-cyan-12)',
         class: filled ? 'hud-glow' : '' }, s);
     }
     if (opts.label) {
@@ -328,17 +329,24 @@
       `M 8 ${H - 24} h ${W * 0.3} l 24 -24 V 46 l 20 -20 h ${W * 0.35}`,
       `M ${W * 0.5} ${H - 8} V ${H * 0.55} l -18 -18 H 40`
     ];
-    const g = el('g', { class: 'hud-stroke', 'stroke-width': 1.5, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }, s);
+    const g = el('g', { class: 'hud-stroke', 'stroke-width': opts.strokeWidth || 1.5,
+      'stroke-linejoin': 'round', 'stroke-linecap': 'round' }, s);
+    // terminators: start defaults to a small accent square, end to an open dot;
+    // either can be 'none' (plain line ends, e.g. gauge-to-gauge links)
+    const startStyle = opts.start || 'square', endStyle = opts.end || 'dot';
     paths.forEach(d => {
       const p = el('path', { d }, g);
       if (opts.node !== false) {
-        // terminate the last point in a small dot/square
         const len = p.getTotalLength ? p.getTotalLength() : 0;
         if (len) {
           const pt = p.getPointAtLength(len);
           const start = p.getPointAtLength(0);
-          el('circle', { cx: pt.x, cy: pt.y, r: 3.2, fill: '#06203f', stroke: 'var(--hud-cyan)', 'stroke-width': 1.2 }, g);
-          el('rect', { x: start.x - 2.4, y: start.y - 2.4, width: 4.8, height: 4.8, fill: 'var(--hud-accent)' }, g);
+          if (endStyle === 'dot')
+            el('circle', { cx: pt.x, cy: pt.y, r: 3.2, fill: '#06203f', stroke: 'var(--hud-cyan)', 'stroke-width': 1.2 }, g);
+          if (startStyle === 'square')
+            el('rect', { x: start.x - 2.4, y: start.y - 2.4, width: 4.8, height: 4.8, fill: 'var(--hud-accent)' }, g);
+          else if (startStyle === 'circle')
+            el('circle', { cx: start.x, cy: start.y, r: 3.2, fill: 'none', stroke: 'var(--hud-cyan)', 'stroke-width': 1.2 }, g);
         }
       }
     });
@@ -500,20 +508,118 @@
   HUD.equalizer = function (opts) {
     opts = opts || {};
     const bars = opts.bars || 20, bw = opts.barWidth || 5, gap = opts.gap || 5, H = opts.height || 48;
-    const W = bars * (bw + gap);
-    const s = svg(W, H);
+    // baseline: {left: px} extends a base rule left of bar 0 to a circle node (ref: top-left EQ)
+    const ext = opts.baseline ? (opts.baseline.left == null ? 24 : opts.baseline.left) : 0;
+    const W = ext + bars * (bw + gap);
+    const s = svg(W, H + (opts.baseline ? 4 : 0));
     s.dataset.role = opts.role || 'equalizer';
     const seed = [8, 16, 11, 26, 19, 38, 26, 46, 33, 22, 40, 17, 30, 12, 21, 9, 15, 24, 10, 18, 28, 14, 34, 20];
+    // mixed: dim steel-blue bars interleaved with bright, per the reference skyline
+    const tone = (i) => opts.mixed
+      ? (i % 5 === 2 ? 'var(--hud-blue)' : i % 4 === 1 ? 'var(--hud-accent)' : 'var(--hud-cyan-70)')
+      : (i % 4 === 1 ? 'var(--hud-accent)' : 'var(--hud-cyan-70)');
     for (let i = 0; i < bars; i++) {
       const h0 = 6 + (seed[i % seed.length] / 46) * (H - 6);
-      const r = el('rect', { x: i * (bw + gap), y: H - h0, width: bw, height: h0,
-        fill: i % 4 === 1 ? 'var(--hud-accent)' : 'var(--hud-cyan-70)', class: 'hud-glow' }, s);
+      const r = el('rect', { x: ext + i * (bw + gap), y: H - h0, width: bw, height: h0,
+        fill: tone(i), class: opts.mixed && i % 5 === 2 ? '' : 'hud-glow' }, s);
       if (gsap) {
         const h1 = 6 + Math.max(5, (H - 10) * (((i * 13) % 9) / 9));
         gsap.to(r, { attr: { height: h1, y: H - h1 }, duration: 0.5 + (i % 5) * 0.12,
           ease: 'sine.inOut', repeat: -1, yoyo: true, delay: (i % 7) * 0.08 });
       }
     }
+    if (opts.baseline) {
+      el('line', { x1: 8, y1: H + 1, x2: W - 2, y2: H + 1,
+        class: 'hud-stroke', 'stroke-width': 1 }, s);
+      el('circle', { cx: 4.5, cy: H + 1, r: 3.2, fill: 'none',
+        class: 'hud-stroke', 'stroke-width': 1.2 }, s);
+    }
+    return s;
+  };
+
+  /* ============================================================
+     DonutGauge — thick solid annulus with a bright value arc and
+     a large centered readout. The reference's 30/50/70 gauges:
+     dark track, cyan fill from 12 o'clock, no tick ring.
+     opts: {size=76, value, thickness, role}
+     ============================================================ */
+  HUD.donutGauge = function (opts) {
+    opts = opts || {};
+    const S = opts.size || 76, c = S / 2, val = opts.value == null ? 50 : opts.value;
+    const th = opts.thickness || S * 0.19, rO = S * 0.48;
+    const s = svg(S, S);
+    if (opts.role) s.dataset.role = opts.role;
+    const arc = d3.arc().innerRadius(rO - th).outerRadius(rO);
+    // dark track ring
+    el('path', { d: arc({ startAngle: 0, endAngle: 2 * Math.PI }), transform: `translate(${c} ${c})`,
+      fill: 'rgba(79, 212, 232, 0.14)', stroke: 'var(--hud-cyan-25)', 'stroke-width': 1 }, s);
+    // value arc from 12 o'clock, clockwise
+    el('path', { d: arc({ startAngle: 0, endAngle: 2 * Math.PI * (val / 100) }),
+      transform: `translate(${c} ${c})`, fill: 'var(--hud-cyan)', class: 'hud-glow' }, s);
+    const num = el('text', { x: c, y: c + S * 0.075, 'text-anchor': 'middle',
+      'font-size': S * 0.21, class: 'hud-txt' }, s);
+    txt(num, Math.round(val) + '%');
+    return s;
+  };
+
+  /* ============================================================
+     Candlesticks — small market-style chart ornament (ref: top-left,
+     right of the dashed square). Wicks + bodies, mixed bright/dim.
+     opts: {count=5, width=96, height=66, role}
+     ============================================================ */
+  HUD.candlesticks = function (opts) {
+    opts = opts || {};
+    const n = opts.count || 5, W = opts.width || 96, H = opts.height || 66;
+    const s = svg(W, H);
+    if (opts.role) s.dataset.role = opts.role;
+    const step = W / n;
+    // [wickTop, bodyTop, bodyH, wickBot, bright] as fractions of H
+    const spec = [[0.10, 0.30, 0.34, 0.86, false], [0.02, 0.16, 0.44, 0.92, true],
+                  [0.14, 0.34, 0.30, 0.78, false], [0.06, 0.22, 0.48, 0.96, true],
+                  [0.18, 0.38, 0.28, 0.82, false]];
+    for (let i = 0; i < n; i++) {
+      const [wt, bt, bh, wb, bright] = spec[i % spec.length];
+      const cx = step * (i + 0.5), bw = step * 0.52;
+      el('line', { x1: cx, y1: H * wt, x2: cx, y2: H * wb,
+        class: 'hud-stroke', 'stroke-width': 1 }, s);
+      el('rect', { x: cx - bw / 2, y: H * bt, width: bw, height: H * bh,
+        fill: bright ? 'var(--hud-cyan)' : 'var(--hud-blue)',
+        class: bright ? 'hud-glow' : '' }, s);
+    }
+    return s;
+  };
+
+  /* ============================================================
+     DashedSquare — "target box" ornament: four corner brackets
+     around an inner dashed square (ref: top-left, above gauges).
+     opts: {size=64, bracket=14, role}
+     ============================================================ */
+  HUD.dashedSquare = function (opts) {
+    opts = opts || {};
+    const S = opts.size || 64, bl = opts.bracket || S * 0.22, inset = S * 0.14;
+    const s = svg(S, S);
+    if (opts.role) s.dataset.role = opts.role;
+    el('rect', { x: inset, y: inset, width: S - inset * 2, height: S - inset * 2,
+      class: 'hud-stroke', 'stroke-width': 1.2, 'stroke-dasharray': '5 4' }, s);
+    const g = el('g', { class: 'hud-stroke-bright', 'stroke-width': 1.5,
+      'stroke-linecap': 'round' }, s);
+    const o = 1;
+    [`M ${o} ${bl} V ${o} H ${bl}`, `M ${S - bl} ${o} H ${S - o} V ${bl}`,
+     `M ${S - o} ${S - bl} V ${S - o} H ${S - bl}`, `M ${bl} ${S - o} H ${o} V ${S - bl}`]
+      .forEach(d => el('path', { d }, g));
+    return s;
+  };
+
+  /* ============================================================
+     NodeDot — small bright filled circle used as a link node
+     between elements (ref: dots between the 30/50/70 gauges).
+     opts: {r=4}
+     ============================================================ */
+  HUD.nodeDot = function (opts) {
+    opts = opts || {};
+    const r = opts.r || 4, S = r * 2 + 4;
+    const s = svg(S, S);
+    el('circle', { cx: S / 2, cy: S / 2, r, fill: 'var(--hud-cyan)', class: 'hud-glow' }, s);
     return s;
   };
 
@@ -576,12 +682,17 @@
   };
 
   // dotted matrix of small squares (varying opacity → "data noise")
+  // gapCols: column indices left fully blank, splitting the matrix into
+  // clustered blocks like the reference's top-left data field.
   HUD.dotMatrix = function (opts) {
     opts = opts || {};
     const rows = opts.rows || 6, cols = opts.cols || 24, cell = opts.cell || 11, sz = opts.size || 6;
+    const gaps = opts.gapCols || [];
     const s = svg(cols * cell, rows * cell);
     for (let r = 0; r < rows; r++) for (let cc = 0; cc < cols; cc++) {
-      const v = (r * 31 + cc * 7) % 9;
+      if (gaps.indexOf(cc) !== -1) continue;
+      const v = (r * 31 + cc * 7) % 11;
+      if (v > 8) continue;              // empty cells — the ref matrix breathes
       el('rect', { x: cc * cell, y: r * cell, width: sz, height: sz,
         fill: v < 3 ? 'var(--hud-accent)' : v < 6 ? 'var(--hud-cyan-45)' : 'var(--hud-cyan-12)' }, s);
     }
