@@ -13,31 +13,36 @@
 <meta name="apple-mobile-web-app-title" content="CLARVIS">
 <style>
 /* ============================================================
-   CLARVIS HUD — pixel-faithful recreation of the reference art.
+   CLARVIS HUD — pixel-faithful recreation of the reference art, v3.
+   Built from the hi-res crops: 3D cone, hexagon panels, tech-frame
+   vitals, binary blocks, capsule bars, turbine floor gauge — and the
+   PERSPECTIVE FLOOR that gives the scene its depth.
    Visuals only (stage 1); functionality returns in stage 2.
-   Scene coordinates: 1600 x 1000 (image scaled ~2.56x, 2.60x).
    ============================================================ */
 html, body { height: 100%; margin: 0; background: #03102C; overflow: hidden; }
 #scene { width: 100vw; height: 100vh; height: 100dvh; display: block; }
 
-.spin-slow   { transform-origin: 823px 462px; animation: rot 150s linear infinite; }
-.spin-blades { transform-origin: 823px 462px; animation: rot 100s linear infinite reverse; }
-.spin-mid    { transform-origin: 823px 462px; animation: rot 64s linear infinite; }
-.spin-inner  { transform-origin: 823px 462px; animation: rot 40s linear infinite reverse; }
+.spin-slow   { transform-origin: 823px 428px; animation: rot 150s linear infinite; }
+.spin-blades { transform-origin: 823px 428px; animation: rot 100s linear infinite reverse; }
+.spin-mid    { transform-origin: 823px 428px; animation: rot 64s linear infinite; }
+.spin-inner  { transform-origin: 823px 428px; animation: rot 40s linear infinite reverse; }
+.turb-spin   { transform-origin: 1010px 885px; animation: rot 70s linear infinite; }
 @keyframes rot { to { transform: rotate(360deg); } }
-.core-pulse { transform-origin: 823px 462px; animation: pulse 3.4s ease-in-out infinite; }
+.core-pulse { transform-origin: 823px 428px; animation: pulse 3.4s ease-in-out infinite; }
 @keyframes pulse { 50% { transform: scale(1.05); opacity: .94; } }
 .sweep1 { transform-origin: 754px 109px; animation: rot 5s linear infinite; }
 .sweep2 { transform-origin: 695px 190px; animation: rot 8s linear infinite reverse; }
-.ecg-sweep { stroke-dasharray: 70 620; animation: ecg 3.4s linear infinite; }
-@keyframes ecg { from { stroke-dashoffset: 690; } to { stroke-dashoffset: 0; } }
+.ecg-sweep { stroke-dasharray: 70 560; animation: ecg 3.4s linear infinite; }
+@keyframes ecg { from { stroke-dashoffset: 630; } to { stroke-dashoffset: 0; } }
 .chev { animation: chevflow 1.6s linear infinite; }
 .chev:nth-child(2) { animation-delay: .18s; } .chev:nth-child(3) { animation-delay: .36s; }
 .chev:nth-child(4) { animation-delay: .54s; } .chev:nth-child(5) { animation-delay: .72s; }
 @keyframes chevflow { 0%, 100% { opacity: .3; } 30% { opacity: 1; } }
 .blink-soft { animation: bl 3s ease-in-out infinite; }
 @keyframes bl { 50% { opacity: .4; } }
-.loader-spin { transform-origin: 1143px 878px; animation: rot 6s linear infinite; }
+.loader-spin { transform-origin: 1143px 862px; animation: rot 6s linear infinite; }
+.ringbr-a { transform-origin: 330px 500px; animation: rot 26s linear infinite; }
+.ringbr-b { transform-origin: 330px 500px; animation: rot 20s linear infinite reverse; }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
 </style>
 </head>
@@ -45,7 +50,7 @@ html, body { height: 100%; margin: 0; background: #03102C; overflow: hidden; }
 <svg id="scene" viewBox="0 0 1600 1000" preserveAspectRatio="xMidYMid meet"
      xmlns="http://www.w3.org/2000/svg" font-family="ui-monospace, Menlo, monospace">
 <defs>
-  <radialGradient id="bgGlow" cx="50%" cy="45%" r="75%">
+  <radialGradient id="bgGlow" cx="50%" cy="42%" r="75%">
     <stop offset="0%" stop-color="#0D3F86"/>
     <stop offset="42%" stop-color="#082657"/>
     <stop offset="100%" stop-color="#020C22"/>
@@ -56,139 +61,192 @@ html, body { height: 100%; margin: 0; background: #03102C; overflow: hidden; }
     <stop offset="58%" stop-color="#39C8F5" stop-opacity=".5"/>
     <stop offset="100%" stop-color="#39C8F5" stop-opacity="0"/>
   </radialGradient>
+  <linearGradient id="horizonGlow" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0%" stop-color="#2E8FE0" stop-opacity="0"/>
+    <stop offset="50%" stop-color="#2E8FE0" stop-opacity=".22"/>
+    <stop offset="100%" stop-color="#2E8FE0" stop-opacity="0"/>
+  </linearGradient>
+  <linearGradient id="coneFace" x1="0" y1="0" x2="1" y2="0">
+    <stop offset="0%" stop-color="#123E7C"/>
+    <stop offset="45%" stop-color="#3FA8E8"/>
+    <stop offset="55%" stop-color="#BFF0FF"/>
+    <stop offset="100%" stop-color="#1B5AA8"/>
+  </linearGradient>
   <style>
     .ln   { stroke: #3FBBEF; fill: none; }
     .lnB  { stroke: #7FDCFB; fill: none; }
     .ln2  { stroke: rgba(63,187,239,.45); fill: none; }
-    .fillT{ fill: rgba(63,187,239,.14); }
+    .fillT{ fill: rgba(63,187,239,.12); }
     .fillS{ fill: rgba(120,210,250,.55); }
     .txt  { fill: #CFF2FF; }
     .txtd { fill: rgba(150,215,245,.7); }
     .node { fill: #072353; stroke: #3FBBEF; }
+    .floor{ stroke: #2E7FD9; }
   </style>
 </defs>
 
-<!-- ================= BACKGROUND ================= -->
+<!-- ================= BACKGROUND + FLOOR (the depth layer) ================= -->
 <rect width="1600" height="1000" fill="url(#bgGlow)"/>
+<g id="floor"></g>
+<rect x="0" y="722" width="1600" height="40" fill="url(#horizonGlow)"/>
 
 <!-- ================= PERIMETER FRAMES (double-line, stepped) ================= -->
 <g class="ln" stroke-width="2">
-  <!-- top-left corner steps -->
   <path d="M 16 210 V 30 Q 16 16 30 16 H 350 l 26 26 H 480"/>
   <path d="M 34 210 V 44 H 340 l 26 26 H 470" stroke-opacity=".45" stroke-width="1"/>
-  <!-- top-right staircase down-right -->
   <path d="M 1120 16 H 1300 l 20 20 h 90 l 18 18 h 90 l 16 16 H 1584 V 210"/>
   <path d="M 1140 34 H 1292 l 20 20 h 90 l 18 18 h 84 l 14 14 h 108" stroke-opacity=".45" stroke-width="1"/>
-  <!-- bottom-left -->
   <path d="M 16 790 V 970 Q 16 984 30 984 H 330 l 24 -22 H 560"/>
   <path d="M 34 800 V 966 H 336 l 24 -22 H 520" stroke-opacity=".45" stroke-width="1"/>
-  <!-- bottom-right -->
   <path d="M 1584 790 V 970 Q 1584 984 1570 984 H 1260 l -24 -22 H 1060"/>
   <path d="M 1566 800 V 966 H 1266 l -24 -22 H 1100" stroke-opacity=".45" stroke-width="1"/>
 </g>
-<!-- right-edge tall angular rail -->
 <g class="ln" stroke-width="1.5">
   <path d="M 1584 240 V 400 l -22 24 v 90 l 22 24 V 760"/>
   <path d="M 1560 260 V 396 l -20 22 v 84 l 20 22 V 740" stroke-opacity=".4" stroke-width="1"/>
 </g>
-<!-- left-edge accents: dot column + film strip -->
-<g id="edgeDotsL"></g>
-<g id="filmstrip"></g>
-<!-- small bracket squares near TL frame -->
 <rect x="378" y="40" width="16" height="16" class="ln" stroke-width="1.5" fill="none"/>
 <rect x="410" y="72" width="11" height="11" class="ln2" stroke-width="1.5" fill="none"/>
+<!-- big quarter disc anchoring the bottom-right corner (per the wide crop) -->
+<path d="M 1600 1000 L 1600 906 A 94 94 0 0 0 1506 1000 Z" fill="rgba(63,187,239,.4)"
+      stroke="#3FBBEF" stroke-width="1.5"/>
 
 <!-- ================= TOP-LEFT: DONUTS + CAPTION + DOT MATRIX ================= -->
 <g id="donuts"></g>
 <text x="36" y="236" font-size="13" letter-spacing="2" class="txt">HUD INTERFACE TECHNOLOGY</text>
 <g id="dotmatrixTL"></g>
 
-<!-- ================= LEFT: SAIL PANEL ================= -->
+<!-- ================= LEFT: 3D CONE on elliptical base ================= -->
 <g>
-  <path class="ln" stroke-width="1.5" d="M 30 420 h 26 M 30 420 v 186 M 30 606 h 26
-        M 268 420 h -26 M 268 606 h -26 M 268 420 v 186"/>
-  <g id="sail"></g>
-  <text x="282" y="446" font-size="12" class="txtd">3,2932.31</text>
-  <text x="282" y="466" font-size="10" class="txtd">0.291.320</text>
-  <text x="20" y="560" font-size="9" class="txtd" transform="rotate(-90 20 560)">8.293121</text>
+  <ellipse cx="150" cy="592" rx="118" ry="26" class="ln2" stroke-width="1.5"
+           fill="rgba(63,187,239,.10)"/>
+  <path d="M 150 430 L 92 588 A 90 18 0 0 0 208 588 Z" fill="url(#coneFace)" opacity=".9"/>
+  <path d="M 150 430 L 130 592 L 168 592 Z" fill="rgba(230,250,255,.65)"/>
+  <path class="ln2" stroke-width="1" d="M 150 430 L 92 588 M 150 430 L 208 588 M 150 430 V 592"/>
+  <ellipse cx="150" cy="592" rx="58" ry="12" class="ln2" stroke-width="1" fill="none"/>
+  <text x="26" y="470" font-size="12" class="txtd">8.235687</text>
+  <path class="ln2" stroke-width="1" d="M 96 466 h 40"/>
 </g>
 
-<!-- ================= LEFT: VITALS (ECG) ================= -->
+<!-- ================= LEFT: 100% SEGMENTED RING BRACKET ================= -->
 <g>
-  <path class="ln" stroke-width="1.5" fill="none"
-        d="M 40 624 H 356 l 12 12 V 742 l -12 12 H 40 l -12 -12 V 636 Z"/>
-  <text x="52" y="648" font-size="10" letter-spacing="2" class="txtd">VITALS // LIVE</text>
-  <path class="ln2" stroke-width="1" d="M 44 730 H 352" stroke-dasharray="2 5"/>
+  <g class="ringbr-a">
+    <path class="ln" stroke-width="3" d="M 330 434 A 66 66 0 0 1 388 468" stroke-dasharray="8 7"/>
+    <path class="ln" stroke-width="3" d="M 330 566 A 66 66 0 0 1 272 532" stroke-dasharray="8 7"/>
+  </g>
+  <g class="ringbr-b">
+    <path class="lnB" stroke-width="6" d="M 276 466 A 62 62 0 0 1 306 440"/>
+    <path class="lnB" stroke-width="6" d="M 384 534 A 62 62 0 0 1 354 560"/>
+  </g>
+  <rect x="288" y="478" width="84" height="44" class="ln fillT" stroke-width="1.5"/>
+  <text x="298" y="509" font-size="22" class="txt">100%</text>
+  <path class="ln2" stroke-width="1" d="M 396 500 h 56 l 30 -24 h 60"/>
+  <circle cx="546" cy="476" r="4" class="node" stroke-width="1"/>
+  <text x="404" y="446" font-size="12" class="txtd">3,2932.31</text>
+  <text x="404" y="464" font-size="10" class="txtd">0.291.320</text>
+</g>
+
+<!-- ================= LEFT: VITALS TECH-FRAME ================= -->
+<g>
+  <path class="ln" stroke-width="1.5" fill="rgba(63,187,239,.06)"
+        d="M 56 624 h 44 l 10 -9 h 196 l 16 14 v 32 l -9 9 v 50 l 9 9 v 16 l -16 14 H 116 l -13 -11 H 62 l -14 -13 V 638 Z"/>
+  <path class="ln2" stroke-width="1" d="M 66 632 h 240 M 66 748 h 240" stroke-opacity=".5"/>
+  <text x="76" y="652" font-size="10" letter-spacing="2" class="txtd">VITALS // LIVE</text>
+  <text x="76" y="676" font-size="9" class="txtd">1.276</text>
+  <text x="212" y="726" font-size="9" class="txtd">0.0015741</text>
   <path class="ln2" stroke-width="1.5"
-        d="M 44 694 h 30 l 10 -14 l 10 26 l 8 -44 l 10 52 l 8 -30 l 8 10 h 26 l 10 -12 l 10 22 l 8 -38 l 10 44 l 8 -26 l 8 10 h 40" opacity=".9"/>
+        d="M 68 700 h 26 l 9 -13 l 9 24 l 7 -40 l 9 48 l 7 -27 l 7 9 h 24 l 9 -11 l 9 20 l 7 -34 l 9 40 l 7 -23 l 7 9 h 46"/>
   <path class="ecg-sweep" stroke="#CFF2FF" stroke-width="2" fill="none"
-        d="M 44 694 h 30 l 10 -14 l 10 26 l 8 -44 l 10 52 l 8 -30 l 8 10 h 26 l 10 -12 l 10 22 l 8 -38 l 10 44 l 8 -26 l 8 10 h 40"/>
+        d="M 68 700 h 26 l 9 -13 l 9 24 l 7 -40 l 9 48 l 7 -27 l 7 9 h 24 l 9 -11 l 9 20 l 7 -34 l 9 40 l 7 -23 l 7 9 h 46"/>
+  <path d="M 316 700 l 12 -5 v 10 Z" fill="#7FDCFB"/>
+  <g class="lnB" stroke-width="2.5">
+    <path d="M 76 728 l 8 7 l -8 7 M 88 728 l 8 7 l -8 7 M 100 728 l 8 7 l -8 7"/>
+  </g>
 </g>
 
-<!-- ================= LEFT: SCHEMATIC PANEL (triangle + 75%) ================= -->
+<!-- ================= HEX PANEL A — 75% (donuts + bars + hexagon) ================= -->
+<g id="hexA"></g>
+<g id="schemticks"></g>
+
+<!-- ================= BOTTOM-LEFT SUITE ================= -->
+<!-- capsule bar columns on the left edge -->
+<g id="capsules"></g>
+<!-- bracket square with 4 corner dots -->
 <g>
-  <rect x="384" y="600" width="204" height="154" class="ln2 fillT" stroke-width="1"/>
-  <text x="530" y="628" font-size="14" class="txt">75%</text>
-  <path class="ln" stroke-width="1.5" d="M 436 726 L 486 650 L 536 726 Z"/>
-  <circle cx="486" cy="700" r="3.5" fill="#CFF2FF"/>
-  <path class="ln2" stroke-width="1" d="M 400 726 h 172 M 486 650 v -16 h 46"/>
-  <g id="schemticks"></g>
+  <path class="ln" stroke-width="2" d="M 132 772 h 20 M 132 772 v 20 M 216 772 h -20 M 216 772 v 20
+        M 132 856 h 20 M 132 856 v -20 M 216 856 h -20 M 216 856 v -20"/>
+  <circle cx="148" cy="788" r="4" fill="#3FBBEF"/>
+  <circle cx="200" cy="788" r="4" fill="#3FBBEF"/>
+  <circle cx="148" cy="840" r="4" fill="#3FBBEF"/>
+  <circle cx="200" cy="840" r="4" fill="#3FBBEF"/>
+</g>
+<!-- dash matrix, segmented bar, dot row, slash row -->
+<g id="dashmatrix"></g>
+<g id="widebar"></g>
+<g id="dotrow"></g>
+<g id="slashrow"></g>
+<!-- square maze + film strip -->
+<path class="ln" stroke-width="2" fill="none"
+      d="M 40 866 h 104 v 100 h -82 v -80 h 60 v 60 h -38 v -38 h 17"/>
+<g id="filmstrip"></g>
+<!-- HEX PANEL B — 100% -->
+<g id="hexB"></g>
+<!-- stacked dash columns -->
+<g id="stacks"></g>
+<!-- binary circuit block -->
+<g>
+  <rect x="600" y="796" width="250" height="78" class="ln2 fillT" stroke-width="1"/>
+  <g class="txtd" font-size="9">
+    <text x="610" y="812">0.0100111011001110</text>
+    <text x="610" y="826">0.0110100100011101</text>
+    <text x="610" y="840">0.0101110010010110</text>
+    <text x="610" y="854">0.0010011101100101</text>
+  </g>
+  <g class="ln" stroke-width="1.5">
+    <path d="M 762 810 h 44 M 762 810 v 22 h 30 M 792 832 v 18 h 24 M 762 850 h 12"/>
+    <circle cx="810" cy="810" r="3" fill="#3FBBEF" stroke="none"/>
+    <circle cx="816" cy="850" r="3" fill="#3FBBEF" stroke="none"/>
+  </g>
+  <text x="600" y="892" font-size="10" class="txtd">0.01010011101100111000010010100101011</text>
 </g>
 
-<!-- ================= BOTTOM-LEFT CLUSTER ================= -->
+<!-- ================= CENTER RETICLE (823, 428) ================= -->
 <g>
-  <path class="ln" stroke-width="2" fill="none"
-        d="M 40 830 h 110 v 104 h -86 v -84 h 62 v 62 h -40 v -40 h 18"/>
-  <g id="dashmatrix"></g>
-  <g id="widebar"></g>
-  <g id="minibars"></g>
-</g>
-
-<!-- ================= CENTER RETICLE (823, 462) ================= -->
-<g>
-  <circle cx="823" cy="462" r="300" fill="url(#coreGlow)" opacity=".13"/>
+  <circle cx="823" cy="428" r="290" fill="url(#coreGlow)" opacity=".13"/>
   <g class="spin-slow">
-    <circle cx="823" cy="462" r="262" class="ln2" stroke-width="1"/>
+    <circle cx="823" cy="428" r="252" class="ln2" stroke-width="1"/>
     <g id="oticks"></g>
-    <circle cx="823" cy="462" r="240" class="ln2" stroke-width="1" stroke-dasharray="3 9"/>
+    <circle cx="823" cy="428" r="230" class="ln2" stroke-width="1" stroke-dasharray="3 9"/>
   </g>
   <g class="spin-blades"><g id="blades"></g></g>
   <g class="spin-mid">
-    <circle cx="823" cy="462" r="152" class="ln" stroke-width="1.5" stroke-dasharray="64 12 6 12"/>
-    <circle cx="823" cy="462" r="136" class="ln2" stroke-width="1" stroke-dasharray="2 8"/>
+    <circle cx="823" cy="428" r="146" class="ln" stroke-width="1.5" stroke-dasharray="62 12 6 12"/>
+    <circle cx="823" cy="428" r="130" class="ln2" stroke-width="1" stroke-dasharray="2 8"/>
   </g>
   <g class="spin-inner">
     <g class="lnB" stroke-width="8">
-      <path d="M 823 356 A 106 106 0 0 1 915 409" opacity=".85"/>
-      <path d="M 921 512 A 106 106 0 0 1 833 568" opacity=".5"/>
-      <path d="M 762 549 A 106 106 0 0 1 718 474" opacity=".7"/>
+      <path d="M 823 326 A 102 102 0 0 1 911 377" opacity=".85"/>
+      <path d="M 917 476 A 102 102 0 0 1 833 530" opacity=".5"/>
+      <path d="M 764 512 A 102 102 0 0 1 722 440" opacity=".7"/>
     </g>
-    <circle cx="823" cy="462" r="88" class="ln2" stroke-width="1" stroke-dasharray="1 6"/>
+    <circle cx="823" cy="428" r="84" class="ln2" stroke-width="1" stroke-dasharray="1 6"/>
   </g>
   <g class="core-pulse">
-    <circle cx="823" cy="462" r="66" fill="url(#coreGlow)"/>
-    <circle cx="823" cy="462" r="42" class="ln" stroke-width="1" opacity=".75"/>
-    <circle cx="823" cy="462" r="13" fill="#FFFFFF"/>
+    <circle cx="823" cy="428" r="62" fill="url(#coreGlow)"/>
+    <circle cx="823" cy="428" r="40" class="ln" stroke-width="1" opacity=".75"/>
+    <circle cx="823" cy="428" r="12" fill="#FFFFFF"/>
     <g class="lnB" stroke-width="1.5" opacity=".9">
-      <path d="M 823 430 V 410 M 823 494 V 514 M 791 462 H 771 M 855 462 H 875"/>
+      <path d="M 823 398 V 380 M 823 458 V 476 M 793 428 H 775 M 853 428 H 871"/>
     </g>
   </g>
 </g>
 
-<!-- ================= PROTRACTOR ARC (under center-right) ================= -->
-<g>
-  <path class="ln" stroke-width="1.5" d="M 738 848 A 168 168 0 0 1 1022 848" fill="none"/>
-  <path class="ln2" stroke-width="1" d="M 760 836 A 146 146 0 0 1 1000 836" fill="none"/>
-  <g id="arcticks"></g>
-</g>
-
-<!-- ================= TOP BANNER (hatches + radar + filled triangle) ================= -->
+<!-- ================= TOP BANNER + RADARS + TRIANGLES ================= -->
 <g>
   <path class="ln" stroke-width="1.5" fill="rgba(63,187,239,.05)"
         d="M 430 92 L 470 66 H 900 l 30 24 H 1064 l 30 26 v 34 H 940 l -28 -22 H 560 l -36 -28 Z"/>
   <g id="hatchA"></g>
   <g id="hatchB"></g>
-  <!-- radar scope inside banner -->
   <g>
     <circle cx="754" cy="109" r="40" class="ln" stroke-width="1.5"/>
     <circle cx="754" cy="109" r="28" class="ln2" stroke-width="1"/>
@@ -199,14 +257,11 @@ html, body { height: 100%; margin: 0; background: #03102C; overflow: hidden; }
     <circle cx="768" cy="94" r="3" fill="#CFF2FF"/>
     <circle cx="740" cy="122" r="2.5" fill="#7FDCFB"/>
   </g>
-  <!-- bright filled triangle at banner's right end -->
   <path class="fillS" stroke="#7FDCFB" stroke-width="1.5" d="M 1032 150 L 1098 178 L 1032 206 Z"/>
   <text x="1030" y="252" font-size="14" class="txt">99%</text>
   <path class="ln2" stroke-width="1" d="M 1024 246 h -70 l -28 22 H 810"/>
   <circle cx="806" cy="268" r="4" class="node" stroke-width="1"/>
 </g>
-
-<!-- second radar scope, below banner-left -->
 <g>
   <circle cx="695" cy="190" r="34" class="ln2" stroke-width="1"/>
   <circle cx="695" cy="190" r="22" class="ln2" stroke-width="1" stroke-dasharray="3 6"/>
@@ -216,28 +271,23 @@ html, body { height: 100%; margin: 0; background: #03102C; overflow: hidden; }
   <circle cx="704" cy="178" r="2.5" fill="#7FDCFB"/>
 </g>
 
-<!-- ================= TOP-RIGHT: HP + STRIPED BAR + TRIANGLE + PIE ================= -->
+<!-- ================= TOP-RIGHT CLUSTER ================= -->
 <g>
   <text x="1132" y="106" font-size="16" letter-spacing="2" class="txt">HP</text>
   <circle cx="1178" cy="100" r="9" class="ln" stroke-width="1.5"/>
   <circle cx="1204" cy="100" r="9" class="ln2" stroke-width="1.5"/>
-  <!-- diagonal-striped parallelogram bar -->
   <path class="ln" stroke-width="1.5" fill="rgba(63,187,239,.08)"
         d="M 1256 76 H 1408 l 24 20 v 40 H 1284 l -28 -24 Z"/>
   <g id="stripes"></g>
-  <!-- bright filled triangle (paper-plane-like) -->
   <path class="fillS" stroke="#7FDCFB" stroke-width="1.5" d="M 1438 232 L 1462 168 L 1500 224 Z"/>
   <path class="ln2" stroke-width="1" d="M 1462 168 L 1470 214"/>
-  <!-- small dot bracket -->
   <g id="dotcolTR"></g>
-  <!-- pie chart with exploded quarter -->
   <g transform="translate(1290, 300)">
     <path d="M 0 0 L 0 -46 A 46 46 0 1 1 -46 0 Z" fill="rgba(63,187,239,.42)"
           stroke="#3FBBEF" stroke-width="1.5"/>
     <path d="M -9 -9 L -9 -55 A 46 46 0 0 0 -55 -9 Z" fill="rgba(191,240,255,.6)"
           stroke="#CFF2FF" stroke-width="1.5"/>
   </g>
-  <!-- battery, right edge -->
   <rect x="1544" y="252" width="30" height="62" class="ln" stroke-width="1.5" fill="none"/>
   <rect x="1552" y="244" width="14" height="8" class="ln" stroke-width="1.5" fill="none"/>
   <rect x="1549" y="282" width="20" height="27" fill="rgba(63,187,239,.5)"/>
@@ -251,40 +301,34 @@ html, body { height: 100%; margin: 0; background: #03102C; overflow: hidden; }
   <circle cx="1214" cy="369" r="9" class="ln" stroke-width="1.5"/>
   <path class="lnB" stroke-width="2" d="M 1214 369 L 1248 335"/>
   <path d="M 1248 335 l -7 -1 l 9 -9 l 1 10 Z" fill="#CFF2FF"/>
-
   <g id="gearring"></g>
   <circle cx="1362" cy="377" r="11" class="ln" stroke-width="1.5"/>
   <circle cx="1362" cy="377" r="3.5" fill="#CFF2FF"/>
-
-  <!-- signal icon -->
   <g class="ln" stroke-width="1.5">
     <path d="M 1500 408 a 26 26 0 0 1 36 0 M 1494 396 a 38 38 0 0 1 48 0 M 1506 420 a 14 14 0 0 1 24 0"/>
     <circle cx="1518" cy="428" r="3" fill="#3FBBEF" stroke="none"/>
   </g>
-
-  <!-- CORE SYS panel -->
-  <rect x="1100" y="467" width="332" height="156" class="ln2 fillT" stroke-width="1"/>
+  <rect x="1100" y="467" width="332" height="150" class="ln2 fillT" stroke-width="1"/>
   <text x="1114" y="491" font-size="10" letter-spacing="2" class="txtd">CORE SYS // DUAL MODULE</text>
-  <g transform="translate(1190, 556)">
+  <g transform="translate(1190, 552)">
     <ellipse rx="34" ry="13" class="ln" stroke-width="1" transform="rotate(30)"/>
     <ellipse rx="34" ry="13" class="ln" stroke-width="1" transform="rotate(-30)"/>
     <ellipse rx="34" ry="13" class="ln2" stroke-width="1" transform="rotate(90)"/>
     <circle r="4" fill="#CFF2FF"/>
   </g>
-  <g transform="translate(1330, 556)">
+  <g transform="translate(1330, 552)">
     <circle r="30" class="ln2" stroke-width="1"/>
     <circle r="21" class="ln" stroke-width="1" stroke-dasharray="24 8"/>
     <circle r="11" class="ln" stroke-width="1"/>
     <circle r="3.5" fill="#CFF2FF"/>
   </g>
-  <!-- right-edge stack -->
   <rect x="1490" y="480" width="18" height="18" class="ln" stroke-width="1.5" fill="none"/>
   <circle cx="1499" cy="540" r="12" class="ln" stroke-width="1.5"/>
   <g id="edgeDotsR"></g>
 </g>
 
 <!-- ================= RIGHT-LOW: CHEVRONS + PLANE 75% ================= -->
-<g transform="translate(1112, 692)">
+<g transform="translate(1112, 648)">
   <path class="chev" d="M 0 0 l 16 14 l -16 14" fill="none" stroke="#7FDCFB" stroke-width="5"/>
   <path class="chev" d="M 28 0 l 16 14 l -16 14" fill="none" stroke="#7FDCFB" stroke-width="5"/>
   <path class="chev" d="M 56 0 l 16 14 l -16 14" fill="none" stroke="#7FDCFB" stroke-width="5"/>
@@ -292,104 +336,127 @@ html, body { height: 100%; margin: 0; background: #03102C; overflow: hidden; }
   <path class="chev" d="M 112 0 l 16 14 l -16 14" fill="none" stroke="#7FDCFB" stroke-width="5"/>
 </g>
 <g>
-  <path class="ln" stroke-width="1.5" d="M 1296 656 h -18 v 168 h 18 M 1452 656 h 18 v 168 h -18"/>
-  <text x="1296" y="692" font-size="13" class="txt">75%</text>
+  <path class="ln" stroke-width="1.5" d="M 1296 640 h -18 v 160 h 18 M 1452 640 h 18 v 160 h -18"/>
+  <text x="1296" y="676" font-size="13" class="txt">75%</text>
   <path class="fillS" stroke="#CFF2FF" stroke-width="1"
-        d="M 1330 780 l 74 -42 l -24 58 l -13 -16 l -16 21 Z"/>
-  <path d="M 1398 706 A 34 34 0 0 1 1420 764" fill="none" stroke="#7FDCFB" stroke-width="3"/>
+        d="M 1330 758 l 74 -42 l -24 58 l -13 -16 l -16 21 Z"/>
+  <path d="M 1398 686 A 34 34 0 0 1 1420 744" fill="none" stroke="#7FDCFB" stroke-width="3"/>
 </g>
 
-<!-- ================= BOTTOM-RIGHT: SEG LOADER + RULER + 100% CAPSULE ================= -->
+<!-- ================= BOTTOM-CENTER: TURBINE GAUGE ON THE FLOOR ================= -->
+<g>
+  <g class="turb-spin"><g id="turbblades"></g></g>
+  <circle cx="1010" cy="885" r="188" class="ln2" stroke-width="1" stroke-dasharray="4 10"/>
+  <circle cx="1010" cy="885" r="120" class="ln" stroke-width="2" stroke-dasharray="90 24 40 24"/>
+  <g id="turbticks"></g>
+  <circle cx="1010" cy="885" r="52" class="ln2" stroke-width="1"/>
+  <ellipse cx="1010" cy="885" rx="34" ry="22" class="ln fillT" stroke-width="1.5"/>
+  <text x="1010" y="890" font-size="15" class="txt" text-anchor="middle"
+        transform="rotate(-90 1010 885)">100%</text>
+</g>
+<!-- row of small ring gauges sitting on the floor -->
+<g id="ringrow"></g>
+<!-- audio spectrum bars on the floor -->
+<g id="spectrum"></g>
+
+<!-- ================= BOTTOM-RIGHT: RADAR-DISH LOADER + RULER + CAPSULE ================= -->
 <g>
   <g class="loader-spin"><g id="loaderseg"></g></g>
-  <circle cx="1143" cy="878" r="34" class="ln2" stroke-width="1" stroke-dasharray="2 6"/>
-  <circle cx="1143" cy="878" r="20" class="ln2" stroke-width="1" stroke-dasharray="1 5"/>
+  <circle cx="1143" cy="862" r="34" class="ln2" stroke-width="1" stroke-dasharray="2 6"/>
+  <g class="lnB" stroke-width="2">
+    <path d="M 1130 872 a 18 14 -40 0 1 22 -14 M 1136 866 l 14 -16"/>
+    <circle cx="1152" cy="848" r="2.5" fill="#7FDCFB" stroke="none"/>
+    <path d="M 1128 874 h 18"/>
+  </g>
   <g id="ruler"></g>
-  <rect x="1291" y="909" width="180" height="30" rx="15" class="ln" stroke-width="1.5" fill="none"/>
-  <rect x="1297" y="915" width="130" height="18" rx="9" fill="rgba(63,187,239,.55)"/>
+  <path class="ln" stroke-width="1.5" d="M 1284 900 h -14 v 48 h 14 M 1478 900 h 14 v 48 h -14"/>
+  <rect x="1291" y="909" width="180" height="30" rx="4" class="ln" stroke-width="1.5" fill="none"/>
+  <rect x="1297" y="915" width="130" height="18" rx="2" fill="rgba(63,187,239,.55)"/>
   <text x="1300" y="900" font-size="11" class="txtd">100%</text>
 </g>
 
-<!-- ================= BOTTOM-CENTER: RINGS + STRIP + DOTS ================= -->
-<g>
-  <g transform="translate(655, 908)">
-    <circle r="16" class="ln2" stroke-width="1.5"/>
-    <circle r="5" fill="rgba(127,220,251,.7)"/>
-  </g>
-  <g transform="translate(760, 906)">
-    <circle r="34" class="ln2" stroke-width="1"/>
-    <path d="M 0 -34 A 34 34 0 1 1 -24 24" fill="none" stroke="#3FBBEF" stroke-width="5"/>
-    <circle r="5" fill="#CFF2FF"/>
-  </g>
-  <g id="segstrip"></g>
-  <g id="pagedots"></g>
-  <path class="ln2" stroke-width="1" d="M 560 968 h 480"/>
-</g>
+<!-- ================= PAGINATION DOTS ================= -->
+<g id="pagedots"></g>
 
 <!-- ================= CIRCUIT TRACES + NODES ================= -->
 <g class="ln2" stroke-width="1">
   <path d="M 332 300 l 60 40 H 560 l 30 30"/>
-  <path d="M 268 500 H 420 l 60 -36 H 600"/>
-  <path d="M 368 690 H 470 l 36 -30"/>
-  <path d="M 588 700 H 700 l 40 40 v 60"/>
+  <path d="M 268 592 H 420 l 60 -36 H 600"/>
+  <path d="M 588 700 H 700 l 40 40 v 50"/>
   <path d="M 1162 369 H 1080 l -40 34"/>
   <path d="M 1100 540 H 1010 l -36 -30"/>
-  <path d="M 1143 820 V 770 l -30 -30"/>
+  <path d="M 1143 806 V 770 l -30 -30"/>
   <path d="M 430 100 l -34 34 H 300"/>
-  <path d="M 823 724 V 780"/>
+  <path d="M 662 486 l 40 40 v 30"/>
 </g>
 <g>
   <circle cx="594" cy="373" r="4" class="node" stroke-width="1"/>
-  <circle cx="604" cy="464" r="4" class="node" stroke-width="1"/>
-  <circle cx="740" cy="800" r="4" class="node" stroke-width="1"/>
+  <circle cx="604" cy="556" r="4" class="node" stroke-width="1"/>
+  <circle cx="740" cy="792" r="4" class="node" stroke-width="1"/>
   <circle cx="1036" cy="403" r="4" class="node" stroke-width="1"/>
   <circle cx="970" cy="510" r="4" class="node" stroke-width="1"/>
   <circle cx="296" cy="134" r="4" class="node" stroke-width="1"/>
+  <circle cx="702" cy="560" r="4" class="node" stroke-width="1"/>
 </g>
 
-<!-- scattered + markers, micro-labels -->
 <g class="txtd" font-size="12">
   <text x="380" y="212" class="blink-soft">+</text>
   <text x="1216" y="300">+</text>
-  <text x="530" y="806" class="blink-soft">+</text>
+  <text x="560" y="782" class="blink-soft">+</text>
   <text x="1078" y="160">+</text>
-  <text x="948" y="668">+</text>
+  <text x="948" y="640">+</text>
   <text x="636" y="248" font-size="9">SCN.04</text>
-  <text x="962" y="700" font-size="9">LNK.77</text>
-  <text x="284" y="530" font-size="9">MDL.19</text>
+  <text x="962" y="672" font-size="9">LNK.77</text>
+  <text x="452" y="540" font-size="9">MDL.19</text>
 </g>
 </svg>
 
 <script>
   const NS = 'http://www.w3.org/2000/svg';
-  const put = (parent, tag, attrs) => {
+  const put = (parent, tag, attrs, text) => {
     const el = document.createElementNS(NS, tag);
     for (const k in attrs) el.setAttribute(k, attrs[k]);
+    if (text != null) el.textContent = text;
     document.getElementById(parent).appendChild(el);
     return el;
   };
   const P = (cx, cy, r, a) => [cx + r * Math.sin(a), cy - r * Math.cos(a)];
 
-  // ---- center reticle: outer ticks (78) ----
+  // ================= FLOOR: perspective grid =================
+  // Horizon at y=740; vanishing point above it so verticals converge.
+  (function floor() {
+    const VP = { x: 800, y: 640 }, HY = 740;
+    const ys = [740, 752, 768, 790, 818, 852, 892, 938, 990];
+    ys.forEach((y, i) => put('floor', 'line', { x1: 0, y1: y, x2: 1600, y2: y,
+      stroke: '#2E7FD9', 'stroke-width': i === 0 ? 1.5 : 1,
+      opacity: i === 0 ? .35 : .10 + i * .012 }));
+    for (let xb = -400; xb <= 2000; xb += 133) {
+      const t = (HY - VP.y) / (1000 - VP.y);
+      const xh = VP.x + (xb - VP.x) * t;
+      put('floor', 'line', { x1: xh, y1: HY, x2: xb, y2: 1000,
+        stroke: '#2E7FD9', 'stroke-width': 1, opacity: .13 });
+    }
+  })();
+
+  // ---- center reticle ticks ----
   for (let i = 0; i < 78; i++) {
     const a = i / 78 * 2 * Math.PI;
-    const [x1, y1] = P(823, 462, i % 6 === 0 ? 244 : 252, a);
-    const [x2, y2] = P(823, 462, 262, a);
+    const [x1, y1] = P(823, 428, i % 6 === 0 ? 234 : 242, a);
+    const [x2, y2] = P(823, 428, 252, a);
     put('oticks', 'line', { x1, y1, x2, y2, stroke: '#3FBBEF',
       'stroke-width': i % 6 === 0 ? 2 : 1, opacity: i % 6 === 0 ? .85 : .4 });
   }
-  // ---- petals: irregular shards (two sizes, jittered angles, like the art) ----
+  // ---- petals (irregular shards) ----
   const jit = [0, 4, -4, 3, 5, -3, 4, -5, 2, -4, 5, -2];
   for (let i = 0; i < 12; i++) {
     const big = i % 3 !== 2;
-    const r0 = big ? 226 : 208, r1 = big ? 168 : 176, w0 = big ? 30 : 22, w1 = big ? 20 : 15;
-    const a = i * 30 + jit[i];
+    const r0 = big ? 216 : 200, r1 = big ? 162 : 170, w0 = big ? 29 : 21, w1 = big ? 19 : 14;
     put('blades', 'path', {
       d: `M ${-w0} ${-r0} L ${w0} ${-r0} L ${w1} ${-r1} L ${-w1} ${-r1} Z`,
       fill: 'rgba(120,210,250,0.13)', stroke: '#5FCBF6', 'stroke-width': 1.2,
-      transform: `rotate(${a} 823 462) translate(823 462)` });
+      transform: `rotate(${i * 30 + jit[i]} 823 428) translate(823 428)` });
   }
-  // ---- TL donuts 40/50/70 ----
+  // ---- TL donuts ----
   [[51, 190, 40], [125, 183, 50], [199, 176, 70]].forEach(([cx, cy, pct]) => {
     const C = 2 * Math.PI * 27;
     put('donuts', 'circle', { cx, cy, r: 27, fill: 'none',
@@ -397,64 +464,107 @@ html, body { height: 100%; margin: 0; background: #03102C; overflow: hidden; }
     put('donuts', 'circle', { cx, cy, r: 27, fill: 'none', stroke: '#3FBBEF',
       'stroke-width': 7, 'stroke-linecap': 'round',
       'stroke-dasharray': `${C * pct / 100} ${C}`, transform: `rotate(-90 ${cx} ${cy})` });
-    const t = put('donuts', 'text', { x: cx - 15, y: cy + 4, 'font-size': 12, fill: '#CFF2FF' });
-    t.textContent = pct + '%';
+    put('donuts', 'text', { x: cx - 15, y: cy + 4, 'font-size': 12, fill: '#CFF2FF' }, pct + '%');
   });
   put('donuts', 'path', { d: 'M 78 187 L 98 184 M 152 180 L 172 178',
     stroke: 'rgba(63,187,239,.45)', 'stroke-width': 1 });
-  // ---- TL dot matrix 13 x 5 ----
+  // ---- TL dot matrix ----
   for (let r = 0; r < 5; r++) for (let c = 0; c < 13; c++)
     put('dotmatrixTL', 'rect', { x: 38 + c * 15, y: 258 + r * 15, width: 7, height: 7,
       fill: (r * 13 + c) % 6 < 4 ? 'rgba(63,187,239,.8)' : 'rgba(63,187,239,.2)' });
-  // ---- left edge dots + film strip ----
-  for (let r = 0; r < 9; r++) for (let c = 0; c < 2; c++)
-    put('edgeDotsL', 'rect', { x: 46 + c * 11, y: 250 + r * 12, width: 5, height: 5,
-      fill: (r + c) % 3 ? 'rgba(63,187,239,.25)' : 'rgba(63,187,239,.8)',
-      transform: 'translate(-40 430)' });
-  for (let i = 0; i < 8; i++)
-    put('filmstrip', 'rect', { x: 20, y: 806 + i * 20, width: 8, height: 12,
-      fill: 'rgba(63,187,239,.4)' });
-  // ---- sail: fin triangle + vertical hatches ----
-  put('sail', 'path', { d: 'M 74 594 L 176 452 L 176 594 Z', fill: 'rgba(63,187,239,.16)',
-    stroke: '#3FBBEF', 'stroke-width': 1.5 });
-  for (let i = 1; i < 8; i++) {
-    const x = 176 - i * 13;
-    const yTop = 452 + (594 - 452) * (i * 13) / (176 - 74);
-    put('sail', 'line', { x1: x, y1: 594, x2: x, y2: yTop,
+
+  // ================= HEX PANELS (donut column + bars + % + hexagon) =================
+  function hexPanel(id, x, y, w, h, pct, hexR) {
+    put(id, 'rect', { x, y, width: w, height: h, class: 'ln2 fillT', 'stroke-width': 1 });
+    [.72, .45, .86].forEach((f, i) => {
+      const cy = y + 30 + i * 36, C = 2 * Math.PI * 13;
+      put(id, 'circle', { cx: x + 30, cy, r: 13, fill: 'none',
+        stroke: 'rgba(63,187,239,.3)', 'stroke-width': 5 });
+      put(id, 'circle', { cx: x + 30, cy, r: 13, fill: 'none', stroke: '#3FBBEF',
+        'stroke-width': 5, 'stroke-dasharray': `${C * f} ${C}`,
+        transform: `rotate(-90 ${x + 30} ${cy})` });
+    });
+    [56, 40, 48].forEach((len, i) =>
+      put(id, 'line', { x1: x + 56, y1: y + 24 + i * 13, x2: x + 56 + len, y2: y + 24 + i * 13,
+        stroke: i === 1 ? '#7FDCFB' : 'rgba(63,187,239,.6)', 'stroke-width': 4 }));
+    put(id, 'text', { x: x + 58, y: y + 92, 'font-size': 20, fill: '#CFF2FF' }, pct);
+    const hx = x + w - hexR - 26, hy = y + h / 2;
+    let d = '';
+    for (let i = 0; i < 6; i++) {
+      const a = Math.PI / 3 * i + Math.PI / 6;
+      d += (i ? 'L' : 'M') + (hx + hexR * Math.cos(a)) + ' ' + (hy + hexR * Math.sin(a)) + ' ';
+    }
+    put(id, 'path', { d: d + 'Z', fill: 'none', stroke: '#3FBBEF', 'stroke-width': 1.5 });
+    put(id, 'circle', { cx: hx, cy: hy, r: hexR * .55, fill: 'none',
+      stroke: 'rgba(63,187,239,.6)', 'stroke-width': 1 });
+    put(id, 'line', { x1: hx - hexR * .8, y1: hy, x2: hx + hexR * .8, y2: hy,
       stroke: 'rgba(63,187,239,.5)', 'stroke-width': 1 });
+    put(id, 'line', { x1: hx, y1: hy - hexR * .8, x2: hx, y2: hy + hexR * .8,
+      stroke: 'rgba(63,187,239,.5)', 'stroke-width': 1 });
+    put(id, 'circle', { cx: hx, cy: hy, r: 9, fill: '#CFF2FF' });
+    put(id, 'text', { x: hx - 34, y: y + h - 12, 'font-size': 10,
+      fill: 'rgba(150,215,245,.7)' }, '0.002157');
   }
-  // ---- schematic ruler ----
-  for (let i = 0; i < 14; i++)
-    put('schemticks', 'line', { x1: 396 + i * 14, y1: 764, x2: 396 + i * 14, y2: 771,
+  hexPanel('hexA', 400, 606, 260, 148, '75%', 42);
+  hexPanel('hexB', 236, 872, 260, 118, '100%', 36);
+  // ruler under hex panel A
+  for (let i = 0; i < 15; i++)
+    put('schemticks', 'line', { x1: 404 + i * 17, y1: 764, x2: 404 + i * 17, y2: 771,
       stroke: 'rgba(63,187,239,.5)', 'stroke-width': 1 });
-  // ---- BL: dash matrix (3 rows), wide segmented bar, mini bar chart ----
+
+  // ================= BOTTOM-LEFT SUITE =================
+  // capsule bar columns (3 pill stacks, left edge)
+  for (let c = 0; c < 3; c++) {
+    const x = 40 + c * 24, filled = [7, 5, 8][c];
+    for (let i = 0; i < 9; i++)
+      put('capsules', 'rect', { x, y: 636 + i * 15, width: 13, height: 10, rx: 4,
+        fill: i >= 9 - filled ? (i > 6 ? '#5FCBF6' : 'rgba(63,187,239,.55)')
+                              : 'rgba(63,187,239,.12)' });
+  }
+  // dash matrix 3 x 16
   for (let r = 0; r < 3; r++) for (let c = 0; c < 16; c++)
-    put('dashmatrix', 'rect', { x: 192 + c * 17, y: 786 + r * 14, width: 10, height: 6,
+    put('dashmatrix', 'rect', { x: 350 + c * 20, y: 786 + r * 15, width: 12, height: 7,
       fill: (r * 16 + c) % 5 < 3 ? 'rgba(63,187,239,.55)' : 'rgba(63,187,239,.15)' });
-  for (let i = 0; i < 16; i++)
-    put('widebar', 'rect', { x: 182 + i * 21, y: 848, width: 14, height: 12,
-      fill: i < 10 ? 'rgba(63,187,239,.7)' : 'rgba(63,187,239,.18)' });
-  put('widebar', 'rect', { x: 180, y: 844, width: 340, height: 20, fill: 'none',
+  // segmented bar + frame
+  for (let i = 0; i < 14; i++)
+    put('widebar', 'rect', { x: 244 + i * 22, y: 744, width: 15, height: 13,
+      fill: i < 9 ? 'rgba(63,187,239,.7)' : 'rgba(63,187,239,.18)' });
+  put('widebar', 'rect', { x: 240, y: 740, width: 316, height: 21, fill: 'none',
     stroke: 'rgba(63,187,239,.45)', 'stroke-width': 1 });
-  const bh = [10, 20, 14, 30, 18, 26, 34, 24, 40, 30];
-  bh.forEach((h, i) => put('minibars', 'rect',
-    { x: 540 + i * 17, y: 960 - h, width: 10, height: h, fill: 'rgba(63,187,239,.6)' }));
-  // ---- banner hatch groups (split by the radar scope) ----
+  // dot row + slash row
+  for (let i = 0; i < 12; i++)
+    put('dotrow', 'circle', { cx: 250 + i * 18, cy: 776, r: 3.5,
+      fill: i % 4 ? 'rgba(63,187,239,.4)' : '#5FCBF6' });
+  for (let i = 0; i < 14; i++)
+    put('slashrow', 'line', { x1: 250 + i * 14, y1: 850, x2: 242 + i * 14, y2: 862,
+      stroke: i % 5 === 0 ? '#7FDCFB' : 'rgba(63,187,239,.5)', 'stroke-width': 2 });
+  // film strip
+  for (let i = 0; i < 6; i++)
+    put('filmstrip', 'rect', { x: 20, y: 856 + i * 20, width: 8, height: 12,
+      fill: 'rgba(63,187,239,.4)' });
+  // stacked dash columns
+  const stacks = [12, 7, 15, 9, 13];
+  stacks.forEach((n, c) => {
+    for (let i = 0; i < n; i++)
+      put('stacks', 'rect', { x: 516 + c * 17, y: 986 - i * 7, width: 11, height: 4,
+        fill: i % 4 === 3 ? '#5FCBF6' : 'rgba(63,187,239,.5)' });
+  });
+
+  // ================= TOP BANNER hatches, stripes, TR dots =================
   for (let i = 0; i < 20; i++)
     put('hatchA', 'line', { x1: 470 + i * 12, y1: 88, x2: 462 + i * 12, y2: 130,
       stroke: i % 5 === 0 ? '#7FDCFB' : 'rgba(63,187,239,.45)', 'stroke-width': 2 });
   for (let i = 0; i < 16; i++)
     put('hatchB', 'line', { x1: 816 + i * 12, y1: 88, x2: 808 + i * 12, y2: 130,
       stroke: i % 5 === 0 ? '#7FDCFB' : 'rgba(63,187,239,.45)', 'stroke-width': 2 });
-  // ---- TR: diagonal stripes in the parallelogram ----
   for (let i = 0; i < 9; i++)
     put('stripes', 'line', { x1: 1282 + i * 16, y1: 84, x2: 1266 + i * 16, y2: 128,
       stroke: i % 2 ? '#5FCBF6' : 'rgba(63,187,239,.35)', 'stroke-width': 5 });
-  // ---- TR dot bracket ----
   for (let r = 0; r < 6; r++) for (let c = 0; c < 3; c++)
     put('dotcolTR', 'rect', { x: 1120 + c * 12, y: 130 + r * 12, width: 5, height: 5,
       fill: (r + c) % 3 ? 'rgba(63,187,239,.25)' : 'rgba(63,187,239,.8)' });
-  // ---- compass ticks ----
+
+  // ---- compass ticks + gear ring + right edge dots ----
   for (let i = 0; i < 36; i++) {
     const a = i / 36 * 2 * Math.PI;
     const [x1, y1] = P(1214, 369, i % 9 === 0 ? 40 : 45, a);
@@ -462,7 +572,6 @@ html, body { height: 100%; margin: 0; background: #03102C; overflow: hidden; }
     put('compassticks', 'line', { x1, y1, x2, y2, stroke: '#3FBBEF',
       'stroke-width': 1, opacity: i % 9 === 0 ? .9 : .4 });
   }
-  // ---- gear ring ----
   for (let i = 0; i < 10; i++) {
     const a0 = i / 10 * 360, a1 = a0 + 26;
     const [x0, y0] = P(1362, 377, 34, a0 * Math.PI / 180);
@@ -470,36 +579,62 @@ html, body { height: 100%; margin: 0; background: #03102C; overflow: hidden; }
     put('gearring', 'path', { d: `M ${x0} ${y0} A 34 34 0 0 1 ${x1} ${y1}`,
       fill: 'none', stroke: i % 2 ? '#5FCBF6' : 'rgba(63,187,239,.4)', 'stroke-width': 10 });
   }
-  // ---- right edge dot stack ----
   for (let r = 0; r < 5; r++)
     put('edgeDotsR', 'rect', { x: 1494, y: 580 + r * 12, width: 6, height: 6,
       fill: r % 2 ? 'rgba(63,187,239,.3)' : 'rgba(63,187,239,.8)' });
-  // ---- protractor arc ticks ----
-  for (let i = 0; i <= 24; i++) {
-    const a = (-58 + i * 4.8) * Math.PI / 180;
-    const [x1, y1] = P(880, 970, i % 4 === 0 ? 138 : 148, a);
-    const [x2, y2] = P(880, 970, 160, a);
-    put('arcticks', 'line', { x1, y1, x2, y2, stroke: '#3FBBEF',
-      'stroke-width': i % 4 === 0 ? 2 : 1, opacity: i % 4 === 0 ? .85 : .45 });
+
+  // ================= TURBINE GAUGE =================
+  // 8 fan blades, two gaps (like the art's broken ring)
+  for (let i = 0; i < 8; i++) {
+    if (i === 2 || i === 5) continue;
+    const a0 = i * 45 + 4, a1 = a0 + 34;
+    const r0 = 188, r1 = 132;
+    const p0 = P(1010, 885, r0, a0 * Math.PI / 180), p1 = P(1010, 885, r0, a1 * Math.PI / 180);
+    const p2 = P(1010, 885, r1, (a1 - 4) * Math.PI / 180), p3 = P(1010, 885, r1, (a0 + 4) * Math.PI / 180);
+    put('turbblades', 'path', {
+      d: `M ${p0[0]} ${p0[1]} A ${r0} ${r0} 0 0 1 ${p1[0]} ${p1[1]} L ${p2[0]} ${p2[1]} A ${r1} ${r1} 0 0 0 ${p3[0]} ${p3[1]} Z`,
+      fill: 'rgba(90,190,245,.28)', stroke: '#4FC7F2', 'stroke-width': 1 });
   }
+  for (let i = 0; i < 48; i++) {
+    const a = i / 48 * 2 * Math.PI;
+    const [x1, y1] = P(1010, 885, 96, a);
+    const [x2, y2] = P(1010, 885, i % 4 === 0 ? 78 : 86, a);
+    put('turbticks', 'line', { x1, y1, x2, y2, stroke: '#3FBBEF',
+      'stroke-width': 1, opacity: i % 4 === 0 ? .8 : .4 });
+  }
+  // ---- ring row on the floor ----
+  const ringDefs = [[622, 938, 13, .8], [668, 934, 17, .55], [720, 930, 15, .7],
+                    [772, 928, 19, .45], [826, 930, 14, .85]];
+  ringDefs.forEach(([cx, cy, r, f]) => {
+    const C = 2 * Math.PI * r;
+    put('ringrow', 'circle', { cx, cy, r, fill: 'none',
+      stroke: 'rgba(63,187,239,.3)', 'stroke-width': 5 });
+    put('ringrow', 'circle', { cx, cy, r, fill: 'none', stroke: '#4FC7F2',
+      'stroke-width': 5, 'stroke-dasharray': `${C * f} ${C}`,
+      transform: `rotate(${cx % 360} ${cx} ${cy})` });
+    put('ringrow', 'circle', { cx, cy, r: 3, fill: '#CFF2FF' });
+  });
+  // ---- spectrum bars on the floor ----
+  const spec = [8, 18, 12, 30, 22, 44, 30, 52, 38, 26, 46, 20, 34, 14, 24, 10];
+  spec.forEach((h, i) => put('spectrum', 'rect',
+    { x: 1216 + i * 9, y: 856 - h, width: 5, height: h,
+      fill: i % 4 === 1 ? '#5FCBF6' : 'rgba(63,187,239,.55)' }));
+
   // ---- BR loader segments ----
   for (let i = 0; i < 12; i++) {
     const a0 = i / 12 * 360 + 3, a1 = a0 + 24;
-    const [x0, y0] = P(1143, 878, 52, a0 * Math.PI / 180);
-    const [x1, y1] = P(1143, 878, 52, a1 * Math.PI / 180);
+    const [x0, y0] = P(1143, 862, 52, a0 * Math.PI / 180);
+    const [x1, y1] = P(1143, 862, 52, a1 * Math.PI / 180);
     put('loaderseg', 'path', { d: `M ${x0} ${y0} A 52 52 0 0 1 ${x1} ${y1}`,
       fill: 'none', stroke: i % 3 === 2 ? 'rgba(63,187,239,.3)' : '#3FBBEF', 'stroke-width': 8 });
   }
-  // ---- ruler above capsule ----
+  // ---- ruler ----
   for (let i = 0; i < 16; i++)
-    put('ruler', 'line', { x1: 1252 + i * 14, y1: 856, x2: 1252 + i * 14,
-      y2: i % 4 === 0 ? 868 : 864, stroke: 'rgba(63,187,239,.55)', 'stroke-width': 1 });
-  // ---- bottom segment strip + pagination dots ----
-  for (let i = 0; i < 20; i++)
-    put('segstrip', 'rect', { x: 560 + i * 20, y: 934, width: 12, height: 8,
-      fill: i < 13 ? 'rgba(63,187,239,.65)' : 'rgba(63,187,239,.18)' });
+    put('ruler', 'line', { x1: 1252 + i * 14, y1: 878, x2: 1252 + i * 14,
+      y2: i % 4 === 0 ? 890 : 886, stroke: 'rgba(63,187,239,.55)', 'stroke-width': 1 });
+  // ---- pagination dots ----
   for (let i = 0; i < 7; i++)
-    put('pagedots', 'circle', { cx: 716 + i * 18, cy: 960, r: i === 2 ? 5 : 3.5,
+    put('pagedots', 'circle', { cx: 716 + i * 18, cy: 985, r: i === 2 ? 5 : 3.5,
       fill: i === 2 ? '#CFF2FF' : 'rgba(63,187,239,.45)' });
 </script>
 </body>
