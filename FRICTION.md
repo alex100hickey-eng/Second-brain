@@ -8,3 +8,4 @@ the real-usage audit log, fixes the top items, and checks them off.
 Format: `- [YYYY-MM-DD] the complaint` → when fixed: `- [x] [YYYY-MM-DD] the complaint (fixed YYYY-MM-DD, commit)`
 
 ---
+- [2026-07-22] Voice: Alex wants full CONVERSATION MODE like the Claude app — press the mic ONCE and talk naturally: it detects when he stops speaking (VAD), sends, speaks the reply, then listens again automatically. Current hold-or-tap flow requires a button interaction per turn. (Design sketch: browser VAD via WebAudio RMS threshold + silence timeout on the existing MediaRecorder loop; interrupt by speaking. ElevenLabs streaming TTS would tighten the reply gap.)
