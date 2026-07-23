@@ -81,25 +81,26 @@
 
   /* ===== TOP-LEFT (actual-ref corner): boxed EQ, dashed square w/ corner
      squares, diagonal capsule rails + hatch stripes, top traces ===== */
-  // long two-tone bar chart inside a broken-line box
-  at(HUD.dashedSquare({ width: 384, height: 82, cornerStyle: 'none',
-    inset: 1, dash: '12 8' }), 36, 16);
-  at(HUD.equalizer({ bars: 44, barWidth: 4, gap: 4, height: 56, mixed: true,
-    baseline: { left: 8, cap: false }, role: 'audio' }), 48, 24);
-  at(HUD.tickStrip({ count: 30, step: 12, h: 8 }), 48, 102);
+  // long two-tone bar chart inside a broken-line box — few, LONG dashes
+  at(HUD.dashedSquare({ width: 340, height: 72, cornerStyle: 'none',
+    inset: 1, dash: '66 30' }), 40, 18);
+  at(HUD.equalizer({ bars: 42, barWidth: 4, gap: 3.5, height: 48, mixed: true,
+    baseline: { left: 8, cap: false }, role: 'audio' }), 50, 26);
+  at(HUD.tickStrip({ count: 26, step: 12, h: 8 }), 50, 94);
   // ornament cluster right of the box — dashed square with solid corner
   // squares, capsule rails climbing 45deg, hatch stripe pack, dot traces
-  at(HUD.dashedSquare({ size: 78, cornerStyle: 'squares' }), 442, 26);
+  at(HUD.dashedSquare({ size: 78, cornerStyle: 'squares', dash: '7 5' }), 442, 26);
   at(HUD.diagCandles({ size: 105, role: 'candles' }), 516, 10);
   at(HUD.hatchStripes({ count: 7, gap: 8, len: 56 }), 600, 4);
   // paired top rails with node dots reaching toward the banner
-  at(HUD.circuitTrace({ width: 212, height: 10, start: 'none', end: 'dot',
-    paths: ['M 2 5 H 208'] }), 352, 5);
-  at(HUD.circuitTrace({ width: 156, height: 10, start: 'none', end: 'dot',
-    paths: ['M 2 5 H 152'] }), 368, 17);
-  // left rail dropping from the EQ box down past the matrix
-  at(HUD.circuitTrace({ width: 10, height: 214, start: 'none', end: 'dot',
-    paths: ['M 5 2 V 210'] }), 33, 96);
+  at(HUD.circuitTrace({ width: 194, height: 10, start: 'none', end: 'fdot',
+    paths: ['M 2 5 H 190'] }), 392, 5);
+  at(HUD.circuitTrace({ width: 136, height: 10, start: 'none', end: 'fdot',
+    paths: ['M 132 5 H 2'] }), 404, 17);
+  // left rail: filled-dot cap, vertical drop, then a ~140deg inward break
+  // toward the signal readout
+  at(HUD.circuitTrace({ width: 64, height: 220, start: 'fdot', end: 'dot',
+    paths: ['M 5 2 V 150 l 52 62'] }), 33, 96);
   atC(HUD.donutGauge({ size: 96, value: 30, ticks: true, role: 'g1' }), 96, 146);
   atC(HUD.donutGauge({ size: 96, value: 50, ticks: true, role: 'g2' }), 211, 144);
   atC(HUD.donutGauge({ size: 96, value: 70, ticks: true, role: 'g3' }), 326, 143);

@@ -343,10 +343,14 @@
           const start = p.getPointAtLength(0);
           if (endStyle === 'dot')
             el('circle', { cx: pt.x, cy: pt.y, r: 3.2, fill: '#06203f', stroke: 'var(--hud-cyan)', 'stroke-width': 1.2 }, g);
+          else if (endStyle === 'fdot')
+            el('circle', { cx: pt.x, cy: pt.y, r: 3, fill: 'var(--hud-cyan)', 'stroke-width': 0 }, g);
           if (startStyle === 'square')
             el('rect', { x: start.x - 2.4, y: start.y - 2.4, width: 4.8, height: 4.8, fill: 'var(--hud-accent)' }, g);
           else if (startStyle === 'circle')
             el('circle', { cx: start.x, cy: start.y, r: 3.2, fill: 'none', stroke: 'var(--hud-cyan)', 'stroke-width': 1.2 }, g);
+          else if (startStyle === 'fdot')
+            el('circle', { cx: start.x, cy: start.y, r: 3, fill: 'var(--hud-cyan)', 'stroke-width': 0 }, g);
         }
       }
     });
@@ -630,10 +634,11 @@
        `M ${W - o} ${H - bl} V ${H - o} H ${W - bl}`, `M ${bl} ${H - o} H ${o} V ${H - bl}`]
         .forEach(d => el('path', { d }, g));
     } else if (corner === 'squares') {
-      // solid squares centered on the dashed rect's corners (actual-ref style)
-      const q = Math.min(W, H) * 0.18;
-      [[inset, inset], [W - inset, inset], [inset, H - inset], [W - inset, H - inset]]
-        .forEach(([cx, cy]) => el('rect', { x: cx - q / 2, y: cy - q / 2, width: q, height: q,
+      // broken-line square OUTSIDE, four solid squares tucked inside its
+      // corners with a clear gap (actual-ref style)
+      const q = Math.min(W, H) * 0.20, p = inset + Math.min(W, H) * 0.10;
+      [[p, p], [W - p - q, p], [p, H - p - q], [W - p - q, H - p - q]]
+        .forEach(([x, y]) => el('rect', { x, y, width: q, height: q,
           fill: 'var(--hud-accent)', class: 'hud-glow' }, s));
     }
     return s;
