@@ -511,7 +511,7 @@
     // baseline: {left: px} extends a base rule left of bar 0 to a circle node (ref: top-left EQ)
     const ext = opts.baseline ? (opts.baseline.left == null ? 24 : opts.baseline.left) : 0;
     const W = ext + bars * (bw + gap);
-    const s = svg(W, H + (opts.baseline ? 4 : 0));
+    const s = svg(W, H + (opts.baseline ? 12 : 0));
     s.dataset.role = opts.role || 'equalizer';
     const seed = [8, 16, 11, 26, 19, 38, 26, 46, 33, 22, 40, 17, 30, 12, 21, 9, 15, 24, 10, 18, 28, 14, 34, 20];
     // mixed: dim steel-blue bars interleaved with bright, per the reference skyline
@@ -529,9 +529,10 @@
       }
     }
     if (opts.baseline) {
-      el('line', { x1: 8, y1: H + 1, x2: W - 2, y2: H + 1,
+      // the ref baseline floats a clear gap below the bars, bars never touch it
+      el('line', { x1: 8, y1: H + 9, x2: W - 2, y2: H + 9,
         class: 'hud-stroke', 'stroke-width': 1 }, s);
-      el('circle', { cx: 4.5, cy: H + 1, r: 3.2, fill: 'none',
+      el('circle', { cx: 4.5, cy: H + 9, r: 3.2, fill: 'none',
         class: 'hud-stroke', 'stroke-width': 1.2 }, s);
     }
     return s;

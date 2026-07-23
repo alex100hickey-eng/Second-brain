@@ -79,10 +79,15 @@
   /* ===== TOP-LEFT: EQ + baseline, dashed square, candlesticks, 30/50/70 donuts, matrix, signal ===== */
   at(HUD.equalizer({ bars: 23, barWidth: 5, gap: 3, height: 64, mixed: true,
     baseline: { left: 26 }, role: 'audio' }), 42, 22);
-  // connector fan: EQ baseline → dashed square (upper) / under the square into the candles (lower)
-  at(HUD.circuitTrace({ width: 280, height: 56, start: 'none',
-    paths: ['M 0 33 H 66 l 26 -26 H 116', 'M 0 33 H 96 l 8 8 H 196 l 26 -26 H 268'] }), 232, 54);
-  at(HUD.dashedSquare({ size: 64 }), 352, 26);
+  // connector fan from the EQ baseline junction (deck ~275,95):
+  // up-branch passes THROUGH the dashed square and across the candles, with an
+  // open circle node ON the line between candles; down-branch dives into the
+  // 70% donut's upper-left edge. Lines end plain (no terminators) per the ref.
+  at(HUD.circuitTrace({ width: 260, height: 80, start: 'none', end: 'dot',
+    paths: ['M 3 47 l 43 -43 H 215'] }), 272, 48);
+  at(HUD.circuitTrace({ width: 260, height: 80, node: false,
+    paths: ['M 215 4 H 255', 'M 3 47 l 26 26'] }), 272, 48);
+  at(HUD.dashedSquare({ size: 70 }), 333, 29);
   at(HUD.candlesticks({ width: 100, height: 68, role: 'candles' }), 446, 30);
   atC(HUD.donutGauge({ size: 76, value: 30, role: 'g1' }), 96, 146);
   atC(HUD.donutGauge({ size: 76, value: 50, role: 'g2' }), 211, 144);
