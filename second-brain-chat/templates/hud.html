@@ -112,6 +112,9 @@
     paths: ['M 1 4 H 24'] }), 257, 140);
   atC(HUD.nodeDot({ r: 4 }), 269, 144);
   label('HUD INTERFACE TECHNOLOGY', 132, 196);
+  // underline rail beneath the label, filled dots both ends, spanning the matrix
+  at(HUD.circuitTrace({ width: 466, height: 10, start: 'fdot', end: 'fdot',
+    paths: ['M 5 5 H 461'] }), 118, 210);
   at(HUD.dotMatrix({ rows: 6, cols: 58, cell: 9, size: 4, fade: true,
     gapCols: [12, 27, 42] }), 60, 224);
   (function signalRow() {
