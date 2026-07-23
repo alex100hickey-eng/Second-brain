@@ -1117,3 +1117,18 @@ before any change: `run_tests.py` 170/1 (whisper say-sample, finding #7), `test_
 - One regression caught live (mic dead after rewrite: stale replyAudio ref in the press
   handler) — fixed. Full suite 255/0.
 - Roadmap (FRICTION.md): single-press CONVERSATION MODE with VAD, like the Claude app.
+
+## Phase 5.3 — HUD visual rebuild (stage 1, v3→v6) — [2026-07-23 ~08:15 ET]
+- Alex pivoted the UI: / must open on a HUD looking EXACTLY like his reference concept art
+  (visuals first, functionality re-wired after). Iterated v1→v6; committed each round.
+- Breakthrough: extracted the HI-RES reference + region pairs from Alex's pixel-diff PDF
+  (python zlib/PIL, scratchpad pdfimgs/), sampled true palette (turquoise-cyan #5FD9E8 on
+  near-black #010A20, steel glow #2F6AA8) and rebuilt: trapezoid banner w/ emblem+databars,
+  PCB-trace borders, 30/50/70 donuts, hex-grid, flower-of-life panel, dish ring, tall
+  sliders, turbine floor gauge, perspective floor, enclosing frame, 16-shard mandala w/
+  diagonal pointers, dash bands. hud.html = pure SVG art (no function yet).
+- STAGE 2 PENDING: wire command bar + chat/voice + live data + popups INTO this art
+  (functional version preserved in git history at commit 63cc0e1-era hud.html and v1
+  "HUD shell" commit; reuse its JS wholesale).
+- Old pages intact: /chat-classic (console), /dashboard (board), /hud-classic (old HUD),
+  /memory. Server deploys auto on push; phone unaffected functionally.
