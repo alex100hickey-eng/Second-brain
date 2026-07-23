@@ -308,6 +308,7 @@
     color: var(--text-dim);
   }
 
+  .mic-btn.busy { opacity: .5; pointer-events: none; }
   .mic-btn.listening {
     border-color: #ff5c5c;
     color: #ff5c5c;
@@ -666,7 +667,8 @@
 
       removeThinking();
       removeToolStatus();
-      if (voiceOn && fullText) speak(fullText);
+      if ((voiceOn || lastVoiceTurn) && fullText) { speak(fullText); }
+      lastVoiceTurn = false;
     } catch (err) {
       removeThinking();
       removeToolStatus();
@@ -711,15 +713,64 @@
       .trim();
   }
 
-  function speak(md) {
+  // Jarvis's voice plays through WebAudio: an AudioContext unlocked by Alex's FIRST
+  // tap anywhere satisfies autoplay policy forever after — a plain Audio().play()
+  // outside a click handler gets silently blocked (the "no voice back" bug).
+  let audioCtx = null, currentVoiceSrc = null;
+  function ensureAudioCtx() {
+    if (!audioCtx && (window.AudioContext || window.webkitAudioContext)) {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+  }
+  document.addEventListener('pointerdown', ensureAudioCtx, { capture: true });
+  function stopVoicePlayback() {
+    if (currentVoiceSrc) { try { currentVoiceSrc.stop(); } catch (e) {} currentVoiceSrc = null; }
+  }
+  async function playVoice(arrayBuffer) {
+    ensureAudioCtx();
+    if (!audioCtx) throw new Error('no AudioContext');
+    const buf = await audioCtx.decodeAudioData(arrayBuffer);
+    stopVoicePlayback();
+    const src = audioCtx.createBufferSource();
+    src.buffer = buf;
+    src.connect(audioCtx.destination);
+    src.start();
+    currentVoiceSrc = src;
+  }
+  let lastVoiceTurn = false;  // voice in → voice out, even with the Voice toggle off
+
+  function browserSpeak(text) {
     if (!canSpeak) return;
     speechSynthesis.cancel();
-    const u = new SpeechSynthesisUtterance(speechText(md));
+    const u = new SpeechSynthesisUtterance(text);
     u.rate = 1.05;
     const voice = speechSynthesis.getVoices().find(v => v.lang.startsWith('en') && v.localService)
       || speechSynthesis.getVoices().find(v => v.lang.startsWith('en'));
     if (voice) u.voice = voice;
     speechSynthesis.speak(u);
+  }
+
+  async function speak(md) {
+    const text = speechText(md);
+    if (!text) return;
+    stopVoicePlayback();
+    try {
+      // Server decides the best voice: ElevenLabs MP3 (audio/mpeg) > Mac `say`
+      // (json ok:true) > tell us to use browser voices.
+      const res = await fetch('/api/speak', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      });
+      const ctype = res.headers.get('Content-Type') || '';
+      if (ctype.includes('audio')) {
+        await playVoice(await res.arrayBuffer());
+        return;
+      }
+      const data = await res.json().catch(() => ({}));
+      if (data.ok) return;  // the Mac spoke via `say`
+    } catch (err) { /* fall through to browser voices */ }
+    browserSpeak(text);
   }
 
   if (canSpeak) speechSynthesis.getVoices(); // warm the voice list (loads async)
@@ -734,21 +785,32 @@
   });
 
   async function transcribeBlob(blob) {
+    // iOS records audio/mp4; Chrome records audio/webm — name the file to match.
+    const ext = (blob.type || '').includes('mp4') ? 'mp4'
+              : (blob.type || '').includes('ogg') ? 'ogg' : 'webm';
     const fd = new FormData();
-    fd.append('audio', blob, 'clip.webm');
+    fd.append('audio', blob, 'clip.' + ext);
     input.placeholder = 'Transcribing…';
+    micBtn.classList.add('busy');
     try {
       const res = await fetch('/api/transcribe', { method: 'POST', body: fd });
       const data = await res.json();
       if (data.text) {
         input.value = (input.value ? input.value + ' ' : '') + data.text;
         input.focus();
+        // Voice should feel like conversation: send immediately unless Alex turned
+        // auto-send off (localStorage jarvis-voice-autosend = 'off').
+        lastVoiceTurn = true;  // spoken question → spoken answer, toggle or not
+        if (localStorage.getItem('jarvis-voice-autosend') !== 'off') {
+          form.requestSubmit();
+        }
       } else {
         input.placeholder = data.note ? ('Didn\'t catch that — ' + data.note) : 'Didn\'t catch that. Try again.';
       }
     } catch (err) {
       input.placeholder = 'Transcription failed — type instead.';
     } finally {
+      micBtn.classList.remove('busy');
       setTimeout(() => { input.placeholder = 'Ask or tell me something...'; }, 2500);
     }
   }
@@ -766,7 +828,8 @@
     mediaRecorder.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
     mediaRecorder.onstop = () => {
       if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
-      if (chunks.length) transcribeBlob(new Blob(chunks, { type: 'audio/webm' }));
+      const mime = (mediaRecorder && mediaRecorder.mimeType) || 'audio/webm';
+      if (chunks.length) transcribeBlob(new Blob(chunks, { type: mime }));
     };
     mediaRecorder.start();
     recording = true;
@@ -782,10 +845,32 @@
   if (!canRecord) {
     micBtn.style.display = 'none'; // no mic API here — typing (incl. dictation tools) still works
   } else {
-    micBtn.addEventListener('click', () => {
-      if (recording) stopRecording();
-      else { speechSynthesis && speechSynthesis.cancel(); startRecording(); }
+    // HOLD to talk (release = transcribe + auto-send), or quick-TAP to toggle
+    // recording on/off — both feel natural; hold is the conversation mode.
+    let pressT = 0, held = false;
+    const HOLD_MS = 350;
+    micBtn.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      pressT = Date.now(); held = false;
+      if (!recording) {
+        if (canSpeak) speechSynthesis.cancel();
+        stopVoicePlayback();  // pressing the mic interrupts Jarvis mid-sentence
+        startRecording();
+        held = true;  // started by this press — release may stop it (hold mode)
+      }
     });
+    micBtn.addEventListener('pointerup', (e) => {
+      e.preventDefault();
+      const dur = Date.now() - pressT;
+      if (held && dur >= HOLD_MS) stopRecording();       // hold-to-talk release
+      else if (!held && recording) stopRecording();      // tap while recording = stop
+      // quick tap that STARTED recording (dur < HOLD_MS): leave it running (toggle mode)
+    });
+    micBtn.addEventListener('pointerleave', () => {
+      // Finger slid off mid-hold: treat as release so recording doesn't run away.
+      if (held && recording && Date.now() - pressT >= HOLD_MS) stopRecording();
+    });
+    micBtn.addEventListener('contextmenu', (e) => e.preventDefault()); // no long-press menu on iOS
   }
   if (!canSpeak) voiceToggle.style.display = 'none';
   updateVoiceUI();

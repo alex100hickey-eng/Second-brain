@@ -263,3 +263,12 @@ CLARVIS can now send nudges to Alex's phone via ntfy.sh. New surface, new notes:
 - **No inbound path:** CLARVIS only PUBLISHES. Nothing subscribes to or executes
   anything from the topic — a hostile poster could annoy Alex's phone (rotate the
   topic in both places if that ever happens) but cannot reach CLARVIS itself.
+
+## 10. Voice via ElevenLabs — 2026-07-22 (Phase 5)
+
+With `ELEVENLABS_API_KEY` set, push-to-talk audio (STT) and spoken-reply text (TTS)
+are sent to ElevenLabs' API over HTTPS. Nothing is sent without Alex pressing the
+mic or having spoken replies enabled; no audio is stored on our side (temp files
+deleted immediately; the browser blob is transient). Without the key, everything
+stays local: whisper.cpp STT on the Mac, `say`/browser voices for TTS. The key
+lives only in env (.env / Coolify), entered by Alex, like every other secret.

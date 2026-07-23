@@ -91,6 +91,7 @@ import observability  # noqa: E402 — tool audit log + cost tracking (local, gi
 import health  # noqa: E402 — system health check (read-only)
 import data_boundary  # noqa: E402 — shared untrusted-content wrapper (prompt-injection hygiene)
 import login_limiter  # noqa: E402 — brute-force lockout for the internet-facing login gate
+import voice_engine  # noqa: E402 — ElevenLabs STT/TTS with local whisper/say fallbacks
 # Where uploaded / dropped videos live for the analyze_video tool.
 INBOX_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "inbox")
 os.makedirs(INBOX_DIR, exist_ok=True)
@@ -4664,25 +4665,35 @@ def api_upload_video():
 
 @app.route("/api/transcribe", methods=["POST"])
 def api_transcribe():
-    """Push-to-talk: accept a recorded audio blob, transcribe it LOCALLY with the
-    existing whisper.cpp setup (no cloud), and return the text. The mic UI drops the
-    text into the chat box for Alex to review and send. Audio is deleted immediately."""
+    """Push-to-talk transcription. ElevenLabs Scribe first (works everywhere, incl.
+    the server → the phone finally has ears), local whisper.cpp as the keyless/offline
+    fallback (Mac only). Audio is never stored; temp files deleted immediately."""
     import tempfile as _tf
     if "audio" not in request.files:
         return jsonify({"error": "No audio in upload."}), 400
     f = request.files["audio"]
     if not f or not f.filename:
         return jsonify({"error": "Empty audio."}), 400
+    blob = f.read()
+    if len(blob) < 500:
+        return jsonify({"text": "", "note": "recording was empty or too short"})
+    if voice_engine.available():
+        res = voice_engine.transcribe(
+            blob, filename=f.filename, mime=f.mimetype or "audio/webm")
+        if "text" in res:
+            return jsonify({"text": res["text"], "engine": "elevenlabs"})
+        print(f"Warning: ElevenLabs STT failed, falling back to whisper: {res.get('error')}")
+    # Local whisper.cpp fallback (Mac home node)
     os.makedirs(video_processor.WORK_DIR, exist_ok=True)
     ext = os.path.splitext(f.filename)[1].lower() or ".webm"
     tmp = _tf.mkdtemp(prefix="voice_", dir=video_processor.WORK_DIR)
     src = os.path.join(tmp, "clip" + ext)
     try:
-        f.save(src)
-        if os.path.getsize(src) < 500:
-            return jsonify({"text": "", "note": "recording was empty or too short"})
+        with open(src, "wb") as out:
+            out.write(blob)
         result = video_processor.transcribe_file(src, work_dir=tmp)
-        return jsonify({"text": (result.get("text") or "").strip(), "note": result.get("note", "")})
+        return jsonify({"text": (result.get("text") or "").strip(),
+                        "note": result.get("note", ""), "engine": "whisper"})
     except Exception as e:
         print(f"Warning: /api/transcribe error: {e}")
         return jsonify({"error": f"Transcription failed: {e}"}), 500
@@ -4697,17 +4708,23 @@ _SPEAK_LOCK = threading.Lock()
 
 @app.route("/api/speak", methods=["POST"])
 def api_speak():
-    """Speak text aloud on this Mac with the built-in `say` command. Optional server-side
-    TTS (the chat UI's default spoken-replies uses the browser's voices; this endpoint is
-    for when Alex wants the Mac itself to talk). Off by default — only called when the UI
-    asks. Capped in length; runs detached so the request returns immediately."""
-    import shutil as _sh
-    if not _sh.which("say"):
-        return jsonify({"ok": False, "error": "macOS `say` not available."}), 400
+    """Jarvis's voice. With ELEVENLABS_API_KEY set: returns MP3 audio the browser
+    plays (works on the phone). Without it: falls back to the Mac's `say` (local
+    node only; returns JSON so the UI knows the Mac spoke / to use browser voices).
+    Only ever called when Alex has spoken replies on."""
     data = request.get_json(silent=True) or {}
     text = (data.get("text") or "").strip()[:2000]  # cap length
     if not text:
         return jsonify({"ok": False, "error": "No text."}), 400
+    if voice_engine.available():
+        res = voice_engine.speak(text)
+        if "audio" in res:
+            return Response(res["audio"], mimetype="audio/mpeg",
+                            headers={"Cache-Control": "no-store"})
+        print(f"Warning: ElevenLabs TTS failed, falling back: {res.get('error')}")
+    import shutil as _sh
+    if not _sh.which("say"):
+        return jsonify({"ok": False, "error": "No TTS available here — browser voices will be used."}), 200
     try:
         with _SPEAK_LOCK:
             # Detached; don't block the response on speech finishing.

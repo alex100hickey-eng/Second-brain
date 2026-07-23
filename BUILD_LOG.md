@@ -1100,3 +1100,20 @@ before any change: `run_tests.py` 170/1 (whisper say-sample, finding #7), `test_
   only ~16.9k fresh input tokens (was 55,955). First token now ~1.8s (was 2.5-3.5s), ack at
   ~1ms. ~60%+ per-turn input-cost cut (cache reads bill at 10%). Full suite 255/0.
 - Optional next: history-prefix caching / trim limit=40 → ~20 (halves the fresh 16.9k).
+
+## Phase 5.2 — Voice pass: ElevenLabs + conversational UX — [17:40 ET]
+- New voice_engine.py (stdlib-only): ElevenLabs Scribe STT + TTS (eleven_flash_v2_5,
+  default voice "George"), certifi SSL context (framework Python has no system CAs).
+  /api/transcribe: Scribe first → local whisper.cpp fallback; /api/speak: ElevenLabs MP3
+  → Mac `say` → tells UI to use browser voices. ELEVENLABS_API_KEY/VOICE_ID in .env(.example);
+  SECURITY_NOTES §10 (audio/text to ElevenLabs over HTTPS only when Alex uses voice).
+- UX rebuilt in index.html: HOLD-to-talk (release = transcribe + AUTO-SEND) or quick-tap
+  toggle; transcription auto-sends (jarvis-voice-autosend, default on); VOICE IN → VOICE OUT
+  (spoken question always gets a spoken answer, toggle now only governs typed turns);
+  WebAudio playback unlocked on first tap (fixes autoplay-blocked silent replies — the bug
+  Alex hit); mic press interrupts Jarvis mid-sentence; iOS mp4 blob naming.
+- Live-verified with Alex on the Mac: hold → speak → transcribe → auto-send → reply →
+  spoken back in the ElevenLabs voice. TTS round-trip ~1.0s for a sentence.
+- One regression caught live (mic dead after rewrite: stale replyAudio ref in the press
+  handler) — fixed. Full suite 255/0.
+- Roadmap (FRICTION.md): single-press CONVERSATION MODE with VAD, like the Claude app.
