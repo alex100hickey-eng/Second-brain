@@ -1,0 +1,143 @@
+/* ============================================================
+   CLARVIS HUD component library — static/hud/hud.css
+   Design system per HUD_STYLE.md. Glow lives on strokes/text
+   only (drop-shadow, never box-shadow). Palette is locked.
+   ============================================================ */
+@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400..900&family=Share+Tech+Mono&display=swap');
+
+:root {
+  /* Palette — the only colors permitted (HUD_STYLE.md).
+     Values sampled directly from the reference (references/hud-target.png). */
+  --hud-bg-edge:   #010a20;   /* outermost background */
+  --hud-bg-center: #123a6e;   /* center background glow */
+  --hud-cyan:      #4fd4e8;   /* primary stroke / text  (rgb 79,212,232) */
+  --hud-blue:      #2f6aa8;   /* secondary / de-emphasized structural blue */
+  --hud-accent:    #9bf2fa;   /* bright accent / emphasis (rgb 155,242,250) */
+  --hud-white:     #e8fdff;   /* KEY NUMBERS ONLY */
+
+  /* Derived tints (still within palette, just alpha — base rgb 79,212,232) */
+  --hud-cyan-70: rgba(79, 212, 232, 0.70);
+  --hud-cyan-45: rgba(79, 212, 232, 0.45);
+  --hud-cyan-25: rgba(79, 212, 232, 0.25);
+  --hud-cyan-12: rgba(79, 212, 232, 0.12);
+  --hud-fill:    rgba(79, 212, 232, 0.05);   /* max panel fill */
+  --hud-label:   rgba(150, 225, 245, 0.72);
+
+  /* Glow — strokes and text only. Stack the second layer for emphasis. */
+  --hud-glow:        drop-shadow(0 0 4px rgba(79, 212, 232, 0.6));
+  --hud-glow-strong: drop-shadow(0 0 4px rgba(79, 212, 232, 0.6))
+                     drop-shadow(0 0 12px rgba(155, 242, 250, 0.5));
+  --hud-glow-core:   drop-shadow(0 0 6px rgba(155, 242, 250, 0.9))
+                     drop-shadow(0 0 22px rgba(79, 212, 232, 0.7));
+}
+
+/* ---------- Page ---------- */
+.hud-body {
+  margin: 0;
+  min-height: 100vh;
+  background: radial-gradient(ellipse at center, var(--hud-bg-center) 0%, var(--hud-bg-edge) 100%);
+  color: var(--hud-cyan);
+  font-family: 'Share Tech Mono', ui-monospace, Menlo, monospace;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---------- Typography ---------- */
+.hud-heading,
+.hud-num,
+.hud-label {
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  margin: 0;
+}
+.hud-heading { font-family: 'Orbitron', sans-serif; color: var(--hud-cyan); filter: var(--hud-glow); }
+.hud-num     { font-family: 'Orbitron', sans-serif; color: var(--hud-white); filter: var(--hud-glow-strong); }
+.hud-label   { font-family: 'Share Tech Mono', monospace; font-size: 10px; color: var(--hud-label); filter: var(--hud-glow); }
+
+/* ---------- Glow utilities (apply to SVG groups / paths / text) ---------- */
+.hud-glow        { filter: var(--hud-glow); }
+.hud-glow-strong { filter: var(--hud-glow-strong); }
+.hud-glow-core   { filter: var(--hud-glow-core); }
+
+/* ---------- SVG stroke / fill system ---------- */
+.hud-svg { display: block; overflow: visible; }
+.hud-stroke        { stroke: var(--hud-cyan);   fill: none; filter: var(--hud-glow); }
+.hud-stroke-dim    { stroke: var(--hud-cyan-45); fill: none; }
+.hud-stroke-faint  { stroke: var(--hud-cyan-25); fill: none; }
+.hud-stroke-bright { stroke: var(--hud-accent);  fill: none; filter: var(--hud-glow-strong); }
+.hud-stroke-blue   { stroke: var(--hud-blue);    fill: none; }
+.hud-fill-faint    { fill: var(--hud-fill); }
+.hud-fill-tint     { fill: var(--hud-cyan-12); }
+.hud-fill-cyan     { fill: var(--hud-cyan); }
+.hud-fill-accent   { fill: var(--hud-accent); }
+.hud-txt           { fill: var(--hud-white); font-family: 'Orbitron', sans-serif; letter-spacing: 0.08em; filter: var(--hud-glow-strong); }
+.hud-txt-dim       { fill: var(--hud-label); font-family: 'Share Tech Mono', monospace; letter-spacing: 0.12em; }
+
+/* ---------- Panel: clipped corners + corner brackets ---------- */
+.hud-panel {
+  position: relative;
+  display: inline-block;
+  color: var(--hud-cyan);
+}
+/* transparent (max 5%) fill, clipped to a 45deg-notched octagon */
+.hud-panel::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--hud-fill);
+  clip-path: polygon(
+    var(--notch) 0, calc(100% - var(--notch)) 0, 100% var(--notch),
+    100% calc(100% - var(--notch)), calc(100% - var(--notch)) 100%,
+    var(--notch) 100%, 0 calc(100% - var(--notch)), 0 var(--notch)
+  );
+  pointer-events: none;
+}
+/* SVG overlay draws the glowing notched outline + corner brackets */
+.hud-panel > .hud-frame {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.hud-panel > .hud-content {
+  position: relative;
+  z-index: 1;
+}
+.hud-panel-title {
+  position: absolute;
+  top: 8px;
+  left: 16px;
+  z-index: 2;
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--hud-label);
+  filter: var(--hud-glow);
+}
+
+/* ---------- Scanline / grid overlay ---------- */
+.hud-scanlines {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 50;
+  background-image:
+    repeating-linear-gradient(0deg, rgba(79, 212, 232, 0.05) 0 1px, transparent 1px 3px),
+    linear-gradient(rgba(79, 212, 232, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(79, 212, 232, 0.05) 1px, transparent 1px);
+  background-size: 100% 3px, 44px 44px, 44px 44px;
+  mix-blend-mode: screen;
+}
+.hud-scanlines::after {
+  content: "";
+  position: absolute;
+  left: 0; right: 0;
+  height: 22%;
+  background: linear-gradient(180deg, transparent, rgba(155, 242, 250, 0.06) 50%, transparent);
+}
+
+/* ---------- Motion ---------- */
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; }
+}

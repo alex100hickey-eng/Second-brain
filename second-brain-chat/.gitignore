@@ -1,0 +1,5 @@
+# Node dependencies — gsap/d3 installed via npm; vendored builds live in static/vendor/
+node_modules/
+
+# Third-party reference material only (arwes) — kept locally, never imported or committed
+references/

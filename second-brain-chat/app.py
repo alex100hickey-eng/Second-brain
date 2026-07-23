@@ -4406,6 +4406,14 @@ def hud_classic():
     return render_template("dashboard.html")
 
 
+@app.route("/hud-demo")
+def hud_demo():
+    # Showcase for the reusable HUD component library (static/hud/), styled per
+    # HUD_STYLE.md. Displays every component; used to iterate the visual style
+    # against references/hud-target.png.
+    return render_template("hud-demo.html")
+
+
 @app.route("/api/dashboard")
 def api_dashboard():
     # A transient upstream read error (Supabase/Composio) shouldn't blow up as an HTML

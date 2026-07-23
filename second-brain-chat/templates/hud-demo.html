@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>CLARVIS — HUD Component Library</title>
+<link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32.png">
+<link rel="stylesheet" href="/static/hud/hud.css?v=5">
+<style>
+  html, body { margin: 0; }
+  .hud-wrap { padding: 20px 26px 40px; position: relative; z-index: 1; }
+  .hud-topbar { display: flex; align-items: baseline; justify-content: space-between; gap: 20px;
+    border-bottom: 1px solid var(--hud-cyan-25); padding-bottom: 10px; margin-bottom: 12px; }
+  .hud-topbar h1 { font-family: 'Orbitron', sans-serif; font-weight: 700; font-size: 22px;
+    letter-spacing: 0.22em; margin: 0; color: var(--hud-cyan); filter: var(--hud-glow-strong); }
+  .hud-topbar .sub { font-size: 10px; letter-spacing: 0.2em; color: var(--hud-label); text-transform: uppercase; }
+
+  /* centerpiece band */
+  .hud-center { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center;
+    gap: 18px; margin: 2px 0 6px; }
+  .hud-center .side { display: flex; flex-direction: column; gap: 12px; }
+  .hud-center .side.right { align-items: flex-end; }
+  .hud-reactor-mount { display: flex; justify-content: center; }
+
+  /* full-width instrument strip */
+  .hud-strip { display: flex; flex-wrap: wrap; gap: 22px 30px; align-items: center;
+    justify-content: space-between; padding: 8px 4px; margin: 2px 0 10px;
+    border-top: 1px solid var(--hud-cyan-12); border-bottom: 1px solid var(--hud-cyan-12); }
+
+  /* section labels */
+  .hud-sec { font-family: 'Share Tech Mono', monospace; font-size: 10px; letter-spacing: 0.2em;
+    text-transform: uppercase; color: var(--hud-cyan-45); margin: 12px 2px 8px; display: flex;
+    align-items: center; gap: 10px; }
+  .hud-sec::after { content: ""; flex: 1; height: 1px; background: var(--hud-cyan-12); }
+
+  /* component gallery */
+  .hud-grid { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
+  .hud-cell-label { position: absolute; bottom: 6px; right: 12px; font-family: 'Share Tech Mono', monospace;
+    font-size: 9px; letter-spacing: 0.14em; color: var(--hud-cyan-45); text-transform: uppercase; }
+
+  .hud-prims { display: flex; flex-wrap: wrap; gap: 22px 34px; align-items: center; }
+
+  /* faint background scatter fills the negative space */
+  .hud-scatter { position: absolute; opacity: 0.5; z-index: 0; pointer-events: none; }
+</style>
+</head>
+<body class="hud-body">
+
+<div class="hud-wrap">
+  <div class="hud-topbar">
+    <h1>CLARVIS · HUD</h1>
+    <div class="sub">Component Library · V1 · static/hud · SCN.04 · MDL.19 · LNK.77</div>
+  </div>
+
+  <!-- ================= CENTERPIECE ================= -->
+  <div class="hud-center">
+    <div class="side left" id="center-left"></div>
+    <div class="hud-reactor-mount" id="reactor-mount"></div>
+    <div class="side right" id="center-right"></div>
+  </div>
+
+  <!-- ================= INSTRUMENT STRIP ================= -->
+  <div class="hud-strip" id="strip"></div>
+
+  <!-- ================= COMPONENT GALLERY ================= -->
+  <div class="hud-sec">Components</div>
+  <div class="hud-grid" id="gallery"></div>
+
+  <!-- ================= DECORATIVE PRIMITIVES ================= -->
+  <div class="hud-sec">Decorative Primitives</div>
+  <div class="hud-prims" id="prims"></div>
+</div>
+
+<script src="/static/vendor/gsap.min.js"></script>
+<script src="/static/vendor/d3.min.js"></script>
+<script src="/static/hud/hud.js?v=5"></script>
+<script>
+  HUD.scanlineOverlay();
+
+  // ---- background scatter: faint filler in the negative space (empty zones only) ----
+  (function scatter() {
+    const wrap = document.querySelector('.hud-wrap');
+    const place = (node, css) => {
+      const d = document.createElement('div');
+      d.className = 'hud-scatter';
+      Object.assign(d.style, css);
+      d.appendChild(node); wrap.appendChild(d);
+    };
+    // top-center gap (below title, above reactor)
+    place(HUD.dotMatrix({ rows: 3, cols: 16, cell: 10 }), { left: '300px', top: '84px' });
+    // mid-band gaps flanking the gallery
+    place(HUD.binaryStream({ rows: 5, cols: 14, cell: 11 }), { right: '36px', top: '520px' });
+    place(HUD.hexCluster({ rows: 2, cols: 4, r: 11 }), { left: '24px', top: '540px' });
+    // "+" markers near the reactor corners
+    place(HUD.marker({ size: 20 }), { left: '33%', top: '250px' });
+    place(HUD.marker({ size: 20 }), { left: '64%', top: '470px' });
+  })();
+
+  // ---- centerpiece: CoreReactor flanked by instruments ----
+  document.getElementById('reactor-mount').appendChild(HUD.coreReactor({ size: 430 }));
+
+  const L = document.getElementById('center-left');
+  L.appendChild(HUD.statReadout({ label: 'CORE OUTPUT', value: '99', unit: '%', size: 34 }));
+  L.appendChild(HUD.radialGauge({ size: 138, value: 72, label: 'FLUX' }));
+  L.appendChild(HUD.dataBar({ width: 220, segments: 16, value: 62, label: 'CHARGE' }));
+  L.appendChild(HUD.tickStrip({ count: 18, step: 12 }));
+  L.appendChild(HUD.miniRings({ rings: [[13, 0.7], [15, 0.45], [12, 0.8]] }));
+
+  const Rt = document.getElementById('center-right');
+  Rt.appendChild(HUD.statReadout({ label: 'LINK', value: '77', unit: 'ms', size: 34 }));
+  Rt.appendChild(HUD.pieIndicator({ size: 116, value: 35 }));
+  Rt.appendChild(HUD.waveMonitor({ width: 220, height: 74, label: 'VITALS' }));
+  Rt.appendChild(HUD.hexCluster({ rows: 2, cols: 4, r: 12 }));
+  Rt.appendChild(HUD.chevronRun({ count: 7, step: 22, h: 22 }));
+
+  // ---- instrument strip ----
+  const S = document.getElementById('strip');
+  S.appendChild(HUD.dotMatrix({ rows: 4, cols: 20, cell: 11 }));
+  S.appendChild(HUD.miniRings());
+  S.appendChild(HUD.chevronRun({ count: 8, step: 24 }));
+  S.appendChild(HUD.tickStrip({ count: 20, step: 12 }));
+  S.appendChild(HUD.hexCluster({ rows: 2, cols: 5, r: 12 }));
+  S.appendChild(HUD.binaryStream({ rows: 3, cols: 16, cell: 12 }));
+
+  // ---- gallery: one labeled panel per component (+ interleaved filler) ----
+  function cell(title, node, w, h) {
+    const p = HUD.panel({ width: w, height: h, title });
+    p._content.appendChild(node);
+    const lab = document.createElement('div');
+    lab.className = 'hud-cell-label';
+    lab.textContent = title;
+    p.appendChild(lab);
+    return p;
+  }
+  function col(nodes, gap) {
+    const w = document.createElement('div'); w.style.display = 'flex'; w.style.flexDirection = 'column';
+    w.style.gap = (gap || 10) + 'px'; nodes.forEach(n => w.appendChild(n)); return w;
+  }
+  const G = document.getElementById('gallery');
+  G.appendChild(cell('HudPanel', col([
+    HUD.statReadout({ label: 'STATUS', value: 'OK', size: 24 }),
+    HUD.tickStrip({ count: 12, step: 12 })
+  ]), 210, 150));
+  G.appendChild(cell('RadialGauge', HUD.radialGauge({ size: 148, value: 88, label: 'PWR' }), 190, 190));
+  G.appendChild(cell('RadialGauge', HUD.radialGauge({ size: 148, value: 45, label: 'TEMP' }), 190, 190));
+  G.appendChild(cell('DataBar', col([
+    HUD.dataBar({ width: 200, segments: 14, value: 78, label: 'MEM' }),
+    HUD.dataBar({ width: 200, segments: 14, value: 34, label: 'IO' }),
+    HUD.dataBar({ width: 200, segments: 14, value: 92, label: 'NET' })
+  ]), 236, 190));
+  G.appendChild(cell('WaveMonitor', HUD.waveMonitor({ width: 236, height: 96, label: 'ECG' }), 272, 150));
+  G.appendChild(cell('CircuitTrace', HUD.circuitTrace({ width: 216, height: 128 }), 250, 170));
+  G.appendChild(cell('PieIndicator', HUD.pieIndicator({ size: 128, value: 62 }), 190, 190));
+  G.appendChild(cell('BinaryStream', HUD.binaryStream({ rows: 6, cols: 18, cell: 13 }), 256, 170));
+  G.appendChild(cell('StatReadout', col([
+    HUD.statReadout({ label: 'SIGNAL', value: '5.232145', size: 22 }),
+    HUD.statReadout({ label: 'DELTA', value: '8.235687', size: 22 })
+  ]), 236, 150));
+  // filler panels to complete the last row at HUD density
+  G.appendChild(cell('MDL.19', col([
+    HUD.miniRings({ rings: [[13, 0.7], [15, 0.45], [12, 0.85]] }),
+    HUD.chevronRun({ count: 6, step: 22, h: 20 }),
+    HUD.tickStrip({ count: 14, step: 12 })
+  ]), 220, 150));
+  G.appendChild(cell('SCN.04', col([
+    HUD.dataBar({ width: 190, segments: 12, value: 84, label: 'SYNC' }),
+    HUD.hexCluster({ rows: 2, cols: 4, r: 11 })
+  ]), 220, 150));
+  G.appendChild(cell('LNK.77', HUD.binaryStream({ rows: 5, cols: 16, cell: 12 }), 236, 150));
+
+  // ---- decorative primitives showcase ----
+  const P = document.getElementById('prims');
+  [
+    ['hexCluster', HUD.hexCluster()],
+    ['chevronRun', HUD.chevronRun()],
+    ['tickStrip', HUD.tickStrip()],
+    ['dotMatrix', HUD.dotMatrix({ rows: 4, cols: 16 })],
+    ['miniRings', HUD.miniRings()],
+    ['marker', HUD.marker({ size: 22 })]
+  ].forEach(([name, node]) => {
+    const b = document.createElement('div');
+    b.style.display = 'flex'; b.style.flexDirection = 'column'; b.style.gap = '6px'; b.style.alignItems = 'flex-start';
+    node.style.minHeight = '30px';
+    b.appendChild(node);
+    const l = document.createElement('div'); l.className = 'hud-label'; l.textContent = name;
+    b.appendChild(l); P.appendChild(b);
+  });
+</script>
+</body>
+</html>
