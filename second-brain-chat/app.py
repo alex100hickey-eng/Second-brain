@@ -4381,19 +4381,28 @@ except Exception as e:
 # ============================================================
 
 @app.route("/")
+@app.route("/hud")
 def index():
+    # The HUD shell IS the app now (Alex's call, 2026-07-22): opens on the command
+    # deck — chat via the command bar, dashboard content via panel popups.
+    return render_template("hud.html")
+
+
+@app.route("/chat-classic")
+def chat_classic():
+    # The original chat page, kept as the fallback "console" view.
     return render_template("index.html")
 
 
 @app.route("/dashboard")
 def dashboard():
-    # The clean, readable, mobile-friendly home base (see home.html). The elaborate
-    # sci-fi HUD is preserved at /hud.
+    # The clean, readable, mobile-friendly board (see home.html).
     return render_template("home.html")
 
 
-@app.route("/hud")
-def hud():
+@app.route("/hud-classic")
+def hud_classic():
+    # The previous HUD, preserved (6 rounds of iteration — not thrown away).
     return render_template("dashboard.html")
 
 
