@@ -217,6 +217,12 @@ html, body { height: 100%; margin: 0; background: #010A20; overflow: hidden; }
   <circle cx="70" cy="900" r="6" fill="#E8FDFF" filter="url(#glow)"/>
   <circle cx="112" cy="928" r="11" class="ln2" stroke-width="3" stroke-dasharray="5 4"/>
 </g>
+<!-- bottom-left corner filigree: nested angles + tick strip -->
+<g class="ln" stroke-width="1.5">
+  <path d="M 30 920 h 70 l 16 16 v 44"/>
+  <path d="M 30 936 h 58 l 14 14 v 30" opacity=".5"/>
+  <path d="M 40 962 h 8 M 56 962 h 8 M 72 962 h 8" stroke-width="3"/>
+</g>
 <!-- stacked bar columns + spectrum -->
 <g id="stacks"></g>
 <g id="spectrum"></g>
@@ -234,6 +240,9 @@ html, body { height: 100%; margin: 0; background: #010A20; overflow: hidden; }
     <circle cx="760" cy="440" r="150" class="ln" stroke-width="1.5" stroke-dasharray="58 12 6 12"/>
     <g id="microseg"></g>
     <circle cx="760" cy="440" r="128" class="ln2" stroke-width="1" stroke-dasharray="2 7"/>
+    <circle cx="760" cy="440" r="246" class="ln2" stroke-width="1" opacity=".5"/>
+    <path class="ln" stroke-width="3" opacity=".55" d="M 640 296 A 188 188 0 0 1 728 256
+          M 878 610 A 188 188 0 0 1 800 626 M 594 520 A 188 188 0 0 1 578 470"/>
   </g>
   <g class="spin-micro"><g id="spokes"></g></g>
   <g class="spin-inner">
@@ -275,6 +284,8 @@ html, body { height: 100%; margin: 0; background: #010A20; overflow: hidden; }
   <g id="databars"></g>
   <circle cx="856" cy="176" r="7" class="ln" stroke-width="1.5"/>
   <circle cx="876" cy="176" r="7" class="ln2" stroke-width="1.5"/>
+  <path class="ln2" stroke-width="1" d="M 596 84 L 636 190" opacity=".6"/>
+  <path class="ln2" stroke-width="1" d="M 724 178 h 120" stroke-dasharray="2 4"/>
   <path class="fillS" stroke="#9BF2FA" stroke-width="1.5" filter="url(#glow)"
         d="M 918 150 L 972 174 L 918 198 Z"/>
 </g>
