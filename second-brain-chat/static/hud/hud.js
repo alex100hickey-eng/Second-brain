@@ -547,9 +547,24 @@
   HUD.donutGauge = function (opts) {
     opts = opts || {};
     const S = opts.size || 76, c = S / 2, val = opts.value == null ? 50 : opts.value;
-    const th = opts.thickness || S * 0.19, rO = S * 0.48;
+    // ticks: true adds a slowly rotating dashed tick ring around the donut
+    // (radialGauge's halo); the donut shrinks to leave room for it.
+    const rO = opts.ticks ? S * 0.38 : S * 0.48;
+    const th = opts.thickness || rO * 0.4;
     const s = svg(S, S);
     if (opts.role) s.dataset.role = opts.role;
+    if (opts.ticks) {
+      const rTick = S * 0.46, rTickIn = S * 0.40;
+      const gTicks = el('g', {}, s);
+      el('circle', { cx: c, cy: c, r: rTick, class: 'hud-stroke-faint', 'stroke-width': 1, 'stroke-dasharray': '2 6' }, gTicks);
+      for (let i = 0; i < 60; i++) {
+        const major = i % 5 === 0;
+        const [x1, y1] = P(c, c, major ? rTickIn - 4 : rTickIn, i / 60 * 360);
+        const [x2, y2] = P(c, c, rTick, i / 60 * 360);
+        el('line', { x1, y1, x2, y2, stroke: 'var(--hud-cyan)', 'stroke-width': major ? 1.5 : 1, opacity: major ? 0.8 : 0.35 }, gTicks);
+      }
+      spin(gTicks, c, c, 48);
+    }
     const arc = d3.arc().innerRadius(rO - th).outerRadius(rO);
     // dark track ring
     el('path', { d: arc({ startAngle: 0, endAngle: 2 * Math.PI }), transform: `translate(${c} ${c})`,

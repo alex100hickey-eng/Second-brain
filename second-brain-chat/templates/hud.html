@@ -89,15 +89,15 @@
     paths: ['M 215 4 H 255', 'M 3 47 l 26 26'] }), 272, 48);
   at(HUD.dashedSquare({ size: 70 }), 333, 29);
   at(HUD.candlesticks({ width: 100, height: 68, role: 'candles' }), 446, 30);
-  atC(HUD.donutGauge({ size: 76, value: 30, role: 'g1' }), 96, 146);
-  atC(HUD.donutGauge({ size: 76, value: 50, role: 'g2' }), 211, 144);
-  atC(HUD.donutGauge({ size: 76, value: 70, role: 'g3' }), 326, 143);
-  // gauge-to-gauge links with bright node dots at the midpoints
-  at(HUD.circuitTrace({ width: 42, height: 8, node: false,
-    paths: ['M 1 4 H 41'] }), 133, 141);
+  atC(HUD.donutGauge({ size: 96, value: 30, ticks: true, role: 'g1' }), 96, 146);
+  atC(HUD.donutGauge({ size: 96, value: 50, ticks: true, role: 'g2' }), 211, 144);
+  atC(HUD.donutGauge({ size: 96, value: 70, ticks: true, role: 'g3' }), 326, 143);
+  // gauge-to-gauge links with bright node dots, spanning between the tick halos
+  at(HUD.circuitTrace({ width: 25, height: 8, node: false,
+    paths: ['M 1 4 H 24'] }), 142, 141);
   atC(HUD.nodeDot({ r: 4 }), 154, 145);
-  at(HUD.circuitTrace({ width: 42, height: 8, node: false,
-    paths: ['M 1 4 H 41'] }), 248, 140);
+  at(HUD.circuitTrace({ width: 25, height: 8, node: false,
+    paths: ['M 1 4 H 24'] }), 257, 140);
   atC(HUD.nodeDot({ r: 4 }), 269, 144);
   label('HUD INTERFACE TECHNOLOGY', 132, 196);
   at(HUD.dotMatrix({ rows: 6, cols: 28, cell: 12, gapCols: [7, 15] }), 60, 224);
