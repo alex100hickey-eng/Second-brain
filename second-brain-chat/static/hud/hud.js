@@ -329,17 +329,26 @@
     const W = opts.width || 260, H = opts.height || 90;
     const s = svg(W, H);
     if (opts.role) s.dataset.role = opts.role;
-    const midY = H * 0.55;
-    // build a repeating EKG path across the width
+    const midY = H * 0.55, A = opts.amp || 1;
     let d = `M 6 ${midY}`;
-    const beat = [[16, 0], [8, -6], [8, 12], [6, -22], [8, 26], [6, -14], [6, 5]];
-    let x = 6;
-    while (x < W - 30) {
-      d += ` h 22`; x += 22;
-      for (const [dx, dy] of beat) { d += ` l ${dx} ${dy}`; x += dx; }
+    if (opts.profile) {
+      // bespoke one-shot trace (ref vitals wave is a specific composition)
+      for (const [dx, dy] of opts.profile) d += ` l ${dx} ${dy}`;
+      d += ` H ${W - 14}`;
+    } else {
+      // repeating EKG; one full repeat is 22 + 58px — guard so the last
+      // beat can't overshoot
+      const beat = [[16, 0], [8, -6 * A], [8, 12 * A], [6, -22 * A], [8, 26 * A],
+                    [6, -14 * A], [6, 4 * A]];
+      let x = 6;
+      while (x < W - 86) {
+        d += ` h 22`; x += 22;
+        for (const [dx, dy] of beat) { d += ` l ${dx} ${dy}`; x += dx; }
+      }
+      d += ` H ${W - 6}`;
     }
-    d += ` H ${W - 6}`;
-    el('path', { d, class: 'hud-stroke', 'stroke-width': 2, opacity: 0.55, 'stroke-linejoin': 'round' }, s);
+    el('path', { d, class: 'hud-stroke', 'stroke-width': opts.profile ? 2.4 : 2,
+      opacity: opts.profile ? 0.85 : 0.55, 'stroke-linejoin': 'round' }, s);
     if (opts.arrow) el('polygon', {
       points: `${W - 2},${midY} ${W - 12},${midY - 5} ${W - 12},${midY + 5}`,
       fill: 'var(--hud-cyan)', class: 'hud-glow' }, s);
@@ -426,50 +435,139 @@
   };
 
   /* ============================================================
-     StatPanel — bracket-corner panel: three broken donuts, line
-     stack, big % value, hex-nut crosshair, decimal label (the ref's
-     twin 75%/100% panels). opts: {width=200, height=132, value='100',
+     StatPanel — thin rect with OUTER corner brackets: three thick
+     gapped donuts, chunky line stack, big % value, large hex-nut with
+     a through-crosshair and pale core, decimal label (the ref's twin
+     75%/100% panels). opts: {width=200, height=144, value='100',
      decimal='0.002157', role}
      ============================================================ */
   HUD.statPanel = function (opts) {
     opts = opts || {};
-    const W = opts.width || 200, H = opts.height || 132;
-    const s = svg(W, H);
+    const W = opts.width || 200, H = opts.height || 144;
+    const s = svg(W, H, { style: 'overflow:visible' });
     if (opts.role) s.dataset.role = opts.role;
-    el('rect', { x: 1, y: 1, width: W - 2, height: H - 2, fill: 'var(--hud-fill)',
-      class: 'hud-stroke-faint', 'stroke-width': 1 }, s);
-    const bl = 16;   // corner brackets
-    const gB = el('g', { class: 'hud-stroke', 'stroke-width': 1.5, fill: 'none' }, s);
-    [[1, 1, bl, bl], [W - 1, 1, -bl, bl], [W - 1, H - 1, -bl, -bl], [1, H - 1, bl, -bl]]
-      .forEach(([x, y, dx, dy]) => el('path', {
-        d: `M ${x + dx} ${y} H ${x} V ${y + dy}` }, gB));
-    // three broken donut rings stacked on the left
-    [[30, 40, 300], [64, 130, 290], [98, 220, 310]].forEach(([cy2, a0, a1]) => {
-      const [x0, y0] = P(26, cy2, 12, a0), [x1, y1] = P(26, cy2, 12, a1);
-      el('path', { d: `M ${x0} ${y0} A 12 12 0 ${a1 - a0 > 180 ? 1 : 0} 1 ${x1} ${y1}`,
-        fill: 'none', stroke: 'var(--hud-cyan)', 'stroke-width': 5, class: 'hud-glow' }, s);
+    el('rect', { x: 6, y: 6, width: W - 12, height: H - 12, fill: 'var(--hud-fill)',
+      class: 'hud-stroke', 'stroke-width': 1.2 }, s);
+    // outer corner brackets, slightly proud of the rect, long arms
+    const bl = 26;
+    const gB = el('g', { class: 'hud-stroke-bright', 'stroke-width': 1.6, fill: 'none' }, s);
+    [`M ${bl} 0 H 0 V ${bl}`, `M ${W - bl} 0 H ${W} V ${bl}`,
+     `M ${W - bl} ${H} H ${W} V ${H - bl}`, `M ${bl} ${H} H 0 V ${H - bl}`]
+      .forEach(d => el('path', { d }, gB));
+    // three progress donuts: bright arc + dim royal remainder (ref)
+    [[38, 40, 265], [76, 150, 240], [114, 250, 285]].forEach(([cy2, a0, len]) => {
+      const arcTo = (from, sweep, stroke, cls) => {
+        const [x0, y0] = P(30, cy2, 13, from), [x1, y1] = P(30, cy2, 13, from + sweep);
+        el('path', { d: `M ${x0} ${y0} A 13 13 0 ${sweep > 180 ? 1 : 0} 1 ${x1} ${y1}`,
+          fill: 'none', stroke, 'stroke-width': 8, class: cls || '' }, s);
+      };
+      arcTo(a0 + len, 360 - len, 'var(--hud-blue)');
+      arcTo(a0, len, 'var(--hud-accent)', 'hud-glow');
     });
-    // line stack top-middle
-    [[120, 'var(--hud-white)', 0.85], [120, 'var(--hud-cyan)', 0.9],
-     [86, 'var(--hud-cyan-45)', 1], [60, 'var(--hud-cyan-25)', 1]].forEach(([w, st, op], i) =>
-      el('rect', { x: 48, y: 20 + i * 8, width: w, height: 3, fill: st, opacity: op }, s));
+    // chunky rounded line stack: three full-length, one short royal
+    [[118, 'var(--hud-white)', 0.9, 4], [118, 'var(--hud-white)', 0.65, 4],
+     [118, 'var(--hud-cyan)', 0.9, 4], [56, 'var(--hud-blue)', 1, 5]].forEach(([w, st, op, hh], i) =>
+      el('rect', { x: 56, y: 22 + i * 9, width: Math.min(w, W - 70), height: hh,
+        rx: 2, fill: st, opacity: op }, s));
     // big % value
-    const t = el('text', { x: 48, y: 96, 'font-size': 22, class: 'hud-txt' }, s);
+    const t = el('text', { x: 56, y: 104, 'font-size': 26, class: 'hud-txt' }, s);
     txt(t, (opts.value == null ? '100' : opts.value) + '%');
-    // hex-nut with crosshair + bright core, right side
-    const hx = W - 50, hy = H - 48, hr = 26;
+    // large hex-nut, through-crosshair, pale core
+    const hx = W - 54, hy = H - 54, hr = 32;
     let hd = '';
     for (let i = 0; i < 6; i++) {
       const [x, y] = P(hx, hy, hr, 30 + i * 60);
       hd += (i ? ' L ' : 'M ') + x + ' ' + y;
     }
-    el('path', { d: hd + ' Z', class: 'hud-stroke', 'stroke-width': 1.2, fill: 'none' }, s);
-    el('path', { d: `M ${hx - hr - 12} ${hy} H ${hx - 10} M ${hx + 10} ${hy} H ${hx + hr + 12}
-                     M ${hx} ${hy - hr - 10} V ${hy - 8} M ${hx} ${hy + 8} V ${hy + hr + 10}`,
+    el('path', { d: hd + ' Z', class: 'hud-stroke', 'stroke-width': 1.3, fill: 'none' }, s);
+    el('path', { d: `M ${hx - hr - 24} ${hy} H ${hx + hr + 18}
+                     M ${hx} ${hy - hr - 26} V ${hy + hr + 22}`,
       class: 'hud-stroke-dim', 'stroke-width': 1 }, s);
-    el('circle', { cx: hx, cy: hy, r: 8, fill: 'var(--hud-accent)', class: 'hud-glow-strong' }, s);
-    const d2 = el('text', { x: 48, y: H - 12, 'font-size': 9, class: 'hud-txt-dim' }, s);
+    // bright stubs where the crosshair exits the hexagon
+    el('path', { d: `M ${hx} ${hy - hr - 26} v 9 M ${hx} ${hy + hr + 22} v -9
+                     M ${hx - hr - 24} ${hy} h 9 M ${hx + hr + 18} ${hy} h -9`,
+      class: 'hud-stroke-bright', 'stroke-width': 2 }, s);
+    el('circle', { cx: hx, cy: hy, r: 13, fill: 'var(--hud-white)', opacity: 0.95,
+      class: 'hud-glow' }, s);
+    const d2 = el('text', { x: 56, y: H - 14, 'font-size': 9, class: 'hud-txt-dim' }, s);
     txt(d2, opts.decimal || '0.002157');
+    return s;
+  };
+
+  /* ============================================================
+     EcgPanel — the ref's vitals frame: chamfer/notch outline with a
+     royal offset shadow, dark fill, tab notches, deco squares, bright
+     chevrons, wave-start node, broken baseline, decimal label.
+     Content (the wave) is overlaid by the template.
+     opts: {width=285, height=140}
+     ============================================================ */
+  HUD.ecgPanel = function (opts) {
+    opts = opts || {};
+    const W = opts.width || 285, H = opts.height || 140;
+    const s = svg(W, H, { style: 'overflow:visible' });
+    // outline with a bite notch on the top edge and a step on the bottom
+    const d = 'M 20 6 H 96 l 5 5 h 22 l 5 -5 H 238 L 278 27 V 106 L 254 134 ' +
+              'H 150 l 0 -4 h -28 l 0 4 H 34 L 14 118 V 26 Z';
+    el('path', { d, fill: 'none', stroke: 'var(--hud-blue)', 'stroke-width': 1.5,
+      opacity: 0.85, transform: 'translate(-5,-6)' }, s);
+    el('path', { d, fill: 'rgba(6,20,48,0.62)', class: 'hud-stroke',
+      'stroke-width': 1.8 }, s);
+    // doubled inner line along the top-right chamfer
+    el('line', { x1: 236, y1: 12, x2: 271, y2: 30, class: 'hud-stroke-dim',
+      'stroke-width': 1 }, s);
+    // faint inner inset outline segments (bottom + right)
+    el('path', { d: 'M 40 126 H 246 M 270 40 V 100', class: 'hud-stroke-faint',
+      'stroke-width': 1 }, s);
+    // tab notches riding the frame edges + a bright block on the top edge
+    [[58, 3, 16, 5], [206, 3, 12, 5], [10, 60, 5, 18], [10, 92, 5, 12],
+     [168, 131, 14, 5]].forEach(([x, y, w, h]) =>
+      el('rect', { x, y, width: w, height: h, fill: 'var(--hud-cyan)', opacity: 0.7 }, s));
+    el('rect', { x: 36, y: 2, width: 12, height: 8, fill: 'var(--hud-accent)',
+      class: 'hud-glow' }, s);
+    // dark deco squares scattered top-left + mid-left
+    [[30, 20, 11], [47, 24, 7], [62, 19, 6], [26, 78, 8]].forEach(([x, y, q]) =>
+      el('rect', { x, y, width: q, height: q, fill: 'rgba(8,22,50,0.95)',
+        class: 'hud-stroke-faint', 'stroke-width': 1 }, s));
+    // bright chevrons: top-right + bottom-left
+    const chev = (x0, y0, n, sc) => {
+      for (let i = 0; i < n; i++)
+        el('path', { d: `M ${x0 + i * 9 * sc} ${y0} l ${7 * sc} ${5 * sc} l ${-7 * sc} ${5 * sc}`,
+          fill: 'none', class: 'hud-stroke-bright', 'stroke-width': 2.2 }, s);
+    };
+    chev(226, 14, 3, 1);
+    chev(30, 102, 3, 1.15);
+    // node square where the wave begins + broken baseline + decimal
+    el('rect', { x: 56, y: 62, width: 6, height: 6, fill: 'var(--hud-cyan)' }, s);
+    el('line', { x1: 34, y1: 124, x2: 246, y2: 124, class: 'hud-stroke-dim',
+      'stroke-width': 1, 'stroke-dasharray': '34 9' }, s);
+    txt(el('text', { x: 148, y: 112, 'font-size': 9, class: 'hud-txt-dim' }, s),
+      '0.0015741');
+    return s;
+  };
+
+  /* ============================================================
+     NodeSquare — solid square outline, four filled corner nodes,
+     outer L-brackets (the ref's left-column ornament).
+     opts: {size=46, node 'dot'|'square', role}
+     ============================================================ */
+  HUD.nodeSquare = function (opts) {
+    opts = opts || {};
+    const S = opts.size || 46, inset = S * 0.16, q = S * 0.14;
+    const s = svg(S, S, { style: 'overflow:visible' });
+    if (opts.role) s.dataset.role = opts.role;
+    el('rect', { x: inset, y: inset, width: S - inset * 2, height: S - inset * 2,
+      class: 'hud-stroke', 'stroke-width': 1.4, fill: 'var(--hud-fill)' }, s);
+    const pos = [[inset + q, inset + q], [S - inset - q, inset + q],
+                 [inset + q, S - inset - q], [S - inset - q, S - inset - q]];
+    pos.forEach(([x, y]) => opts.node === 'square'
+      ? el('rect', { x: x - q / 2, y: y - q / 2, width: q, height: q,
+          fill: 'var(--hud-accent)', class: 'hud-glow' }, s)
+      : el('circle', { cx: x, cy: y, r: q * 0.78, fill: 'var(--hud-accent)',
+          class: 'hud-glow' }, s));
+    const bl = S * 0.24;
+    const gB = el('g', { class: 'hud-stroke-dim', 'stroke-width': 1.2, fill: 'none' }, s);
+    [[0, 0, 1, 1], [S, 0, -1, 1], [S, S, -1, -1], [0, S, 1, -1]].forEach(([x, y, dx, dy]) =>
+      el('path', { d: `M ${x + dx * bl} ${y} H ${x} V ${y + dy * bl}` }, gB));
     return s;
   };
 
@@ -490,15 +588,15 @@
     bars.forEach(([len, tn], i) => {
       const off = i * (t + gap);
       if (opts.seg && v) {
-        // striped bar: stack of small segments with a bright one mixed in
+        // mostly-solid royal bars with sparse breaks; one bright tip (ref)
         let y = long;
         let k = 0;
         while (y > long - len) {
-          const sh = Math.min(8, y - (long - len));
+          if ((k + i * 2) % 5 === 4) { y -= 6; k++; continue; }
+          const sh = Math.min(14, y - (long - len));
           el('rect', { x: off, y: y - sh, width: t, height: sh,
-            fill: (k + i) % 5 === 2 ? 'var(--hud-accent)' : tone[tn],
-            opacity: (k + i) % 3 ? 1 : 0.55 }, s);
-          y -= sh + 3; k++;
+            fill: (i === 2 && k === 0) ? 'var(--hud-accent)' : tone[tn] }, s);
+          y -= sh + 2; k++;
         }
         return;
       }
