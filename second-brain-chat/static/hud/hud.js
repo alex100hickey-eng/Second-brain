@@ -1070,6 +1070,59 @@
      ONLY grid in the HUD (background elsewhere stays clean navy).
      opts: {width=1600, height=170, vanishX}
      ============================================================ */
+  /* ============================================================
+     FloorPlane — a trapezoid floor spanning the full bottom edge:
+     narrow at the horizon, full width at the viewer. Filled with a
+     navy → light-blue vertical gradient and overlaid with a light
+     blue perspective grid (verticals converging on the vanishing
+     point, horizontals bunching toward the horizon). The grid is
+     clipped to the trapezoid so nothing leaks outside the plane.
+     opts: {width=1600, height=380, topInset, vanishX, cols, rows, role}
+     ============================================================ */
+  let _floorSeq = 0;
+  HUD.floorPlane = function (opts) {
+    opts = opts || {};
+    const W = opts.width || 1600, H = opts.height || 380;
+    const inset = opts.topInset == null ? W * 0.30 : opts.topInset;
+    const vp = opts.vanishX == null ? W / 2 : opts.vanishX;
+    const uid = 'hud-floor-' + (++_floorSeq);
+    const s = svg(W, H);
+    if (opts.role) s.dataset.role = opts.role;
+
+    const shape = `M ${inset} 0 H ${W - inset} L ${W} ${H} H 0 Z`;
+    const defs = el('defs', {}, s);
+    // navy at the horizon → light blue toward the viewer
+    const lg = el('linearGradient', { id: uid + '-g', x1: '0', y1: '0', x2: '0', y2: '1' }, defs);
+    el('stop', { offset: '0%', 'stop-color': 'var(--hud-bg-edge)', 'stop-opacity': '0.85' }, lg);
+    el('stop', { offset: '45%', 'stop-color': 'var(--hud-bg-center)', 'stop-opacity': '0.9' }, lg);
+    el('stop', { offset: '100%', 'stop-color': 'var(--hud-cyan)', 'stop-opacity': '0.55' }, lg);
+    const cp = el('clipPath', { id: uid + '-c' }, defs);
+    el('path', { d: shape }, cp);
+
+    el('path', { d: shape, fill: `url(#${uid}-g)` }, s);
+
+    // grid, clipped to the plane
+    const g = el('g', { 'clip-path': `url(#${uid}-c)`,
+      stroke: 'var(--hud-accent)', fill: 'none' }, s);
+    const cols = opts.cols || 19;
+    for (let i = 0; i < cols; i++) {
+      const t = (i - (cols - 1) / 2) / ((cols - 1) / 2);
+      el('line', { x1: vp + t * (W / 2 - inset), y1: 0,
+        x2: vp + t * W * 1.35, y2: H,
+        'stroke-width': 1, opacity: 0.5 }, g);
+    }
+    const rows = opts.rows || 9;
+    for (let i = 1; i <= rows; i++) {
+      const t = i / rows, y = H * t * t;    // squared → bunched at the horizon
+      el('line', { x1: 0, y1: y, x2: W, y2: y,
+        'stroke-width': 1, opacity: 0.25 + 0.45 * t }, g);
+    }
+    // bright leading edge along the horizon
+    el('path', { d: `M ${inset} 0 H ${W - inset}`, class: 'hud-stroke-bright',
+      'stroke-width': 1.5 }, s);
+    return s;
+  };
+
   HUD.floorGrid = function (opts) {
     opts = opts || {};
     const W = opts.width || 1600, H = opts.height || 380;

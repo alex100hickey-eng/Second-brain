@@ -35,8 +35,10 @@
 .hud-body {
   margin: 0;
   min-height: 100vh;
-  /* glow sits on the core reactor (deck 760,440), not the page center */
-  background: radial-gradient(ellipse at 47.5% 44%, var(--hud-bg-center) 0%, var(--hud-bg-edge) 100%);
+  /* navy at the edges, fading to a lighter blue behind the core reactor
+     (deck 800,430) — the reactor is the only light source on the page */
+  background: radial-gradient(ellipse at 50% 43%,
+    var(--hud-bg-center) 0%, #0a2450 42%, var(--hud-bg-edge) 100%);
   color: var(--hud-cyan);
   font-family: 'Share Tech Mono', ui-monospace, Menlo, monospace;
   -webkit-font-smoothing: antialiased;
