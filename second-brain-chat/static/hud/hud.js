@@ -1161,7 +1161,34 @@
     s.style.cssText = 'position:absolute;left:0;top:0';
     const R = W - o, B = H - o;
     let d, pad = [14, 16];                    // [vertical, horizontal] content pad
-    if (shape === 'hex') {
+    if (shape === 'banner') {                 // long top, 45deg descent right
+      d = `M ${k} ${o} H ${R} L ${W - k * 1.8} ${B} H ${o} V ${k} Z`;
+      pad = [16, k + 12];
+    } else if (shape === 'hept') {            // irregular heptagon (plane panel)
+      d = `M ${W * 0.28} ${o} H ${W * 0.76} L ${R} ${H * 0.30} V ${H * 0.72}
+           L ${W * 0.72} ${B} H ${W * 0.24} L ${o} ${H * 0.66} V ${H * 0.28} Z`;
+      pad = [20, 34];
+    } else if (shape === 'bite') {            // chamfered rect, notch bitten out of the top
+      d = `M ${k} ${o} H ${W * 0.38} l 7 9 h ${W * 0.14} l 7 -9 H ${W - k}
+           L ${R} ${k} V ${B - k} L ${W - k} ${B} H ${k} L ${o} ${B - k} V ${k} Z`;
+      pad = [22, 18];
+    } else if (shape === 'keystone') {        // inverted trapezoid, wide at top
+      d = `M ${o} ${o} H ${R} L ${W - k} ${B} H ${k} Z`;
+      pad = [14, k + 12];
+    } else if (shape === 'blade') {           // square right, pointed left nose
+      d = `M ${k} ${o} H ${R} V ${B} H ${k * 1.8} L ${o} ${H * 0.5} Z`;
+      pad = [14, k + 18];
+    } else if (shape === 'stack') {           // stepped left edge
+      d = `M ${k} ${o} H ${R} V ${B} H ${o} V ${H * 0.66} H ${k * 0.8}
+           V ${H * 0.33} H ${k * 1.6} Z`;
+      pad = [14, k + 16];
+    } else if (shape === 'crest') {           // peaked top edge
+      d = `M ${W / 2} ${o} L ${R} ${k * 1.6} V ${B} H ${o} V ${k * 1.6} Z`;
+      pad = [k + 14, 16];
+    } else if (shape === 'bracket') {         // corner brackets only, no outline
+      d = null;
+      pad = [16, 18];
+    } else if (shape === 'hex') {
       d = `M ${k} ${o} H ${W - k} L ${R} ${H / 2} L ${W - k} ${B} H ${k} L ${o} ${H / 2} Z`;
       pad = [14, k + 10];
     } else if (shape === 'slant') {
@@ -1179,16 +1206,36 @@
     } else {                                   // notch
       d = `M ${k} ${o} H ${R} V ${H - k} L ${W - k} ${B} H ${o} V ${k} Z`;
     }
-    el('path', { d, fill: 'var(--hud-fill)', stroke: 'var(--hud-accent)',
-      'stroke-width': 1.3, 'stroke-linejoin': 'miter', class: 'hud-glow' }, s);
+    if (d) {
+      el('path', { d: d.replace(/\s+/g, ' '), fill: 'var(--hud-fill)',
+        stroke: 'var(--hud-accent)', 'stroke-width': 1.3,
+        'stroke-linejoin': 'miter', class: 'hud-glow' }, s);
+    } else {
+      // bracket: floating corner Ls over a bare fill, no continuous outline
+      el('rect', { x: o, y: o, width: W - o * 2, height: H - o * 2,
+        fill: 'var(--hud-fill)' }, s);
+      const bl = 26;
+      const gB = el('g', { class: 'hud-stroke-bright', 'stroke-width': 1.8,
+        fill: 'none' }, s);
+      [`M ${bl} ${o} H ${o} V ${bl}`, `M ${R - bl} ${o} H ${R} V ${bl}`,
+       `M ${R - bl} ${B} H ${R} V ${B - bl}`, `M ${bl} ${B} H ${o} V ${B - bl}`]
+        .forEach(p => el('path', { d: p }, gB));
+    }
     if (shape === 'tab') {   // header divider under the tab strip
       el('line', { x1: o, y1: 22, x2: R, y2: 22, class: 'hud-stroke-dim',
         'stroke-width': 1 }, s);
     }
-    // bright corner ticks so an empty frame still reads as instrumented
-    const t = 12;
-    el('path', { d: `M ${o} ${H / 2 - t} V ${H / 2 + t} M ${R} ${H / 2 - t} V ${H / 2 + t}`,
-      class: 'hud-stroke-bright', 'stroke-width': 2 }, s);
+    if (shape === 'bite') {  // deco squares in the header band (ecg panel)
+      [[14, 5], [30, 4]].forEach(([x, q]) =>
+        el('rect', { x: k + x, y: 15, width: q * 2, height: q * 2,
+          class: 'hud-stroke-faint', 'stroke-width': 1, fill: 'none' }, s));
+    }
+    // bright edge ticks so an empty frame still reads as instrumented
+    if (['notch', 'hex', 'slant', 'tab', 'arrow', 'trapz', 'banner', 'blade'].indexOf(shape) !== -1) {
+      const t = 12;
+      el('path', { d: `M ${o} ${H / 2 - t} V ${H / 2 + t} M ${R} ${H / 2 - t} V ${H / 2 + t}`,
+        class: 'hud-stroke-bright', 'stroke-width': 2 }, s);
+    }
     div.appendChild(s);
 
     const content = document.createElement('div');
