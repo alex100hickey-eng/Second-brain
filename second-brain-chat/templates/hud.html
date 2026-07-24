@@ -66,8 +66,8 @@
     vanishX: 1050, rows: 5, role: 'floor' }), -250, 845);
   // name lying flat on the floor, receding to the same vanishing point (x=800),
   // letter-spaced wide so it stretches most of the way across the plane
-  at(HUD.floorText({ text: 'C.L.A.R.V.I.S', size: 96, tilt: 63, spacing: 0.46,
-    perspective: 1900, opacity: 0.85, role: 'floor-name' }), 800, 862);
+  at(HUD.floorText({ text: 'C.L.A.R.V.I.S', size: 100, tilt: 63, spacing: 0.46,
+    perspective: 1900, opacity: 0.9, role: 'floor-name' }), 800, 906);
 
   /* ===== ORBIT RINGS: slow counter-rotating marks hugging the
      reactor, filling the gap between it and the widget ring ===== */
@@ -79,70 +79,77 @@
      Shapes pull from the older HUD builds (banner descent, ECG bite
      notch, plane heptagon, stat-panel brackets). Append widgets into
      each frame's ._content, or via CLARVIS_HUD.frame(role). ===== */
-  // top row
-  at(HUD.widgetFrame({ width: 290, height: 88, shape: 'banner',   role: 'w-tl' }), 70, 14);
-  at(HUD.widgetFrame({ width: 225, height: 88, shape: 'crest',    role: 'w-t1' }), 380, 14);
-  at(HUD.widgetFrame({ width: 350, height: 88, shape: 'bite',     role: 'w-tc' }), 625, 14);
-  at(HUD.widgetFrame({ width: 225, height: 88, shape: 'keystone', role: 'w-t2' }), 995, 14);
-  at(HUD.widgetFrame({ width: 290, height: 88, shape: 'stack',    role: 'w-tr' }), 1240, 14);
-  // left flank
-  at(HUD.widgetFrame({ width: 285, height: 158, shape: 'hept',    role: 'w-l1' }), 40, 130);
-  at(HUD.widgetFrame({ width: 285, height: 158, shape: 'hex',     role: 'w-l2' }), 40, 306);
-  at(HUD.widgetFrame({ width: 285, height: 158, shape: 'blade',   role: 'w-l3' }), 40, 482);
+  // top arc — staggered heights, none sharing a baseline
+  at(HUD.widgetFrame({ width: 200, height: 80, shape: 'banner',   role: 'w-tl' }), 60, 30);
+  at(HUD.widgetFrame({ width: 170, height: 70, shape: 'crest',    role: 'w-t1' }), 300, 14);
+  at(HUD.widgetFrame({ width: 150, height: 64, shape: 'blade',    role: 'w-t2' }), 510, 58);
+  at(HUD.widgetFrame({ width: 225, height: 74, shape: 'bite',     role: 'w-tc' }), 700, 16);
+  at(HUD.widgetFrame({ width: 165, height: 68, shape: 'keystone', role: 'w-t3' }), 975, 44);
+  at(HUD.widgetFrame({ width: 195, height: 74, shape: 'stack',    role: 'w-tr' }), 1180, 14);
+  // left flank — drifting in and out from the edge
+  at(HUD.widgetFrame({ width: 210, height: 96, shape: 'hex',      role: 'w-l1' }), 36, 176);
+  at(HUD.widgetFrame({ width: 188, height: 90, shape: 'bracket',  role: 'w-l2' }), 74, 316);
+  at(HUD.widgetFrame({ width: 218, height: 94, shape: 'arrow',    role: 'w-l3' }), 30, 452);
   // right flank
-  at(HUD.widgetFrame({ width: 285, height: 158, shape: 'bracket', role: 'w-r1' }), 1275, 130);
-  at(HUD.widgetFrame({ width: 285, height: 158, shape: 'arrow',   role: 'w-r2' }), 1275, 306);
-  at(HUD.widgetFrame({ width: 285, height: 158, shape: 'notch',   role: 'w-r3' }), 1275, 482);
-  // bottom row
-  at(HUD.widgetFrame({ width: 290, height: 88, shape: 'trapz',    role: 'w-bl' }), 70, 752);
-  at(HUD.widgetFrame({ width: 225, height: 88, shape: 'slant',    role: 'w-b1' }), 380, 752);
-  at(HUD.widgetFrame({ width: 350, height: 88, shape: 'hept',     role: 'w-bc' }), 625, 752);
-  at(HUD.widgetFrame({ width: 225, height: 88, shape: 'tab',      role: 'w-b2' }), 995, 752);
-  at(HUD.widgetFrame({ width: 290, height: 88, shape: 'keystone', role: 'w-br' }), 1240, 752);
+  at(HUD.widgetFrame({ width: 160, height: 72, shape: 'hept',     role: 'w-r1' }), 1400, 44);
+  at(HUD.widgetFrame({ width: 200, height: 96, shape: 'trapz',    role: 'w-r2' }), 1352, 176);
+  at(HUD.widgetFrame({ width: 216, height: 90, shape: 'slant',    role: 'w-r3' }), 1306, 318);
+  at(HUD.widgetFrame({ width: 190, height: 94, shape: 'tab',      role: 'w-r4' }), 1364, 458);
+  // low arc — pushed down into the space the lettering freed up
+  at(HUD.widgetFrame({ width: 208, height: 86, shape: 'notch',    role: 'w-bl' }), 140, 630);
+  at(HUD.widgetFrame({ width: 236, height: 80, shape: 'banner',   role: 'w-bc' }), 610, 762);
+  at(HUD.widgetFrame({ width: 212, height: 86, shape: 'keystone', role: 'w-br' }), 1284, 632);
 
-  /* ===== SPINNERS + instruments in the side corridors ===== */
-  atC(HUD.compassRing({ size: 104 }), 400, 208);
-  atC(HUD.radarFan({ size: 104 }), 1200, 208);
-  atC(HUD.flowerOfLife({ r: 30 }), 400, 690);
-  atC(HUD.miniRings({ rings: [[20, 0.72], [14, 0.45]] }), 1200, 690);
-  atC(HUD.donutGauge({ size: 92, value: 68, ticks: true }), 400, 430);
-  atC(HUD.dial({ size: 96, value: 74 }), 1200, 430);
-  atC(HUD.nodeSquare({ size: 34 }), 400, 330);
-  atC(HUD.nodeSquare({ size: 34, node: 'square' }), 1200, 330);
-  atC(HUD.marker({ size: 18 }), 400, 552);
-  atC(HUD.marker({ size: 18 }), 1200, 552);
+  /* ===== SPINNERS + instruments woven into the gaps ===== */
+  atC(HUD.compassRing({ size: 100 }), 392, 244);
+  atC(HUD.radarFan({ size: 100 }), 1214, 238);
+  atC(HUD.flowerOfLife({ r: 30 }), 388, 624);
+  atC(HUD.miniRings({ rings: [[20, 0.72], [14, 0.45]] }), 1218, 616);
+  atC(HUD.donutGauge({ size: 88, value: 68, ticks: true }), 336, 428);
+  atC(HUD.dial({ size: 92, value: 74 }), 1256, 436);
+  atC(HUD.nodeSquare({ size: 32 }), 300, 336);
+  atC(HUD.nodeSquare({ size: 32, node: 'square' }), 1288, 342);
+  atC(HUD.marker({ size: 18 }), 316, 540);
+  atC(HUD.marker({ size: 18 }), 1272, 546);
+  atC(HUD.marker({ size: 16 }), 470, 706);
+  atC(HUD.marker({ size: 16 }), 1116, 700);
 
-  /* ===== PATTERN FILL: corridors, thin strips, corner pockets ===== */
-  at(HUD.dotMatrix({ rows: 3, cols: 13, cell: 9, size: 4, fade: true }), 50, 656);
-  at(HUD.binaryStream({ rows: 3, cols: 11, cell: 11 }), 1282, 656);
-  at(HUD.chevronRun({ count: 5, step: 17, h: 13 }), 50, 722);
-  at(HUD.hatchStripes({ count: 7, gap: 11, len: 15 }), 1300, 716);
-  at(HUD.tickStrip({ count: 12, step: 11, h: 9 }), 486, 112);
-  at(HUD.tickStrip({ count: 12, step: 11, h: 9 }), 972, 112);
-  at(HUD.circleGrid({ rows: 1, cols: 5, r: 6 }), 500, 726);
-  at(HUD.hexCluster({ rows: 1, cols: 4, r: 11 }), 990, 722);
-  at(HUD.barStack({ dir: 'v', thick: 8, gap: 7, bars: [[34, 1], [52, 2], [24, 0]] }), 344, 620);
-  at(HUD.barStack({ dir: 'v', thick: 8, gap: 7, bars: [[26, 0], [44, 2], [36, 1]] }), 1218, 620);
-  at(HUD.candlesticks({ count: 5, width: 84, height: 58 }), 336, 118);
-  at(HUD.mirrorBars({ rows: 10, width: 84, height: 62 }), 1184, 116);
-  at(HUD.equalizer({ bars: 9, barWidth: 4, gap: 5, height: 40 }), 340, 470);
-  at(HUD.equalizer({ bars: 9, barWidth: 4, gap: 5, height: 40 }), 1196, 470);
+  /* ===== PATTERN FILL: the space between the floating frames ===== */
+  at(HUD.candlesticks({ count: 5, width: 80, height: 54 }), 280, 122);
+  at(HUD.mirrorBars({ rows: 10, width: 80, height: 58 }), 1214, 108);
+  at(HUD.tickStrip({ count: 11, step: 11, h: 9 }), 486, 148);
+  at(HUD.tickStrip({ count: 11, step: 11, h: 9 }), 968, 132);
+  at(HUD.equalizer({ bars: 9, barWidth: 4, gap: 5, height: 38 }), 246, 452);
+  at(HUD.equalizer({ bars: 9, barWidth: 4, gap: 5, height: 38 }), 1268, 500);
+  at(HUD.dotMatrix({ rows: 3, cols: 12, cell: 9, size: 4, fade: true }), 44, 572);
+  at(HUD.binaryStream({ rows: 3, cols: 10, cell: 11 }), 1338, 572);
+  at(HUD.chevronRun({ count: 5, step: 17, h: 13 }), 62, 742);
+  at(HUD.hatchStripes({ count: 7, gap: 11, len: 15 }), 1382, 738);
+  at(HUD.dotMatrix({ rows: 2, cols: 10, cell: 9, size: 4, fade: true }), 386, 742);
+  at(HUD.circleGrid({ rows: 1, cols: 5, r: 6 }), 906, 726);
+  at(HUD.hexCluster({ rows: 1, cols: 4, r: 11 }), 1060, 748);
+  at(HUD.barStack({ dir: 'v', thick: 8, gap: 7, bars: [[34, 1], [52, 2], [24, 0]] }), 372, 540);
+  at(HUD.barStack({ dir: 'v', thick: 8, gap: 7, bars: [[26, 0], [44, 2], [36, 1]] }), 1224, 690);
 
   /* ===== micro readouts + link traces ===== */
-  label('5.232145', 52, 636);
-  label('0.002157', 1284, 636);
-  label('8.235687', 340, 100, true);
-  label('0.0015741', 1184, 100, true);
-  label('MDL.19', 344, 600);
-  label('LNK.77', 1220, 600);
-  at(HUD.circuitTrace({ width: 90, height: 40, start: 'fdot', end: 'none',
-    paths: ['M 4 4 H 44 l 20 20 H 86'] }), 330, 262);
-  at(HUD.circuitTrace({ width: 90, height: 40, start: 'none', end: 'fdot',
-    paths: ['M 4 24 H 42 l 20 -20 H 86'] }), 1180, 262);
-  at(HUD.circuitTrace({ width: 90, height: 40, start: 'fdot', end: 'none',
-    paths: ['M 4 30 H 44 l 20 -20 H 86'] }), 330, 646);
-  at(HUD.circuitTrace({ width: 90, height: 40, start: 'none', end: 'fdot',
-    paths: ['M 4 8 H 42 l 20 22 H 86'] }), 1180, 646);
+  label('5.232145', 46, 552);
+  label('0.002157', 1340, 552);
+  label('8.235687', 284, 104, true);
+  label('0.0015741', 1214, 92, true);
+  label('MDL.19', 376, 520);
+  label('LNK.77', 1228, 670);
+  at(HUD.circuitTrace({ width: 86, height: 38, start: 'fdot', end: 'none',
+    paths: ['M 4 4 H 42 l 18 18 H 82'] }), 268, 268);
+  at(HUD.circuitTrace({ width: 86, height: 38, start: 'none', end: 'fdot',
+    paths: ['M 4 22 H 40 l 18 -18 H 82'] }), 1290, 274);
+  at(HUD.circuitTrace({ width: 86, height: 38, start: 'fdot', end: 'none',
+    paths: ['M 4 28 H 42 l 18 -18 H 82'] }), 282, 610);
+  at(HUD.circuitTrace({ width: 86, height: 38, start: 'none', end: 'fdot',
+    paths: ['M 4 6 H 40 l 18 20 H 82'] }), 1286, 596);
+  at(HUD.circuitTrace({ width: 70, height: 30, node: false,
+    paths: ['M 4 26 l 18 -18 H 66'] }), 540, 700);
+  at(HUD.circuitTrace({ width: 70, height: 30, node: false,
+    paths: ['M 66 26 l -18 -18 H 4'] }), 1040, 694);
 
   /* ===== CENTERPIECE: the arc reactor (core links to chat) ===== */
   atC(HUD.coreReactor({ size: 560, href: '/chat-classic', linkTarget: '_blank',

@@ -1150,7 +1150,7 @@
     opts = opts || {};
     const W = opts.width || 300, H = opts.height || 160;
     const shape = opts.shape || 'notch';
-    const k = opts.cut || 22;                 // chamfer / point depth
+    const k = opts.cut || 13;                 // chamfer / point depth (soft by default)
     const o = 1.5;                            // stroke inset
     const div = document.createElement('div');
     div.className = 'hud-widget';
@@ -1208,8 +1208,8 @@
     }
     if (d) {
       el('path', { d: d.replace(/\s+/g, ' '), fill: 'var(--hud-fill)',
-        stroke: 'var(--hud-accent)', 'stroke-width': 1.3,
-        'stroke-linejoin': 'miter', class: 'hud-glow' }, s);
+        stroke: 'var(--hud-accent)', 'stroke-width': 1.1, opacity: 0.85,
+        'stroke-linejoin': 'round', class: 'hud-glow' }, s);
     } else {
       // bracket: floating corner Ls over a bare fill, no continuous outline
       el('rect', { x: o, y: o, width: W - o * 2, height: H - o * 2,
@@ -1230,11 +1230,11 @@
         el('rect', { x: k + x, y: 15, width: q * 2, height: q * 2,
           class: 'hud-stroke-faint', 'stroke-width': 1, fill: 'none' }, s));
     }
-    // bright edge ticks so an empty frame still reads as instrumented
-    if (['notch', 'hex', 'slant', 'tab', 'arrow', 'trapz', 'banner', 'blade'].indexOf(shape) !== -1) {
-      const t = 12;
+    // soft edge ticks so an empty frame still reads as instrumented
+    if (['notch', 'hex', 'slant', 'tab', 'arrow', 'trapz'].indexOf(shape) !== -1) {
+      const t = 8;
       el('path', { d: `M ${o} ${H / 2 - t} V ${H / 2 + t} M ${R} ${H / 2 - t} V ${H / 2 + t}`,
-        class: 'hud-stroke-bright', 'stroke-width': 2 }, s);
+        class: 'hud-stroke', 'stroke-width': 1.4, opacity: 0.8 }, s);
     }
     div.appendChild(s);
 
@@ -1270,9 +1270,9 @@
     const defs = el('defs', {}, s);
     // navy at the horizon → light blue toward the viewer
     const lg = el('linearGradient', { id: uid + '-g', x1: '0', y1: '0', x2: '0', y2: '1' }, defs);
-    el('stop', { offset: '0%', 'stop-color': 'var(--hud-bg-edge)', 'stop-opacity': '0.85' }, lg);
-    el('stop', { offset: '45%', 'stop-color': 'var(--hud-bg-center)', 'stop-opacity': '0.9' }, lg);
-    el('stop', { offset: '100%', 'stop-color': 'var(--hud-cyan)', 'stop-opacity': '0.55' }, lg);
+    el('stop', { offset: '0%', 'stop-color': 'var(--hud-bg-edge)', 'stop-opacity': '0.94' }, lg);
+    el('stop', { offset: '55%', 'stop-color': 'var(--hud-bg-center)', 'stop-opacity': '0.82' }, lg);
+    el('stop', { offset: '100%', 'stop-color': 'var(--hud-blue)', 'stop-opacity': '0.5' }, lg);
     const cp = el('clipPath', { id: uid + '-c' }, defs);
     el('path', { d: shape }, cp);
 
