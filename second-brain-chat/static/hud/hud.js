@@ -340,10 +340,173 @@
     }
     d += ` H ${W - 6}`;
     el('path', { d, class: 'hud-stroke', 'stroke-width': 2, opacity: 0.55, 'stroke-linejoin': 'round' }, s);
+    if (opts.arrow) el('polygon', {
+      points: `${W - 2},${midY} ${W - 12},${midY - 5} ${W - 12},${midY + 5}`,
+      fill: 'var(--hud-cyan)', class: 'hud-glow' }, s);
     const sweep = el('path', { d, class: 'hud-stroke-bright', 'stroke-width': 2, 'stroke-linejoin': 'round',
       'stroke-dasharray': '70 1400' }, s);
     if (gsap) gsap.fromTo(sweep, { strokeDashoffset: 1470 }, { strokeDashoffset: 0, duration: 3.4, ease: 'none', repeat: -1 });
     if (opts.label) txt(el('text', { x: 6, y: 14, 'font-size': 9, class: 'hud-txt-dim' }, s), opts.label);
+    return s;
+  };
+
+  /* ============================================================
+     HoloCone — faceted translucent pyramid on an elliptical base
+     (the ref's left-mid 3D cone ornament).
+     opts: {width=160, height=132, role}
+     ============================================================ */
+  HUD.holoCone = function (opts) {
+    opts = opts || {};
+    const W = opts.width || 160, H = opts.height || 132;
+    const s = svg(W, H, { style: 'overflow:visible' });
+    if (opts.role) s.dataset.role = opts.role;
+    // tall spike lit from the LEFT (ref): pale faces left, deep royal right;
+    // apex leans left; wide base disc spills out left of the cone
+    const ax = W * 0.44, ay = H * 0.02;
+    const g = el('g', { class: 'hud-glow' }, s);
+    el('ellipse', { cx: W * 0.40, cy: H * 0.87, rx: W * 0.42, ry: H * 0.115,
+      fill: 'rgba(47,106,168,0.55)', stroke: 'var(--hud-cyan-45)', 'stroke-width': 1.2 }, g);
+    const L = [W * 0.26, H * 0.87], ML = [W * 0.38, H * 0.95],
+          M = [W * 0.52, H * 0.955], MR = [W * 0.66, H * 0.93], R = [W * 0.76, H * 0.82];
+    const face = (a, b, fill) => el('polygon', {
+      points: `${ax},${ay} ${a[0]},${a[1]} ${b[0]},${b[1]}`, fill,
+      stroke: 'rgba(232,253,255,0.45)', 'stroke-width': 1,
+      'stroke-linejoin': 'round' }, g);
+    face(L, ML, 'rgba(155,242,250,0.55)');
+    face(ML, M, 'rgba(232,253,255,0.62)');    // palest face, front-left
+    face(M, MR, 'rgba(79,212,232,0.48)');
+    face(MR, R, 'rgba(47,106,168,0.88)');     // dark royal right face
+    // bright front fin peeling down-left out of the silhouette (ref detail)
+    el('polygon', { points: `${W * 0.40},${H * 0.55} ${W * 0.28},${H * 0.98} ${W * 0.46},${H * 0.96}`,
+      fill: 'rgba(155,242,250,0.5)', stroke: 'rgba(232,253,255,0.4)', 'stroke-width': 1 }, g);
+    return s;
+  };
+
+  /* ============================================================
+     SpeedoCluster — open bracket frame, dashed C-arcs + a hatch arc
+     hugging a digital % box (the ref's left-mid "100%" element).
+     opts: {value=100, role}
+     ============================================================ */
+  HUD.speedoCluster = function (opts) {
+    opts = opts || {};
+    const W = 150, H = 116, cx = 75, cy = 58;
+    const s = svg(W, H);
+    if (opts.role) s.dataset.role = opts.role;
+    const seg = (r, a0, a1, sw, dash, op) => {
+      const [x0, y0] = P(cx, cy, r, a0), [x1, y1] = P(cx, cy, r, a1);
+      el('path', { d: `M ${x0} ${y0} A ${r} ${r} 0 ${a1 - a0 > 180 ? 1 : 0} 1 ${x1} ${y1}`,
+        fill: 'none', stroke: 'var(--hud-cyan)', 'stroke-width': sw,
+        opacity: op || 1, 'stroke-dasharray': dash || 'none' }, s);
+    };
+    // tight surround hugging the box (ref): dotted arc top-right, small
+    // dashes top-left, long dashes at the bottom, thin fragments beside the
+    // box sides, FOUR chunky hatch blocks per side
+    seg(50, -40, 60, 2, '1.5 7', 0.9);
+    seg(50, 292, 322, 2, '4 5', 0.7);
+    seg(50, 120, 165, 2, '10 6', 0.8);
+    seg(50, 196, 241, 2, '10 6', 0.8);
+    seg(43, 245, 285, 1.5, 'none', 0.55);
+    seg(43, 75, 115, 1.5, 'none', 0.55);
+    const hatch = (aFrom) => {
+      for (let i = 0; i < 4; i++) {
+        const a = aFrom + i * 14;
+        const [x1, y1] = P(cx, cy, 40, a), [x2, y2] = P(cx, cy, 52, a);
+        el('line', { x1, y1, x2, y2, stroke: 'var(--hud-cyan-70)',
+          'stroke-width': 9, 'stroke-linecap': 'butt' }, s);
+      }
+    };
+    hatch(242); hatch(66);
+    // deep-navy digital box, bright cyan border, white value
+    el('rect', { x: 35, y: 39, width: 80, height: 38, fill: 'rgba(18,58,110,0.85)',
+      stroke: 'var(--hud-accent)', 'stroke-width': 1.5, class: 'hud-glow' }, s);
+    const t = el('text', { x: 75, y: 65, 'text-anchor': 'middle', 'font-size': 19,
+      class: 'hud-txt' }, s);
+    txt(t, (opts.value == null ? 100 : opts.value) + '%');
+    return s;
+  };
+
+  /* ============================================================
+     StatPanel — bracket-corner panel: three broken donuts, line
+     stack, big % value, hex-nut crosshair, decimal label (the ref's
+     twin 75%/100% panels). opts: {width=200, height=132, value='100',
+     decimal='0.002157', role}
+     ============================================================ */
+  HUD.statPanel = function (opts) {
+    opts = opts || {};
+    const W = opts.width || 200, H = opts.height || 132;
+    const s = svg(W, H);
+    if (opts.role) s.dataset.role = opts.role;
+    el('rect', { x: 1, y: 1, width: W - 2, height: H - 2, fill: 'var(--hud-fill)',
+      class: 'hud-stroke-faint', 'stroke-width': 1 }, s);
+    const bl = 16;   // corner brackets
+    const gB = el('g', { class: 'hud-stroke', 'stroke-width': 1.5, fill: 'none' }, s);
+    [[1, 1, bl, bl], [W - 1, 1, -bl, bl], [W - 1, H - 1, -bl, -bl], [1, H - 1, bl, -bl]]
+      .forEach(([x, y, dx, dy]) => el('path', {
+        d: `M ${x + dx} ${y} H ${x} V ${y + dy}` }, gB));
+    // three broken donut rings stacked on the left
+    [[30, 40, 300], [64, 130, 290], [98, 220, 310]].forEach(([cy2, a0, a1]) => {
+      const [x0, y0] = P(26, cy2, 12, a0), [x1, y1] = P(26, cy2, 12, a1);
+      el('path', { d: `M ${x0} ${y0} A 12 12 0 ${a1 - a0 > 180 ? 1 : 0} 1 ${x1} ${y1}`,
+        fill: 'none', stroke: 'var(--hud-cyan)', 'stroke-width': 5, class: 'hud-glow' }, s);
+    });
+    // line stack top-middle
+    [[120, 'var(--hud-white)', 0.85], [120, 'var(--hud-cyan)', 0.9],
+     [86, 'var(--hud-cyan-45)', 1], [60, 'var(--hud-cyan-25)', 1]].forEach(([w, st, op], i) =>
+      el('rect', { x: 48, y: 20 + i * 8, width: w, height: 3, fill: st, opacity: op }, s));
+    // big % value
+    const t = el('text', { x: 48, y: 96, 'font-size': 22, class: 'hud-txt' }, s);
+    txt(t, (opts.value == null ? '100' : opts.value) + '%');
+    // hex-nut with crosshair + bright core, right side
+    const hx = W - 50, hy = H - 48, hr = 26;
+    let hd = '';
+    for (let i = 0; i < 6; i++) {
+      const [x, y] = P(hx, hy, hr, 30 + i * 60);
+      hd += (i ? ' L ' : 'M ') + x + ' ' + y;
+    }
+    el('path', { d: hd + ' Z', class: 'hud-stroke', 'stroke-width': 1.2, fill: 'none' }, s);
+    el('path', { d: `M ${hx - hr - 12} ${hy} H ${hx - 10} M ${hx + 10} ${hy} H ${hx + hr + 12}
+                     M ${hx} ${hy - hr - 10} V ${hy - 8} M ${hx} ${hy + 8} V ${hy + hr + 10}`,
+      class: 'hud-stroke-dim', 'stroke-width': 1 }, s);
+    el('circle', { cx: hx, cy: hy, r: 8, fill: 'var(--hud-accent)', class: 'hud-glow-strong' }, s);
+    const d2 = el('text', { x: 48, y: H - 12, 'font-size': 9, class: 'hud-txt-dim' }, s);
+    txt(d2, opts.decimal || '0.002157');
+    return s;
+  };
+
+  /* ============================================================
+     BarStack — stack of rounded bars, mixed tones/lengths (the ref's
+     left-edge ornament). opts: {bars: [[len, tone 0|1|2]...], dir 'h'|'v',
+     thick=7, gap=6, role}
+     ============================================================ */
+  HUD.barStack = function (opts) {
+    opts = opts || {};
+    const bars = opts.bars || [[44, 1], [30, 0], [38, 1], [22, 0], [34, 2]];
+    const t = opts.thick || 7, gap = opts.gap || 6, v = opts.dir === 'v';
+    const long = Math.max.apply(null, bars.map(b => b[0]));
+    const across = bars.length * (t + gap) - gap;
+    const s = svg(v ? across : long, v ? long : across);
+    if (opts.role) s.dataset.role = opts.role;
+    const tone = ['var(--hud-blue)', 'var(--hud-cyan)', 'var(--hud-accent)'];
+    bars.forEach(([len, tn], i) => {
+      const off = i * (t + gap);
+      if (opts.seg && v) {
+        // striped bar: stack of small segments with a bright one mixed in
+        let y = long;
+        let k = 0;
+        while (y > long - len) {
+          const sh = Math.min(8, y - (long - len));
+          el('rect', { x: off, y: y - sh, width: t, height: sh,
+            fill: (k + i) % 5 === 2 ? 'var(--hud-accent)' : tone[tn],
+            opacity: (k + i) % 3 ? 1 : 0.55 }, s);
+          y -= sh + 3; k++;
+        }
+        return;
+      }
+      const base = v ? { x: off, y: long - len, width: t, height: len }
+                     : { x: 0, y: off, width: len, height: t };
+      el('rect', Object.assign(base, { rx: t / 2, fill: tone[tn],
+        class: tn === 2 ? 'hud-glow' : '' }), s);
+    });
     return s;
   };
 
