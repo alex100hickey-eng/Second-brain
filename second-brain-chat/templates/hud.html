@@ -53,15 +53,32 @@
   /* ===== FLOOR: trapezoid plane across the whole bottom edge.
      Overshoots the 1600x1000 stage on both sides and below so it still
      bleeds to the screen edges when the viewport letterboxes the deck. ===== */
-  at(HUD.floorPlane({ width: 2100, height: 440, topInset: 880,
-    vanishX: 1050, role: 'floor' }), -250, 620);
+  at(HUD.floorPlane({ width: 2100, height: 320, topInset: 880,
+    vanishX: 1050, rows: 7, role: 'floor' }), -250, 740);
+
+  /* ===== WIDGET FRAMES: empty light-blue outlines flanking the
+     reactor. Append widgets into each frame's ._content. ===== */
+  at(HUD.widgetFrame({ width: 300, height: 160, shape: 'slant', role: 'w-l1' }), 70, 150);
+  at(HUD.widgetFrame({ width: 300, height: 130, shape: 'hex',   role: 'w-l2' }), 70, 350);
+  at(HUD.widgetFrame({ width: 280, height: 120, shape: 'trapz', role: 'w-l3' }), 80, 540);
+  at(HUD.widgetFrame({ width: 310, height: 170, shape: 'notch', role: 'w-r1' }), 1230, 140);
+  at(HUD.widgetFrame({ width: 310, height: 150, shape: 'tab',   role: 'w-r2' }), 1230, 350);
+  at(HUD.widgetFrame({ width: 290, height: 120, shape: 'arrow', role: 'w-r3' }), 1240, 540);
 
   /* ===== CENTERPIECE: the arc reactor (core links to chat) ===== */
   atC(HUD.coreReactor({ size: 560, href: '/chat-classic', linkTarget: '_blank',
     linkTitle: 'Open CLARVIS chat' }), 800, 430, 'core-reactor');
 
   // registry for live-data wiring: every gauge/readout/bar carries a data-role.
-  window.CLARVIS_HUD = { deck, roles: () => Array.from(deck.querySelectorAll('[data-role]')).map(n => n.dataset.role) };
+  // frame(role) returns a widget frame's content box — append widgets straight into it.
+  window.CLARVIS_HUD = {
+    deck,
+    roles: () => Array.from(deck.querySelectorAll('[data-role]')).map(n => n.dataset.role),
+    frame: (role) => {
+      const n = deck.querySelector(`[data-role="${role}"]`);
+      return n && n._content ? n._content : null;
+    }
+  };
 </script>
 </body>
 </html>

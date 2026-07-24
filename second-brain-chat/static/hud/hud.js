@@ -1071,6 +1071,74 @@
      opts: {width=1600, height=170, vanishX}
      ============================================================ */
   /* ============================================================
+     WidgetFrame — an empty light-blue outline shaped to hold a
+     widget. Each `shape` has a distinct silhouette so a deck of
+     them doesn't read as a grid of identical boxes:
+       notch  — chamfered top-left + bottom-right corners
+       hex    — elongated hexagon, pointed left and right
+       slant  — parallelogram leaning right
+       tab    — header strip + one chamfered corner
+       arrow  — right-pointing pentagon
+       trapz  — trapezoid, narrow at top (echoes the floor)
+     Returns a positioned <div>; append widgets into `._content`
+     (also exposed as the .hud-content child).
+     opts: {width, height, shape, role, cut}
+     ============================================================ */
+  HUD.widgetFrame = function (opts) {
+    opts = opts || {};
+    const W = opts.width || 300, H = opts.height || 160;
+    const shape = opts.shape || 'notch';
+    const k = opts.cut || 22;                 // chamfer / point depth
+    const o = 1.5;                            // stroke inset
+    const div = document.createElement('div');
+    div.className = 'hud-widget';
+    div.style.cssText = `position:relative;width:${W}px;height:${H}px`;
+    if (opts.role) div.dataset.role = opts.role;
+
+    const s = svg(W, H);
+    s.style.cssText = 'position:absolute;left:0;top:0';
+    const R = W - o, B = H - o;
+    let d, pad = [14, 16];                    // [vertical, horizontal] content pad
+    if (shape === 'hex') {
+      d = `M ${k} ${o} H ${W - k} L ${R} ${H / 2} L ${W - k} ${B} H ${k} L ${o} ${H / 2} Z`;
+      pad = [14, k + 10];
+    } else if (shape === 'slant') {
+      d = `M ${k} ${o} H ${R} L ${W - k} ${B} H ${o} Z`;
+      pad = [14, k + 10];
+    } else if (shape === 'tab') {
+      d = `M ${o} ${o} H ${W - k} L ${R} ${k} V ${B} H ${o} Z`;
+      pad = [30, 16];
+    } else if (shape === 'arrow') {
+      d = `M ${o} ${o} H ${W - k} L ${R} ${H / 2} L ${W - k} ${B} H ${o} Z`;
+      pad = [14, 16];
+    } else if (shape === 'trapz') {
+      d = `M ${k} ${o} H ${W - k} L ${R} ${B} H ${o} Z`;
+      pad = [14, k + 10];
+    } else {                                   // notch
+      d = `M ${k} ${o} H ${R} V ${H - k} L ${W - k} ${B} H ${o} V ${k} Z`;
+    }
+    el('path', { d, fill: 'var(--hud-fill)', stroke: 'var(--hud-accent)',
+      'stroke-width': 1.3, 'stroke-linejoin': 'miter', class: 'hud-glow' }, s);
+    if (shape === 'tab') {   // header divider under the tab strip
+      el('line', { x1: o, y1: 22, x2: R, y2: 22, class: 'hud-stroke-dim',
+        'stroke-width': 1 }, s);
+    }
+    // bright corner ticks so an empty frame still reads as instrumented
+    const t = 12;
+    el('path', { d: `M ${o} ${H / 2 - t} V ${H / 2 + t} M ${R} ${H / 2 - t} V ${H / 2 + t}`,
+      class: 'hud-stroke-bright', 'stroke-width': 2 }, s);
+    div.appendChild(s);
+
+    const content = document.createElement('div');
+    content.className = 'hud-content';
+    content.style.cssText = `position:absolute;left:${pad[1]}px;right:${pad[1]}px;` +
+      `top:${pad[0]}px;bottom:${pad[0]}px;overflow:hidden`;
+    div.appendChild(content);
+    div._content = content;
+    return div;
+  };
+
+  /* ============================================================
      FloorPlane — a trapezoid floor spanning the full bottom edge:
      narrow at the horizon, full width at the viewer. Filled with a
      navy → light-blue vertical gradient and overlaid with a light
