@@ -11,7 +11,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="CLARVIS">
-<link rel="stylesheet" href="/static/hud/hud.css?v=9">
+<link rel="stylesheet" href="/static/hud/hud.css?v=10">
 <style>
   html, body { height: 100%; margin: 0; overflow: hidden; }
   /* fixed-proportion HUD stage, scaled to fit the viewport */
@@ -30,7 +30,7 @@
 
 <script src="/static/vendor/gsap.min.js"></script>
 <script src="/static/vendor/d3.min.js"></script>
-<script src="/static/hud/hud.js?v=9"></script>
+<script src="/static/hud/hud.js?v=10"></script>
 <script>
   const deck = document.getElementById('deck');
   function fit() {
@@ -167,18 +167,69 @@
   at(HUD.equalizer({ bars: 6, barWidth: 8, gap: 6, height: 60, role: 'stacks' }), 172, 900);
   at(HUD.equalizer({ bars: 20, height: 46, role: 'spectrum' }), 408, 916);
 
-  /* ===== TOP BANNER: spinning emblem + data bars + 99%/20% ===== */
-  atC(HUD.radialGauge({ size: 88, value: 72, role: 'emblem' }), 658, 135);
-  at(HUD.dotMatrix({ rows: 6, cols: 10, cell: 11 }), 720, 84);
-  label('99%', 946, 202, true); label('20%', 1040, 210);
+  /* ===== TOP-MIDDLE BANNER STRIP (actual-ref pass 2) =====
+     slanted banner parallelogram; inside: wireframe sphere, mirrored
+     bar column, broken ring, solid play triangle. Above: descending
+     mini chart + long node rails. Right: circle grid, pill, waffle. */
+  at(HUD.bannerFrame({ width: 560, height: 158, tlOff: 95, topEnd: 365 }), 560, 70);
+  atC(HUD.fanRosette({ size: 130, role: 'emblem' }), 726, 152);
+  atC(HUD.mirrorBars({ rows: 18, width: 124, height: 108 }), 857, 166);
+  // broken ring — the accent line's terminating node — with its small
+  // companion circle at the gap (ref "headphone")
+  atC(HUD.miniRings({ rings: [[30, 0.78]], strokeWidth: 3, centerDot: false,
+    endDot: true }), 995, 189);
+  atC(HUD.circleGrid({ rows: 1, cols: 1, r: 9 }), 966, 205);
+  // arrowhead wedge just RIGHT of the tip: its hypotenuse ascends to mirror
+  // the descent, flat bottom riding the tail line
+  at(HUD.solidTriangle({ size: 65, dir: 'wedge' }), 1085, 162);
+  at(HUD.circuitTrace({ width: 130, height: 8, node: false,
+    paths: ['M 2 4 H 116'] }), 1081, 223);
+  // rail running left from the mid-slant node dot toward the candle cluster
+  at(HUD.circuitTrace({ width: 110, height: 8, node: false,
+    paths: ['M 1 4 H 103'] }), 505, 146);
+  // exit rail off the mid-descent node dot: 45deg up past the banner top,
+  // then a long run right ending in a far fdot
+  at(HUD.circuitTrace({ width: 220, height: 100, start: 'none', end: 'fdot',
+    paths: ['M 2 93 l 87 -87 H 215'] }), 983, 50);
+  // descending mini chart sitting on the top frame line, with stem
+  at(HUD.circuitTrace({ width: 8, height: 42, node: false,
+    paths: ['M 4 0 V 40'] }), 826, 2);
+  at(HUD.equalizer({ bars: 9, barWidth: 5, gap: 4, height: 36, decay: true,
+    role: 'minichart' }), 834, 6);
+  // long rails: left one bends 45deg down into the banner's TL corner dot
+  at(HUD.circuitTrace({ width: 186, height: 56, start: 'fdot', end: 'none',
+    paths: ['M 5 5 H 134 l 46 46'] }), 470, 18);
+  at(HUD.circuitTrace({ width: 40, height: 12, start: 'none', end: 'square',
+    paths: ['M 2 6 H 34'] }), 993, 34);
+  at(HUD.circuitTrace({ width: 250, height: 12, start: 'none', end: 'fdot',
+    paths: ['M 2 6 H 246'] }), 1035, 34);
+  at(HUD.circuitTrace({ width: 175, height: 10, start: 'none', end: 'fdot',
+    paths: ['M 2 5 H 170'] }), 1075, 83);
+  // status circle grid right of the banner's top edge
+  at(HUD.circleGrid({ rows: 2, cols: 3, r: 8 }), 1049, 66);
+  // right-edge cluster: tilted pill, waffle grid panel + triangle, hatches,
+  // dashed capsule with segment bar
+  (function pillTilt() {
+    const w = document.createElement('div');
+    w.style.transform = 'rotate(-7deg)'; w.style.transformOrigin = 'left center';
+    w.appendChild(HUD.pillOutline({ width: 117, height: 42, inner: true }));
+    at(w, 1158, 92);
+  })();
+  at(HUD.waffle({ rows: 5, cols: 9, cell: 10, skew: -14 }), 1178, 131);
+  atC(HUD.solidTriangle({ size: 30, dir: 'right' }), 1284, 186);
+  at(HUD.hatchStripes({ count: 10, gap: 7, len: 18 }), 1212, 189);
+  at(HUD.pillOutline({ width: 160, height: 26, dash: '6 5' }), 1166, 217);
+  at(HUD.dataBar({ width: 130, segments: 10, value: 70, flat: true }), 1181, 224);
 
-  /* ===== TOP-RIGHT: HP dial + binary + hex grid + capsule bar ===== */
-  label('HP', 1060, 70, true);
-  atC(HUD.radialGauge({ size: 74, value: 99, role: 'hp' }), 1122, 96);
-  at(HUD.binaryStream({ rows: 1, cols: 16, cell: 11 }), 1104, 44);
-  at(HUD.hexCluster({ rows: 2, cols: 5, r: 12 }), 958, 82);
-  at(HUD.tickStrip({ count: 8, step: 15, h: 16 }), 968, 150);
-  at(HUD.dataBar({ width: 200, segments: 14, value: 64, role: 'cap' }), 1174, 74);
+  /* ===== TOP-RIGHT: HP dial + binary + hex grid + capsule bar =====
+     (holding positions clear of the banner strip until the region-3
+     pass rebuilds this corner against the actual reference) */
+  label('HP', 1318, 64, true);
+  atC(HUD.radialGauge({ size: 74, value: 99, role: 'hp' }), 1372, 100);
+  at(HUD.binaryStream({ rows: 1, cols: 16, cell: 11 }), 1330, 14);
+  at(HUD.hexCluster({ rows: 2, cols: 5, r: 12 }), 1420, 140);
+  at(HUD.tickStrip({ count: 8, step: 15, h: 16 }), 1180, 262);
+  at(HUD.dataBar({ width: 160, segments: 12, value: 64, role: 'cap' }), 1400, 44);
 
   /* ===== RIGHT: pie + battery + labels ===== */
   atC(HUD.pieIndicator({ size: 110, value: 35, role: 'pie' }), 1236, 300);

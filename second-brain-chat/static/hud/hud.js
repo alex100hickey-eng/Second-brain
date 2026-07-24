@@ -523,11 +523,17 @@
       ? (i % 5 === 2 ? 'var(--hud-blue)' : i % 4 === 1 ? 'var(--hud-accent)' : 'var(--hud-cyan-70)')
       : (i % 4 === 1 ? 'var(--hud-accent)' : 'var(--hud-cyan-70)');
     for (let i = 0; i < bars; i++) {
-      const h0 = 6 + (seed[i % seed.length] / 46) * (H - 6);
+      // decay: heights slope off left-to-right with jitter (top-center mini chart)
+      const base = opts.decay
+        ? Math.max(4, (1 - i / bars) * 40 + (seed[i % seed.length] - 20) * 0.25)
+        : seed[i % seed.length];
+      const h0 = 6 + (base / 46) * (H - 6);
       const r = el('rect', { x: ext + i * (bw + gap), y: H - h0, width: bw, height: h0,
         fill: tone(i), class: opts.mixed && i % 5 === 2 ? '' : 'hud-glow' }, s);
       if (gsap) {
-        const h1 = 6 + Math.max(5, (H - 10) * (((i * 13) % 9) / 9));
+        // decay bars wobble around their own height so the slope survives
+        const h1 = opts.decay ? Math.max(4, h0 * 0.72)
+          : 6 + Math.max(5, (H - 10) * (((i * 13) % 9) / 9));
         gsap.to(r, { attr: { height: h1, y: H - h1 }, duration: 0.5 + (i % 5) * 0.12,
           ease: 'sine.inOut', repeat: -1, yoyo: true, delay: (i % 7) * 0.08 });
       }
@@ -830,10 +836,17 @@
     let x = 4;
     specs.forEach(([r, f]) => {
       const cx = x + r, cy = maxR + 4, C = 2 * Math.PI * r;
-      el('circle', { cx, cy, r, fill: 'none', stroke: 'var(--hud-cyan-25)', 'stroke-width': 5 }, s);
-      el('circle', { cx, cy, r, fill: 'none', stroke: 'var(--hud-cyan)', 'stroke-width': 5,
+      const sw = opts.strokeWidth || 5;
+      el('circle', { cx, cy, r, fill: 'none', stroke: 'var(--hud-cyan-25)', 'stroke-width': sw }, s);
+      el('circle', { cx, cy, r, fill: 'none', stroke: 'var(--hud-cyan)', 'stroke-width': sw,
         'stroke-dasharray': `${C * f} ${C}`, transform: `rotate(-90 ${cx} ${cy})`, class: 'hud-glow' }, s);
-      el('circle', { cx, cy, r: 3, fill: 'var(--hud-white)' }, s);
+      if (opts.centerDot !== false)
+        el('circle', { cx, cy, r: 3, fill: 'var(--hud-white)' }, s);
+      if (opts.endDot) {
+        // small bright dot where the value arc ends (broken-ring style)
+        const [ex, ey] = P(cx, cy, r, f * 360);
+        el('circle', { cx: ex, cy: ey, r: sw * 0.7, fill: 'var(--hud-accent)', class: 'hud-glow' }, s);
+      }
       x += r * 2 + gap;
     });
     return s;
@@ -848,6 +861,232 @@
     el('path', { d: `M ${c} ${c - a} V ${c + a} M ${c - a} ${c} H ${c + a}`,
       class: 'hud-stroke-bright', 'stroke-width': 1.5 }, s);
     if (gsap) gsap.to(s, { opacity: 0.35, duration: 1.5, ease: 'sine.inOut', repeat: -1, yoyo: true });
+    return s;
+  };
+
+  /* ============================================================
+     TOP-MIDDLE BANNER STRIP components (actual-ref pass 2)
+     ============================================================ */
+
+  /* BannerFrame — the blade-shaped banner: long bottom edge, 45deg
+     left slant up to a short top edge, then one long shallow diagonal
+     descending to an acute tip at bottom-right (play triangle nests
+     in the tip). Full inner offset outline + node dots at TL corner,
+     mid-slant, mid-diagonal, near-tip and BL corner.
+     opts: {width=560, height=158, tlOff=95, topEnd=355} */
+  HUD.bannerFrame = function (opts) {
+    opts = opts || {};
+    const W = opts.width || 560, H = opts.height || 158;
+    const tl = opts.tlOff == null ? 95 : opts.tlOff;
+    const te = opts.topEnd == null ? 355 : opts.topEnd;
+    const s = svg(W, H, { style: 'overflow: visible' });
+    if (opts.role) s.dataset.role = opts.role;
+    // ONE straight 45deg descent from the top edge to the tip; the inner
+    // accent line descends in parallel leaving a dark corridor between.
+    const dy = H - 2, tipX = te + dy, tipY = H - 1;
+    // faint interior wash (closed path, fill only)
+    el('path', { d: `M 0 ${tipY} L ${tl} 1 H ${te} L ${tipX} ${tipY} Z`,
+      fill: 'var(--hud-fill)', stroke: 'none' }, s);
+    // open strokes with OVERSHOT corners (ref: lines cross past every joint)
+    const og = el('g', { class: 'hud-stroke', 'stroke-width': 1.6, fill: 'none' }, s);
+    // left slant overshoots past both the bottom corner and the top edge
+    el('line', { x1: -14, y1: H + 12, x2: tl + 17, y2: -16 }, og);
+    // top edge overshoots left of the slant; its tip is an open 45deg chamfer
+    el('path', { d: `M ${tl - 81} 17 L ${tl - 65} 1 H ${te}` }, og);
+    // descent to the tip + bottom edge overshooting left past the corner
+    el('path', { d: `M ${te} 1 L ${tipX} ${tipY} M -26 ${tipY} H ${tipX}` }, og);
+    // 45deg stub off the top-left corner descending into the interior, fdot end
+    el('path', { d: `M ${tl - 10} 1 L ${tl + 26} 37`, class: 'hud-stroke',
+      'stroke-width': 1.2, fill: 'none' }, s);
+    el('circle', { cx: tl + 26, cy: 37, r: 4, fill: 'var(--hud-accent)', class: 'hud-glow' }, s);
+    // fdot resting on the bottom edge right of the corner
+    el('circle', { cx: 103, cy: tipY, r: 4.5, fill: 'var(--hud-accent)', class: 'hud-glow' }, s);
+    // doubled bottom edge (dim)
+    el('line', { x1: 26, y1: H - 11, x2: tipX - 34, y2: H - 11,
+      class: 'hud-stroke-dim', 'stroke-width': 1 }, s);
+    // inner accent: start fdot, run under the top edge, then descend 45deg
+    // parallel inside the outer descent; its far end terminates at the
+    // broken-ring node the template places there (no end dot of its own).
+    const ax0 = te * 0.59, ay = 26;
+    el('path', { d: `M ${ax0} ${ay} H ${te - 23} L ${te + 52} ${ay + 75}`,
+      class: 'hud-stroke', 'stroke-width': 1.2, fill: 'none' }, s);
+    el('circle', { cx: ax0, cy: ay, r: 4, fill: 'var(--hud-accent)', class: 'hud-glow' }, s);
+    // dim doubled top-edge segment on the left third (ref doubles it there)
+    el('line', { x1: tl, y1: 10, x2: ax0, y2: 10,
+      class: 'hud-stroke-dim', 'stroke-width': 1 }, s);
+    // node dots: BL, TL, mid-slant, and mid-descent
+    [[0, tipY], [tl, 1], [tl / 2, H / 2], [te + dy * 0.45, 1 + dy * 0.45]]
+      .forEach(([cx, cy]) =>
+        el('circle', { cx, cy, r: 4.5, fill: 'var(--hud-accent)', class: 'hud-glow' }, s));
+    return s;
+  };
+
+  /* FanRosette — chaotic scribble rosette with outlined wedge fan
+     blades (the banner's left ornament in the actual ref).
+     opts: {size=130, role} */
+  HUD.fanRosette = function (opts) {
+    opts = opts || {};
+    const S = opts.size || 130, c = S / 2, r = S * 0.48;
+    const s = svg(S, S);
+    if (opts.role) s.dataset.role = opts.role;
+    const g = el('g', {}, s);
+    const rad = Math.PI / 180;
+    // outlined annular fan blades
+    [[-52, -10, 0.50, 0.96], [8, 46, 0.42, 0.88], [150, 196, 0.48, 0.92]]
+      .forEach(([a0, a1, ki, ko]) => {
+        el('path', { d: d3.arc()({ startAngle: a0 * rad, endAngle: a1 * rad,
+          innerRadius: r * ki, outerRadius: r * ko }),
+          transform: `translate(${c} ${c})`, class: 'hud-stroke',
+          'stroke-width': 1.2, fill: 'rgba(79, 212, 232, 0.08)' }, g);
+      });
+    // irregular scribble rings
+    [[0.90, '3 9', 0], [0.72, '14 22', 40], [0.55, '6 5', -30],
+     [0.38, '18 9', 80], [0.25, '4 7', 10]].forEach(([k, dash, rot]) => {
+      el('circle', { cx: c, cy: c, r: r * k, class: 'hud-stroke-faint',
+        'stroke-width': 1, 'stroke-dasharray': dash,
+        transform: `rotate(${rot} ${c} ${c})` }, g);
+    });
+    // inner chaotic ellipses
+    [[0.55, 0.20, 25], [0.40, 0.14, -40], [0.30, 0.24, 70]].forEach(([kx, ky, rot]) => {
+      el('ellipse', { cx: c, cy: c, rx: r * kx, ry: r * ky,
+        transform: `rotate(${rot} ${c} ${c})`, class: 'hud-stroke-faint',
+        'stroke-width': 1 }, g);
+    });
+    el('circle', { cx: c, cy: c, r: 2.5, fill: 'var(--hud-accent)', class: 'hud-glow' }, s);
+    spin(g, c, c, 52);
+    return s;
+  };
+
+  /* WireSphere — chaotic wireframe gyroscope: tilted ellipses +
+     partial arcs, slow counter-rotation. opts: {size=130, role} */
+  HUD.wireSphere = function (opts) {
+    opts = opts || {};
+    const S = opts.size || 130, c = S / 2, r = S * 0.44;
+    const s = svg(S, S);
+    if (opts.role) s.dataset.role = opts.role;
+    const g1 = el('g', {}, s), g2 = el('g', {}, s);
+    // tilted ellipse shells
+    [[0.98, 0.30, 18], [0.92, 0.52, -24], [0.85, 0.72, 55], [0.99, 0.16, -62],
+     [0.74, 0.95, 8], [1.22, 0.18, -8]].forEach(([kx, ky, rot], i) => {
+      el('ellipse', { cx: c, cy: c, rx: r * kx, ry: r * ky,
+        transform: `rotate(${rot} ${c} ${c})`,
+        class: i % 2 ? 'hud-stroke-dim' : 'hud-stroke', 'stroke-width': 1 }, i % 2 ? g2 : g1);
+    });
+    // scribble arcs (dashed partial circles at odd radii)
+    [[0.62, '30 14', 40], [0.34, '10 18', -70], [0.5, '52 30', 130]].forEach(([k, dash, rot]) => {
+      el('circle', { cx: c, cy: c, r: r * k, class: 'hud-stroke-faint',
+        'stroke-width': 1, 'stroke-dasharray': dash,
+        transform: `rotate(${rot} ${c} ${c})` }, g2);
+    });
+    el('circle', { cx: c, cy: c, r: 2.5, fill: 'var(--hud-accent)', class: 'hud-glow' }, s);
+    spin(g1, c, c, 44); spin(g2, c, c, 58, true);
+    return s;
+  };
+
+  /* MirrorBars — vertical spine with mirrored horizontal strokes of
+     varying width (the banner's central data column).
+     opts: {rows=16, width=110, height=96} */
+  HUD.mirrorBars = function (opts) {
+    opts = opts || {};
+    const rows = opts.rows || 16, W = opts.width || 110, H = opts.height || 96;
+    const s = svg(W, H);
+    if (opts.role) s.dataset.role = opts.role;
+    const cx = W / 2, step = H / rows;
+    // spine overshoots the rows top and bottom (ref's I-beam look)
+    el('line', { x1: cx, y1: -8, x2: cx, y2: H + 8, class: 'hud-stroke', 'stroke-width': 1.5 }, s);
+    // seeded half-width pairs [left, right] as fractions of W/2, 0 = skip side
+    const seed = [[0.9, 0.86], [0.55, 0.6], [0.98, 0.3], [0.42, 0.95], [0.75, 0.7],
+                  [0.2, 0.5], [0.88, 0.92], [0.35, 0.25], [0.6, 0.82], [0.95, 0.5],
+                  [0.5, 0.4], [0.8, 0.9], [0.3, 0.68], [0.92, 0.35], [0.65, 0.75], [0.45, 0.55]];
+    for (let i = 0; i < rows; i++) {
+      const [lw, rw] = seed[i % seed.length], y = step * (i + 0.5);
+      const bright = i % 3 !== 1;
+      el('line', { x1: cx - (W / 2) * lw, y1: y, x2: cx + (W / 2) * rw, y2: y,
+        stroke: bright ? 'var(--hud-cyan)' : 'var(--hud-blue)',
+        'stroke-width': Math.max(2, step * 0.42),
+        class: bright ? 'hud-glow' : '', opacity: bright ? 0.9 : 0.75 }, s);
+    }
+    return s;
+  };
+
+  /* CircleGrid — small open status circles, some drawn with a gap.
+     opts: {rows=2, cols=3, r=8, gap=14} */
+  HUD.circleGrid = function (opts) {
+    opts = opts || {};
+    const rows = opts.rows || 2, cols = opts.cols || 3, r = opts.r || 8;
+    const gap = opts.gap || 14;
+    const W = cols * (r * 2 + gap), H = rows * (r * 2 + gap);
+    const s = svg(W, H);
+    if (opts.role) s.dataset.role = opts.role;
+    const frac = [1, 0.72, 0.85, 0.6, 1, 0.78];
+    for (let i = 0; i < rows * cols; i++) {
+      const cx = (i % cols) * (r * 2 + gap) + r + gap / 2;
+      const cy = Math.floor(i / cols) * (r * 2 + gap) + r + gap / 2;
+      const C = 2 * Math.PI * r, f = frac[i % frac.length];
+      el('circle', { cx, cy, r, fill: 'none', class: 'hud-stroke', 'stroke-width': 1.6,
+        'stroke-dasharray': f === 1 ? 'none' : `${C * f} ${C}`,
+        transform: `rotate(${(i * 77) % 360} ${cx} ${cy})` }, s);
+    }
+    return s;
+  };
+
+  /* SolidTriangle — filled accent play-triangle. dir: 'right'|'left'|'up' */
+  HUD.solidTriangle = function (opts) {
+    opts = opts || {};
+    const S = opts.size || 44, h = S * 0.86;
+    const s = svg(S, S);
+    if (opts.role) s.dataset.role = opts.role;
+    const pts = { right: `1,${(S - h) / 2} 1,${(S + h) / 2} ${S - 1},${S / 2}`,
+                  left: `${S - 1},${(S - h) / 2} ${S - 1},${(S + h) / 2} 1,${S / 2}`,
+                  up: `${(S - h) / 2},${S - 1} ${(S + h) / 2},${S - 1} ${S / 2},1`,
+                  // 45deg right wedge: apex top-RIGHT, hypotenuse ascending
+                  // left-to-right — mirrors a banner descent to form the
+                  // arrowhead at the tip; vertical right leg, flat bottom
+                  wedge: `${S - 1},1 1,${S - 1} ${S - 1},${S - 1}` };
+    el('polygon', { points: pts[opts.dir || 'right'],
+      fill: 'var(--hud-accent)', class: 'hud-glow-strong' }, s);
+    return s;
+  };
+
+  /* PillOutline — stadium (capsule) outline, optionally dashed.
+     opts: {width=150, height=36, dash} */
+  HUD.pillOutline = function (opts) {
+    opts = opts || {};
+    const W = opts.width || 150, H = opts.height || 36;
+    const s = svg(W, H);
+    if (opts.role) s.dataset.role = opts.role;
+    const a = { x: 1, y: 1, width: W - 2, height: H - 2, rx: (H - 2) / 2,
+      class: 'hud-stroke', 'stroke-width': 1.4 };
+    if (opts.dash) a['stroke-dasharray'] = opts.dash;
+    el('rect', a, s);
+    if (opts.inner) {
+      const i = opts.inner === true ? 6 : opts.inner;
+      el('rect', { x: 1 + i, y: 1 + i, width: W - 2 - i * 2, height: H - 2 - i * 2,
+        rx: (H - 2 - i * 2) / 2, class: 'hud-stroke-dim', 'stroke-width': 1 }, s);
+    }
+    return s;
+  };
+
+  /* Waffle — slanted panel filled with a grid of small squares and a
+     solid triangle in the lower-right (actual-ref right of banner).
+     opts: {rows=5, cols=9, cell=10, skew=-14} */
+  HUD.waffle = function (opts) {
+    opts = opts || {};
+    const rows = opts.rows || 5, cols = opts.cols || 9, cell = opts.cell || 10;
+    const skew = opts.skew == null ? -14 : opts.skew;
+    const gw = cols * cell, gh = rows * cell;
+    const pad = 8, W = gw + pad * 2 + Math.abs(skew) * 2, H = gh + pad * 2;
+    const s = svg(W, H, { style: 'overflow: visible' });
+    if (opts.role) s.dataset.role = opts.role;
+    const g = el('g', { transform: `skewX(${skew})`,
+      'transform-origin': `${W / 2} ${H / 2}` }, s);
+    el('rect', { x: Math.abs(skew), y: 1, width: gw + pad * 2, height: H - 2,
+      class: 'hud-stroke', 'stroke-width': 1.2, fill: 'var(--hud-fill)' }, g);
+    for (let rI = 0; rI < rows; rI++)
+      for (let cI = 0; cI < cols; cI++)
+        el('rect', { x: Math.abs(skew) + pad + cI * cell + 1, y: pad + rI * cell + 1,
+          width: cell - 3, height: cell - 3, fill: 'var(--hud-cyan)',
+          opacity: 0.55 + ((rI * cols + cI) % 4) * 0.12 }, g);
     return s;
   };
 
