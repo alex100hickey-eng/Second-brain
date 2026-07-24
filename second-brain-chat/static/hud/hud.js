@@ -125,90 +125,122 @@
     el('circle', { cx: c, cy: c, r: R(330), fill: `url(#${gid})`, opacity: 0.12 }, s);
     el('circle', { cx: c, cy: c, r: R(286), fill: `url(#${gid})`, opacity: 0.22 }, s);
 
-    // outer slow ring: ticks + dot ring
-    const gSlow = el('g', {}, s);
-    el('circle', { cx: c, cy: c, r: R(238), class: 'hud-stroke-dim', 'stroke-width': 1 }, gSlow);
-    for (let i = 0; i < 72; i++) {
-      const major = i % 6 === 0;
-      const [x1, y1] = P(c, c, R(major ? 222 : 228), i / 72 * 360);
-      const [x2, y2] = P(c, c, R(238), i / 72 * 360);
-      el('line', { x1, y1, x2, y2, stroke: 'var(--hud-cyan)',
-        'stroke-width': major ? 2 : 1, opacity: major ? 0.85 : 0.4 }, gSlow);
-    }
-    for (let i = 0; i < 48; i++) {
-      const [dx, dy] = P(c, c, R(208), i / 48 * 360);
-      el('circle', { cx: dx, cy: dy, r: 2, fill: i % 4 ? 'var(--hud-cyan-45)' : 'var(--hud-accent)' }, gSlow);
-    }
-    spin(gSlow, c, c, 150);
+    // geometry helpers for the ring stack (fractions of the outer radius)
+    const K = S / 2, F = (f) => f * K;
+    const arc = (parent, r, a0, len, sw, stroke, op, cap) => {
+      const [x0, y0] = P(c, c, r, a0), [x1, y1] = P(c, c, r, a0 + len);
+      return el('path', { d: `M ${x0} ${y0} A ${r} ${r} 0 ${len > 180 ? 1 : 0} 1 ${x1} ${y1}`,
+        fill: 'none', stroke, 'stroke-width': sw, opacity: op == null ? 1 : op,
+        'stroke-linecap': cap || 'round' }, parent);
+    };
+    // seeded PRNG so the glyph rings render identically every load
+    let sd = 7;
+    const rnd = () => (sd = (sd * 9301 + 49297) % 233280) / 233280;
 
-    // blade ring
-    const gBlades = el('g', { class: 'hud-glow' }, s);
-    const jit = [0, 3, -3, 2, 4, -2, 3, -4, 2, -3, 4, -2, 3, -3, 2, -4];
-    for (let i = 0; i < 16; i++) {
-      const fam = i % 3;
-      const r0 = R(fam === 0 ? 200 : fam === 1 ? 190 : 178);
-      const r1 = R(fam === 0 ? 154 : fam === 1 ? 148 : 154);
-      const w0 = R(fam === 0 ? 20 : fam === 1 ? 17 : 13);
-      const w1 = R(fam === 0 ? 14 : fam === 1 ? 11 : 9);
-      const bright = i % 5 === 0;
-      el('path', {
-        d: `M ${-w0} ${-r0} L ${w0} ${-r0} L ${w1} ${-r1} L ${-w1} ${-r1} Z`,
-        fill: bright ? 'rgba(155,242,250,0.28)' : 'rgba(79,212,232,0.12)',
-        stroke: bright ? 'var(--hud-accent)' : 'var(--hud-cyan)',
-        'stroke-width': bright ? 1.5 : 1,
-        transform: `rotate(${i * 22.5 + jit[i]} ${c} ${c}) translate(${c} ${c})`
-      }, gBlades);
-    }
-    spin(gBlades, c, c, 100, true);
-
-    // mid ring: dashed rings + micro segments
-    const gMid = el('g', {}, s);
-    el('circle', { cx: c, cy: c, r: R(150), class: 'hud-stroke', 'stroke-width': 1.5, 'stroke-dasharray': '58 12 6 12' }, gMid);
-    el('circle', { cx: c, cy: c, r: R(128), class: 'hud-stroke-dim', 'stroke-width': 1, 'stroke-dasharray': '2 7' }, gMid);
-    el('circle', { cx: c, cy: c, r: R(246), class: 'hud-stroke-faint', 'stroke-width': 1 }, gMid);
-    for (let i = 0; i < 24; i++) {
-      const a0 = i / 24 * 360 + 2, a1 = a0 + 11;
-      const [x0, y0] = P(c, c, R(140), a0);
-      const [x1, y1] = P(c, c, R(140), a1);
-      el('path', { d: `M ${x0} ${y0} A ${R(140)} ${R(140)} 0 0 1 ${x1} ${y1}`,
-        fill: 'none', stroke: i % 2 ? 'var(--hud-cyan)' : 'var(--hud-cyan-25)', 'stroke-width': R(5) }, gMid);
-    }
-    spin(gMid, c, c, 64);
-
-    // micro spokes
-    const gMicro = el('g', {}, s);
-    for (let i = 0; i < 12; i++) {
-      const [x1, y1] = P(c, c, R(92), i / 12 * 360);
-      const [x2, y2] = P(c, c, R(116), i / 12 * 360);
-      el('line', { x1, y1, x2, y2, stroke: 'var(--hud-cyan-45)', 'stroke-width': 2 }, gMicro);
-    }
-    spin(gMicro, c, c, 30);
-
-    // inner bright arcs
-    const gInner = el('g', {}, s);
-    const gb = el('g', { class: 'hud-stroke-bright', 'stroke-width': R(7) }, gInner);
-    el('path', { d: `M ${c} ${c - R(98)} A ${R(98)} ${R(98)} 0 0 1 ${c + R(85)} ${c - R(49)}`, opacity: 0.85 }, gb);
-    el('path', { d: `M ${c + R(91)} ${c + R(46)} A ${R(98)} ${R(98)} 0 0 1 ${c + R(10)} ${c + R(98)}`, opacity: 0.5 }, gb);
-    el('path', { d: `M ${c - R(57)} ${c + R(77)} A ${R(98)} ${R(98)} 0 0 1 ${c - R(97)} ${c + R(8)}`, opacity: 0.7 }, gb);
-    el('circle', { cx: c, cy: c, r: R(80), class: 'hud-stroke-dim', 'stroke-width': 1, 'stroke-dasharray': '1 5' }, gInner);
-    el('circle', { cx: c, cy: c, r: R(64), class: 'hud-stroke', 'stroke-width': 1, 'stroke-dasharray': '14 5 3 5', opacity: 0.7 }, gInner);
-    spin(gInner, c, c, 40, true);
-
-    // diagonal pointer arrows
-    const gArrow = el('g', { class: 'hud-stroke', 'stroke-width': 1.5 }, s);
-    [[1, 1, -1], [-1, 1, 1], [1, -1, -1], [-1, -1, 1]].forEach(([sx, sy]) => {
-      const bx = c + sx * R(174), by = c - sy * R(174);
-      const tx = bx + sx * R(34), ty = by - sy * R(34);
-      el('path', { d: `M ${bx} ${by} L ${tx} ${ty} M ${tx} ${ty} l ${-sx * 12} ${sy * 2} M ${tx} ${ty} l ${-sx * 2} ${sy * 12}` }, gArrow);
+    // faint straight lines crossing the whole assembly (ref has 2-3)
+    const gLines = el('g', { stroke: 'var(--hud-white)', 'stroke-width': 1, opacity: 0.16 }, s);
+    [[28, 1.3], [117, 1.22], [78, 1.12]].forEach(([ang, ext]) => {
+      const [x0, y0] = P(c, c, F(ext), ang), [x1, y1] = P(c, c, F(ext), ang + 180);
+      el('line', { x1: x0, y1: y0, x2: x1, y2: y1 }, gLines);
     });
 
-    // glowing core + crosshair
+    // sparse graduated ring behind the petals (the protractor arc that peeks
+    // out under the banner)
+    const gGrad = el('g', {}, s);
+    el('circle', { cx: c, cy: c, r: F(0.86), class: 'hud-stroke-faint', 'stroke-width': 1 }, gGrad);
+    for (let i = 0; i < 60; i++) {
+      const [x1, y1] = P(c, c, F(0.83), i * 6), [x2, y2] = P(c, c, F(0.86), i * 6);
+      el('line', { x1, y1, x2, y2, stroke: 'var(--hud-cyan)', 'stroke-width': 1, opacity: 0.35 }, gGrad);
+    }
+
+    // SIX hollow petal boxes, large, sporadically spaced and sized (ref)
+    const gP = el('g', { class: 'hud-glow' }, s);
+    const petals = [[15, 0.20, 1.03, 0.62], [88, 0.13, 0.96, 0.68],
+                    [148, 0.23, 1.05, 0.58], [212, 0.12, 0.94, 0.66],
+                    [262, 0.18, 1.01, 0.60], [325, 0.14, 0.97, 0.67]];
+    petals.forEach(([ang, hw, ro, ri]) => {
+      const w0 = F(hw), w1 = F(hw * 0.78), r0 = F(ro), r1 = F(ri);
+      el('path', { d: `M ${-w0} ${-r0} L ${w0} ${-r0} L ${w1} ${-r1} L ${-w1} ${-r1} Z`,
+        fill: 'none', stroke: 'var(--hud-cyan)', 'stroke-width': 1.2, opacity: 0.8,
+        transform: `rotate(${ang} ${c} ${c}) translate(${c} ${c})` }, gP);
+    });
+    spin(gP, c, c, 170, true);
+
+    // chunky bright arc ring — the signature outer ring
+    const gA = el('g', { class: 'hud-glow-strong' }, s);
+    [[-15, 70, 1], [70, 40, 0.85], [128, 55, 0.95], [200, 80, 0.9], [300, 45, 0.8]]
+      .forEach(([a0, len, op]) => arc(gA, F(0.72), a0, len, F(0.048), 'var(--hud-accent)', op));
+    [[95, 18], [262, 22]].forEach(([a0, len]) =>
+      arc(gA, F(0.66), a0, len, F(0.028), 'var(--hud-cyan)', 0.7));
+    spin(gA, c, c, 90);
+
+    // thin ring + stitched micro-dash ring
+    el('circle', { cx: c, cy: c, r: F(0.695), class: 'hud-stroke-dim', 'stroke-width': 1,
+      'stroke-dasharray': '8 6' }, s);
+    el('circle', { cx: c, cy: c, r: F(0.64), stroke: 'var(--hud-white)', fill: 'none',
+      'stroke-width': 1, opacity: 0.4 }, s);
+    el('circle', { cx: c, cy: c, r: F(0.61), stroke: 'var(--hud-white)', fill: 'none',
+      'stroke-width': F(0.012), opacity: 0.55, 'stroke-dasharray': '2 5' }, s);
+    // extra patterned layers between the signature rings (density pass)
+    el('circle', { cx: c, cy: c, r: F(0.58), stroke: 'var(--hud-white)', fill: 'none',
+      'stroke-width': 1, opacity: 0.3, 'stroke-dasharray': '1 3' }, s);
+    const gFragA = el('g', {}, s);
+    [[35, 30], [160, 22], [285, 34]].forEach(([a0, len]) =>
+      arc(gFragA, F(0.565), a0, len, F(0.014), 'var(--hud-cyan)', 0.7));
+    spin(gFragA, c, c, 110, true);
+    el('circle', { cx: c, cy: c, r: F(0.50), class: 'hud-stroke', 'stroke-width': 1.2,
+      opacity: 0.6, 'stroke-dasharray': '20 8 4 8' }, s);
+    const gFragB = el('g', {}, s);
+    [[75, 14], [200, 20], [318, 12]].forEach(([a0, len]) =>
+      arc(gFragB, F(0.455), a0, len, F(0.016), 'var(--hud-accent)', 0.8));
+    spin(gFragB, c, c, 75);
+    el('circle', { cx: c, cy: c, r: F(0.415), class: 'hud-stroke-dim', 'stroke-width': F(0.010),
+      'stroke-dasharray': '1 6' }, s);
+
+    // medium arc ring
+    const gM = el('g', { class: 'hud-glow' }, s);
+    el('circle', { cx: c, cy: c, r: F(0.53), class: 'hud-stroke-faint', 'stroke-width': 1 }, gM);
+    [[20, 55, 0.9], [95, 35, 0.7], [150, 60, 0.85], [250, 50, 0.75], [330, 25, 0.6]]
+      .forEach(([a0, len, op]) => arc(gM, F(0.53), a0, len, F(0.026), 'var(--hud-cyan)', op));
+    spin(gM, c, c, 64, true);
+
+    // inner structure: stitch, faint ring, short-arc cluster
+    el('circle', { cx: c, cy: c, r: F(0.48), class: 'hud-stroke-dim', 'stroke-width': 1,
+      'stroke-dasharray': '1 4' }, s);
+    el('circle', { cx: c, cy: c, r: F(0.43), class: 'hud-stroke-faint', 'stroke-width': 1 }, s);
+    const gSh = el('g', {}, s);
+    [[10, 25], [70, 15], [130, 30], [200, 20], [275, 25], [335, 12]]
+      .forEach(([a0, len]) => arc(gSh, F(0.38), a0, len, F(0.018), 'var(--hud-cyan)', 0.8));
+    spin(gSh, c, c, 40);
+
+    // WHITE glyph rings — irregular data-mark rings around the core
+    const glyphRing = (r, sw, marks) => {
+      const g = el('g', {}, s);
+      let a = rnd() * 360;
+      for (let i = 0; i < marks; i++) {
+        arc(g, r, a, 4 + rnd() * 14, sw, 'var(--hud-white)', 0.92, 'butt');
+        a += 8 + rnd() * 14;
+      }
+      return g;
+    };
+    el('circle', { cx: c, cy: c, r: F(0.34), stroke: 'var(--hud-white)', fill: 'none',
+      'stroke-width': 1, opacity: 0.3 }, s);
+    el('circle', { cx: c, cy: c, r: F(0.31), class: 'hud-stroke', 'stroke-width': 1,
+      opacity: 0.55, 'stroke-dasharray': '12 5' }, s);
+    spin(glyphRing(F(0.26), F(0.030), 24), c, c, 52, true);
+    el('circle', { cx: c, cy: c, r: F(0.225), stroke: 'var(--hud-white)', fill: 'none',
+      'stroke-width': 1, opacity: 0.35, 'stroke-dasharray': '2 4' }, s);
+    spin(glyphRing(F(0.18), F(0.024), 18), c, c, 36);
+    el('circle', { cx: c, cy: c, r: F(0.155), class: 'hud-stroke-dim', 'stroke-width': 1 }, s);
+    el('circle', { cx: c, cy: c, r: F(0.13), stroke: 'var(--hud-white)', fill: 'none',
+      'stroke-width': F(0.008), opacity: 0.7, 'stroke-dasharray': '1.5 4' }, s);
+
+    // glowing white core disc + halo ring
     const gCore = el('g', { class: 'hud-glow-core' }, s);
-    el('circle', { cx: c, cy: c, r: R(58), fill: `url(#${gid})` }, gCore);
-    el('circle', { cx: c, cy: c, r: R(36), class: 'hud-stroke', 'stroke-width': 1, opacity: 0.75 }, gCore);
-    el('circle', { cx: c, cy: c, r: R(11), fill: '#ffffff' }, gCore);
-    el('path', { d: `M ${c} ${c - R(28)} V ${c - R(44)} M ${c} ${c + R(28)} V ${c + R(44)} M ${c - R(28)} ${c} H ${c - R(44)} M ${c + R(28)} ${c} H ${c + R(44)}`,
-      class: 'hud-stroke-bright', 'stroke-width': 1.5, opacity: 0.9 }, gCore);
+    el('circle', { cx: c, cy: c, r: F(0.24), fill: `url(#${gid})` }, gCore);
+    el('circle', { cx: c, cy: c, r: F(0.115), stroke: 'var(--hud-white)', fill: 'none',
+      'stroke-width': 1.5, opacity: 0.8 }, gCore);
+    el('circle', { cx: c, cy: c, r: F(0.095), fill: '#ffffff' }, gCore);
     if (gsap) gsap.to(gCore, { scale: 1.05, opacity: 0.94, svgOrigin: `${c} ${c}`,
       duration: 1.7, ease: 'sine.inOut', repeat: -1, yoyo: true });
 
