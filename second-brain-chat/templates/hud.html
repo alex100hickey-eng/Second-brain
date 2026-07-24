@@ -257,9 +257,19 @@
   at(HUD.binaryStream({ rows: 1, cols: 16, cell: 11 }), 1330, 14);
   at(HUD.dataBar({ width: 160, segments: 12, value: 64, role: 'cap' }), 1400, 44);
   at(HUD.tickStrip({ count: 8, step: 15, h: 16 }), 1180, 262);
+  // arrowed line under the top capsule bar + 0.0032 + small target ring
+  at(HUD.circuitTrace({ width: 160, height: 10, node: false,
+    paths: ['M 2 4 H 148 M 148 4 l -9 -5 M 148 4 l -9 5'] }), 1400, 70);
+  label('0.0032', 1404, 144);
+  atC(HUD.miniRings({ rings: [[10, 0.8]], centerDot: true }), 1330, 152);
+  // slim pill outline echoing the ref's elongated capsule
+  at(HUD.dashedSquare({ width: 190, height: 34, cornerStyle: 'none', dash: 'none',
+    inset: 1, rx: 16 }), 1340, 80);
   // big hollow arrow chevron riding the top-right corner (ref)
   at(HUD.circuitTrace({ width: 155, height: 130, node: false,
     paths: ['M 2 2 H 78 L 148 64 L 78 126 H 2 L 66 64 Z'] }), 1428, 122);
+  // tall signal bars hugging the right frame edge
+  at(HUD.barStack({ dir: 'v', thick: 14, gap: 10, bars: [[52, 1], [76, 2], [40, 0]] }), 1478, 248);
 
   /* ===== RIGHT: pie + battery + mini bars ===== */
   atC(HUD.pieIndicator({ size: 116, role: 'pie',
@@ -275,14 +285,28 @@
     d.style.fontSize = '17px';
     d.className = 'hud-num';
     d.style.position = 'absolute';
-    const d2 = label('20%', 946, 256, true);
+    const d2 = label('20%', 1014, 272, true);
     d2.style.fontSize = '12px';
   })();
   at(HUD.tickStrip({ count: 12, step: 9, h: 8 }), 730, 280);
   at(HUD.tickStrip({ count: 9, step: 9, h: 6 }), 730, 296);
   at(HUD.circuitTrace({ width: 130, height: 44, start: 'fdot', end: 'none',
     paths: ['M 4 4 H 56 l 22 22 V 40'] }), 664, 274);
-  at(HUD.tickStrip({ count: 8, step: 8, h: 5 }), 940, 280);
+  at(HUD.tickStrip({ count: 8, step: 8, h: 5 }), 1008, 292);
+
+  /* ===== rounded strip with dot track under the banner tip (ref) ===== */
+  (function dotPill() {
+    const w = document.createElement('div');
+    w.style.cssText = 'position:relative;width:300px;height:34px';
+    const box = HUD.dashedSquare({ width: 300, height: 34, cornerStyle: 'none',
+      dash: 'none', inset: 1, rx: 16 });
+    box.style.cssText = 'position:absolute;left:0;top:0';
+    w.appendChild(box);
+    const dots = row(Array.from({ length: 9 }, () => HUD.nodeDot({ r: 5 })), 15);
+    dots.style.cssText = 'position:absolute;left:16px;top:10px;display:flex;gap:15px';
+    w.appendChild(dots);
+    at(w, 908, 236);
+  })();
 
   /* ===== RIGHT-MID: compass ring + rounded radar panel ===== */
   atC(HUD.compassRing({ size: 148, role: 'compass' }), 1162, 495);
@@ -326,7 +350,7 @@
       HUD.tickStrip({ count: 4, step: 9, h: 10 }),
       HUD.miniRings({ rings: [[15, 0.6]] })
     ], 18);
-    content.style.cssText = 'position:absolute;left:34px;top:4px';
+    content.style.cssText = 'position:absolute;left:34px;top:4px;display:flex;gap:18px;align-items:center';
     w.appendChild(content);
     at(w, 830, 648);
   })();
