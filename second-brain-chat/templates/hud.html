@@ -64,6 +64,9 @@
      bleeds to the screen edges when the viewport letterboxes the deck. ===== */
   at(HUD.floorPlane({ width: 2100, height: 215, topInset: 880,
     vanishX: 1050, rows: 5, role: 'floor' }), -250, 845);
+  // name lying flat on the floor, receding to the same vanishing point (x=800)
+  at(HUD.floorText({ text: 'C.L.A.R.V.I.S', size: 92, tilt: 63,
+    perspective: 1700, opacity: 0.85, role: 'floor-name' }), 800, 866);
 
   /* ===== ORBIT RINGS: slow counter-rotating marks hugging the
      reactor, filling the gap between it and the widget ring ===== */

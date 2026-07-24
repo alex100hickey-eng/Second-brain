@@ -1071,6 +1071,28 @@
      opts: {width=1600, height=170, vanishX}
      ============================================================ */
   /* ============================================================
+     FloorText — big lettering lying flat on the floor plane, tilted
+     about its top edge so it recedes toward the floor's vanishing
+     point. Anchor it at the horizon; it lays out toward the viewer.
+     opts: {text, size=130, tilt=68, perspective=700, spacing=0.14,
+            opacity=0.9, role}
+     ============================================================ */
+  HUD.floorText = function (opts) {
+    opts = opts || {};
+    const d = document.createElement('div');
+    d.className = 'hud-floor-text';
+    d.textContent = opts.text || 'C.L.A.R.V.I.S';
+    if (opts.role) d.dataset.role = opts.role;
+    d.style.cssText =
+      `font-size:${opts.size || 130}px;` +
+      `letter-spacing:${opts.spacing == null ? 0.14 : opts.spacing}em;` +
+      `opacity:${opts.opacity == null ? 0.9 : opts.opacity};` +
+      `transform:translateX(-50%) perspective(${opts.perspective || 700}px) ` +
+      `rotateX(${opts.tilt == null ? 68 : opts.tilt}deg);`;
+    return d;
+  };
+
+  /* ============================================================
      OrbitRing — a ring of marks that slowly orbits a center point.
      Drop it behind the reactor to fill the space around it.
      kind: 'dots' | 'ticks' | 'arcs'

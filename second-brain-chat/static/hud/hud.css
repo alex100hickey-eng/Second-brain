@@ -119,6 +119,21 @@
   filter: var(--hud-glow);
 }
 
+/* ---------- Floor text: laid flat on the ground plane ----------
+   Rotated about its TOP edge so the near end reads larger and the
+   far end recedes toward the floor's vanishing point. */
+.hud-floor-text {
+  font-family: 'Orbitron', sans-serif;
+  font-weight: 700;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--hud-accent);
+  transform-origin: 50% 0%;
+  pointer-events: none;
+  filter: drop-shadow(0 0 6px rgba(79, 212, 232, 0.65))
+          drop-shadow(0 0 22px rgba(155, 242, 250, 0.4));
+}
+
 /* ---------- Scanline / grid overlay ---------- */
 .hud-scanlines {
   position: fixed;
