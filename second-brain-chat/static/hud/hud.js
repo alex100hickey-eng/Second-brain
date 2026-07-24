@@ -1071,6 +1071,46 @@
      opts: {width=1600, height=170, vanishX}
      ============================================================ */
   /* ============================================================
+     OrbitRing — a ring of marks that slowly orbits a center point.
+     Drop it behind the reactor to fill the space around it.
+     kind: 'dots' | 'ticks' | 'arcs'
+     opts: {r=310, count=28, kind, dur=90, reverse, weight, role}
+     ============================================================ */
+  HUD.orbitRing = function (opts) {
+    opts = opts || {};
+    const r = opts.r || 310, S = (r + 18) * 2, c = S / 2;
+    const s = svg(S, S, { style: 'overflow:visible' });
+    if (opts.role) s.dataset.role = opts.role;
+    const g = el('g', {}, s);
+    const n = opts.count || 28, kind = opts.kind || 'dots';
+    if (kind === 'arcs') {
+      (opts.segs || [[10, 34], [96, 18], [150, 44], [232, 26], [300, 30]])
+        .forEach(([a0, len]) => {
+          const [x0, y0] = P(c, c, r, a0), [x1, y1] = P(c, c, r, a0 + len);
+          el('path', { d: `M ${x0} ${y0} A ${r} ${r} 0 0 1 ${x1} ${y1}`, fill: 'none',
+            stroke: 'var(--hud-accent)', 'stroke-width': opts.weight || 3,
+            'stroke-linecap': 'round', opacity: 0.7, class: 'hud-glow' }, g);
+        });
+    } else {
+      for (let i = 0; i < n; i++) {
+        const a = i / n * 360, major = i % 4 === 0;
+        if (kind === 'ticks') {
+          const [x1, y1] = P(c, c, r, a), [x2, y2] = P(c, c, r + (major ? 13 : 7), a);
+          el('line', { x1, y1, x2, y2, stroke: 'var(--hud-cyan)',
+            'stroke-width': major ? 2 : 1, opacity: major ? 0.8 : 0.4 }, g);
+        } else {
+          const [x, y] = P(c, c, r, a);
+          el('circle', { cx: x, cy: y, r: major ? 3.4 : 1.8,
+            fill: major ? 'var(--hud-accent)' : 'var(--hud-cyan-45)',
+            class: major ? 'hud-glow' : '' }, g);
+        }
+      }
+    }
+    spin(g, c, c, opts.dur || 90, opts.reverse);
+    return s;
+  };
+
+  /* ============================================================
      WidgetFrame — an empty light-blue outline shaped to hold a
      widget. Each `shape` has a distinct silhouette so a deck of
      them doesn't read as a grid of identical boxes:
