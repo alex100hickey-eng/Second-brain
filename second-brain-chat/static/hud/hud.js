@@ -1009,21 +1009,168 @@
      ============================================================ */
   HUD.floorGrid = function (opts) {
     opts = opts || {};
-    const W = opts.width || 1600, H = opts.height || 170;
-    const vp = opts.vanishX == null ? W / 2 : opts.vanishX;
+    const W = opts.width || 1600, H = opts.height || 380;
+    const vp = opts.vanishX == null ? W * 0.475 : opts.vanishX;
     const s = svg(W, H);
-    // fade the strip out toward its top so it melts into the background
-    s.style.maskImage = 'linear-gradient(180deg, transparent 0%, black 55%)';
-    s.style.webkitMaskImage = 'linear-gradient(180deg, transparent 0%, black 55%)';
-    const g = el('g', { stroke: 'var(--hud-cyan-25)', 'stroke-width': 1 }, s);
-    const n = 23;
+    // fade the floor out toward the horizon so it melts into the background
+    s.style.maskImage = 'linear-gradient(180deg, transparent 0%, black 26%)';
+    s.style.webkitMaskImage = 'linear-gradient(180deg, transparent 0%, black 26%)';
+    const g = el('g', { stroke: 'var(--hud-blue)', 'stroke-width': 1 }, s);
+    // fan verticals spreading wide from just above the horizon
+    const n = opts.lines || 17;
     for (let i = 0; i < n; i++) {
-      const t = i - (n - 1) / 2;
-      el('line', { x1: vp + t * (W * 0.62 / n), y1: 0,
-        x2: vp + t * (W * 1.55 / n), y2: H, opacity: 0.45 }, g);
+      const t = (i - (n - 1) / 2) / ((n - 1) / 2);
+      el('line', { x1: vp + t * W * 0.12, y1: 0,
+        x2: vp + t * W * 1.15, y2: H, opacity: 0.4 }, g);
     }
-    [0.08, 0.20, 0.35, 0.53, 0.73, 0.92].forEach(f =>
-      el('line', { x1: 0, y1: H * f, x2: W, y2: H * f, opacity: 0.12 + 0.4 * f }, g));
+    // horizontals: dense near the horizon, spreading toward the viewer
+    for (let i = 1; i <= 8; i++) {
+      const t = i / 8, y = H * t * t;
+      el('line', { x1: 0, y1: y, x2: W, y2: y, opacity: 0.1 + 0.35 * t,
+        'stroke-width': i > 6 ? 1.5 : 1 }, g);
+    }
+    // long bright crossing diagonals cutting the floor (ref)
+    el('line', { x1: -30, y1: H * 0.9, x2: W * 0.62, y2: 4,
+      class: 'hud-stroke-dim', 'stroke-width': 1.2 }, s);
+    el('line', { x1: W + 30, y1: H * 0.82, x2: W * 0.45, y2: 2,
+      class: 'hud-stroke-dim', 'stroke-width': 1.2 }, s);
+    return s;
+  };
+
+  /* ============================================================
+     FlowerOfLife — seed-of-life sacred-geometry medallion (ref
+     right-lower panel centerpiece). opts: {r=26}
+     ============================================================ */
+  HUD.flowerOfLife = function (opts) {
+    opts = opts || {};
+    const R = opts.r || 26, S = R * 2 + 8, c = S / 2;
+    const s = svg(S, S);
+    const g = el('g', { class: 'hud-stroke', 'stroke-width': 1, fill: 'none' }, s);
+    el('circle', { cx: c, cy: c, r: R, 'stroke-width': 1.3 }, g);
+    const r2 = R / 2;
+    el('circle', { cx: c, cy: c, r: r2 }, g);
+    for (let i = 0; i < 6; i++) {
+      const [x, y] = P(c, c, r2, i * 60);
+      el('circle', { cx: x, cy: y, r: r2 }, g);
+    }
+    return s;
+  };
+
+  /* ============================================================
+     CompassRing — thick dotted ring, long cross spokes running
+     through everything, bright outer arc fragments, center dot
+     (ref right-mid dial). opts: {size=160, role}
+     ============================================================ */
+  HUD.compassRing = function (opts) {
+    opts = opts || {};
+    const S = opts.size || 160, c = S / 2, r = S * 0.33;
+    const s = svg(S, S, { style: 'overflow:visible' });
+    if (opts.role) s.dataset.role = opts.role;
+    const gSpin = el('g', {}, s);
+    el('circle', { cx: c, cy: c, r, class: 'hud-stroke', 'stroke-width': 3.5,
+      'stroke-dasharray': '2.5 6' }, gSpin);
+    spin(gSpin, c, c, 70);
+    el('circle', { cx: c, cy: c, r: r * 0.6, class: 'hud-stroke-dim', 'stroke-width': 1 }, s);
+    el('path', { d: `M ${-S * 0.06} ${c} H ${S * 1.06} M ${c} ${-S * 0.06} V ${S * 1.06}`,
+      class: 'hud-stroke-dim', 'stroke-width': 1 }, s);
+    const frag = (a0, len) => {
+      const [x0, y0] = P(c, c, r * 1.32, a0), [x1, y1] = P(c, c, r * 1.32, a0 + len);
+      el('path', { d: `M ${x0} ${y0} A ${r * 1.32} ${r * 1.32} 0 0 1 ${x1} ${y1}`,
+        fill: 'none', class: 'hud-stroke-bright', 'stroke-width': 4 }, s);
+    };
+    frag(300, 60); frag(120, 45);
+    el('circle', { cx: c, cy: c, r: 4.5, fill: 'var(--hud-accent)', class: 'hud-glow' }, s);
+    return s;
+  };
+
+  /* ============================================================
+     RadarFan — concentric dashed rings with a filled royal sweep
+     wedge and a brighter inner wedge (ref rounded-panel radar).
+     opts: {size=120}
+     ============================================================ */
+  HUD.radarFan = function (opts) {
+    opts = opts || {};
+    const S = opts.size || 120, c = S / 2;
+    const s = svg(S, S);
+    el('circle', { cx: c, cy: c, r: S * 0.44, class: 'hud-stroke-dim', 'stroke-width': 1.5,
+      'stroke-dasharray': '3 4' }, s);
+    el('circle', { cx: c, cy: c, r: S * 0.30, class: 'hud-stroke-faint', 'stroke-width': 1 }, s);
+    const wedge = (a0, a1, r, fill, op) => {
+      const [x0, y0] = P(c, c, r, a0), [x1, y1] = P(c, c, r, a1);
+      el('path', { d: `M ${c} ${c} L ${x0} ${y0} A ${r} ${r} 0 ${a1 - a0 > 180 ? 1 : 0} 1 ${x1} ${y1} Z`,
+        fill, opacity: op }, s);
+    };
+    const gW = el('g', {}, s);
+    const w2 = (a0, a1, r, fill, op) => {
+      const [x0, y0] = P(c, c, r, a0), [x1, y1] = P(c, c, r, a1);
+      el('path', { d: `M ${c} ${c} L ${x0} ${y0} A ${r} ${r} 0 0 1 ${x1} ${y1} Z`,
+        fill, opacity: op }, gW);
+    };
+    w2(210, 285, S * 0.42, 'var(--hud-blue)', 0.85);
+    w2(228, 270, S * 0.30, 'var(--hud-accent)', 0.5);
+    spin(gW, c, c, 26);
+    el('circle', { cx: c, cy: c, r: 3.5, fill: 'var(--hud-cyan)', class: 'hud-glow' }, s);
+    return s;
+  };
+
+  /* ============================================================
+     PlanePanel — irregular heptagon outline holding the faceted
+     paper plane, 75% bracket label, mini bars, loader arc (ref
+     bottom-right). opts: {width=295, height=190, role}
+     ============================================================ */
+  HUD.planePanel = function (opts) {
+    opts = opts || {};
+    const W = opts.width || 295, H = opts.height || 190;
+    const s = svg(W, H, { style: 'overflow:visible' });
+    if (opts.role) s.dataset.role = opts.role;
+    el('path', { d: `M ${W * 0.30} 2 H ${W * 0.78} L ${W - 2} ${H * 0.30} V ${H * 0.72}
+                     L ${W * 0.72} ${H - 2} H ${W * 0.26} L 2 ${H * 0.66} V ${H * 0.28} Z`,
+      class: 'hud-stroke', 'stroke-width': 1.5, fill: 'var(--hud-fill)' }, s);
+    // faceted paper plane: bright left face, royal right face, small keel
+    const px = W * 0.56, py = H * 0.48;
+    el('polygon', { points: `${px},${py - 56} ${px - 44},${py + 44} ${px - 6},${py + 20}`,
+      fill: 'var(--hud-accent)', opacity: 0.9, class: 'hud-glow' }, s);
+    el('polygon', { points: `${px},${py - 56} ${px + 40},${py + 48} ${px - 6},${py + 20}`,
+      fill: 'var(--hud-blue)' }, s);
+    el('polygon', { points: `${px - 6},${py + 20} ${px - 18},${py + 56} ${px + 2},${py + 32}`,
+      fill: 'var(--hud-cyan)', opacity: 0.8 }, s);
+    // 75% with bracket, mini bars, small bars, loader arc
+    txt(el('text', { x: 26, y: 44, 'font-size': 16, class: 'hud-txt' }, s), '75%');
+    el('path', { d: 'M 24 20 h 32 M 24 20 v 12', class: 'hud-stroke', 'stroke-width': 1.2,
+      fill: 'none' }, s);
+    [[0, 14], [1, 20], [2, 9]].forEach(([i, h]) =>
+      el('rect', { x: W - 48 + i * 10, y: 36 - h, width: 6, height: h,
+        fill: 'var(--hud-cyan)', opacity: 0.85 }, s));
+    [[0, 10], [1, 16], [2, 7]].forEach(([i, h]) =>
+      el('rect', { x: 30 + i * 8, y: H - 36 + (16 - h), width: 5, height: h,
+        fill: 'var(--hud-blue)' }, s));
+    const [lx0, ly0] = P(W * 0.44, H - 30, 12, 40), [lx1, ly1] = P(W * 0.44, H - 30, 12, 320);
+    el('path', { d: `M ${lx0} ${ly0} A 12 12 0 1 1 ${lx1} ${ly1}`, fill: 'none',
+      class: 'hud-stroke-bright', 'stroke-width': 3 }, s);
+    return s;
+  };
+
+  /* ============================================================
+     BatteryBar — horizontal battery capsule with end cap, music
+     note icon, white % value (ref bottom-right).
+     opts: {width=210, height=54, value='100%', role}
+     ============================================================ */
+  HUD.batteryBar = function (opts) {
+    opts = opts || {};
+    const W = opts.width || 210, H = opts.height || 54;
+    const s = svg(W, H);
+    if (opts.role) s.dataset.role = opts.role;
+    el('path', { d: 'M 14 34 V 12 l 10 -4 V 30', class: 'hud-stroke', 'stroke-width': 2,
+      fill: 'none' }, s);
+    el('circle', { cx: 11, cy: 35, r: 4, fill: 'var(--hud-cyan)' }, s);
+    el('circle', { cx: 21, cy: 31, r: 4, fill: 'var(--hud-cyan)' }, s);
+    el('rect', { x: 34, y: 8, width: W - 60, height: H - 16, class: 'hud-stroke',
+      'stroke-width': 1.5, fill: 'var(--hud-fill)' }, s);
+    el('rect', { x: 40, y: 14, width: (W - 72) * 0.97, height: H - 28,
+      fill: 'var(--hud-cyan-25)' }, s);
+    el('rect', { x: W - 22, y: 16, width: 6, height: H - 32, fill: 'var(--hud-cyan)' }, s);
+    txt(el('text', { x: 34 + (W - 60) / 2, y: H / 2 + 7, 'text-anchor': 'middle',
+      'font-size': 18, class: 'hud-txt' }, s), opts.value || '100%');
     return s;
   };
 
