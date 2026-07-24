@@ -244,6 +244,26 @@
     if (gsap) gsap.to(gCore, { scale: 1.05, opacity: 0.94, svgOrigin: `${c} ${c}`,
       duration: 1.7, ease: 'sine.inOut', repeat: -1, yoyo: true });
 
+    // optional: turn the core into a link (opts.href). Topmost transparent
+    // hit area over the center + hover ring affordance + tooltip.
+    if (opts.href) {
+      const a = el('a', {}, s);
+      a.setAttribute('href', opts.href);
+      a.setAttributeNS('http://www.w3.org/1999/xlink', 'xlink:href', opts.href);
+      if (opts.linkTarget) a.setAttribute('target', opts.linkTarget);
+      a.style.cursor = 'pointer';
+      const hov = el('circle', { cx: c, cy: c, r: F(0.235), fill: 'none',
+        stroke: 'var(--hud-accent)', 'stroke-width': 2, opacity: 0,
+        'pointer-events': 'none' }, a);
+      hov.style.transition = 'opacity 0.25s';
+      el('circle', { cx: c, cy: c, r: F(0.28), fill: 'rgba(0,0,0,0)',
+        'pointer-events': 'all' }, a);
+      const tt = el('title', {}, a);
+      tt.textContent = opts.linkTitle || 'Open chat';
+      a.addEventListener('mouseenter', () => { hov.style.opacity = 0.9; });
+      a.addEventListener('mouseleave', () => { hov.style.opacity = 0; });
+    }
+
     return s;
   };
 
