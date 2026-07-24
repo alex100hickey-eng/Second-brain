@@ -701,8 +701,25 @@
     const s = svg(S, S);
     if (opts.role) s.dataset.role = opts.role;
     const arc = d3.arc().innerRadius(0).outerRadius(r);
-    const end = 2 * Math.PI * (val / 100);
     const g = el('g', { transform: `translate(${c} ${c})`, class: 'hud-glow' }, s);
+    if (opts.slices) {
+      // exploded multi-slice pie (ref): gaps between slices, mixed tones
+      const styles = { bright: ['rgba(155,242,250,0.9)', 'var(--hud-accent)'],
+                       mid: ['rgba(79,212,232,0.55)', 'var(--hud-cyan)'],
+                       dim: ['rgba(47,106,168,0.8)', 'var(--hud-blue)'] };
+      let a = opts.rotate == null ? -0.9 : opts.rotate;
+      opts.slices.forEach(([pct, st]) => {
+        const end2 = a + 2 * Math.PI * pct / 100;
+        const [f, sk] = styles[st] || styles.mid;
+        el('path', { d: arc({ startAngle: a, endAngle: end2 }), fill: f,
+          stroke: sk, 'stroke-width': 1.2 }, g);
+        a = end2 + 0.10;
+      });
+      el('circle', { cx: c, cy: c, r: r + 6, class: 'hud-stroke-faint',
+        'stroke-width': 1, 'stroke-dasharray': '3 4' }, s);
+      return s;
+    }
+    const end = 2 * Math.PI * (val / 100);
     // remainder (faint)
     el('path', { d: arc({ startAngle: end, endAngle: 2 * Math.PI }), fill: 'var(--hud-cyan-12)',
       stroke: 'var(--hud-cyan-45)', 'stroke-width': 1 }, g);
@@ -710,6 +727,31 @@
     el('path', { d: arc({ startAngle: 0, endAngle: end }), fill: 'rgba(155,242,250,0.55)',
       stroke: 'var(--hud-accent)', 'stroke-width': 1.5 }, g);
     el('circle', { cx: c, cy: c, r: r + 5, class: 'hud-stroke-faint', 'stroke-width': 1, 'stroke-dasharray': '3 4' }, s);
+    return s;
+  };
+
+  /* ============================================================
+     BatteryV — vertical battery: cased rounded outline, terminal
+     nub, stacked cells filling bottom-up (ref right side).
+     opts: {width=64, height=110, cells=5, value=75, role}
+     ============================================================ */
+  HUD.batteryV = function (opts) {
+    opts = opts || {};
+    const W = opts.width || 64, H = opts.height || 110, cells = opts.cells || 5;
+    const s = svg(W, H);
+    if (opts.role) s.dataset.role = opts.role;
+    el('rect', { x: W * 0.28, y: 2, width: W * 0.44, height: 7, rx: 2,
+      class: 'hud-stroke', 'stroke-width': 1.5, fill: 'var(--hud-cyan-25)' }, s);
+    el('rect', { x: 6, y: 9, width: W - 12, height: H - 12, rx: 8,
+      class: 'hud-stroke', 'stroke-width': 1.6, fill: 'var(--hud-fill)' }, s);
+    const ch = (H - 26) / cells;
+    const lit = Math.round(cells * (opts.value == null ? 75 : opts.value) / 100);
+    for (let i = 0; i < cells; i++) {
+      const filled = i >= cells - lit;
+      el('rect', { x: 13, y: 14 + i * ch, width: W - 26, height: ch - 5, rx: 2,
+        fill: filled ? (i >= cells - 2 ? 'var(--hud-accent)' : 'var(--hud-cyan)')
+                     : 'var(--hud-cyan-12)', opacity: filled ? 0.9 : 1 }, s);
+    }
     return s;
   };
 
@@ -924,7 +966,8 @@
     const s = svg(W, H, { style: 'overflow: visible' });
     if (opts.role) s.dataset.role = opts.role;
     el('rect', { x: inset, y: inset, width: W - inset * 2, height: H - inset * 2,
-      class: 'hud-stroke', 'stroke-width': 1.2, 'stroke-dasharray': opts.dash || '5 4' }, s);
+      rx: opts.rx || 0, class: 'hud-stroke', 'stroke-width': 1.2,
+      'stroke-dasharray': opts.dash || '5 4' }, s);
     if (corner === 'brackets') {
       const bl = opts.bracket || Math.min(W, H) * 0.22, o = 1;
       const g = el('g', { class: 'hud-stroke-bright', 'stroke-width': 1.5,
@@ -1092,6 +1135,7 @@
     opts = opts || {};
     const S = opts.size || 120, c = S / 2;
     const s = svg(S, S);
+    if (opts.role) s.dataset.role = opts.role;
     el('circle', { cx: c, cy: c, r: S * 0.44, class: 'hud-stroke-dim', 'stroke-width': 1.5,
       'stroke-dasharray': '3 4' }, s);
     el('circle', { cx: c, cy: c, r: S * 0.30, class: 'hud-stroke-faint', 'stroke-width': 1 }, s);

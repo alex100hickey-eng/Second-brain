@@ -262,16 +262,27 @@
     paths: ['M 2 2 H 78 L 148 64 L 78 126 H 2 L 66 64 Z'] }), 1428, 122);
 
   /* ===== RIGHT: pie + battery + mini bars ===== */
-  atC(HUD.pieIndicator({ size: 116, value: 35, role: 'pie' }), 1165, 315);
+  atC(HUD.pieIndicator({ size: 116, role: 'pie',
+    slices: [[52, 'bright'], [26, 'mid'], [11, 'dim']] }), 1165, 315);
   label('35%', 1240, 268, true);
-  (function battery() {
-    const w = document.createElement('div');
-    w.style.transform = 'rotate(-90deg)'; w.style.transformOrigin = 'top left';
-    w.appendChild(HUD.dataBar({ width: 94, segments: 5, value: 75, role: 'bat' }));
-    at(w, 1350, 370);
+  atC(HUD.batteryV({ width: 64, height: 112, value: 75, role: 'bat' }), 1382, 330);
+  label('75%', 1362, 396);
+  at(HUD.barStack({ dir: 'v', thick: 7, gap: 6, bars: [[24, 1], [34, 2], [16, 0]] }), 1448, 342);
+
+  /* ===== 99% / 20% cluster in the clearing above the reactor ===== */
+  (function pct99() {
+    const d = label('99%', 806, 248, true);
+    d.style.fontSize = '17px';
+    d.className = 'hud-num';
+    d.style.position = 'absolute';
+    const d2 = label('20%', 946, 256, true);
+    d2.style.fontSize = '12px';
   })();
-  label('75%', 1352, 380);
-  at(HUD.barStack({ dir: 'v', thick: 7, gap: 6, bars: [[24, 1], [34, 2], [16, 0]] }), 1444, 336);
+  at(HUD.tickStrip({ count: 12, step: 9, h: 8 }), 730, 280);
+  at(HUD.tickStrip({ count: 9, step: 9, h: 6 }), 730, 296);
+  at(HUD.circuitTrace({ width: 130, height: 44, start: 'fdot', end: 'none',
+    paths: ['M 4 4 H 56 l 22 22 V 40'] }), 664, 274);
+  at(HUD.tickStrip({ count: 8, step: 8, h: 5 }), 940, 280);
 
   /* ===== RIGHT-MID: compass ring + rounded radar panel ===== */
   atC(HUD.compassRing({ size: 148, role: 'compass' }), 1162, 495);
@@ -279,7 +290,7 @@
     const w = document.createElement('div');
     w.style.cssText = 'position:relative;width:310px;height:150px';
     const box = HUD.dashedSquare({ width: 310, height: 150, cornerStyle: 'none',
-      dash: 'none', inset: 1 });
+      dash: 'none', inset: 1, rx: 12 });
     box.style.cssText = 'position:absolute;left:0;top:0';
     w.appendChild(box);
     const bars = HUD.barStack({ dir: 'v', seg: true, thick: 12, gap: 6,
@@ -305,7 +316,7 @@
     const w = document.createElement('div');
     w.style.cssText = 'position:relative;width:380px;height:70px';
     const box = HUD.dashedSquare({ width: 380, height: 70, cornerStyle: 'none',
-      dash: 'none', inset: 1 });
+      dash: 'none', inset: 1, rx: 8 });
     box.style.cssText = 'position:absolute;left:0;top:0';
     w.appendChild(box);
     const content = row([
@@ -323,7 +334,10 @@
 
   /* ===== bottom-right: plane heptagon + dish + battery bar ===== */
   at(HUD.planePanel({ width: 295, height: 190, role: 'plane' }), 1280, 688);
-  atC(HUD.dial({ size: 120, value: 84, role: 'dish' }), 1150, 860);
+  // small circle-fork circuit ornament tucked under the radar panel
+  at(HUD.circuitTrace({ width: 110, height: 30, start: 'circle', end: 'none',
+    paths: ['M 16 15 H 58 M 58 15 l 16 -9 M 58 15 l 16 9'] }), 1385, 560);
+  atC(HUD.radarFan({ size: 130, role: 'dish' }), 1150, 860);
   at(HUD.batteryBar({ width: 210, height: 54, value: '100%', role: 'cap100' }), 1310, 930);
 
   /* ===== BOTTOM: loader rings spread along the floor ===== */
