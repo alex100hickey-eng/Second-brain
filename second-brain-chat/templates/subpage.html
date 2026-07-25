@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>CLARVIS</title>
+<link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32.png">
+<link rel="manifest" href="/static/manifest.json">
+<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+<meta name="theme-color" content="#010A20">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="stylesheet" href="/static/hud/hud.css?v=12">
+<style>
+  html, body { height: 100%; margin: 0; overflow: hidden; }
+  #deck { position: absolute; width: 1600px; height: 1000px; left: 50%; top: 50%;
+    transform-origin: center; }
+  .n { position: absolute; }
+  .nc { position: absolute; transform: translate(-50%, -50%); }
+  .lbl { position: absolute; font-family: 'Share Tech Mono', monospace; font-size: 11px;
+    letter-spacing: 0.15em; text-transform: uppercase; color: var(--hud-label);
+    filter: var(--hud-glow); }
+  .lbl.hi { color: var(--hud-cyan); }
+  .pagetitle { position: absolute; left: 60px; top: 40px;
+    font-family: 'Orbitron', sans-serif; font-size: 30px; font-weight: 700;
+    letter-spacing: 0.22em; text-transform: uppercase;
+    color: var(--hud-accent); filter: var(--hud-glow-strong); }
+  .pagesub { position: absolute; left: 62px; top: 82px;
+    font-family: 'Share Tech Mono', monospace; font-size: 11px;
+    letter-spacing: 0.2em; text-transform: uppercase; color: var(--hud-label); }
+</style>
+</head>
+<body class="hud-body">
+<div id="deck"></div>
+
+<script src="/static/vendor/gsap.min.js"></script>
+<script src="/static/vendor/d3.min.js"></script>
+<script src="/static/hud/hud.js?v=12"></script>
+<script>
+  /* One template serves every expanded view; the page key comes from the URL
+     so no server-side templating is needed (keeps this file previewable as a
+     plain static file too). */
+  const PAGES = {
+    school: {
+      title: 'SCHOOL', sub: 'MAIL / ASSIGNMENTS / COURSES',
+      panels: [
+        { title: 'INBOX', shape: 'header', x: 60, y: 380, w: 430, h: 300,
+          rows: [['REGISTRAR — ENROLMENT', '1H', true], ['PROF. HALE — LAB SLOT', '4H', true],
+                 ['BURSAR — STATEMENT', '1D'], ['LIBRARY — HOLD READY', '2D'],
+                 ['ADVISING — CHECK-IN', '3D'], ['CLUBS — WEEKLY', '4D']] },
+        { title: 'ASSIGNMENTS', shape: 'header', x: 530, y: 380, w: 430, h: 300,
+          rows: [['CHEM P-SET 7', 'DUE 2D', true], ['ESSAY DRAFT', 'DUE 5D'],
+                 ['LAB REPORT 3', 'DUE 9D'], ['STATS QUIZ', 'DUE 11D'],
+                 ['GROUP SLIDES', 'DUE 14D']] },
+        { title: 'COURSE LOAD', shape: 'cutbr', x: 1000, y: 380, w: 300, h: 300,
+          rows: [['CHEM 210', 'A-'], ['STAT 154', 'B+'], ['HIST 101', 'A'],
+                 ['ENGL 220', 'B+'], ['CREDITS', '16']] }
+      ]
+    },
+    revenue: {
+      title: 'REVENUE', sub: 'STREAMS / TREND / PIPELINE',
+      panels: [
+        { title: 'MONTH TO DATE', shape: 'header', x: 60, y: 380, w: 380, h: 300,
+          stat: { value: '$1,240', sub: 'UP 18% VS LAST MONTH' },
+          spark: [3, 4, 3, 6, 5, 8, 7, 11],
+          rows: [['TARGET', '$2,000'], ['RUN RATE', '$1,860']] },
+        { title: 'STREAMS', shape: 'header', x: 480, y: 380, w: 430, h: 300,
+          rows: [['FREELANCE BUILDS', '$620', true], ['AFFILIATE', '$310'],
+                 ['DIGITAL GOODS', '$210'], ['CONSULT CALLS', '$100'],
+                 ['ACTIVE SOURCES', '4']] },
+        { title: 'PIPELINE', shape: 'cutbr', x: 950, y: 380, w: 350, h: 300,
+          rows: [['PROPOSAL — ACME', '$800'], ['SCOPING — NORTHWIND', '$450'],
+                 ['LEAD — CONTOSO', '$300'], ['WEIGHTED', '$1,010', true]] }
+      ]
+    },
+    schedule: {
+      title: 'SCHEDULE', sub: 'TODAY / WEEK AHEAD',
+      panels: [
+        { title: 'TODAY', shape: 'header', x: 60, y: 380, w: 420, h: 300,
+          rows: [['09:00 CHEM LAB', 'RM 214', true], ['11:30 ADVISING', 'ZOOM'],
+                 ['13:30 LIFT', 'GYM'], ['16:00 SHIFT', '4H', true],
+                 ['20:00 STUDY BLOCK', '2H']] },
+        { title: 'WEEK AHEAD', shape: 'header', x: 520, y: 380, w: 440, h: 300,
+          rows: [['TUE — QUIZ', 'STAT 154'], ['WED — LAB REPORT DUE', '23:59'],
+                 ['THU — SHIFT', '5H'], ['FRI — ESSAY DRAFT', '23:59'],
+                 ['SAT — MEET', '10:00']] },
+        { title: 'LOAD', shape: 'cutbr', x: 1000, y: 380, w: 300, h: 300,
+          rows: [['BOOKED HOURS', '38'], ['FREE BLOCKS', '11'],
+                 ['CONFLICTS', '0'], ['NEXT FREE', 'TUE 15:00', true]] }
+      ]
+    },
+    tasks: {
+      title: 'TASK QUEUE', sub: 'CLARVIS AUTONOMOUS WORK',
+      panels: [
+        { title: 'ACTIVE', shape: 'header', x: 60, y: 380, w: 400, h: 300,
+          stat: { value: 'INTAKE SCAN', sub: 'RUNNING — STARTED 14 MIN AGO' },
+          bar: 64,
+          rows: [['SOURCE', 'IMESSAGE + MAIL'], ['EVENTS FOUND', '12']] },
+        { title: 'QUEUED', shape: 'header', x: 500, y: 380, w: 420, h: 300,
+          rows: [['DAILY EXPANSION SCOUT', '06:00'], ['VAULT REINDEX', '02:00'],
+                 ['WEEKLY REVIEW DRAFT', 'SUN'], ['BUDGET SWEEP', 'HOURLY']] },
+        { title: 'RECENT', shape: 'cutbr', x: 960, y: 380, w: 340, h: 300,
+          rows: [['PROACTIVE NUDGE', 'SENT'], ['GMAIL SCAN', 'OK'],
+                 ['CALENDAR SCAN', 'OK'], ['FAILURES 24H', '0', true]] }
+      ]
+    }
+  };
+
+  // page key: the URL segment when it names a known page, else ?p=, else school
+  const SEG = (location.pathname.replace(/\/+$/, '').split('/').pop() || '').toLowerCase();
+  const QP = (new URLSearchParams(location.search).get('p') || '').toLowerCase();
+  const KEY = PAGES[SEG] ? SEG : (PAGES[QP] ? QP : 'school');
+  const page = PAGES[KEY];
+  const deck = document.getElementById('deck');
+  // same shell as home; the reactor is the way back
+  const { at, atC, label } = HUD.deckShell(deck, {
+    reactorHref: '/', reactorTitle: 'Back to the deck',
+    reactorX: 800, reactorY: 196, reactorSize: 300
+  });
+
+  const t = document.createElement('div');
+  t.className = 'pagetitle'; t.textContent = page.title; deck.appendChild(t);
+  const sb = document.createElement('div');
+  sb.className = 'pagesub'; sb.textContent = page.sub; deck.appendChild(sb);
+
+  page.panels.forEach(p => {
+    const f = HUD.widgetFrame({ width: p.w, height: p.h, shape: p.shape,
+      title: p.title, role: 'panel-' + p.title.toLowerCase().replace(/\W+/g, '-') });
+    const c = f._content;
+    if (p.stat) c.appendChild(HUD.bigStat(p.stat));
+    if (p.bar != null) {
+      const b = HUD.dataBar({ width: p.w - 60, segments: 14, value: p.bar, flat: true });
+      b.style.margin = '8px 0';
+      c.appendChild(b);
+    }
+    if (p.spark) {
+      const s = HUD.miniSpark({ values: p.spark, width: p.w - 60, height: 34 });
+      s.style.margin = '8px 0';
+      c.appendChild(s);
+    }
+    if (p.rows) {
+      const r = HUD.listRows({ rows: p.rows });
+      r.style.marginTop = '8px';
+      c.appendChild(r);
+    }
+    at(f, p.x, p.y);
+  });
+
+  /* ===== shared chrome: back hint, chat bar, light decoration ===== */
+  label('◄ CORE — RETURN TO DECK', 660, 366, true);
+  at(HUD.chatBar({ width: 620, action: '/chat-classic', role: 'chatbar' }), 490, 790);
+  at(HUD.chevronPair({ count: 2, dir: 'right' }), 400, 806);
+  at(HUD.chevronPair({ count: 2, dir: 'left' }), 1130, 806);
+  at(HUD.tickStrip({ count: 11, step: 11, h: 9 }), 60, 116);
+  at(HUD.ladder({ height: 120, count: 7 }), 1520, 400);
+  at(HUD.dotMatrix({ rows: 3, cols: 12, cell: 9, size: 4, fade: true }), 1330, 118);
+  at(HUD.cornerMark({ size: 16, dir: 'tl' }), 60, 348);
+  at(HUD.cornerMark({ size: 16, dir: 'tr' }), 1524, 348);
+  at(HUD.cornerMark({ size: 16, dir: 'bl' }), 60, 700);
+  at(HUD.cornerMark({ size: 16, dir: 'br' }), 1524, 700);
+
+  window.CLARVIS_HUD = { deck, page: KEY,
+    roles: () => Array.from(deck.querySelectorAll('[data-role]')).map(n => n.dataset.role) };
+</script>
+</body>
+</html>

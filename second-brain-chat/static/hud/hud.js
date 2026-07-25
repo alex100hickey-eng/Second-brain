@@ -1505,19 +1505,19 @@
     if (shape === 'header') {                 // panel with a filled title band
       d = `M ${k} ${o} H ${W - k} L ${R} ${k} V ${B - k} L ${W - k} ${B}
            H ${k} L ${o} ${B - k} V ${k} Z`;
-      pad = [30, 16];
+      pad = [30, 16, 10];
     } else if (shape === 'cutbr') {           // only the bottom-right corner cut
       d = `M ${o} ${o} H ${R} V ${B - k * 1.7} L ${W - k * 1.7} ${B} H ${o} Z`;
-      pad = [14, 16];
+      pad = [14, 16, 10];
     } else if (shape === 'cuttl') {           // only the top-left corner cut
       d = `M ${k * 1.7} ${o} H ${R} V ${B} H ${o} V ${k * 1.7} Z`;
-      pad = [14, 16];
+      pad = [14, 16, 10];
     } else if (shape === 'layered') {         // panel with an offset ghost behind
       d = `M ${o + 9} ${o + 9} H ${R} V ${B} H ${o + 9} Z`;
-      pad = [18, 20];
+      pad = [18, 20, 12];
     } else if (shape === 'round') {           // soft rect + inner border
       d = null;
-      pad = [16, 18];
+      pad = [16, 18, 12];
     } else if (shape === 'banner') {          // long top, 45deg descent right
       d = `M ${k} ${o} H ${R} L ${W - k * 1.8} ${B} H ${o} V ${k} Z`;
       pad = [16, k + 12];
@@ -1593,8 +1593,9 @@
         .replace(/\s+/g, ' '), fill: 'var(--hud-cyan-25)' }, s);
       el('line', { x1: o, y1: 24, x2: R, y2: 24, class: 'hud-stroke',
         'stroke-width': 1.1, opacity: 0.9 }, s);
-      [10, 20].forEach(x =>
-        el('rect', { x: k + x, y: 9, width: 5, height: 6,
+      // accent blocks sit at the RIGHT end of the band, clear of the title
+      [16, 26].forEach(x =>
+        el('rect', { x: W - k - x, y: 9, width: 5, height: 6,
           fill: 'var(--hud-accent)', opacity: 0.8 }, s));
     }
     if (shape === 'tab') {   // header divider under the tab strip
@@ -1614,13 +1615,232 @@
     }
     div.appendChild(s);
 
+    // a title needs headroom on shapes that have no band of their own
+    if (opts.title && shape !== 'header' && pad[0] < 22) pad[0] = 22;
     const content = document.createElement('div');
     content.className = 'hud-content';
     content.style.cssText = `position:absolute;left:${pad[1]}px;right:${pad[1]}px;` +
-      `top:${pad[0]}px;bottom:${pad[0]}px;overflow:hidden`;
+      `top:${pad[0]}px;bottom:${pad[2] == null ? pad[0] : pad[2]}px;overflow:hidden`;
     div.appendChild(content);
     div._content = content;
+
+    // optional: the whole frame becomes a link to its expanded page
+    if (opts.href) {
+      div.classList.add('hud-widget-link');
+      div.setAttribute('role', 'link');
+      div.setAttribute('tabindex', '0');
+      if (opts.linkTitle) div.title = opts.linkTitle;
+      const go = () => { window.location.href = opts.href; };
+      div.addEventListener('click', go);
+      div.addEventListener('keydown', e => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); }
+      });
+      el('path', { d: `M ${R - 21} ${B - 12} l 6 -6 l -6 -6 M ${R - 13} ${B - 12} l 6 -6 l -6 -6`,
+        class: 'hud-stroke-bright', 'stroke-width': 1.5, fill: 'none', opacity: 0.9 }, s);
+    }
+    if (opts.title) {
+      const t = document.createElement('div');
+      t.className = 'hud-widget-title';
+      t.textContent = opts.title;
+      t.style.top = (shape === 'header' ? 6 : 3) + 'px';
+      t.style.left = pad[1] + 'px';
+      div.appendChild(t);
+    }
     return div;
+  };
+
+  /* ============================================================
+     Widget content helpers — drop these into a frame's ._content.
+     ============================================================ */
+
+  // listRows: [[label, value, hot], ...] as tight label/value lines
+  HUD.listRows = function (opts) {
+    opts = opts || {};
+    const wrap = document.createElement('div');
+    wrap.className = 'hud-rows';
+    (opts.rows || []).forEach(([lab, val, hot]) => {
+      const r = document.createElement('div');
+      r.className = 'hud-row';
+      const a = document.createElement('span');
+      a.className = 'hud-row-l'; a.textContent = lab;
+      const b = document.createElement('span');
+      b.className = 'hud-row-v' + (hot ? ' hot' : ''); b.textContent = val;
+      r.appendChild(a); r.appendChild(b); wrap.appendChild(r);
+    });
+    return wrap;
+  };
+
+  // bigStat: a key number with a unit and a caption underneath
+  HUD.bigStat = function (opts) {
+    opts = opts || {};
+    const wrap = document.createElement('div');
+    wrap.className = 'hud-bigstat';
+    const v = document.createElement('div');
+    v.className = 'hud-bigstat-v';
+    v.textContent = opts.value == null ? '—' : String(opts.value);
+    if (opts.unit) {
+      const u = document.createElement('span');
+      u.className = 'hud-bigstat-u'; u.textContent = opts.unit;
+      v.appendChild(u);
+    }
+    wrap.appendChild(v);
+    if (opts.sub) {
+      const sd = document.createElement('div');
+      sd.className = 'hud-bigstat-s'; sd.textContent = opts.sub;
+      wrap.appendChild(sd);
+    }
+    return wrap;
+  };
+
+  // miniSpark: tiny bar sparkline for trend readouts
+  HUD.miniSpark = function (opts) {
+    opts = opts || {};
+    const vals = opts.values || [3, 5, 4, 7, 6, 9, 8, 11];
+    const W = opts.width || 120, H = opts.height || 30;
+    const s = svg(W, H);
+    const max = Math.max.apply(null, vals) || 1;
+    const bw = W / vals.length;
+    vals.forEach((v, i) => {
+      const h = Math.max(2, (v / max) * (H - 2));
+      el('rect', { x: i * bw + 1, y: H - h, width: Math.max(2, bw - 3), height: h,
+        fill: i === vals.length - 1 ? 'var(--hud-accent)' : 'var(--hud-cyan)',
+        opacity: i === vals.length - 1 ? 1 : 0.55 }, s);
+    });
+    return s;
+  };
+
+  /* ============================================================
+     ChatBar — command input with a send action and a voice button
+     (Web Speech dictation where the browser supports it).
+     opts: {width=620, action='/chat-classic', placeholder, role}
+     ============================================================ */
+  HUD.chatBar = function (opts) {
+    opts = opts || {};
+    const W = opts.width || 620, H = 54;
+    const wrap = document.createElement('div');
+    wrap.className = 'hud-chatbar';
+    wrap.style.cssText = `position:relative;width:${W}px;height:${H}px`;
+    if (opts.role) wrap.dataset.role = opts.role;
+
+    const s = svg(W, H);
+    s.style.cssText = 'position:absolute;left:0;top:0';
+    const k = 14, o = 1.5, R = W - o, B = H - o;
+    el('path', { d: `M ${k} ${o} H ${W - k} L ${R} ${k} V ${B - k} L ${W - k} ${B} ` +
+      `H ${k} L ${o} ${B - k} V ${k} Z`, fill: 'rgba(6,20,48,0.62)',
+      stroke: 'var(--hud-accent)', 'stroke-width': 1.2, class: 'hud-glow' }, s);
+    wrap.appendChild(s);
+
+    const input = document.createElement('input');
+    input.className = 'hud-chatbar-input';
+    input.type = 'text';
+    input.placeholder = opts.placeholder || 'ASK CLARVIS…';
+    wrap.appendChild(input);
+
+    const mic = document.createElement('button');
+    mic.className = 'hud-chatbar-btn hud-chatbar-mic';
+    mic.type = 'button'; mic.title = 'Voice input';
+    mic.appendChild(micGlyph());
+    wrap.appendChild(mic);
+
+    const send = document.createElement('button');
+    send.className = 'hud-chatbar-btn hud-chatbar-send';
+    send.type = 'button'; send.title = 'Send';
+    send.appendChild(sendGlyph());
+    wrap.appendChild(send);
+
+    const action = opts.action || '/chat-classic';
+    const submit = () => {
+      const v = input.value.trim();
+      window.location.href = v ? action + '?q=' + encodeURIComponent(v) : action;
+    };
+    send.addEventListener('click', submit);
+    input.addEventListener('keydown', e => { if (e.key === 'Enter') submit(); });
+
+    // voice: dictate into the field so the user can confirm before sending
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    let rec = null;
+    mic.addEventListener('click', () => {
+      if (!SR) { window.location.href = action; return; }
+      if (rec) { rec.stop(); return; }
+      rec = new SR();
+      rec.lang = 'en-US';
+      rec.interimResults = true;
+      mic.classList.add('listening');
+      rec.onresult = e => {
+        input.value = Array.from(e.results).map(r => r[0].transcript).join('');
+      };
+      const done = () => { mic.classList.remove('listening'); rec = null; };
+      rec.onerror = done; rec.onend = done;
+      rec.start();
+    });
+    wrap._input = input;
+    return wrap;
+
+    function micGlyph() {
+      const g = svg(18, 18);
+      el('rect', { x: 6, y: 2, width: 6, height: 9, rx: 3, fill: 'currentColor' }, g);
+      el('path', { d: 'M 3.5 8.5 a 5.5 5.5 0 0 0 11 0 M 9 14 v 3 M 6 17 h 6',
+        fill: 'none', stroke: 'currentColor', 'stroke-width': 1.5 }, g);
+      return g;
+    }
+    function sendGlyph() {
+      const g = svg(18, 18);
+      el('path', { d: 'M 4 4 l 10 5 l -10 5 l 2 -5 Z', fill: 'currentColor' }, g);
+      return g;
+    }
+  };
+
+  /* ============================================================
+     DeckShell — the scaffolding every CLARVIS page shares: the fit
+     handler, placement helpers, outer frame, floor + lettering,
+     orbit rings and the clickable core reactor. Returns the
+     placement helpers so a page lays its own content on top.
+     opts: {reactorHref, reactorX, reactorY, reactorSize, floorText,
+            reactorTitle}
+     ============================================================ */
+  HUD.deckShell = function (deck, opts) {
+    opts = opts || {};
+    const W = 1600, H = 1000;
+    function fit() {
+      const sc = Math.min(window.innerWidth / W, window.innerHeight / H);
+      deck.style.transform = `translate(-50%, -50%) scale(${sc})`;
+    }
+    window.addEventListener('resize', fit); fit();
+    HUD.scanlineOverlay();
+
+    function at(node, x, y, role) {
+      const d = document.createElement('div'); d.className = 'n';
+      d.style.left = x + 'px'; d.style.top = y + 'px';
+      if (role) d.dataset.role = role;
+      d.appendChild(node); deck.appendChild(d); return d;
+    }
+    function atC(node, x, y, role) {
+      const d = document.createElement('div'); d.className = 'nc';
+      d.style.left = x + 'px'; d.style.top = y + 'px';
+      if (role) d.dataset.role = role;
+      d.appendChild(node); deck.appendChild(d); return d;
+    }
+    function label(text, x, y, hi) {
+      const d = document.createElement('div'); d.className = 'lbl' + (hi ? ' hi' : '');
+      d.style.left = x + 'px'; d.style.top = y + 'px'; d.textContent = text;
+      deck.appendChild(d); return d;
+    }
+
+    at(HUD.screenFrame({ width: W, height: H, inset: 12, cut: 36 }), 0, 0);
+    at(HUD.floorPlane({ width: 2100, height: 215, topInset: 880,
+      vanishX: 1050, rows: 5, role: 'floor' }), -250, 845);
+    at(HUD.floorText({ text: opts.floorText || 'C.L.A.R.V.I.S', size: 100, tilt: 63,
+      spacing: 0.46, perspective: 1900, opacity: 0.9, role: 'floor-name' }), 800, 906);
+
+    const rx = opts.reactorX == null ? 800 : opts.reactorX;
+    const ry = opts.reactorY == null ? 430 : opts.reactorY;
+    const rs = opts.reactorSize || 560;
+    atC(HUD.orbitRing({ r: rs * 0.545, kind: 'dots', dur: 120 }), rx, ry);
+    atC(HUD.orbitRing({ r: rs * 0.568, kind: 'arcs', dur: 210, reverse: true }), rx, ry);
+    atC(HUD.coreReactor({ size: rs, href: opts.reactorHref || '/chat-classic',
+      linkTitle: opts.reactorTitle || 'Open CLARVIS chat' }), rx, ry, 'core-reactor');
+
+    return { at, atC, label, deck };
   };
 
   /* ============================================================

@@ -4394,6 +4394,17 @@ def chat_classic():
     return render_template("index.html")
 
 
+# Expanded views behind the HUD widgets. One template serves all four — it reads
+# the page key off the URL — and every one draws the same shell (floor, lettering,
+# core reactor), so the reactor is a consistent "back to the deck" control.
+@app.route("/school")
+@app.route("/revenue")
+@app.route("/schedule")
+@app.route("/tasks")
+def hud_subpage():
+    return render_template("subpage.html")
+
+
 @app.route("/dashboard")
 def dashboard():
     # The clean, readable, mobile-friendly board (see home.html).
