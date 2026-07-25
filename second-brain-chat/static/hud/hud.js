@@ -35,6 +35,10 @@
   }
   function spin(node, cx, cy, dur, reverse) {
     if (!gsap) return;
+    // promote to its own compositor layer so the rotation (and any filter
+    // on this node's subtree) doesn't force a repaint of neighboring,
+    // unrelated elements every frame — see PERF notes at the top of this file
+    node.style.willChange = 'transform';
     gsap.to(node, {
       rotation: reverse ? -360 : 360,
       svgOrigin: `${cx} ${cy}`,
@@ -166,8 +170,12 @@
     });
     spin(gP, c, c, 170, true);
 
-    // chunky bright arc ring — the signature outer ring
-    const gA = el('g', { class: 'hud-glow-strong' }, s);
+    // chunky bright arc ring — the signature outer ring. PERF: single glow,
+    // not glow-strong — this ring is large, rotates continuously, and was
+    // the single most expensive element on the page (double drop-shadow
+    // recomputed every frame over a big arc set); one shadow reads almost
+    // identically at normal viewing scale.
+    const gA = el('g', { class: 'hud-glow' }, s);
     [[-15, 70, 1], [70, 40, 0.85], [128, 55, 0.95], [200, 80, 0.9], [300, 45, 0.8]]
       .forEach(([a0, len, op]) => arc(gA, F(0.72), a0, len, F(0.048), 'var(--hud-accent)', op));
     [[95, 18], [262, 22]].forEach(([a0, len]) =>
@@ -241,8 +249,11 @@
     el('circle', { cx: c, cy: c, r: F(0.115), stroke: 'var(--hud-white)', fill: 'none',
       'stroke-width': 1.5, opacity: 0.8 }, gCore);
     el('circle', { cx: c, cy: c, r: F(0.095), fill: '#ffffff' }, gCore);
-    if (gsap) gsap.to(gCore, { scale: 1.05, opacity: 0.94, svgOrigin: `${c} ${c}`,
-      duration: 1.7, ease: 'sine.inOut', repeat: -1, yoyo: true });
+    if (gsap) {
+      gCore.style.willChange = 'transform, opacity';
+      gsap.to(gCore, { scale: 1.05, opacity: 0.94, svgOrigin: `${c} ${c}`,
+        duration: 1.7, ease: 'sine.inOut', repeat: -1, yoyo: true });
+    }
 
     // optional: turn the core into a link (opts.href). Topmost transparent
     // hit area over the center + hover ring affordance + tooltip.
@@ -803,8 +814,16 @@
         i++;
       };
       gsap.to({}, { duration: 0.28, repeat: -1, onRepeat: flip });
-      cells.forEach((t, n) => gsap.to(t, { opacity: 0.35, duration: 1.4 + (n % 5) * 0.2,
-        ease: 'sine.inOut', repeat: -1, yoyo: true, delay: (n % 7) * 0.15 }));
+      // PERF: shimmer only every 4th cell instead of every cell — a
+      // binaryStream can have 100+ digits, and each was its own continuous
+      // GSAP tween (a real main-thread cost multiplied across every block
+      // of filler on the page). The visual "some digits pulse" read is the
+      // same with a quarter of the concurrent animations.
+      cells.forEach((t, n) => {
+        if (n % 4 !== 0) return;
+        gsap.to(t, { opacity: 0.35, duration: 1.4 + (n % 5) * 0.2,
+          ease: 'sine.inOut', repeat: -1, yoyo: true, delay: (n % 7) * 0.15 });
+      });
     }
     return s;
   };
@@ -883,13 +902,22 @@
         ? Math.max(4, (1 - i / bars) * 40 + (seed[i % seed.length] - 20) * 0.25)
         : seed[i % seed.length];
       const h0 = 6 + (base / 46) * (H - 6);
-      const r = el('rect', { x: ext + i * (bw + gap), y: H - h0, width: bw, height: h0,
+      // PERF: draw each bar at its max extent, anchored to the baseline, and
+      // animate a CSS scaleY transform instead of the height/y attributes.
+      // Attribute tweening forces an SVG layout recalc every frame across
+      // every bar; scaleY from a bottom transform-origin is compositor-only
+      // and looks identical (bars still grow/shrink from the same baseline).
+      const hMax = H - 6;
+      const r = el('rect', { x: ext + i * (bw + gap), y: H - hMax, width: bw, height: hMax,
         fill: tone(i), class: opts.mixed && i % 5 === 2 ? '' : 'hud-glow' }, s);
+      r.style.transformBox = 'fill-box';
+      r.style.transformOrigin = 'bottom';
+      r.style.transform = `scaleY(${(h0 / hMax).toFixed(3)})`;
       if (gsap) {
         // decay bars wobble around their own height so the slope survives
         const h1 = opts.decay ? Math.max(4, h0 * 0.72)
           : 6 + Math.max(5, (H - 10) * (((i * 13) % 9) / 9));
-        gsap.to(r, { attr: { height: h1, y: H - h1 }, duration: 0.5 + (i % 5) * 0.12,
+        gsap.to(r, { scaleY: h1 / hMax, duration: 0.5 + (i % 5) * 0.12,
           ease: 'sine.inOut', repeat: -1, yoyo: true, delay: (i % 7) * 0.08 });
       }
     }
@@ -1105,13 +1133,15 @@
     const S = opts.size || 96, c = S / 2;
     const s = svg(S, S, { style: 'overflow:visible' });
     if (opts.role) s.dataset.role = opts.role;
-    const g = el('g', {}, s);
+    // PERF: one filter on the rotating group, not four (one per arc) —
+    // same look, a quarter of the drop-shadow recompute cost per frame
+    const g = el('g', { class: 'hud-glow' }, s);
     [[0, 68], [92, 58], [172, 78], [268, 52]].forEach(([a0, len]) => {
       const r = S * 0.44;
       const [x0, y0] = P(c, c, r, a0), [x1, y1] = P(c, c, r, a0 + len);
       el('path', { d: `M ${x0} ${y0} A ${r} ${r} 0 0 1 ${x1} ${y1}`, fill: 'none',
         stroke: 'var(--hud-accent)', 'stroke-width': 4, 'stroke-linecap': 'round',
-        opacity: 0.85, class: 'hud-glow' }, g);
+        opacity: 0.85 }, g);
     });
     spin(g, c, c, 60);
     el('circle', { cx: c, cy: c, r: S * 0.31, class: 'hud-stroke-dim',
@@ -1446,27 +1476,34 @@
     if (opts.role) s.dataset.role = opts.role;
     const g = el('g', {}, s);
     const n = opts.count || 28, kind = opts.kind || 'dots';
+    // PERF: filtered elements go into ONE sub-group with a single glow
+    // filter instead of each carrying its own — same look (only the
+    // major marks glow), far fewer drop-shadow contexts to recompute
+    // while the whole thing spins.
     if (kind === 'arcs') {
+      const gGlow = el('g', { class: 'hud-glow' }, g);
       (opts.segs || [[10, 34], [96, 18], [150, 44], [232, 26], [300, 30]])
         .forEach(([a0, len]) => {
           const [x0, y0] = P(c, c, r, a0), [x1, y1] = P(c, c, r, a0 + len);
           el('path', { d: `M ${x0} ${y0} A ${r} ${r} 0 0 1 ${x1} ${y1}`, fill: 'none',
             stroke: 'var(--hud-accent)', 'stroke-width': opts.weight || 3,
-            'stroke-linecap': 'round', opacity: 0.7, class: 'hud-glow' }, g);
+            'stroke-linecap': 'round', opacity: 0.7 }, gGlow);
         });
-    } else {
+    } else if (kind === 'ticks') {
       for (let i = 0; i < n; i++) {
         const a = i / n * 360, major = i % 4 === 0;
-        if (kind === 'ticks') {
-          const [x1, y1] = P(c, c, r, a), [x2, y2] = P(c, c, r + (major ? 13 : 7), a);
-          el('line', { x1, y1, x2, y2, stroke: 'var(--hud-cyan)',
-            'stroke-width': major ? 2 : 1, opacity: major ? 0.8 : 0.4 }, g);
-        } else {
-          const [x, y] = P(c, c, r, a);
-          el('circle', { cx: x, cy: y, r: major ? 3.4 : 1.8,
-            fill: major ? 'var(--hud-accent)' : 'var(--hud-cyan-45)',
-            class: major ? 'hud-glow' : '' }, g);
-        }
+        const [x1, y1] = P(c, c, r, a), [x2, y2] = P(c, c, r + (major ? 13 : 7), a);
+        el('line', { x1, y1, x2, y2, stroke: 'var(--hud-cyan)',
+          'stroke-width': major ? 2 : 1, opacity: major ? 0.8 : 0.4 }, g);
+      }
+    } else {
+      const gGlow = el('g', { class: 'hud-glow' }, g);
+      for (let i = 0; i < n; i++) {
+        const a = i / n * 360, major = i % 4 === 0;
+        const [x, y] = P(c, c, r, a);
+        el('circle', { cx: x, cy: y, r: major ? 3.4 : 1.8,
+          fill: major ? 'var(--hud-accent)' : 'var(--hud-cyan-45)' },
+          major ? gGlow : g);
       }
     }
     spin(g, c, c, opts.dur || 90, opts.reverse);
@@ -2167,8 +2204,13 @@
     const chevs = [];
     for (let i = 0; i < n; i++) {
       const x = 4 + i * step;
+      // PERF: hud-stroke (single glow) not hud-stroke-bright (double) — a
+      // chevronRun can have 10+ chevrons, each continuously opacity-tweened;
+      // one drop-shadow apiece instead of two is a meaningful cut with the
+      // chevrons still reading as bright accents.
       chevs.push(el('path', { d: `M ${x} 4 l ${h * 0.55} ${h / 2} l ${-h * 0.55} ${h / 2}`,
-        class: 'hud-stroke-bright', 'stroke-width': 4, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', opacity: 0.3 }, s));
+        stroke: 'var(--hud-accent)', fill: 'none', class: 'hud-glow',
+        'stroke-width': 4, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', opacity: 0.3 }, s));
     }
     if (gsap) gsap.to(chevs, { opacity: 1, duration: 0.5, ease: 'sine.inOut',
       stagger: { each: 0.12, repeat: -1, yoyo: true } });
