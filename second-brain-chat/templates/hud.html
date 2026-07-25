@@ -53,6 +53,13 @@
     title: 'Assignments', href: '/school', linkTitle: 'Open school' }, 1304, 322);
   const wRev = widget({ width: 216, height: 102, shape: 'cutbr', role: 'w-br',
     title: 'Revenue', href: '/revenue', linkTitle: 'Open revenue' }, 1288, 630);
+  // PERSONAL comms — texts + non-school mail (left, opposite school mail)
+  const wPersonal = widget({ width: 200, height: 126, shape: 'header', role: 'w-l2',
+    title: 'Personal', href: '/personal', linkTitle: 'Open personal inbox' }, 66, 320);
+  // DAILY LEARNINGS — seven things to read once a day
+  const wLearn = widget({ width: 216, height: 104, shape: 'header', role: 'w-bl',
+    title: 'Today I learned', href: '/learnings', linkTitle: 'Open daily learnings' },
+    136, 628);
 
   const clip = (s, n) => (s || '').length > n ? s.slice(0, n - 1) + '…' : (s || '');
   const money = v => '$' + Math.round(v || 0).toLocaleString();
@@ -95,6 +102,18 @@
       })
     ]);
 
+    // personal — texts + non-school mail
+    const p = (d && d.personal) || {};
+    HUD.fill(wPersonal._content, [
+      HUD.bigStat({ value: gone ? '—' : (p.unread || 0), unit: 'new',
+        sub: gone || `${p.texts || 0} texts · ${p.emails || 0} emails` }),
+      HUD.listRows({
+        empty: '',
+        rows: (p.recent || []).filter(r => r.status === 'new').slice(0, 2)
+          .map(r => [clip(r.from, 26), '', false])
+      })
+    ]);
+
     // assignments — deadlines pulled out of intake
     HUD.fill(wWork._content, HUD.listRows({
       empty: gone || 'No deadlines',
@@ -120,15 +139,30 @@
   render(null, null);                       // paint the empty state immediately
   HUD.bindLive({ url: '/api/hud', every: 60000, render });
 
+  // Daily learnings live on their own endpoint and only change once a day,
+  // so fetch once (every: 0) rather than polling — the card is model-generated
+  // and cached server-side per date.
+  function renderLearnings(d, err) {
+    const v = (d && d.vocab) || {};
+    HUD.fill(wLearn._content, [
+      HUD.bigStat({ value: err ? '—' : clip(v.word || 'Loading…', 16),
+        sub: err ? 'Data unavailable' : (v.meaning ? clip(v.meaning, 30) : 'word of the day') }),
+      HUD.listRows({
+        empty: '',
+        rows: err ? [] : [['+6 more today', '', true]]
+      })
+    ]);
+  }
+  renderLearnings(null, null);
+  HUD.bindLive({ url: '/api/learnings', every: 0, render: renderLearnings });
+
   // --- open frames, awaiting assignment ---
   at(HUD.widgetFrame({ width: 168, height: 70, shape: 'cutbr',   role: 'w-t1' }), 302, 14);
   at(HUD.widgetFrame({ width: 226, height: 76, shape: 'bite',    role: 'w-tc' }), 698, 16);
   at(HUD.widgetFrame({ width: 170, height: 72, shape: 'layered', role: 'w-t2' }), 972, 42);
   at(HUD.widgetFrame({ width: 198, height: 76, shape: 'round',   role: 'w-tr' }), 1182, 14);
-  at(HUD.widgetFrame({ width: 188, height: 90, shape: 'bracket', role: 'w-l2' }), 74, 322);
   at(HUD.widgetFrame({ width: 218, height: 94, shape: 'cuttl',   role: 'w-l3' }), 30, 458);
   at(HUD.widgetFrame({ width: 162, height: 74, shape: 'cutbr',   role: 'w-r1' }), 1398, 44);
-  at(HUD.widgetFrame({ width: 208, height: 88, shape: 'round',   role: 'w-bl' }), 140, 630);
 
   /* ===== CHAT BAR — above the floor lettering ===== */
   at(HUD.chatBar({ width: 620, action: '/chat-classic', role: 'chatbar' }), 490, 790);

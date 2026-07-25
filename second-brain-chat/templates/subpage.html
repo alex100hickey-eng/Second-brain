@@ -44,6 +44,38 @@
   const money = v => '$' + Math.round(v || 0).toLocaleString();
   const rows = (list, empty) => HUD.listRows({ rows: list, empty: empty });
 
+  // a headline + wrapped body paragraph, for the learnings cards
+  function card(head, body, foot) {
+    const w = document.createElement('div');
+    if (head) {
+      const h = document.createElement('div');
+      h.className = 'hud-bigstat-v';
+      h.style.fontSize = '17px';
+      h.style.lineHeight = '1.25';
+      h.textContent = head;
+      w.appendChild(h);
+    }
+    if (body) {
+      const b = document.createElement('div');
+      b.className = 'hud-bigstat-s';
+      b.style.marginTop = '8px';
+      b.style.whiteSpace = 'normal';
+      b.style.lineHeight = '1.5';
+      b.textContent = body;
+      w.appendChild(b);
+    }
+    if (foot) {
+      const f = document.createElement('div');
+      f.className = 'hud-row-v';
+      f.style.marginTop = '10px';
+      f.style.fontSize = '11px';
+      f.style.whiteSpace = 'normal';
+      f.textContent = foot;
+      w.appendChild(f);
+    }
+    return w;
+  }
+
   const PAGES = {
     school: {
       title: 'School', sub: 'Mail \u00b7 assignments \u00b7 deadlines',
@@ -114,6 +146,61 @@
           } }
       ]
     },
+    personal: {
+      title: 'Personal', sub: 'Texts · email · people',
+      panels: [
+        { title: 'Recent', shape: 'header', x: 60, y: 380, w: 470, h: 300,
+          fill: (d, gone) => rows((((d && d.personal) || {}).recent || []).map(r =>
+            [clip(r.from + (r.preview ? ' — ' + r.preview : ''), 50),
+             r.status === 'new' ? 'new' : '', r.status === 'new']),
+            gone || 'Nothing recent') },
+        { title: 'Needs a reply', shape: 'header', x: 570, y: 380, w: 430, h: 300,
+          fill: (d, gone) => rows((((d && d.personal) || {}).recent || [])
+            .filter(r => r.status === 'new').map(r =>
+              [clip(r.from, 32), r.source === 'imessage' ? 'text' : 'email', true]),
+            gone || 'All caught up') },
+        { title: 'Mix', shape: 'cutbr', x: 1040, y: 380, w: 260, h: 300,
+          fill: (d, gone) => {
+            const p = (d && d.personal) || {};
+            return rows([['Texts', String(p.texts || 0)],
+                         ['Emails', String(p.emails || 0)],
+                         ['Unread', String(p.unread || 0), !!p.unread]],
+                        gone || 'No data'); } }
+      ]
+    },
+    learnings: {
+      title: 'Today I learned', sub: 'Seven things, refreshed daily',
+      feed: '/api/learnings',
+      panels: [
+        { title: 'Word of the day', shape: 'header', x: 60, y: 372, w: 350, h: 186,
+          fill: (d, gone) => { const v = (d && d.vocab) || {};
+            return gone ? rows([], gone)
+              : card(v.word, v.meaning, v.example ? '“' + v.example + '”' : ''); } },
+        { title: 'Quote', shape: 'header', x: 430, y: 372, w: 350, h: 186,
+          fill: (d, gone) => { const q = (d && d.quote) || {};
+            return gone ? rows([], gone)
+              : card(null, q.text ? '“' + q.text + '”' : '', q.author ? '— ' + q.author : ''); } },
+        { title: 'Verse', shape: 'header', x: 800, y: 372, w: 350, h: 186,
+          fill: (d, gone) => { const v = (d && d.verse) || {};
+            return gone ? rows([], gone) : card(v.reference, v.text, ''); } },
+        { title: 'Song', shape: 'header', x: 1170, y: 372, w: 350, h: 186,
+          fill: (d, gone) => { const s2 = (d && d.song) || {};
+            return gone ? rows([], gone)
+              : card(s2.title, s2.why, s2.artist ? '— ' + s2.artist : ''); } },
+        { title: 'Money basics', shape: 'header', x: 60, y: 578, w: 470, h: 196,
+          fill: (d, gone) => { const m = (d && d.money_tip) || {};
+            return gone ? rows([], gone) : card(m.title, m.body, ''); } },
+        { title: 'CLARVIS skill', shape: 'header', x: 550, y: 578, w: 470, h: 196,
+          fill: (d, gone) => { const s3 = (d && d.clarvis_skill) || {};
+            return gone ? rows([], gone)
+              : card(s3.title, s3.body, s3.try_this ? 'Try: “' + s3.try_this + '”' : ''); } },
+        { title: 'Opportunity', shape: 'cutbr', x: 1040, y: 578, w: 480, h: 196,
+          fill: (d, gone) => { const o = (d && d.opportunity) || {};
+            return gone ? rows([], gone)
+              : card(o.title, o.body,
+                  [o.effort, o.potential].filter(Boolean).join('  ·  ')); } }
+      ]
+    },
     tasks: {
       title: 'Task queue', sub: 'What CLARVIS is working on',
       panels: [
@@ -174,7 +261,10 @@
     page.panels.forEach(p => HUD.fill(p._frame._content, p.fill(d, gone)));
   }
   render(null, null);
-  HUD.bindLive({ url: '/api/hud', every: 60000, render });
+  // most pages read the shared HUD feed; a page may name its own endpoint via
+  // `feed` (the learnings card is generated once a day, so it isn't polled)
+  HUD.bindLive({ url: page.feed || '/api/hud',
+    every: page.feed ? 0 : 60000, render });
 
   /* ===== shared chrome: back hint, chat bar, light decoration ===== */
   label('◄ Core — back to the deck', 668, 366, true);

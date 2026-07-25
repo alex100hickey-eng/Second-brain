@@ -4401,6 +4401,8 @@ def chat_classic():
 @app.route("/revenue")
 @app.route("/schedule")
 @app.route("/tasks")
+@app.route("/personal")
+@app.route("/learnings")
 def hud_subpage():
     return render_template("subpage.html")
 
@@ -4489,16 +4491,64 @@ def _hud_assignments() -> list:
     return _hud_intake_items(("deadline",), 8)
 
 
-def _hud_mail() -> dict:
-    data = intake.get_intake()
+_SCHOOL_HINTS = ("\\.edu", "registrar", "bursar", "professor", "prof\\.", "advising",
+                 "canvas", "blackboard", "moodle", "gradescope", "syllabus",
+                 "lecture", "seminar", "tuition", "enrol", "enroll", "transcript",
+                 "financial aid", "dean", "faculty", "course", "semester",
+                 "assignment", "midterm", "final exam", "lab report")
+_SCHOOL_RE = re.compile("|".join(_SCHOOL_HINTS), re.I)
+
+
+def _hud_is_school(row: dict) -> bool:
+    """Heuristic split so school mail and personal mail land in different
+    widgets. Deliberately conservative: only obvious academic markers count,
+    so a misfire leaves something in Personal rather than hiding it under
+    School where Alex isn't looking for it."""
+    blob = " ".join(str(row.get(k) or "") for k in ("sender", "preview"))
+    for it in (row.get("items") or []):
+        blob += " " + str(it.get("text") or "")
+    return bool(_SCHOOL_RE.search(blob))
+
+
+def _hud_mail_rows() -> list:
     mail_sources = ("gmail", "email", "mail")
-    rows = [r for r in data.get("recent", [])
+    return [r for r in intake.get_intake().get("recent", [])
             if (r.get("source") or "").lower() in mail_sources]
+
+
+def _hud_clean_sender(raw: str) -> str:
+    """iMessage senders arrive as "Alex (me) in '+1203...'" — strip the thread
+    suffix and bare-number noise so widgets show something readable."""
+    s = (raw or "").strip()
+    s = re.sub(r"\s+in\s+'[^']*'\s*$", "", s)        # drop the " in '<thread>'" tail
+    s = re.sub(r"\s*\(me\)\s*", " ", s).strip()
+    return s or "unknown"
+
+
+def _hud_pack_msgs(rows: list, limit: int = 8) -> dict:
     unread = [r for r in rows if r.get("status") == "new"]
-    recent = [{"from": (r.get("sender") or "unknown")[:40],
+    recent = [{"from": _hud_clean_sender(r.get("sender"))[:40],
                "preview": (r.get("preview") or "")[:80],
-               "status": r.get("status")} for r in rows[:8]]
+               "source": r.get("source"),
+               "status": r.get("status")} for r in rows[:limit]]
     return {"unread": len(unread), "total": len(rows), "recent": recent}
+
+
+def _hud_mail() -> dict:
+    """School mail only — the personal side has its own widget."""
+    return _hud_pack_msgs([r for r in _hud_mail_rows() if _hud_is_school(r)])
+
+
+def _hud_personal() -> dict:
+    """Personal comms: texts (iMessage) plus any mail that isn't school."""
+    texts = [r for r in intake.get_intake().get("recent", [])
+             if (r.get("source") or "").lower() in ("imessage", "sms", "text")]
+    mail = [r for r in _hud_mail_rows() if not _hud_is_school(r)]
+    merged = sorted(texts + mail, key=lambda r: r.get("ts") or "", reverse=True)
+    out = _hud_pack_msgs(merged, 10)
+    out["texts"] = len(texts)
+    out["emails"] = len(mail)
+    return out
 
 
 def _hud_task() -> dict:
@@ -4543,6 +4593,129 @@ def _hud_revenue() -> dict:
     }
 
 
+# ------------------------------------------------------------
+# Daily learnings card — seven small things to read once a day.
+# Generated ONCE per day and cached in Supabase: without the cache this
+# would fire a model call on every page load and every 60s poll.
+# ------------------------------------------------------------
+LEARNINGS_AGENT = "daily_learnings"
+_learnings_lock = threading.Lock()
+
+# each leaf is a plain string; nested objects, NOT stringified blobs
+_LEARNINGS_SHAPE = {
+    "vocab": {"word": "", "pronunciation": "", "meaning": "", "example": ""},
+    "song": {"title": "", "artist": "", "why": ""},
+    "money_tip": {"title": "", "body": ""},
+    "quote": {"text": "", "author": ""},
+    "verse": {"reference": "", "text": ""},
+    "clarvis_skill": {"title": "", "body": "", "try_this": ""},
+    "opportunity": {"title": "", "body": "", "effort": "", "potential": ""},
+}
+
+
+def _learnings_capability_brief(limit: int = 60) -> str:
+    """Real tool names/descriptions so the 'CLARVIS skill of the day' suggests
+    things the system can actually do instead of inventing features."""
+    out = []
+    for t in TOOLS[:limit]:
+        name = t.get("name")
+        desc = (t.get("description") or "").strip().split(".")[0]
+        if name:
+            out.append(f"- {name}: {desc[:110]}")
+    return "\n".join(out)
+
+
+def _generate_learnings(today: str) -> dict:
+    prompt = (
+        "Produce Alex's daily learning card as STRICT JSON — no prose, no code fences.\n"
+        "Return an object matching this EXACT structure. Every value shown as \"\" is a "
+        "plain string you fill in. Each top-level key maps to a nested OBJECT — do not "
+        "collapse any of them into a single string.\n"
+        f"{json.dumps(_LEARNINGS_SHAPE, indent=2)}\n\n"
+        "Rules for each field:\n"
+        "- vocab: a genuinely useful, not-obscure English word he'd plausibly use in "
+        "writing or conversation. Include a short natural example sentence.\n"
+        "- song: a real, existing song worth hearing. One sentence on why it's worth "
+        "his time. Vary genre and era day to day; avoid the most obvious top-40 picks.\n"
+        "- money_tip: general financial LITERACY/education only — how a mechanism works "
+        "(compound interest, expense ratios, emergency funds, credit utilisation, tax-advantaged "
+        "accounts). NEVER recommend a specific stock, crypto, or security, and never give "
+        "personalised investment advice. Explain a concept he can act on himself.\n"
+        "- quote: a real quotation, correctly attributed. No invented attributions.\n"
+        "- verse: a real Bible verse, accurate wording, with book/chapter/verse reference. "
+        "If unsure of exact wording, pick a very well-known verse you can quote precisely.\n"
+        "- clarvis_skill: ONE concrete way to get more out of CLARVIS, drawn from the real "
+        "capability list below. Include 'try_this' as a literal sentence he can paste into "
+        "the chat bar. Never describe a capability that isn't in the list.\n"
+        "- opportunity: a realistic, legal, low-effort way he could earn meaningful money, "
+        "suited to a student who builds software. Be concrete and honest — 'effort' is a "
+        "short phrase like '2-3 hrs setup', 'potential' is an honest range like '$50-200/mo'. "
+        "No get-rich-quick schemes, no MLM, no crypto speculation.\n\n"
+        "Keep every string tight: under ~220 characters each, except 'body' fields which "
+        "may run to ~320. Write plainly, second person, no hype.\n\n"
+        f"Today is {today}. Vary your picks from what you'd choose on any other date.\n\n"
+        f"CLARVIS's real capabilities:\n{_learnings_capability_brief()}"
+    )
+    resp = claude.messages.create(
+        model="claude-sonnet-5",
+        max_tokens=1600,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    raw = "".join(b.text for b in resp.content if getattr(b, "type", "") == "text").strip()
+    if raw.startswith("```"):                      # strip a stray fence if one appears
+        raw = raw.split("```")[1].lstrip("json").strip()
+    card = json.loads(raw)
+    # Validate BEFORE the caller caches it — a malformed card would otherwise
+    # be stored and served for the rest of the day. (Seen in practice: the
+    # model echoing the shape spec back as strings instead of objects.)
+    missing = [k for k in _LEARNINGS_SHAPE if not isinstance(card.get(k), dict)]
+    if missing:
+        raise ValueError(f"learnings card malformed; not objects: {missing}")
+    card["date"] = today
+    card["generated_at"] = datetime.now(LOCAL_TZ).isoformat()
+    return card
+
+
+def get_daily_learnings(force: bool = False) -> dict:
+    today = datetime.now(LOCAL_TZ).strftime("%Y-%m-%d")
+    rows = (supabase.table("Agent Outputs").select("*")
+            .eq("agent_name", LEARNINGS_AGENT).order("id", desc=True)
+            .limit(4).execute().data or [])
+    for r in rows:
+        try:
+            d = json.loads(r["output_text"])
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if d.get("date") == today and not force:
+            return d
+    # serialise generation so a double page-load doesn't bill two model calls
+    with _learnings_lock:
+        rows = (supabase.table("Agent Outputs").select("*")
+                .eq("agent_name", LEARNINGS_AGENT).order("id", desc=True)
+                .limit(4).execute().data or [])
+        for r in rows:
+            try:
+                d = json.loads(r["output_text"])
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if d.get("date") == today and not force:
+                return d
+        card = _generate_learnings(today)
+        supabase.table("Agent Outputs").insert(
+            {"agent_name": LEARNINGS_AGENT, "output_text": json.dumps(card)}).execute()
+        return card
+
+
+@app.route("/api/learnings")
+def api_learnings():
+    try:
+        return jsonify(get_daily_learnings(
+            force=request.args.get("force") in ("1", "true", "yes")))
+    except Exception as e:
+        print(f"Warning: /api/learnings failed: {e}")
+        return jsonify({"error": "temporarily unavailable", "detail": str(e)}), 503
+
+
 @app.route("/api/hud")
 def api_hud():
     def safe(fn, default):
@@ -4554,6 +4727,7 @@ def api_hud():
 
     return jsonify({
         "schedule": safe(_hud_schedule, []),
+        "personal": safe(_hud_personal, {}),
         "assignments": safe(_hud_assignments, []),
         "mail": safe(_hud_mail, {}),
         "task": safe(_hud_task, {}),
