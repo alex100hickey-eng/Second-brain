@@ -1071,6 +1071,159 @@
      opts: {width=1600, height=170, vanishX}
      ============================================================ */
   /* ============================================================
+     ScreenFrame — the outer border that encloses the whole display:
+     notched rectangle, hairline inner rule, bright corner brackets
+     and edge tick runs (ref outer chrome).
+     opts: {width=1600, height=1000, inset=12, cut=36}
+     ============================================================ */
+  HUD.screenFrame = function (opts) {
+    opts = opts || {};
+    const W = opts.width || 1600, H = opts.height || 1000;
+    const m = opts.inset == null ? 12 : opts.inset, k = opts.cut || 36;
+    const s = svg(W, H, { style: 'overflow:visible' });
+    const ring = (i, cls, sw, op) => el('path', {
+      d: `M ${m + i + k} ${m + i} H ${W - m - i - k} L ${W - m - i} ${m + i + k}
+          V ${H - m - i - k} L ${W - m - i - k} ${H - m - i} H ${m + i + k}
+          L ${m + i} ${H - m - i - k} V ${m + i + k} Z`.replace(/\s+/g, ' '),
+      fill: 'none', class: cls, 'stroke-width': sw, opacity: op }, s);
+    ring(0, 'hud-stroke', 1.4, 0.55);
+    ring(9, 'hud-stroke-faint', 1, 0.5);
+    // bright corner brackets just inside the notches
+    const bl = 54, gB = el('g', { class: 'hud-stroke-bright', 'stroke-width': 2,
+      fill: 'none' }, s);
+    [[m + k, m, 1, 0, 0, 1], [W - m - k, m, -1, 0, 0, 1],
+     [W - m - k, H - m, -1, 0, 0, -1], [m + k, H - m, 1, 0, 0, -1]]
+      .forEach(([x, y, sx, , , sy]) =>
+        el('path', { d: `M ${x + sx * bl} ${y} H ${x} L ${x - sx * k} ${y + sy * k}
+                         V ${y + sy * (k + bl * 0.6)}`.replace(/\s+/g, ' ') }, gB));
+    // edge tick runs along the top and bottom rails
+    const gT = el('g', { stroke: 'var(--hud-cyan)', 'stroke-width': 1, opacity: 0.4 }, s);
+    for (let i = 0; i < 26; i++) {
+      const x = W * 0.30 + i * 16;
+      el('line', { x1: x, y1: m + 3, x2: x, y2: m + (i % 5 ? 8 : 13) }, gT);
+      el('line', { x1: x, y1: H - m - 3, x2: x, y2: H - m - (i % 5 ? 8 : 13) }, gT);
+    }
+    return s;
+  };
+
+  /* ============================================================
+     BannerLabel — titled strip with angled ends (ref "Target ..."
+     and "Location ..." banners). opts: {text, width=280,
+     height=32, flip=false, role}
+     ============================================================ */
+  HUD.bannerLabel = function (opts) {
+    opts = opts || {};
+    const W = opts.width || 280, H = opts.height || 32, k = 16;
+    const s = svg(W, H, { style: 'overflow:visible' });
+    if (opts.role) s.dataset.role = opts.role;
+    const d = opts.flip
+      ? `M ${k} 1 H ${W - k} L ${W - 1} ${H - 1} H 1 Z`
+      : `M 1 1 H ${W - 1} L ${W - k} ${H - 1} H ${k} Z`;
+    el('path', { d, fill: 'var(--hud-cyan-12)', stroke: 'var(--hud-accent)',
+      'stroke-width': 1.2, class: 'hud-glow' }, s);
+    txt(el('text', { x: W / 2, y: H / 2 + 6, 'text-anchor': 'middle',
+      'font-size': 14, class: 'hud-txt' }, s), opts.text || '');
+    return s;
+  };
+
+  /* ============================================================
+     ContourBlob — organic concentric contour rings, like a
+     topographic readout (ref top-right blob). opts: {size=110,
+     rings=7, role}
+     ============================================================ */
+  HUD.contourBlob = function (opts) {
+    opts = opts || {};
+    const S = opts.size || 110, c = S / 2, n = opts.rings || 7, pts = 22;
+    const s = svg(S, S, { style: 'overflow:visible' });
+    if (opts.role) s.dataset.role = opts.role;
+    let sd = 17;
+    const rnd = () => (sd = (sd * 9301 + 49297) % 233280) / 233280;
+    const wob = [];
+    for (let i = 0; i < pts; i++) wob.push(0.72 + 0.28 * rnd());
+    const g = el('g', {}, s);
+    for (let r = 0; r < n; r++) {
+      const scale = (0.28 + 0.72 * (r + 1) / n) * S * 0.46;
+      let d = '';
+      for (let i = 0; i <= pts; i++) {
+        const w = wob[i % pts], rad = scale * (0.78 + 0.22 * w);
+        const [x, y] = P(c, c, rad, i / pts * 360);
+        d += (i ? ' L ' : 'M ') + x.toFixed(1) + ' ' + y.toFixed(1);
+      }
+      el('path', { d: d + ' Z', fill: 'none', stroke: 'var(--hud-cyan)',
+        'stroke-width': 1, opacity: 0.28 + 0.5 * (r / n),
+        'stroke-linejoin': 'round' }, g);
+    }
+    spin(g, c, c, 200);
+    return s;
+  };
+
+  /* ============================================================
+     MeshDial — ring with an inscribed rotating wireframe polygon
+     and node dots (ref left dial). opts: {size=120, role}
+     ============================================================ */
+  HUD.meshDial = function (opts) {
+    opts = opts || {};
+    const S = opts.size || 120, c = S / 2, r = S * 0.34;
+    const s = svg(S, S, { style: 'overflow:visible' });
+    if (opts.role) s.dataset.role = opts.role;
+    el('circle', { cx: c, cy: c, r: S * 0.46, class: 'hud-stroke-dim', 'stroke-width': 1 }, s);
+    el('circle', { cx: c, cy: c, r: S * 0.40, class: 'hud-stroke', 'stroke-width': 1.2,
+      opacity: 0.8 }, s);
+    // side arrow ticks
+    [0, 90, 180, 270].forEach(a => {
+      const [x1, y1] = P(c, c, S * 0.46, a), [x2, y2] = P(c, c, S * 0.5, a);
+      el('line', { x1, y1, x2, y2, class: 'hud-stroke-bright', 'stroke-width': 2 }, s);
+    });
+    const g = el('g', {}, s);
+    const angs = [18, 96, 168, 250, 312];
+    const pts = angs.map(a => P(c, c, r, a));
+    for (let i = 0; i < pts.length; i++) {
+      for (let j = i + 1; j < pts.length; j++) {
+        el('line', { x1: pts[i][0], y1: pts[i][1], x2: pts[j][0], y2: pts[j][1],
+          stroke: 'var(--hud-cyan)', 'stroke-width': 1, opacity: 0.45 }, g);
+      }
+    }
+    pts.forEach(([x, y]) => el('circle', { cx: x, cy: y, r: 3,
+      fill: 'var(--hud-accent)', class: 'hud-glow' }, g));
+    spin(g, c, c, 90, true);
+    return s;
+  };
+
+  /* ============================================================
+     NumBadge — number in a cut-corner box (ref "01"/"02").
+     opts: {text='01', width=58, height=42, role}
+     ============================================================ */
+  HUD.numBadge = function (opts) {
+    opts = opts || {};
+    const W = opts.width || 58, H = opts.height || 42, k = 9;
+    const s = svg(W, H);
+    if (opts.role) s.dataset.role = opts.role;
+    el('path', { d: `M ${k} 1 H ${W - 1} V ${H - k} L ${W - k} ${H - 1} H 1 V ${k} Z`,
+      fill: 'var(--hud-fill)', stroke: 'var(--hud-accent)', 'stroke-width': 1.3,
+      class: 'hud-glow' }, s);
+    txt(el('text', { x: W / 2, y: H / 2 + 7, 'text-anchor': 'middle',
+      'font-size': 18, class: 'hud-txt' }, s), opts.text || '01');
+    return s;
+  };
+
+  /* ============================================================
+     DotBlock — uniform dense dot grid used as filler mass.
+     opts: {rows=4, cols=10, cell=9, r=2.2, role}
+     ============================================================ */
+  HUD.dotBlock = function (opts) {
+    opts = opts || {};
+    const rows = opts.rows || 4, cols = opts.cols || 10;
+    const cell = opts.cell || 9, r = opts.r || 2.2;
+    const s = svg(cols * cell, rows * cell);
+    if (opts.role) s.dataset.role = opts.role;
+    for (let y = 0; y < rows; y++) for (let x = 0; x < cols; x++) {
+      el('circle', { cx: x * cell + cell / 2, cy: y * cell + cell / 2, r,
+        fill: 'var(--hud-cyan)', opacity: 0.5 }, s);
+    }
+    return s;
+  };
+
+  /* ============================================================
      RulerScale — graduated measuring strip with numbered majors,
      labels alternating between two baselines (ref bottom scale).
      opts: {width=420, from=100, to=600, step=50, minor=5, role}
