@@ -1071,6 +1071,96 @@
      opts: {width=1600, height=170, vanishX}
      ============================================================ */
   /* ============================================================
+     RulerScale — graduated measuring strip with numbered majors,
+     labels alternating between two baselines (ref bottom scale).
+     opts: {width=420, from=100, to=600, step=50, minor=5, role}
+     ============================================================ */
+  HUD.rulerScale = function (opts) {
+    opts = opts || {};
+    const W = opts.width || 420, H = 46;
+    const from = opts.from == null ? 100 : opts.from;
+    const to = opts.to == null ? 600 : opts.to;
+    const step = opts.step || 50, minor = opts.minor || 5;
+    const s = svg(W, H, { style: 'overflow:visible' });
+    if (opts.role) s.dataset.role = opts.role;
+    const total = Math.round((to - from) / step) * minor;
+    for (let i = 0; i <= total; i++) {
+      const x = 4 + (W - 8) * i / total, major = i % minor === 0;
+      el('line', { x1: x, y1: 2, x2: x, y2: major ? 20 : 12,
+        stroke: 'var(--hud-cyan)', 'stroke-width': major ? 1.6 : 1,
+        opacity: major ? 0.9 : 0.4 }, s);
+      if (major) {
+        const alt = (i / minor) % 2 === 1;
+        txt(el('text', { x, y: alt ? 32 : 43, 'text-anchor': 'middle',
+          'font-size': alt ? 9 : 12, class: 'hud-txt',
+          opacity: alt ? 0.65 : 1 }, s), String(from + (i / minor) * step));
+      }
+    }
+    return s;
+  };
+
+  /* ============================================================
+     Reticle — corner brackets around a crosshair and centre dot
+     (ref target marker). opts: {size=64, role}
+     ============================================================ */
+  HUD.reticle = function (opts) {
+    opts = opts || {};
+    const S = opts.size || 64, c = S / 2, b = S * 0.26;
+    const s = svg(S, S, { style: 'overflow:visible' });
+    if (opts.role) s.dataset.role = opts.role;
+    const g = el('g', { class: 'hud-stroke', 'stroke-width': 1.4, fill: 'none' }, s);
+    [[0, 0, 1, 1], [S, 0, -1, 1], [S, S, -1, -1], [0, S, 1, -1]]
+      .forEach(([x, y, dx, dy]) =>
+        el('path', { d: `M ${x + dx * b} ${y} H ${x} V ${y + dy * b}` }, g));
+    el('circle', { cx: c, cy: c, r: S * 0.17, class: 'hud-stroke-dim', 'stroke-width': 1 }, s);
+    el('path', { d: `M ${c} ${c - S * 0.3} V ${c - S * 0.1} M ${c} ${c + S * 0.1} V ${c + S * 0.3}
+                     M ${c - S * 0.3} ${c} H ${c - S * 0.1} M ${c + S * 0.1} ${c} H ${c + S * 0.3}`
+      .replace(/\s+/g, ' '), class: 'hud-stroke-bright', 'stroke-width': 1.4, fill: 'none' }, s);
+    el('circle', { cx: c, cy: c, r: 2.6, fill: 'var(--hud-accent)', class: 'hud-glow' }, s);
+    return s;
+  };
+
+  /* ============================================================
+     CornerMark — a single L accent used to punctuate empty space.
+     opts: {size=18, dir='tl'|'tr'|'br'|'bl'}
+     ============================================================ */
+  HUD.cornerMark = function (opts) {
+    opts = opts || {};
+    const S = opts.size || 18;
+    const s = svg(S, S, { style: 'overflow:visible' });
+    const m = { tl: `M 0 ${S} V 0 H ${S}`, tr: `M 0 0 H ${S} V ${S}`,
+                br: `M ${S} 0 V ${S} H 0`, bl: `M ${S} ${S} H 0 V 0` };
+    el('path', { d: m[opts.dir || 'tl'], class: 'hud-stroke-bright',
+      'stroke-width': 2, fill: 'none' }, s);
+    return s;
+  };
+
+  /* ============================================================
+     WaveGraph — overlapping smooth signal curves over a baseline
+     (ref bottom-left plot). opts: {width=220, height=70, curves=3}
+     ============================================================ */
+  HUD.waveGraph = function (opts) {
+    opts = opts || {};
+    const W = opts.width || 220, H = opts.height || 70, n = opts.curves || 3;
+    const s = svg(W, H);
+    if (opts.role) s.dataset.role = opts.role;
+    for (let c = 0; c < n; c++) {
+      const amp = 0.26 + 0.18 * c, freq = 1.6 + c * 0.9, ph = c * 1.35;
+      let d = '';
+      for (let x = 0; x <= W; x += 4) {
+        const t = x / W;
+        const env = 0.35 + 0.65 * Math.sin(Math.PI * t);
+        const y = H - H * (0.12 + amp * (0.5 + 0.5 * Math.sin(freq * Math.PI * 2 * t + ph)) * env);
+        d += (x ? ' L ' : 'M ') + x + ' ' + y.toFixed(1);
+      }
+      el('path', { d, fill: 'none', stroke: 'var(--hud-cyan)',
+        'stroke-width': 1.2, opacity: 0.35 + c * 0.2 }, s);
+    }
+    el('line', { x1: 0, y1: H, x2: W, y2: H, class: 'hud-stroke-dim', 'stroke-width': 1 }, s);
+    return s;
+  };
+
+  /* ============================================================
      FloorText — big lettering lying flat on the floor plane, tilted
      about its top edge so it recedes toward the floor's vanishing
      point. Anchor it at the horizon; it lays out toward the viewer.
@@ -1161,7 +1251,23 @@
     s.style.cssText = 'position:absolute;left:0;top:0';
     const R = W - o, B = H - o;
     let d, pad = [14, 16];                    // [vertical, horizontal] content pad
-    if (shape === 'banner') {                 // long top, 45deg descent right
+    if (shape === 'header') {                 // panel with a filled title band
+      d = `M ${k} ${o} H ${W - k} L ${R} ${k} V ${B - k} L ${W - k} ${B}
+           H ${k} L ${o} ${B - k} V ${k} Z`;
+      pad = [30, 16];
+    } else if (shape === 'cutbr') {           // only the bottom-right corner cut
+      d = `M ${o} ${o} H ${R} V ${B - k * 1.7} L ${W - k * 1.7} ${B} H ${o} Z`;
+      pad = [14, 16];
+    } else if (shape === 'cuttl') {           // only the top-left corner cut
+      d = `M ${k * 1.7} ${o} H ${R} V ${B} H ${o} V ${k * 1.7} Z`;
+      pad = [14, 16];
+    } else if (shape === 'layered') {         // panel with an offset ghost behind
+      d = `M ${o + 9} ${o + 9} H ${R} V ${B} H ${o + 9} Z`;
+      pad = [18, 20];
+    } else if (shape === 'round') {           // soft rect + inner border
+      d = null;
+      pad = [16, 18];
+    } else if (shape === 'banner') {          // long top, 45deg descent right
       d = `M ${k} ${o} H ${R} L ${W - k * 1.8} ${B} H ${o} V ${k} Z`;
       pad = [16, k + 12];
     } else if (shape === 'hept') {            // irregular heptagon (plane panel)
@@ -1206,12 +1312,18 @@
     } else {                                   // notch
       d = `M ${k} ${o} H ${R} V ${H - k} L ${W - k} ${B} H ${o} V ${k} Z`;
     }
-    if (d) {
-      el('path', { d: d.replace(/\s+/g, ' '), fill: 'var(--hud-fill)',
-        stroke: 'var(--hud-accent)', 'stroke-width': 1.1, opacity: 0.85,
-        'stroke-linejoin': 'round', class: 'hud-glow' }, s);
-    } else {
-      // bracket: floating corner Ls over a bare fill, no continuous outline
+    if (shape === 'layered') {   // ghost outline offset behind the main panel
+      el('path', { d: `M ${o} ${o} H ${R - 9} V ${B - 9} H ${o} Z`,
+        fill: 'none', class: 'hud-stroke-dim', 'stroke-width': 1 }, s);
+    }
+    if (shape === 'round') {
+      el('rect', { x: o, y: o, width: W - o * 2, height: H - o * 2, rx: 12,
+        fill: 'var(--hud-fill)', stroke: 'var(--hud-accent)', 'stroke-width': 1.1,
+        opacity: 0.85, class: 'hud-glow' }, s);
+      el('rect', { x: o + 6, y: o + 6, width: W - o * 2 - 12, height: H - o * 2 - 12,
+        rx: 8, fill: 'none', class: 'hud-stroke-dim', 'stroke-width': 1 }, s);
+    } else if (shape === 'bracket') {
+      // floating corner Ls over a bare fill, no continuous outline
       el('rect', { x: o, y: o, width: W - o * 2, height: H - o * 2,
         fill: 'var(--hud-fill)' }, s);
       const bl = 26;
@@ -1220,6 +1332,19 @@
       [`M ${bl} ${o} H ${o} V ${bl}`, `M ${R - bl} ${o} H ${R} V ${bl}`,
        `M ${R - bl} ${B} H ${R} V ${B - bl}`, `M ${bl} ${B} H ${o} V ${B - bl}`]
         .forEach(p => el('path', { d: p }, gB));
+    } else if (d) {
+      el('path', { d: d.replace(/\s+/g, ' '), fill: 'var(--hud-fill)',
+        stroke: 'var(--hud-accent)', 'stroke-width': 1.1, opacity: 0.85,
+        'stroke-linejoin': 'round', class: 'hud-glow' }, s);
+    }
+    if (shape === 'header') {    // filled title band + divider (ref panels)
+      el('path', { d: `M ${k} ${o} H ${W - k} L ${R} ${k} V 24 H ${o} V ${k} Z`
+        .replace(/\s+/g, ' '), fill: 'var(--hud-cyan-25)' }, s);
+      el('line', { x1: o, y1: 24, x2: R, y2: 24, class: 'hud-stroke',
+        'stroke-width': 1.1, opacity: 0.9 }, s);
+      [10, 20].forEach(x =>
+        el('rect', { x: k + x, y: 9, width: 5, height: 6,
+          fill: 'var(--hud-accent)', opacity: 0.8 }, s));
     }
     if (shape === 'tab') {   // header divider under the tab strip
       el('line', { x1: o, y1: 22, x2: R, y2: 22, class: 'hud-stroke-dim',
