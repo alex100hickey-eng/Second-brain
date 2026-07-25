@@ -272,3 +272,57 @@ mic or having spoken replies enabled; no audio is stored on our side (temp files
 deleted immediately; the browser blob is transient). Without the key, everything
 stays local: whisper.cpp STT on the Mac, `say`/browser voices for TTS. The key
 lives only in env (.env / Coolify), entered by Alex, like every other secret.
+
+## 11. Multi-account mail, sandbox browsing, screen control — 2026-07-25
+
+Three new surfaces, added together at Alex's request:
+
+**Multi-account mail intake.** School Gmail is its own Composio entity
+(`alex-school`) rather than sharing the default `alex` connection — same
+read-only Gmail scope, kept separate so `_hud_is_school` can trust the account
+instead of guessing from content. iCloud has no Composio connector, so it's
+direct IMAP (`imap.mail.me.com`, `icloud_intake.py`) using an app-specific
+password (`ICLOUD_EMAIL` / `ICLOUD_APP_PASSWORD` in `.env` — never Alex's real
+Apple ID password, and it's revocable from appleid.apple.com without touching
+the account). The IMAP connection opens `INBOX` with `readonly=True` and never
+flags/moves/deletes a message — same no-write guarantee as every other intake
+source. Two abandoned OAuth connection attempts (`ca_37wYTl3HoLLB`,
+`ca_whRhccv1W5XG` — timed-out handshakes from 2026-07-19, never actually
+connected to anything) were deleted as housekeeping.
+
+**Sandbox browsing (`browser_sandbox.py`).** CLARVIS's default way to act on
+the open web: an isolated, cloud-hosted browser (Browserbase, via Composio),
+never Alex's real machine. Requires `BROWSERBASE_API_KEY` (free tier) — the
+tool is always registered so it exists in the catalogue, but returns a clear
+"not configured" message instead of attempting anything until the key is set.
+Page contents returned to the model are explicitly labelled untrusted data.
+
+**Screen control (`screen_control.py`) — the highest-risk surface in this
+codebase.** Literal mouse/keyboard control of Alex's real Mac, for the rare
+task that needs a native app rather than a webpage (browse_web_sandbox is
+always tried first). Four hard constraints, enforced in code, not just
+described:
+  - **Off by default, explicit start.** Nothing runs until
+    `screen_control_start` is called; a session self-expires after 5 minutes
+    even if nobody stops it.
+  - **Escape kill-switch that's verified before it's trusted.** A background
+    `pynput` listener watches for the physical Escape key, independent of
+    whatever action is executing. Critically: `start_session()` preflights
+    this via `Quartz.CGPreflightListenEventAccess()` and **refuses to start**
+    if macOS Accessibility/Input Monitoring permission hasn't been granted —
+    it never claims to be killable by Escape when it actually can't catch the
+    key. Grant permission once: System Settings > Privacy & Security >
+    Accessibility (and Input Monitoring) > enable for the process running
+    the app.
+  - **Local-only.** Gated on `task_manager.RUNTIME != "server"` at both the
+    `app.py` import site and the dispatch site — the server can never load
+    this module (it has no screen to control), and `pyautogui`/`pynput` sit
+    in the shared `requirements.txt` but are simply never imported server-side.
+  - **Narrow, audited actions.** No shell/AppleScript escape hatch — just
+    move/click/type/key/hotkey/scroll, each logged via
+    `monitor.report_event("screen-control", ...)`. `type_text` refuses
+    anything that looks like a password/API key/secret ("type it yourself,"
+    it says) rather than typing a credential on Alex's behalf. The system
+    prompt tells the model to always call `screen_control_stop` the moment a
+    task is done — never leave a session armed — and treats screen content
+    the same as any other untrusted input: reported, never obeyed.

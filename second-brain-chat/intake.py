@@ -354,8 +354,9 @@ def capture_inbox(text: str, label: str = "") -> str:
 # ============================================================
 
 def scan_gmail(newer_than: str = "1d", cap: int = 15) -> str:
-    """Poll recent inbox mail via the whitelisted read-only Composio tool and ingest.
-    Read-only; skips promos/social via Gmail's own category filters."""
+    """Poll recent inbox mail on the DEFAULT connected Gmail account via the
+    whitelisted read-only Composio tool and ingest. Read-only; skips
+    promos/social via Gmail's own category filters."""
     try:
         raw = dispatch_tool("GMAIL_FETCH_EMAILS", {
             "query": f"in:inbox newer_than:{newer_than} "
@@ -365,6 +366,29 @@ def scan_gmail(newer_than: str = "1d", cap: int = 15) -> str:
         data = json.loads(raw) if isinstance(raw, str) else raw
     except Exception as e:
         return f"Gmail scan failed: {e}"
+    return _ingest_gmail_messages(data, "gmail", "personal", cap)
+
+
+def scan_gmail_account(composio_client, entity_user_id: str, source_tag: str,
+                        label: str, newer_than: str = "1d", cap: int = 15) -> str:
+    """Poll a SECONDARY Gmail account (its own Composio entity/connected
+    account — e.g. school Gmail) directly, bypassing the single default
+    dispatch path. Same read-only contract as scan_gmail."""
+    try:
+        result = composio_client.tools.execute(
+            "GMAIL_FETCH_EMAILS", user_id=entity_user_id,
+            arguments={
+                "query": f"in:inbox newer_than:{newer_than} "
+                         "-category:promotions -category:social",
+                "max_results": cap,
+            })
+        data = result.get("data", result) if isinstance(result, dict) else result
+    except Exception as e:
+        return f"{label} Gmail scan failed: {e}"
+    return _ingest_gmail_messages(data, source_tag, label, cap)
+
+
+def _ingest_gmail_messages(data, source_tag: str, label: str, cap: int) -> str:
     messages = _dig_list(data, ("messages", "emails", "items", "results"))
     new, noise = 0, 0
     for m in messages[:cap]:
@@ -377,12 +401,12 @@ def scan_gmail(newer_than: str = "1d", cap: int = 15) -> str:
         subject = _first(m, ("subject", "title")) or "(no subject)"
         body = _first(m, ("snippet", "preview", "messageText", "body", "text")) or ""
         ts = _first(m, ("messageTimestamp", "date", "internalDate", "timestamp")) or ""
-        res = record_raw("gmail", ref, sender, str(ts), f"Subject: {subject}\n{body}")
+        res = record_raw(source_tag, ref, sender, str(ts), f"Subject: {subject}\n{body}")
         if res.get("recorded"):
             new += 1
         elif res.get("reason") == "noise":
             noise += 1
-    return f"Gmail scan: {new} new intake event(s), {noise} filtered as noise."
+    return f"{label} Gmail scan: {new} new intake event(s), {noise} filtered as noise."
 
 
 def scan_calendar(days_ahead: int = 14, cap: int = 40) -> str:

@@ -13,4 +13,8 @@ Pillow
 # Round-5 unified semantic search: local torch-free embeddings
 numpy
 model2vec
+# Screen control (Mac-only at runtime — gated by task_manager.RUNTIME in app.py,
+# so these install fine on the headless server but are never imported there)
+pyautogui
+pynput
 # System deps (brew, not pip): ffmpeg, whisper-cpp + models/ggml-base.en.bin — see ../requirements.txt
