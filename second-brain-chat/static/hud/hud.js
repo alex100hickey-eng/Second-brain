@@ -49,6 +49,39 @@
   const HUD = {};
 
   /* ============================================================
+     MotionControl — global animation governor. Two jobs:
+
+     1. Stop animating while the page isn't actually being looked at.
+        Browsers throttle rAF in hidden tabs but GSAP's ticker keeps
+        running, and a HUD left open in a background tab was burning
+        cycles all day for nothing.
+     2. Honour the OS "reduce motion" setting. The CSS rule only killed
+        CSS animations — every rotation here is a JS-driven GSAP tween,
+        so it sailed straight past that. Now macOS System Settings ->
+        Accessibility -> Display -> Reduce Motion freezes the HUD into
+        a clean static poster, which doubles as a low-power switch.
+
+     Idempotent: safe to call from every page's shell.
+     ============================================================ */
+  let _motionWired = false;
+  HUD.motionControl = function () {
+    if (_motionWired || !gsap) return;
+    _motionWired = true;
+    const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const apply = () => {
+      const gt = gsap.globalTimeline;
+      if (mq.matches) { gt.pause(); return; }   // reduced motion wins outright
+      if (document.hidden) gt.pause(); else gt.resume();
+    };
+    document.addEventListener('visibilitychange', apply);
+    // addEventListener on MediaQueryList is the modern form; older Safari
+    // only has addListener, so fall back rather than silently doing nothing
+    if (mq.addEventListener) mq.addEventListener('change', apply);
+    else if (mq.addListener) mq.addListener(apply);
+    apply();
+  };
+
+  /* ============================================================
      HudPanel — clipped corners + glowing corner brackets
      opts: {width,height, title, notch=14, bracket=18, fill=true}
      Returns a <div.hud-panel>; append content into .hud-content
@@ -1899,6 +1932,7 @@
     }
     window.addEventListener('resize', fit); fit();
     HUD.scanlineOverlay();
+    HUD.motionControl();   // pause when hidden; honour OS reduce-motion
 
     function at(node, x, y, role) {
       const d = document.createElement('div'); d.className = 'n';
