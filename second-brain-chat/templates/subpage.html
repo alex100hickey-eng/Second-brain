@@ -10,7 +10,7 @@
 <meta name="theme-color" content="#010A20">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<link rel="stylesheet" href="/static/hud/hud.css?v=13">
+<link rel="stylesheet" href="/static/hud/hud.css?v=15">
 <style>
   html, body { height: 100%; margin: 0; overflow: hidden; }
   #deck { position: absolute; width: 1600px; height: 1000px; left: 50%; top: 50%;
@@ -35,13 +35,15 @@
 
 <script src="/static/vendor/gsap.min.js"></script>
 <script src="/static/vendor/d3.min.js"></script>
-<script src="/static/hud/hud.js?v=13"></script>
+<script src="/static/hud/hud.js?v=15"></script>
 <script>
   /* One template serves every expanded view; the page key comes from the URL
      so no server-side templating is needed (keeps this file previewable as a
      plain static file too). */
   const clip = (t, n) => (t || '').length > n ? t.slice(0, n - 1) + '\u2026' : (t || '');
   const money = v => '$' + Math.round(v || 0).toLocaleString();
+  // cost figures need cents — rounding $2.74 to "$3" is misleading on a bill
+  const money2 = v => '$' + (Math.round((v || 0) * 100) / 100).toFixed(2);
   const rows = (list, empty) => HUD.listRows({ rows: list, empty: empty });
 
   // a headline + wrapped body paragraph, for the learnings cards
@@ -199,6 +201,159 @@
             return gone ? rows([], gone)
               : card(o.title, o.body,
                   [o.effort, o.potential].filter(Boolean).join('  ·  ')); } }
+      ]
+    },
+    health: {
+      title: 'System health', sub: 'Watchdog · workers · running costs',
+      panels: [
+        { title: 'Status', shape: 'header', x: 60, y: 372, w: 420, h: 192,
+          fill: (d, gone) => {
+            const h = (d && d.health) || {};
+            if (gone) return rows([], gone);
+            const word = ({ healthy: 'All systems good', degraded: 'Degraded',
+                            critical: 'Needs attention' }[h.overall] || h.overall || 'Unknown');
+            const w = document.createElement('div');
+            w.appendChild(HUD.bigStat({ value: word,
+              sub: `${h.checks_ok || 0} of ${h.checks_total || 0} checks passing` }));
+            const r = rows([
+              ['Workers up', `${Object.values(h.workers || {}).filter(Boolean).length}/${Object.keys(h.workers || {}).length}`,
+                (h.workers_down || []).length > 0],
+              ['Open alerts', String((h.incidents || []).length), !!(h.incidents || []).length]
+            ], '');
+            r.style.marginTop = '12px';
+            w.appendChild(r);
+            return w; } },
+        { title: 'Alerts', shape: 'header', x: 500, y: 372, w: 480, h: 192,
+          fill: (d, gone) => {
+            const h = (d && d.health) || {};
+            const items = (h.failing || []).map(f =>
+              [clip(f.name + ' — ' + (f.detail || f.status || ''), 46), 'check', true])
+              .concat((h.workers_down || []).map(n => [clip(n, 40), 'worker down', true]))
+              .concat((h.incidents || []).map(i =>
+                [clip((i.component || '?') + ' — ' + (i.message || ''), 46), i.level || '', true]));
+            return rows(items, gone || 'Nothing wrong right now'); } },
+        { title: 'Workers', shape: 'cutbr', x: 1000, y: 372, w: 300, h: 192,
+          fill: (d, gone) => {
+            const w = ((d && d.health) || {}).workers || {};
+            const ks = Object.keys(w);
+            return rows(ks.map(k => [clip(k.replace(/^jarvis-/, ''), 24),
+              w[k] ? 'up' : 'DOWN', !w[k]]), gone || 'No workers'); } },
+        { title: 'What it costs to run', shape: 'header', x: 60, y: 584, w: 620, h: 190,
+          fill: (d, gone) => {
+            const c = ((d && d.health) || {}).cost || {};
+            if (gone) return rows([], gone);
+            const w = document.createElement('div');
+            w.appendChild(HUD.bigStat({ value: money2(c.total_month), unit: '/mo',
+              sub: `${money2(c.api_month)} metered API + ${money2(c.fixed_month)} fixed infra` }));
+            const r = rows((c.lines || []).map(l =>
+              [clip(l.name + (l.note ? ' — ' + l.note : ''), 44), money2(l.usd), l.kind === 'measured']),
+              '');
+            r.style.marginTop = '10px';
+            w.appendChild(r);
+            return w; } },
+        { title: 'Budget & funding', shape: 'cutbr', x: 700, y: 584, w: 600, h: 190,
+          fill: (d, gone) => {
+            const c = ((d && d.health) || {}).cost || {};
+            if (gone) return rows([], gone);
+            const f = c.funding || {};
+            const w = document.createElement('div');
+            w.appendChild(rows([
+              ['API budget cap', money2(c.budget)],
+              ['Used this month', money2(c.api_month) + '  (' + Math.round((c.pct || 0) * 100) + '%)',
+                (c.tier || 'ok') !== 'ok'],
+              ['Budget tier', (c.tier || 'ok').toUpperCase(), (c.tier || 'ok') !== 'ok'],
+              ['Paid from', f.source || 'not set']
+            ], ''));
+            const bar = HUD.dataBar({ width: 540, segments: 20,
+              value: Math.min(100, Math.round((c.pct || 0) * 100)), flat: true });
+            bar.style.margin = '12px 0 8px';
+            w.appendChild(bar);
+            if (f.note) {
+              const n = document.createElement('div');
+              n.className = 'hud-bigstat-s';
+              n.style.whiteSpace = 'normal';
+              n.textContent = f.note;
+              w.appendChild(n);
+            }
+            return w; } }
+      ]
+    },
+    toolkit: {
+      title: 'CLARVIS toolkit', sub: 'Agents · workers · everything it can run',
+      panels: [
+        { title: 'Working right now', shape: 'header', x: 60, y: 372, w: 430, h: 192,
+          fill: (d, gone) => {
+            const t = (d && d.toolkit) || {};
+            const items = (t.running || []).map(j => [clip(j.label, 40), 'running', true]);
+            return rows(items, gone || 'Idle — nothing running'); } },
+        { title: 'Queued', shape: 'header', x: 510, y: 372, w: 430, h: 192,
+          fill: (d, gone) => rows((((d && d.toolkit) || {}).queued || []).map(j =>
+            [clip(j.label, 40), 'queued']), gone || 'Queue empty') },
+        { title: 'Background workers', shape: 'cutbr', x: 960, y: 372, w: 340, h: 192,
+          fill: (d, gone) => rows((((d && d.toolkit) || {}).workers || []).map(w =>
+            [clip(w.name.replace(/^jarvis-/, ''), 26), w.alive ? 'up' : 'DOWN', !w.alive]),
+            gone || 'No workers') },
+        { title: 'Tools ready to run', shape: 'header', x: 60, y: 584, w: 1240, h: 190,
+          fill: (d, gone) => {
+            const t = (d && d.toolkit) || {};
+            if (gone) return rows([], gone);
+            const wrap = document.createElement('div');
+            wrap.style.display = 'grid';
+            wrap.style.gridTemplateColumns = 'repeat(5, 1fr)';
+            wrap.style.gap = '4px 18px';
+            (t.groups || []).forEach(g => {
+              const col = document.createElement('div');
+              const h = document.createElement('div');
+              h.className = 'hud-row-v';
+              h.style.fontSize = '11px';
+              h.textContent = g.group + ' (' + g.tools.length + ')';
+              col.appendChild(h);
+              const body = document.createElement('div');
+              body.className = 'hud-bigstat-s';
+              body.style.whiteSpace = 'normal';
+              body.style.marginTop = '3px';
+              body.textContent = g.tools.slice(0, 6).map(x => x.name).join(', ')
+                + (g.tools.length > 6 ? ` +${g.tools.length - 6}` : '');
+              col.appendChild(body);
+              wrap.appendChild(col);
+            });
+            return wrap; } }
+      ]
+    },
+    links: {
+      title: 'Links', sub: 'Everything this system runs on',
+      panels: [
+        { title: 'Consoles & services', shape: 'header', x: 60, y: 372, w: 1240, h: 402,
+          fill: (d, gone) => {
+            const l = (d && d.links) || {};
+            if (gone) return rows([], gone);
+            const wrap = document.createElement('div');
+            wrap.style.display = 'grid';
+            wrap.style.gridTemplateColumns = 'repeat(3, 1fr)';
+            wrap.style.gap = '18px 28px';
+            Object.keys(l.groups || {}).sort().forEach(g => {
+              const col = document.createElement('div');
+              const h = document.createElement('div');
+              h.className = 'hud-row-v';
+              h.style.fontSize = '12px';
+              h.style.marginBottom = '6px';
+              h.textContent = g;
+              col.appendChild(h);
+              l.groups[g].forEach(item => {
+                const a = document.createElement('a');
+                a.href = item.url;
+                a.target = '_blank';
+                a.rel = 'noopener noreferrer';
+                a.className = 'hud-link-row';
+                a.textContent = item.name;
+                const note = document.createElement('span');
+                note.textContent = item.note || '';
+                a.appendChild(note);
+                col.appendChild(a);
+              });
+              wrap.appendChild(col);
+            });
+            return wrap; } }
       ]
     },
     tasks: {

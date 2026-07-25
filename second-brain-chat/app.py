@@ -4403,6 +4403,9 @@ def chat_classic():
 @app.route("/tasks")
 @app.route("/personal")
 @app.route("/learnings")
+@app.route("/health")
+@app.route("/toolkit")
+@app.route("/links")
 def hud_subpage():
     return render_template("subpage.html")
 
@@ -4465,10 +4468,29 @@ def _hud_rel_due(due: str) -> str:
     return f"in {days}d"
 
 
+# Five sections all read the same intake feed; without this each one fired its
+# own Supabase round-trip (5 per /api/hud request). Cache briefly so one fetch
+# serves the whole payload — the deck polls this every 60s.
+_INTAKE_CACHE = {"at": 0.0, "data": None}
+_INTAKE_TTL = 20.0
+_intake_cache_lock = threading.Lock()
+
+
+def _hud_intake() -> dict:
+    now = time.time()
+    with _intake_cache_lock:
+        if _INTAKE_CACHE["data"] is not None and now - _INTAKE_CACHE["at"] < _INTAKE_TTL:
+            return _INTAKE_CACHE["data"]
+    data = intake.get_intake()
+    with _intake_cache_lock:
+        _INTAKE_CACHE.update({"at": time.time(), "data": data})
+    return data
+
+
 def _hud_intake_items(kinds: tuple, limit: int) -> list:
     """Flatten intake events into their extracted items, newest first."""
     out = []
-    for row in intake.get_intake().get("recent", []):
+    for row in _hud_intake().get("recent", []):
         for it in (row.get("items") or []):
             if kinds and it.get("type") not in kinds:
                 continue
@@ -4512,7 +4534,7 @@ def _hud_is_school(row: dict) -> bool:
 
 def _hud_mail_rows() -> list:
     mail_sources = ("gmail", "email", "mail")
-    return [r for r in intake.get_intake().get("recent", [])
+    return [r for r in _hud_intake().get("recent", [])
             if (r.get("source") or "").lower() in mail_sources]
 
 
@@ -4541,7 +4563,7 @@ def _hud_mail() -> dict:
 
 def _hud_personal() -> dict:
     """Personal comms: texts (iMessage) plus any mail that isn't school."""
-    texts = [r for r in intake.get_intake().get("recent", [])
+    texts = [r for r in _hud_intake().get("recent", [])
              if (r.get("source") or "").lower() in ("imessage", "sms", "text")]
     mail = [r for r in _hud_mail_rows() if not _hud_is_school(r)]
     merged = sorted(texts + mail, key=lambda r: r.get("ts") or "", reverse=True)
@@ -4590,6 +4612,174 @@ def _hud_revenue() -> dict:
         "approved": len(approved),
         "counts": counts,
         "streams": streams,
+    }
+
+
+# A full health scan shells out to check binaries, reads every DB and
+# round-trips Supabase. The deck polls every 60s from possibly several open
+# pages/devices, so cache the scan briefly and let all of them share it.
+_HEALTH_CACHE = {"at": 0.0, "scan": None, "budget": None}
+_HEALTH_TTL = 45.0
+_health_cache_lock = threading.Lock()
+
+
+def _hud_scan_cached():
+    now = time.time()
+    with _health_cache_lock:
+        fresh = (_HEALTH_CACHE["scan"] is not None
+                 and now - _HEALTH_CACHE["at"] < _HEALTH_TTL)
+        if fresh:
+            return _HEALTH_CACHE["scan"], _HEALTH_CACHE["budget"]
+    scan = monitor.run_health_scan()
+    budget = monitor.spend_vs_budget()
+    with _health_cache_lock:
+        _HEALTH_CACHE.update({"at": time.time(), "scan": scan, "budget": budget})
+    return scan, budget
+
+
+def _hud_health() -> dict:
+    """System health + what CLARVIS costs to run.
+
+    Health comes from the monitor's scan (static checks + worker liveness +
+    recent error events). Cost is MEASURED API spend from observability plus
+    the fixed infra bills in running_costs.json — no database knows what
+    Hetzner charges, so that part is config, and it's labelled as such.
+    """
+    scan, budget = _hud_scan_cached()
+
+    checks = (scan.get("static") or {}).get("checks", [])
+    failing = [{"name": c.get("name"), "status": c.get("status"),
+                "detail": (c.get("detail") or "")[:90]}
+               for c in checks if not c.get("ok")]
+    workers = scan.get("workers", {})
+    down = [n for n, ok in workers.items() if not ok]
+    incidents = [{"component": i.get("component"), "message": (i.get("message") or "")[:90],
+                  "level": i.get("level") or i.get("type")}
+                 for i in scan.get("incidents", [])[:8]]
+
+    api_spend = float(budget.get("spend") or 0.0)
+    try:
+        cfg = json.load(open(os.path.join(os.path.dirname(__file__), "running_costs.json")))
+    except Exception:
+        cfg = {}
+    fixed = [f for f in cfg.get("fixed_monthly", []) if isinstance(f, dict)]
+    fixed_total = sum(float(f.get("usd") or 0) for f in fixed)
+
+    lines = [{"name": "Anthropic API", "usd": round(api_spend, 2),
+              "kind": "measured", "note": "this month, metered"}]
+    lines += [{"name": f.get("name"), "usd": float(f.get("usd") or 0),
+               "kind": "fixed", "note": f.get("note") or ""} for f in fixed]
+    lines.sort(key=lambda r: -r["usd"])
+
+    return {
+        "overall": scan.get("overall", "unknown"),
+        "alert": scan.get("overall") in ("critical", "degraded") or bool(down) or bool(failing),
+        "workers": workers,
+        "workers_down": down,
+        "failing": failing,
+        "incidents": incidents,
+        "checks_total": len(checks),
+        "checks_ok": len([c for c in checks if c.get("ok")]),
+        "cost": {
+            "api_month": round(api_spend, 2),
+            "fixed_month": round(fixed_total, 2),
+            "total_month": round(api_spend + fixed_total, 2),
+            "budget": budget.get("budget"),
+            "tier": budget.get("tier"),
+            "pct": budget.get("pct"),
+            "lines": lines,
+            "by_feature": (budget.get("by_feature") or [])[:8],
+            "funding": cfg.get("funding", {}),
+        },
+    }
+
+
+# Links the system actually depends on. Static by nature — these are the
+# consoles Alex signs into, not something the app can discover at runtime.
+_HUD_LINKS = [
+    {"name": "CLARVIS (server)", "url": "https://clarvis.178.156.209.40.sslip.io",
+     "group": "This system", "note": "the deployed HUD"},
+    {"name": "Coolify", "url": "http://178.156.209.40:8000",
+     "group": "This system", "note": "deploys + container control"},
+    {"name": "GitHub — Second-brain", "url": "https://github.com/alex100hickey-eng/Second-brain",
+     "group": "This system", "note": "source of truth; push = deploy"},
+    {"name": "Supabase", "url": "https://supabase.com/dashboard",
+     "group": "Data", "note": "Agent Outputs table"},
+    {"name": "Hetzner Cloud", "url": "https://console.hetzner.cloud",
+     "group": "Infra", "note": "the server itself"},
+    {"name": "Anthropic Console", "url": "https://console.anthropic.com",
+     "group": "AI", "note": "API keys + usage"},
+    {"name": "Claude", "url": "https://claude.ai",
+     "group": "AI", "note": "chat"},
+    {"name": "Composio", "url": "https://app.composio.dev",
+     "group": "Integrations", "note": "Gmail / Calendar connectors"},
+    {"name": "ElevenLabs", "url": "https://elevenlabs.io/app",
+     "group": "Integrations", "note": "voice"},
+    {"name": "ntfy", "url": "https://ntfy.sh",
+     "group": "Integrations", "note": "phone push"},
+    {"name": "Obsidian", "url": "obsidian://open",
+     "group": "Data", "note": "local vault — opens the app"},
+]
+
+
+def _hud_links() -> dict:
+    groups = {}
+    for l in _HUD_LINKS:
+        groups.setdefault(l["group"], []).append(l)
+    return {"links": _HUD_LINKS, "groups": groups, "count": len(_HUD_LINKS)}
+
+
+def _hud_toolkit() -> dict:
+    """Everything CLARVIS can run: background workers, queued/running jobs,
+    and the tool catalogue — split into what's working now vs ready to run."""
+    # reuse the cached scan rather than re-probing (and rather than reaching
+    # into monitor's private liveness helper)
+    workers = {}
+    try:
+        workers = (_hud_scan_cached()[0] or {}).get("workers", {}) or {}
+    except Exception:
+        pass
+    jobs = JOB_QUEUE.list_jobs(20)
+    counts = JOB_QUEUE.counts()
+    running = [{"label": j.get("label") or j.get("kind"), "kind": j.get("kind"),
+                "status": j.get("status")} for j in jobs if j.get("status") == "running"]
+    queued = [{"label": j.get("label") or j.get("kind"), "kind": j.get("kind"),
+               "status": j.get("status")} for j in jobs if j.get("status") == "queued"]
+
+    # tool catalogue, grouped by the subsystem that contributed it
+    def group_of(name: str) -> str:
+        n = name.lower()
+        if n.startswith(("gmail", "googlecalendar")):    return "Google"
+        if "vault" in n or "note" in n or "obsidian" in n: return "Vault"
+        if "task" in n or "goal" in n:                    return "Tasks"
+        if "money" in n or "revenue" in n:                return "Money"
+        if "scout" in n or "expansion" in n or "finding" in n: return "Expansion"
+        if "intake" in n or "imessage" in n:              return "Intake"
+        if "budget" in n or "health" in n or "monitor" in n or "notification" in n: return "System"
+        if "search" in n or "web" in n or "research" in n: return "Research"
+        return "Core"
+
+    catalogue = {}
+    for t in TOOLS:
+        name = t.get("name")
+        if not name:
+            continue
+        catalogue.setdefault(group_of(name), []).append({
+            "name": name,
+            "desc": (t.get("description") or "").strip().split(".")[0][:110],
+        })
+    for g in catalogue:
+        catalogue[g].sort(key=lambda x: x["name"])
+
+    return {
+        "workers": [{"name": n, "alive": ok} for n, ok in sorted(workers.items())],
+        "workers_alive": len([1 for ok in workers.values() if ok]),
+        "workers_total": len(workers),
+        "running": running,
+        "queued": queued,
+        "job_counts": counts,
+        "tool_count": sum(len(v) for v in catalogue.values()),
+        "groups": [{"group": g, "tools": v} for g, v in sorted(catalogue.items())],
     }
 
 
@@ -4728,6 +4918,9 @@ def api_hud():
     return jsonify({
         "schedule": safe(_hud_schedule, []),
         "personal": safe(_hud_personal, {}),
+        "health": safe(_hud_health, {}),
+        "toolkit": safe(_hud_toolkit, {}),
+        "links": safe(_hud_links, {}),
         "assignments": safe(_hud_assignments, []),
         "mail": safe(_hud_mail, {}),
         "task": safe(_hud_task, {}),

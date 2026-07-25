@@ -1,0 +1,14 @@
+{
+  "_comment": "Recurring costs that no database knows about — infra invoices, subscriptions. API spend is MEASURED from observability.db and added on top; don't list Anthropic usage here or it double-counts. Edit these to match your real bills.",
+  "fixed_monthly": [
+    { "name": "Hetzner CPX11 server", "usd": 24.0, "billed_to": "card", "note": "always-on node" },
+    { "name": "Supabase", "usd": 0.0, "billed_to": "card", "note": "free tier" },
+    { "name": "Composio", "usd": 0.0, "billed_to": "card", "note": "free tier" },
+    { "name": "ElevenLabs", "usd": 0.0, "billed_to": "card", "note": "free tier" },
+    { "name": "GitHub", "usd": 0.0, "billed_to": "card", "note": "free private repos" }
+  ],
+  "funding": {
+    "source": "Personal card",
+    "note": "No revenue offset configured yet — see the Revenue widget."
+  }
+}

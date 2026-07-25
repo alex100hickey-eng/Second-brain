@@ -145,6 +145,15 @@
   filter: var(--hud-glow);
   pointer-events: none;
 }
+/* Alerting state. The palette has no red by design (HUD_STYLE.md), so an
+   alert reads as a slow bright pulse rather than a colour change — it still
+   catches the eye across the deck without breaking the colour rules. */
+.hud-widget-alert { animation: hud-alert-pulse 2s ease-in-out infinite; }
+@keyframes hud-alert-pulse {
+  0%, 100% { filter: drop-shadow(0 0 3px rgba(155, 242, 250, 0.35)); }
+  50%      { filter: drop-shadow(0 0 14px rgba(155, 242, 250, 0.95)); }
+}
+
 .hud-widget-link { cursor: pointer; transition: filter 140ms linear; }
 .hud-widget-link:hover,
 .hud-widget-link:focus-visible {
@@ -191,6 +200,29 @@
   font-family: 'Share Tech Mono', monospace; font-size: 10.5px;
   letter-spacing: 0.02em; color: #93c9dd;
 }
+/* Clickable link rows on the Links page */
+.hud-link-row {
+  display: block;
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 11.5px; letter-spacing: 0.02em; line-height: 1.3;
+  color: #a9d9ea; text-decoration: none;
+  padding: 3px 0 3px 10px;
+  border-left: 2px solid var(--hud-cyan-25);
+  margin-bottom: 3px;
+  transition: color 120ms linear, border-color 120ms linear;
+}
+.hud-link-row:hover {
+  color: var(--hud-white);
+  border-left-color: var(--hud-accent);
+  filter: var(--hud-glow);
+}
+.hud-link-row span {
+  display: block;
+  font-size: 10px;
+  color: var(--hud-label);
+  opacity: 0.75;
+}
+
 .hud-empty {
   font-family: 'Share Tech Mono', monospace; font-size: 11px;
   letter-spacing: 0.02em; color: var(--hud-label); opacity: 0.75;

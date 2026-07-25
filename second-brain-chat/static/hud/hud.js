@@ -1663,10 +1663,13 @@
         .replace(/\s+/g, ' '), fill: 'var(--hud-cyan-25)' }, s);
       el('line', { x1: o, y1: 24, x2: R, y2: 24, class: 'hud-stroke',
         'stroke-width': 1.1, opacity: 0.9 }, s);
-      // accent blocks sit at the RIGHT end of the band, clear of the title
-      [16, 26].forEach(x =>
-        el('rect', { x: W - k - x, y: 9, width: 5, height: 6,
-          fill: 'var(--hud-accent)', opacity: 0.8 }, s));
+      // accent blocks sit at the RIGHT end of the band, clear of the title —
+      // skipped on linked frames, where the expand chevron occupies that spot
+      if (!opts.href) {
+        [16, 26].forEach(x =>
+          el('rect', { x: W - k - x, y: 9, width: 5, height: 6,
+            fill: 'var(--hud-accent)', opacity: 0.8 }, s));
+      }
     }
     if (shape === 'tab') {   // header divider under the tab strip
       el('line', { x1: o, y1: 22, x2: R, y2: 22, class: 'hud-stroke-dim',
@@ -1705,7 +1708,12 @@
       div.addEventListener('keydown', e => {
         if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); }
       });
-      el('path', { d: `M ${R - 21} ${B - 12} l 6 -6 l -6 -6 M ${R - 13} ${B - 12} l 6 -6 l -6 -6`,
+      // Top-right, NOT bottom-right: content is top-aligned and its last row's
+      // right-aligned value lands exactly where a bottom-right chevron sits
+      // (measured a 5px overlap). Up here it shares the title row, which is
+      // always clear of the content box.
+      const cy = shape === 'header' ? 15 : 13;
+      el('path', { d: `M ${R - 20} ${cy} l 5 -5 l -5 -5 M ${R - 13} ${cy} l 5 -5 l -5 -5`,
         class: 'hud-stroke-bright', 'stroke-width': 1.5, fill: 'none', opacity: 0.9 }, s);
     }
     if (opts.title) {
