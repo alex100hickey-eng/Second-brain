@@ -1,13 +1,21 @@
 {
   "name": "CLARVIS",
   "short_name": "CLARVIS",
-  "description": "CLARVIS — Alex's personal AI second brain: chat and command deck",
+  "description": "CLARVIS \u2014 Alex's personal AI second brain: chat and command deck",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#0a0e14",
-  "theme_color": "#0a0e14",
+  "background_color": "#010a20",
+  "theme_color": "#010a20",
   "icons": [
-    { "src": "/static/icon-192.png", "sizes": "192x192", "type": "image/png" },
-    { "src": "/static/icon-512.png", "sizes": "512x512", "type": "image/png" }
+    {
+      "src": "/static/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/static/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
   ]
 }
