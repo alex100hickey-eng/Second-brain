@@ -1071,6 +1071,104 @@
      opts: {width=1600, height=170, vanishX}
      ============================================================ */
   /* ============================================================
+     GlobeIcon — wireframe sphere inside corner brackets (ref top
+     centre). opts: {size=70, role}
+     ============================================================ */
+  HUD.globeIcon = function (opts) {
+    opts = opts || {};
+    const S = opts.size || 70, c = S / 2, r = S * 0.29, b = S * 0.22;
+    const s = svg(S, S, { style: 'overflow:visible' });
+    if (opts.role) s.dataset.role = opts.role;
+    const g = el('g', { class: 'hud-stroke', 'stroke-width': 1.3, fill: 'none' }, s);
+    [[0, 0, 1, 1], [S, 0, -1, 1], [S, S, -1, -1], [0, S, 1, -1]]
+      .forEach(([x, y, dx, dy]) =>
+        el('path', { d: `M ${x + dx * b} ${y} H ${x} V ${y + dy * b}` }, g));
+    el('circle', { cx: c, cy: c, r, class: 'hud-stroke', 'stroke-width': 1.2 }, s);
+    const gs = el('g', {}, s);
+    [0.36, 0.72].forEach(k =>
+      el('ellipse', { cx: c, cy: c, rx: r * k, ry: r, class: 'hud-stroke-dim',
+        'stroke-width': 1, fill: 'none' }, gs));
+    el('ellipse', { cx: c, cy: c, rx: r, ry: r * 0.38, class: 'hud-stroke-dim',
+      'stroke-width': 1, fill: 'none' }, gs);
+    el('line', { x1: c - r, y1: c, x2: c + r, y2: c, class: 'hud-stroke-dim',
+      'stroke-width': 1 }, gs);
+    return s;
+  };
+
+  /* ============================================================
+     SegRing — segmented outer ring spinning around a dashed inner
+     ring and a centre readout (ref sector dial).
+     opts: {size=96, text='02', role}
+     ============================================================ */
+  HUD.segRing = function (opts) {
+    opts = opts || {};
+    const S = opts.size || 96, c = S / 2;
+    const s = svg(S, S, { style: 'overflow:visible' });
+    if (opts.role) s.dataset.role = opts.role;
+    const g = el('g', {}, s);
+    [[0, 68], [92, 58], [172, 78], [268, 52]].forEach(([a0, len]) => {
+      const r = S * 0.44;
+      const [x0, y0] = P(c, c, r, a0), [x1, y1] = P(c, c, r, a0 + len);
+      el('path', { d: `M ${x0} ${y0} A ${r} ${r} 0 0 1 ${x1} ${y1}`, fill: 'none',
+        stroke: 'var(--hud-accent)', 'stroke-width': 4, 'stroke-linecap': 'round',
+        opacity: 0.85, class: 'hud-glow' }, g);
+    });
+    spin(g, c, c, 60);
+    el('circle', { cx: c, cy: c, r: S * 0.31, class: 'hud-stroke-dim',
+      'stroke-width': 1, 'stroke-dasharray': '3 4' }, s);
+    el('circle', { cx: c, cy: c, r: S * 0.22, class: 'hud-stroke', 'stroke-width': 1.1,
+      opacity: 0.7 }, s);
+    txt(el('text', { x: c, y: c + 6, 'text-anchor': 'middle', 'font-size': 15,
+      class: 'hud-txt' }, s), opts.text || '02');
+    return s;
+  };
+
+  /* ============================================================
+     Ladder — vertical graduated scale rail (ref edge scales).
+     opts: {height=140, count=9, role}
+     ============================================================ */
+  HUD.ladder = function (opts) {
+    opts = opts || {};
+    const H = opts.height || 140, W = 26, n = opts.count || 9;
+    const s = svg(W, H, { style: 'overflow:visible' });
+    if (opts.role) s.dataset.role = opts.role;
+    el('line', { x1: 2, y1: 0, x2: 2, y2: H, class: 'hud-stroke',
+      'stroke-width': 1.2, opacity: 0.8 }, s);
+    for (let i = 0; i < n; i++) {
+      const y = H * i / (n - 1), major = i % 3 === 0;
+      el('line', { x1: 2, y1: y, x2: major ? W - 4 : 10, y2: y,
+        stroke: 'var(--hud-cyan)', 'stroke-width': major ? 1.6 : 1,
+        opacity: major ? 0.9 : 0.45 }, s);
+    }
+    return s;
+  };
+
+  /* ============================================================
+     ChevronPair — a short chevron run terminated by a vertical
+     three-dot separator (ref marks flanking the bottom scale).
+     opts: {count=2, size=15, dir='right', role}
+     ============================================================ */
+  HUD.chevronPair = function (opts) {
+    opts = opts || {};
+    const n = opts.count || 2, S = opts.size || 15;
+    const right = (opts.dir || 'right') === 'right';
+    const W = n * S * 0.75 + 22, H = S * 1.5, my = H / 2;
+    const s = svg(W, H, { style: 'overflow:visible' });
+    if (opts.role) s.dataset.role = opts.role;
+    for (let i = 0; i < n; i++) {
+      const x = right ? 2 + i * S * 0.75 : W - 22 - i * S * 0.75;
+      const w = right ? S * 0.6 : -S * 0.6;
+      el('path', { d: `M ${x} ${my - S * 0.55} l ${w} ${S * 0.55} l ${-w} ${S * 0.55}`,
+        fill: 'none', class: 'hud-stroke-bright', 'stroke-width': 2.2 }, s);
+    }
+    const dx = right ? W - 5 : 5;
+    [-6, 0, 6].forEach(dy =>
+      el('circle', { cx: dx, cy: my + dy, r: 1.7, fill: 'var(--hud-cyan)',
+        opacity: 0.85 }, s));
+    return s;
+  };
+
+  /* ============================================================
      ScreenFrame — the outer border that encloses the whole display:
      notched rectangle, hairline inner rule, bright corner brackets
      and edge tick runs (ref outer chrome).
