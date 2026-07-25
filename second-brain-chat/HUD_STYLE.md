@@ -96,9 +96,29 @@ Panels are drawn frames, not cards.
 
 - **Orbitron** (Google Fonts) — headings and all numbers.
 - **Share Tech Mono** (Google Fonts) — labels and body-adjacent text.
-- **All uppercase**, everywhere.
+- **All uppercase**, everywhere — see the Widget content exception below.
 - **letter-spacing: 0.15em** on all text.
 - **Labels are tiny: 10–11px.**
+
+### Widget content (exception)
+
+The rules above govern HUD **chrome** — panel titles, axis labels, micro decimal
+readouts, decorative strings. They do **not** govern real data rendered inside a
+widget (email subjects, task names, event titles, amounts). Forcing uppercase and
+0.15em tracking onto live content makes the deck unreadable at a glance, which
+defeats the point of a heads-up display.
+
+Data text inside `.hud-content` therefore uses:
+
+- **Natural case** — whatever the source produced; no `text-transform`.
+- **letter-spacing: 0.02–0.04em**, not 0.15em.
+- **11–12px**, slightly larger than chrome labels, with roomier line-height.
+- A softer label colour (`#a9d9ea`) so values stay the brightest thing in the row.
+
+Use the library helpers — `HUD.listRows`, `HUD.bigStat`, `HUD.miniSpark` — rather
+than hand-rolling content styles, so this stays consistent. Chrome around that
+content (the widget's own title, the frame, the readouts beside it) still follows
+the strict rules.
 - Numbers may be larger and are the visual anchors; key numbers use the reserved
   white `#e8fdff` and the stacked-glow emphasis filter.
 

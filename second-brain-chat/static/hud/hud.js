@@ -1658,13 +1658,25 @@
     opts = opts || {};
     const wrap = document.createElement('div');
     wrap.className = 'hud-rows';
-    (opts.rows || []).forEach(([lab, val, hot]) => {
+    const rows = opts.rows || [];
+    if (!rows.length) {
+      // an explicit empty:'' means "show nothing at all", not the default text
+      const msg = opts.empty == null ? 'Nothing right now' : opts.empty;
+      if (msg) {
+        const e = document.createElement('div');
+        e.className = 'hud-empty';
+        e.textContent = msg;
+        wrap.appendChild(e);
+      }
+      return wrap;
+    }
+    rows.forEach(([lab, val, hot]) => {
       const r = document.createElement('div');
-      r.className = 'hud-row';
+      r.className = 'hud-row' + (hot ? ' hot' : '');
       const a = document.createElement('span');
       a.className = 'hud-row-l'; a.textContent = lab;
       const b = document.createElement('span');
-      b.className = 'hud-row-v' + (hot ? ' hot' : ''); b.textContent = val;
+      b.className = 'hud-row-v' + (hot ? ' hot' : ''); b.textContent = val == null ? '' : val;
       r.appendChild(a); r.appendChild(b); wrap.appendChild(r);
     });
     return wrap;
@@ -1703,10 +1715,53 @@
     vals.forEach((v, i) => {
       const h = Math.max(2, (v / max) * (H - 2));
       el('rect', { x: i * bw + 1, y: H - h, width: Math.max(2, bw - 3), height: h,
+        rx: 1.5,
         fill: i === vals.length - 1 ? 'var(--hud-accent)' : 'var(--hud-cyan)',
         opacity: i === vals.length - 1 ? 1 : 0.55 }, s);
     });
     return s;
+  };
+
+  /* ============================================================
+     fill — swap a content node's children for freshly built ones.
+     ============================================================ */
+  HUD.fill = function (node, children) {
+    if (!node) return node;
+    while (node.firstChild) node.removeChild(node.firstChild);
+    (Array.isArray(children) ? children : [children])
+      .forEach(c => { if (c) node.appendChild(c); });
+    return node;
+  };
+
+  /* ============================================================
+     bindLive — poll a JSON endpoint and hand the payload to a
+     render callback. The callback is also called with (null, err)
+     on failure so a page can hold its last good state rather than
+     blanking out. Returns {stop, refresh}.
+     opts: {url='/api/hud', every=60000, render}
+     ============================================================ */
+  HUD.bindLive = function (opts) {
+    opts = opts || {};
+    const url = opts.url || '/api/hud';
+    const every = opts.every == null ? 60000 : opts.every;
+    const render = opts.render || function () {};
+    let timer = null;
+
+    function tick() {
+      fetch(url, { headers: { Accept: 'application/json' }, credentials: 'same-origin' })
+        .then(r => {
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          return r.json();
+        })
+        .then(d => {
+          if (!d || d.error) throw new Error((d && d.error) || 'no data');
+          render(d, null);
+        })
+        .catch(err => { render(null, err); });
+    }
+    tick();
+    if (every > 0) timer = setInterval(tick, every);
+    return { stop: () => { if (timer) clearInterval(timer); }, refresh: tick };
   };
 
   /* ============================================================

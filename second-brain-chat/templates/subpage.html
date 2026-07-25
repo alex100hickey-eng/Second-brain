@@ -10,7 +10,7 @@
 <meta name="theme-color" content="#010A20">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<link rel="stylesheet" href="/static/hud/hud.css?v=12">
+<link rel="stylesheet" href="/static/hud/hud.css?v=13">
 <style>
   html, body { height: 100%; margin: 0; overflow: hidden; }
   #deck { position: absolute; width: 1600px; height: 1000px; left: 50%; top: 50%;
@@ -23,11 +23,11 @@
   .lbl.hi { color: var(--hud-cyan); }
   .pagetitle { position: absolute; left: 60px; top: 40px;
     font-family: 'Orbitron', sans-serif; font-size: 30px; font-weight: 700;
-    letter-spacing: 0.22em; text-transform: uppercase;
+    letter-spacing: 0.12em;
     color: var(--hud-accent); filter: var(--hud-glow-strong); }
   .pagesub { position: absolute; left: 62px; top: 82px;
-    font-family: 'Share Tech Mono', monospace; font-size: 11px;
-    letter-spacing: 0.2em; text-transform: uppercase; color: var(--hud-label); }
+    font-family: 'Share Tech Mono', monospace; font-size: 12px;
+    letter-spacing: 0.04em; color: #93c9dd; }
 </style>
 </head>
 <body class="hud-body">
@@ -35,73 +35,111 @@
 
 <script src="/static/vendor/gsap.min.js"></script>
 <script src="/static/vendor/d3.min.js"></script>
-<script src="/static/hud/hud.js?v=12"></script>
+<script src="/static/hud/hud.js?v=13"></script>
 <script>
   /* One template serves every expanded view; the page key comes from the URL
      so no server-side templating is needed (keeps this file previewable as a
      plain static file too). */
+  const clip = (t, n) => (t || '').length > n ? t.slice(0, n - 1) + '\u2026' : (t || '');
+  const money = v => '$' + Math.round(v || 0).toLocaleString();
+  const rows = (list, empty) => HUD.listRows({ rows: list, empty: empty });
+
   const PAGES = {
     school: {
-      title: 'SCHOOL', sub: 'MAIL / ASSIGNMENTS / COURSES',
+      title: 'School', sub: 'Mail \u00b7 assignments \u00b7 deadlines',
       panels: [
-        { title: 'INBOX', shape: 'header', x: 60, y: 380, w: 430, h: 300,
-          rows: [['REGISTRAR — ENROLMENT', '1H', true], ['PROF. HALE — LAB SLOT', '4H', true],
-                 ['BURSAR — STATEMENT', '1D'], ['LIBRARY — HOLD READY', '2D'],
-                 ['ADVISING — CHECK-IN', '3D'], ['CLUBS — WEEKLY', '4D']] },
-        { title: 'ASSIGNMENTS', shape: 'header', x: 530, y: 380, w: 430, h: 300,
-          rows: [['CHEM P-SET 7', 'DUE 2D', true], ['ESSAY DRAFT', 'DUE 5D'],
-                 ['LAB REPORT 3', 'DUE 9D'], ['STATS QUIZ', 'DUE 11D'],
-                 ['GROUP SLIDES', 'DUE 14D']] },
-        { title: 'COURSE LOAD', shape: 'cutbr', x: 1000, y: 380, w: 300, h: 300,
-          rows: [['CHEM 210', 'A-'], ['STAT 154', 'B+'], ['HIST 101', 'A'],
-                 ['ENGL 220', 'B+'], ['CREDITS', '16']] }
+        { title: 'Inbox', shape: 'header', x: 60, y: 380, w: 430, h: 300,
+          fill: (d, gone) => rows(((d && d.mail && d.mail.recent) || []).map(r =>
+            [clip(r.from + (r.preview ? ' \u2014 ' + r.preview : ''), 46),
+             r.status === 'new' ? 'new' : '', r.status === 'new']),
+            gone || 'Inbox clear') },
+        { title: 'Assignments', shape: 'header', x: 530, y: 380, w: 430, h: 300,
+          fill: (d, gone) => rows(((d && d.assignments) || []).map(i =>
+            [clip(i.text, 44), i.rel, /overdue|today|tomorrow/.test(i.rel)]),
+            gone || 'No deadlines tracked') },
+        { title: 'Upcoming', shape: 'cutbr', x: 1000, y: 380, w: 300, h: 300,
+          fill: (d, gone) => rows(((d && d.schedule) || []).map(i =>
+            [clip(i.text, 28), i.rel, /overdue|today/.test(i.rel)]),
+            gone || 'Nothing upcoming') }
       ]
     },
     revenue: {
-      title: 'REVENUE', sub: 'STREAMS / TREND / PIPELINE',
+      title: 'Revenue', sub: 'Streams \u00b7 pipeline \u00b7 estimates',
       panels: [
-        { title: 'MONTH TO DATE', shape: 'header', x: 60, y: 380, w: 380, h: 300,
-          stat: { value: '$1,240', sub: 'UP 18% VS LAST MONTH' },
-          spark: [3, 4, 3, 6, 5, 8, 7, 11],
-          rows: [['TARGET', '$2,000'], ['RUN RATE', '$1,860']] },
-        { title: 'STREAMS', shape: 'header', x: 480, y: 380, w: 430, h: 300,
-          rows: [['FREELANCE BUILDS', '$620', true], ['AFFILIATE', '$310'],
-                 ['DIGITAL GOODS', '$210'], ['CONSULT CALLS', '$100'],
-                 ['ACTIVE SOURCES', '4']] },
-        { title: 'PIPELINE', shape: 'cutbr', x: 950, y: 380, w: 350, h: 300,
-          rows: [['PROPOSAL — ACME', '$800'], ['SCOPING — NORTHWIND', '$450'],
-                 ['LEAD — CONTOSO', '$300'], ['WEIGHTED', '$1,010', true]] }
+        { title: 'Estimated monthly', shape: 'header', x: 60, y: 380, w: 380, h: 300,
+          fill: (d, gone) => {
+            const r = (d && d.revenue) || {};
+            const wrap = document.createElement('div');
+            wrap.appendChild(HUD.bigStat({ value: gone ? '\u2014' : money(r.est_monthly),
+              sub: gone || 'from ' + (r.approved || 0) + ' approved ideas' }));
+            const vals = (r.streams || []).map(s => Math.max(1, s.profit || 1));
+            const sp = HUD.miniSpark({ values: vals.length ? vals : [1, 1, 1, 1],
+              width: 300, height: 40 });
+            sp.style.margin = '12px 0';
+            wrap.appendChild(sp);
+            wrap.appendChild(rows([['Ideas tracked', String(r.ideas || 0)],
+              ['Approved', String(r.approved || 0)]], ''));
+            return wrap;
+          } },
+        { title: 'Streams', shape: 'header', x: 480, y: 380, w: 430, h: 300,
+          fill: (d, gone) => rows(((d && d.revenue && d.revenue.streams) || []).map(s =>
+            [clip(s.name, 40), s.profit ? money(s.profit) : (s.status || ''), !!s.profit]),
+            gone || 'No ideas scouted yet') },
+        { title: 'By status', shape: 'cutbr', x: 950, y: 380, w: 350, h: 300,
+          fill: (d, gone) => {
+            const c = (d && d.revenue && d.revenue.counts) || {};
+            const ks = Object.keys(c);
+            return rows(ks.map(k => [k, String(c[k])]), gone || 'Nothing to group');
+          } }
       ]
     },
     schedule: {
-      title: 'SCHEDULE', sub: 'TODAY / WEEK AHEAD',
+      title: 'Schedule', sub: 'Events \u00b7 commitments',
       panels: [
-        { title: 'TODAY', shape: 'header', x: 60, y: 380, w: 420, h: 300,
-          rows: [['09:00 CHEM LAB', 'RM 214', true], ['11:30 ADVISING', 'ZOOM'],
-                 ['13:30 LIFT', 'GYM'], ['16:00 SHIFT', '4H', true],
-                 ['20:00 STUDY BLOCK', '2H']] },
-        { title: 'WEEK AHEAD', shape: 'header', x: 520, y: 380, w: 440, h: 300,
-          rows: [['TUE — QUIZ', 'STAT 154'], ['WED — LAB REPORT DUE', '23:59'],
-                 ['THU — SHIFT', '5H'], ['FRI — ESSAY DRAFT', '23:59'],
-                 ['SAT — MEET', '10:00']] },
-        { title: 'LOAD', shape: 'cutbr', x: 1000, y: 380, w: 300, h: 300,
-          rows: [['BOOKED HOURS', '38'], ['FREE BLOCKS', '11'],
-                 ['CONFLICTS', '0'], ['NEXT FREE', 'TUE 15:00', true]] }
+        { title: 'Upcoming', shape: 'header', x: 60, y: 380, w: 420, h: 300,
+          fill: (d, gone) => rows(((d && d.schedule) || []).map(i =>
+            [clip(i.text, 42), i.rel, /overdue|today/.test(i.rel)]),
+            gone || 'Nothing scheduled') },
+        { title: 'Deadlines', shape: 'header', x: 520, y: 380, w: 440, h: 300,
+          fill: (d, gone) => rows(((d && d.assignments) || []).map(i =>
+            [clip(i.text, 44), i.rel, /overdue|today|tomorrow/.test(i.rel)]),
+            gone || 'No deadlines') },
+        { title: 'Sources', shape: 'cutbr', x: 1000, y: 380, w: 300, h: 300,
+          fill: (d, gone) => {
+            const all = ((d && d.schedule) || []).concat((d && d.assignments) || []);
+            const by = {};
+            all.forEach(i => { const k = i.source || 'other'; by[k] = (by[k] || 0) + 1; });
+            return rows(Object.keys(by).map(k => [k, String(by[k])]),
+              gone || 'No sources yet');
+          } }
       ]
     },
     tasks: {
-      title: 'TASK QUEUE', sub: 'CLARVIS AUTONOMOUS WORK',
+      title: 'Task queue', sub: 'What CLARVIS is working on',
       panels: [
-        { title: 'ACTIVE', shape: 'header', x: 60, y: 380, w: 400, h: 300,
-          stat: { value: 'INTAKE SCAN', sub: 'RUNNING — STARTED 14 MIN AGO' },
-          bar: 64,
-          rows: [['SOURCE', 'IMESSAGE + MAIL'], ['EVENTS FOUND', '12']] },
-        { title: 'QUEUED', shape: 'header', x: 500, y: 380, w: 420, h: 300,
-          rows: [['DAILY EXPANSION SCOUT', '06:00'], ['VAULT REINDEX', '02:00'],
-                 ['WEEKLY REVIEW DRAFT', 'SUN'], ['BUDGET SWEEP', 'HOURLY']] },
-        { title: 'RECENT', shape: 'cutbr', x: 960, y: 380, w: 340, h: 300,
-          rows: [['PROACTIVE NUDGE', 'SENT'], ['GMAIL SCAN', 'OK'],
-                 ['CALENDAR SCAN', 'OK'], ['FAILURES 24H', '0', true]] }
+        { title: 'Right now', shape: 'header', x: 60, y: 380, w: 400, h: 300,
+          fill: (d, gone) => {
+            const t = (d && d.task) || {};
+            const wrap = document.createElement('div');
+            wrap.appendChild(HUD.bigStat({
+              value: gone ? '\u2014' : clip(t.name || 'Idle', 22),
+              sub: gone || ('state: ' + (t.state || 'idle')) }));
+            const total = (t.queued || 0) + (t.done || 0);
+            const pct = total ? Math.round((t.done || 0) / total * 100) : 0;
+            const b = HUD.dataBar({ width: 330, segments: 14, value: pct, flat: true });
+            b.style.margin = '12px 0';
+            wrap.appendChild(b);
+            wrap.appendChild(rows([['Queued', String(t.queued || 0)],
+              ['Done', String(t.done || 0)], ['Failed', String(t.failed || 0), !!t.failed]], ''));
+            return wrap;
+          } },
+        { title: 'Open tasks', shape: 'header', x: 500, y: 380, w: 420, h: 300,
+          fill: (d, gone) => rows((((d && d.task) || {}).tasks || []).map(t =>
+            [clip(t.title, 40), t.status, t.status === 'doing']),
+            gone || 'Nothing open') },
+        { title: 'Recent intake', shape: 'cutbr', x: 960, y: 380, w: 340, h: 300,
+          fill: (d, gone) => rows(((d && d.mail && d.mail.recent) || []).slice(0, 8).map(r =>
+            [clip(r.from, 26), r.status || '']), gone || 'Nothing recent') }
       ]
     }
   };
@@ -111,6 +149,7 @@
   const QP = (new URLSearchParams(location.search).get('p') || '').toLowerCase();
   const KEY = PAGES[SEG] ? SEG : (PAGES[QP] ? QP : 'school');
   const page = PAGES[KEY];
+
   const deck = document.getElementById('deck');
   // same shell as home; the reactor is the way back
   const { at, atC, label } = HUD.deckShell(deck, {
@@ -123,31 +162,22 @@
   const sb = document.createElement('div');
   sb.className = 'pagesub'; sb.textContent = page.sub; deck.appendChild(sb);
 
+  // build the panels once, then refill their contents on every poll
   page.panels.forEach(p => {
-    const f = HUD.widgetFrame({ width: p.w, height: p.h, shape: p.shape,
+    p._frame = HUD.widgetFrame({ width: p.w, height: p.h, shape: p.shape,
       title: p.title, role: 'panel-' + p.title.toLowerCase().replace(/\W+/g, '-') });
-    const c = f._content;
-    if (p.stat) c.appendChild(HUD.bigStat(p.stat));
-    if (p.bar != null) {
-      const b = HUD.dataBar({ width: p.w - 60, segments: 14, value: p.bar, flat: true });
-      b.style.margin = '8px 0';
-      c.appendChild(b);
-    }
-    if (p.spark) {
-      const s = HUD.miniSpark({ values: p.spark, width: p.w - 60, height: 34 });
-      s.style.margin = '8px 0';
-      c.appendChild(s);
-    }
-    if (p.rows) {
-      const r = HUD.listRows({ rows: p.rows });
-      r.style.marginTop = '8px';
-      c.appendChild(r);
-    }
-    at(f, p.x, p.y);
+    at(p._frame, p.x, p.y);
   });
 
+  function render(d, err) {
+    const gone = err ? 'Data unavailable' : null;
+    page.panels.forEach(p => HUD.fill(p._frame._content, p.fill(d, gone)));
+  }
+  render(null, null);
+  HUD.bindLive({ url: '/api/hud', every: 60000, render });
+
   /* ===== shared chrome: back hint, chat bar, light decoration ===== */
-  label('◄ CORE — RETURN TO DECK', 660, 366, true);
+  label('◄ Core — back to the deck', 668, 366, true);
   at(HUD.chatBar({ width: 620, action: '/chat-classic', role: 'chatbar' }), 490, 790);
   at(HUD.chevronPair({ count: 2, dir: 'right' }), 400, 806);
   at(HUD.chevronPair({ count: 2, dir: 'left' }), 1130, 806);

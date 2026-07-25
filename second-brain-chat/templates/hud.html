@@ -11,7 +11,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="CLARVIS">
-<link rel="stylesheet" href="/static/hud/hud.css?v=12">
+<link rel="stylesheet" href="/static/hud/hud.css?v=13">
 <style>
   html, body { height: 100%; margin: 0; overflow: hidden; }
   #deck { position: absolute; width: 1600px; height: 1000px; left: 50%; top: 50%;
@@ -29,7 +29,7 @@
 
 <script src="/static/vendor/gsap.min.js"></script>
 <script src="/static/vendor/d3.min.js"></script>
-<script src="/static/hud/hud.js?v=12"></script>
+<script src="/static/hud/hud.js?v=13"></script>
 <script>
   const deck = document.getElementById('deck');
   // shared scaffolding: frame, floor, lettering, orbit rings, core reactor
@@ -43,50 +43,82 @@
     return f;
   }
 
-  // SCHEDULE (top-left) -> /schedule
-  widget({ width: 214, height: 96, shape: 'header', role: 'w-tl',
-    title: 'SCHEDULE', href: '/schedule', linkTitle: 'Open schedule' },
-    58, 26, c => c.appendChild(HUD.listRows({ rows: [
-      ['09:00 CHEM LAB', 'RM 214'],
-      ['13:30 LIFT', 'GYM'],
-      ['16:00 SHIFT', '4H', true]] })));
+  const wSchedule = widget({ width: 214, height: 96, shape: 'header', role: 'w-tl',
+    title: 'Schedule', href: '/schedule', linkTitle: 'Open schedule' }, 58, 26);
+  const wTask = widget({ width: 212, height: 112, shape: 'header', role: 'w-l1',
+    title: 'Active task', href: '/tasks', linkTitle: 'Open task queue' }, 36, 178);
+  const wMail = widget({ width: 214, height: 120, shape: 'header', role: 'w-r2',
+    title: 'School mail', href: '/school', linkTitle: 'Open school' }, 1338, 176);
+  const wWork = widget({ width: 216, height: 100, shape: 'layered', role: 'w-r3',
+    title: 'Assignments', href: '/school', linkTitle: 'Open school' }, 1304, 322);
+  const wRev = widget({ width: 216, height: 102, shape: 'cutbr', role: 'w-br',
+    title: 'Revenue', href: '/revenue', linkTitle: 'Open revenue' }, 1288, 630);
 
-  // ACTIVE CLARVIS TASK (left) -> /tasks
-  widget({ width: 212, height: 112, shape: 'header', role: 'w-l1',
-    title: 'ACTIVE TASK', href: '/tasks', linkTitle: 'Open task queue' },
-    36, 178, c => {
-      c.appendChild(HUD.listRows({ rows: [
-        ['INTAKE SCAN', 'RUN', true], ['QUEUE', '3 PENDING']] }));
-      const b = HUD.dataBar({ width: 168, segments: 12, value: 64, flat: true });
-      b.style.marginTop = '6px';
-      c.appendChild(b);
-    });
+  const clip = (s, n) => (s || '').length > n ? s.slice(0, n - 1) + '…' : (s || '');
+  const money = v => '$' + Math.round(v || 0).toLocaleString();
 
-  // SCHOOL EMAIL (right) -> /school
-  widget({ width: 214, height: 120, shape: 'header', role: 'w-r2',
-    title: 'SCHOOL MAIL', href: '/school', linkTitle: 'Open school' },
-    1338, 176, c => {
-      c.appendChild(HUD.bigStat({ value: 4, unit: 'NEW', sub: 'UNREAD — 2 FLAGGED' }));
-      c.appendChild(HUD.listRows({ rows: [['REGISTRAR', '1H'], ['PROF. HALE', '4H']] }));
-    });
+  function render(d, err) {
+    const gone = err ? 'Data unavailable' : null;
 
-  // SCHOOL ASSIGNMENTS (right, next to mail) -> /school
-  widget({ width: 216, height: 100, shape: 'layered', role: 'w-r3',
-    title: 'ASSIGNMENTS', href: '/school', linkTitle: 'Open school' },
-    1304, 322, c => c.appendChild(HUD.listRows({ rows: [
-      ['CHEM P-SET', 'DUE 2D', true],
-      ['ESSAY DRAFT', 'DUE 5D'],
-      ['LAB REPORT', 'DUE 9D']] })));
+    // schedule — upcoming events + commitments
+    HUD.fill(wSchedule._content, HUD.listRows({
+      empty: gone || 'Nothing scheduled',
+      rows: ((d && d.schedule) || []).slice(0, 3).map(i =>
+        [clip(i.text, 42), i.rel, /overdue|today/.test(i.rel)])
+    }));
 
-  // REVENUE (bottom-right) -> /revenue
-  widget({ width: 216, height: 102, shape: 'cutbr', role: 'w-br',
-    title: 'REVENUE', href: '/revenue', linkTitle: 'Open revenue' },
-    1288, 630, c => {
-      c.appendChild(HUD.bigStat({ value: '$1,240', sub: 'MTD — 3 STREAMS' }));
-      const sp = HUD.miniSpark({ values: [3, 4, 3, 6, 5, 8, 7, 11], width: 150, height: 22 });
-      sp.style.marginTop = '4px';
-      c.appendChild(sp);
-    });
+    // active task — what CLARVIS is working on
+    const t = (d && d.task) || {};
+    const taskRows = [];
+    if (t.name) taskRows.push([clip(t.name, 34), (t.state || '').toUpperCase(), t.state === 'running']);
+    taskRows.push(['Queued', String(t.queued == null ? '—' : t.queued)]);
+    HUD.fill(wTask._content, [
+      HUD.listRows({ rows: gone ? [] : taskRows, empty: gone || 'Idle' }),
+      (() => {
+        const total = (t.queued || 0) + (t.done || 0);
+        const pct = total ? Math.round((t.done || 0) / total * 100) : 0;
+        const b = HUD.dataBar({ width: 168, segments: 12, value: pct, flat: true });
+        b.style.marginTop = '8px';
+        return b;
+      })()
+    ]);
+
+    // school mail — unread count + who
+    const m = (d && d.mail) || {};
+    HUD.fill(wMail._content, [
+      HUD.bigStat({ value: gone ? '—' : (m.unread || 0), unit: 'new',
+        sub: gone || `${m.total || 0} recent · school inbox` }),
+      HUD.listRows({
+        empty: '',
+        rows: (m.recent || []).filter(r => r.status === 'new').slice(0, 2)
+          .map(r => [clip(r.from, 30), '', false])
+      })
+    ]);
+
+    // assignments — deadlines pulled out of intake
+    HUD.fill(wWork._content, HUD.listRows({
+      empty: gone || 'No deadlines',
+      rows: ((d && d.assignments) || []).slice(0, 3).map(i =>
+        [clip(i.text, 40), i.rel, /overdue|today|tomorrow/.test(i.rel)])
+    }));
+
+    // revenue — estimated monthly from approved ideas
+    const r = (d && d.revenue) || {};
+    HUD.fill(wRev._content, [
+      HUD.bigStat({ value: gone ? '—' : money(r.est_monthly),
+        sub: gone || `${r.approved || 0} approved · ${r.ideas || 0} ideas` }),
+      (() => {
+        const vals = (r.streams || []).slice(0, 8).map(s => Math.max(1, s.profit || 1));
+        const sp = HUD.miniSpark({ values: vals.length ? vals : [1, 1, 1, 1],
+          width: 150, height: 22 });
+        sp.style.marginTop = '6px';
+        return sp;
+      })()
+    ]);
+  }
+
+  render(null, null);                       // paint the empty state immediately
+  HUD.bindLive({ url: '/api/hud', every: 60000, render });
 
   // --- open frames, awaiting assignment ---
   at(HUD.widgetFrame({ width: 168, height: 70, shape: 'cutbr',   role: 'w-t1' }), 302, 14);

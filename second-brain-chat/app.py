@@ -4436,6 +4436,132 @@ def api_dashboard():
         return jsonify({"error": "temporarily unavailable", "detail": str(e)}), 503
 
 
+# ============================================================
+# HUD deck data — widget-shaped views over the existing stores.
+# Every section is independently fail-safe: a dead upstream yields an empty
+# section (never a 500), so the deck degrades to "nothing right now" instead
+# of going blank or erroring.
+# ============================================================
+
+def _hud_rel_due(due: str) -> str:
+    """'2026-07-26' -> 'in 2d' / 'today' / 'overdue'. Blank when unparseable."""
+    if not due:
+        return ""
+    try:
+        d = datetime.fromisoformat(due.replace("Z", "+00:00"))
+    except ValueError:
+        return ""
+    if d.tzinfo is not None:
+        d = d.astimezone(LOCAL_TZ).replace(tzinfo=None)
+    days = (d.date() - datetime.now(LOCAL_TZ).date()).days
+    if days < 0:
+        return "overdue"
+    if days == 0:
+        return "today"
+    if days == 1:
+        return "tomorrow"
+    return f"in {days}d"
+
+
+def _hud_intake_items(kinds: tuple, limit: int) -> list:
+    """Flatten intake events into their extracted items, newest first."""
+    out = []
+    for row in intake.get_intake().get("recent", []):
+        for it in (row.get("items") or []):
+            if kinds and it.get("type") not in kinds:
+                continue
+            out.append({
+                "text": (it.get("text") or "").strip(),
+                "due": it.get("due") or "",
+                "rel": _hud_rel_due(it.get("due") or ""),
+                "source": row.get("source"),
+                "sender": row.get("sender"),
+            })
+    out.sort(key=lambda i: (i["due"] == "", i["due"]))
+    return out[:limit]
+
+
+def _hud_schedule() -> list:
+    return _hud_intake_items(("event", "commitment"), 8)
+
+
+def _hud_assignments() -> list:
+    return _hud_intake_items(("deadline",), 8)
+
+
+def _hud_mail() -> dict:
+    data = intake.get_intake()
+    mail_sources = ("gmail", "email", "mail")
+    rows = [r for r in data.get("recent", [])
+            if (r.get("source") or "").lower() in mail_sources]
+    unread = [r for r in rows if r.get("status") == "new"]
+    recent = [{"from": (r.get("sender") or "unknown")[:40],
+               "preview": (r.get("preview") or "")[:80],
+               "status": r.get("status")} for r in rows[:8]]
+    return {"unread": len(unread), "total": len(rows), "recent": recent}
+
+
+def _hud_task() -> dict:
+    """What CLARVIS is doing right now: the job queue first, then the tracker."""
+    counts = JOB_QUEUE.counts()
+    jobs = JOB_QUEUE.list_jobs(10)
+    running = next((j for j in jobs if j.get("status") == "running"), None)
+    queued = counts.get("queued", 0)
+    active = running or next((j for j in jobs if j.get("status") == "queued"), None)
+    tasks = []
+    try:
+        tasks = task_tracker.get_tracker().recent_for_dashboard(6)
+    except Exception:
+        pass
+    open_tasks = [t for t in tasks if t.get("status") not in ("done", "dropped")]
+    return {
+        "name": (active or {}).get("label") or (open_tasks[0]["title"] if open_tasks else ""),
+        "state": (active or {}).get("status") or ("open" if open_tasks else "idle"),
+        "queued": queued,
+        "done": counts.get("done", 0),
+        "failed": counts.get("failed", 0),
+        "tasks": [{"title": t["title"][:60], "status": t["status"],
+                   "when": t.get("updated_human", "")} for t in open_tasks[:6]],
+    }
+
+
+def _hud_revenue() -> dict:
+    data = money_pipeline.get_money_ideas()
+    counts = data.get("counts", {})
+    recent = data.get("recent", [])
+    approved = [r for r in recent if (r.get("decision") or "").lower() in ("approve", "approved")]
+    est = sum((r.get("profit") or 0) for r in approved)
+    streams = [{"name": (r.get("name") or "idea")[:38],
+                "profit": r.get("profit") or 0,
+                "status": r.get("status")} for r in recent[:8]]
+    return {
+        "est_monthly": est,
+        "ideas": sum(counts.values()) if counts else len(recent),
+        "approved": len(approved),
+        "counts": counts,
+        "streams": streams,
+    }
+
+
+@app.route("/api/hud")
+def api_hud():
+    def safe(fn, default):
+        try:
+            return fn()
+        except Exception as e:
+            print(f"Warning: /api/hud section {getattr(fn, '__name__', '?')} failed: {e}")
+            return default
+
+    return jsonify({
+        "schedule": safe(_hud_schedule, []),
+        "assignments": safe(_hud_assignments, []),
+        "mail": safe(_hud_mail, {}),
+        "task": safe(_hud_task, {}),
+        "revenue": safe(_hud_revenue, {}),
+        "generated_at": datetime.now(LOCAL_TZ).strftime("%-I:%M %p"),
+    })
+
+
 @app.route("/api/home")
 def api_home():
     try:
