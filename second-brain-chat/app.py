@@ -4604,14 +4604,20 @@ _SCHOOL_RE = re.compile("|".join(_SCHOOL_HINTS), re.I)
 
 
 def _hud_is_school(row: dict) -> bool:
-    """School/personal split. A row from the dedicated school-Gmail account
-    (source "gmail_school") is known for certain — no guessing needed.
-    Everything else (the single default Gmail account, before per-account
-    tagging existed) falls back to a conservative content heuristic: only
-    obvious academic markers count, so a misfire leaves something in
-    Personal rather than hiding it under School where Alex isn't looking."""
-    if (row.get("source") or "").lower() == "gmail_school":
+    """School/personal split. Two sources are known for certain now, no
+    guessing needed: "gmail_school" is always school, "icloud" is always
+    personal (it's Alex's personal Apple account by definition — never
+    subjected to the content heuristic below, so a school-flavored word in
+    a personal email can't misroute it). Only the original default Gmail
+    account (source "gmail", from before per-account tagging existed) falls
+    back to a conservative content heuristic: obvious academic markers
+    only, so a misfire leaves something in Personal rather than hiding it
+    under School where Alex isn't looking."""
+    source = (row.get("source") or "").lower()
+    if source == "gmail_school":
         return True
+    if source == "icloud":
+        return False
     blob = " ".join(str(row.get(k) or "") for k in ("sender", "preview"))
     for it in (row.get("items") or []):
         blob += " " + str(it.get("text") or "")
