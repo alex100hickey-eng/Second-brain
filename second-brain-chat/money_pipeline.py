@@ -47,9 +47,19 @@ Task Manager, council, and expansion pipeline):
 import json
 import os
 import re
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from zoneinfo import ZoneInfo
+
+# data_synthesizer_agent (web_scout's search backend) lives at the project root,
+# one level up from this file — defensive, in case this module is ever imported
+# before app.py has put the root on sys.path (app.py itself already does this,
+# so this is normally a no-op in production; it just makes the module robust
+# standalone too, same spirit as the defensive _github_search import below).
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
 
 try:
     from dotenv import load_dotenv
@@ -131,7 +141,7 @@ def _extract_json(text: str):
     raise ValueError(f"no JSON in reply: {text[:200]}")
 
 
-def _call(system: str, user: str, max_tokens: int = 1500) -> str:
+def _call(system: str, user: str, max_tokens: int = 4000) -> str:
     msg = claude.messages.create(
         model=MODEL, max_tokens=max_tokens, system=system,
         messages=[{"role": "user", "content": user}], timeout=120.0,
@@ -231,7 +241,9 @@ _STRUCTURE_SYSTEM = (
     "AI assistant that can build websites, generate content and video, run scheduled agents, search "
     "the web, and draft plans that execute only behind human approval gates. " + UNTRUSTED_BANNER
     + "\n\nGiven a focus brief and raw candidates, keep only ideas Jarvis could realistically "
-    "OPERATE (mostly hands-off after a one-time setup) and return ONLY a JSON array. Each element:\n"
+    "OPERATE (mostly hands-off after a one-time setup). CURATE, don't transcribe: return only the "
+    "best-fit ideas up to the requested max — never one idea per candidate. Return ONLY a JSON "
+    "array. Each element:\n"
     '{"name": "<short idea name>", "url": "<source url, or \\"\\" if none>", '
     '"method": "<one line: how the money is actually made>", '
     '"jarvis_fit": "<one line: which Jarvis capabilities would run it>", '
@@ -245,9 +257,18 @@ _STRUCTURE_SYSTEM = (
 )
 
 
-def _structure_ideas(focus_brief: str, source: str, raw_items: list) -> list:
+def _structure_ideas(focus_brief: str, source: str, raw_items: list, max_ideas: int = 6) -> list:
     """Turn raw scout hits into structured ideas via the model. raw_items is a list of
-    dicts; extra fields (points, score, desc) are passed through as text."""
+    dicts; extra fields (points, score, desc) are passed through as text.
+
+    max_ideas caps how many the model is asked to RETURN (not how many raw
+    candidates it sees) — without this, a batch of 15-20 candidates made the
+    model try to structure nearly all of them into full verbose objects,
+    which reliably overran even a generous max_tokens and got cut off
+    mid-array (stop_reason: max_tokens), silently discarded by _extract_json
+    as invalid JSON. That was the real cause of near-zero scout output —
+    curating a handful up front avoids the overflow instead of just
+    chasing it with a bigger token ceiling."""
     if not raw_items:
         return []
     listing = "\n".join(
@@ -257,9 +278,10 @@ def _structure_ideas(focus_brief: str, source: str, raw_items: list) -> list:
         for it in raw_items
     )
     user = (f"Focus brief: {focus_brief}\nSource: {source}\n\n"
-            f"{UNTRUSTED_BANNER}\nRaw candidates:\n{listing}")
+            f"{UNTRUSTED_BANNER}\nRaw candidates ({len(raw_items)} total — return AT MOST "
+            f"{max_ideas} of the best-fit ones, not one per candidate):\n{listing}")
     try:
-        arr = _extract_json(_call(_STRUCTURE_SYSTEM, user))
+        arr = _extract_json(_call(_STRUCTURE_SYSTEM, user, max_tokens=4000))
     except (ValueError, json.JSONDecodeError):
         return []
     ideas = []
@@ -295,13 +317,30 @@ def _distill_queries(focus_brief: str) -> list:
     return [" ".join(kept) or focus_brief[:60]]
 
 
+_GITHUB_STOP = {"the", "and", "for", "with", "your", "using", "based", "via"}
+
+
+def _shorten_for_github(query: str, max_words: int = 3) -> str:
+    """GitHub's repo search implicitly ANDs every space-separated term across
+    name/description/README/topics — a distilled query of 5-7 words (which
+    _distill_queries routinely produces, and which was previously getting an
+    extra ' automation' appended on top) ANDs down to zero real repos almost
+    every time. Verified live: 3-word queries return ~20 hits, 5+ word
+    queries return 0. Keep only the first few salient words."""
+    words = [w for w in re.findall(r"[a-zA-Z0-9+#.-]+", query) if w.lower() not in _GITHUB_STOP]
+    return " ".join(words[:max_words]) or query
+
+
 def github_scout(focus_brief: str, cap: int = DEFAULT_SCOUT_CAP) -> list:
     """Revenue-generating automation projects, templates, and toolkits on GitHub."""
     if _github_search is None:
         return []
     raw = []
     for q in _distill_queries(focus_brief):
-        raw.extend(_github_search(f"{q} automation", want=cap * 2))
+        gh_q = _shorten_for_github(q)
+        if "automat" not in gh_q.lower():
+            gh_q = f"{gh_q} automation"
+        raw.extend(_github_search(gh_q, want=cap * 2))
     return _structure_ideas(focus_brief, "github", _dedupe_raw(raw)[:cap * 4])
 
 
@@ -327,9 +366,16 @@ def hn_scout(focus_brief: str, cap: int = DEFAULT_SCOUT_CAP) -> list:
 
 
 def reddit_scout(focus_brief: str, cap: int = DEFAULT_SCOUT_CAP) -> list:
-    """Reddit's public JSON search across side-project / passive-income subs (keyless,
-    just needs a real User-Agent)."""
+    """Reddit's public JSON search across side-project / passive-income subs.
+    NOTE (verified 2026-07-26): Reddit now returns a hard 403 (HTML bot-check
+    page, not JSON) to this server's IP regardless of User-Agent or domain
+    (tried www./old.reddit.com, browser and custom UAs — all blocked). This
+    isn't fixable from here without Reddit's OAuth API (needs registered app
+    credentials) or a proxy. Rather than fail silently forever, a persistent
+    block is audited so it shows up as a real incident instead of masquerading
+    as 'no ideas found'."""
     raw = []
+    blocked = 0
     for q in _distill_queries(focus_brief):
         try:
             r = httpx.get(f"https://www.reddit.com/r/{REDDIT_SUBS}/search.json",
@@ -337,9 +383,13 @@ def reddit_scout(focus_brief: str, cap: int = DEFAULT_SCOUT_CAP) -> list:
                                   "t": "year", "limit": min(cap * 2, 25)},
                           timeout=20, headers={"User-Agent": "Jarvis-money-scout/1.0"},
                           follow_redirects=True)
-            posts = (r.json().get("data", {}).get("children", [])
-                     if r.status_code == 200 else [])
+            if r.status_code != 200 or "application/json" not in r.headers.get("content-type", ""):
+                blocked += 1
+                posts = []
+            else:
+                posts = r.json().get("data", {}).get("children", [])
         except Exception:
+            blocked += 1
             posts = []
         for p in posts:
             d = p.get("data", {})
@@ -349,6 +399,10 @@ def reddit_scout(focus_brief: str, cap: int = DEFAULT_SCOUT_CAP) -> list:
                 "snippet": (d.get("selftext") or "")[:200],
                 "signals": f"{d.get('score', 0)} upvotes, {d.get('num_comments', 0)} comments, r/{d.get('subreddit')}",
             })
+    if blocked and not raw:
+        _audit("reddit_scout", "agent", "Reddit blocked every request (403/non-JSON) — "
+               "this server's IP appears blocked from Reddit's unauthenticated search API",
+               success=False)
     return _structure_ideas(focus_brief, "reddit", _dedupe_raw(raw)[:cap * 4])
 
 
@@ -372,18 +426,26 @@ def capability_scout(focus_brief: str, cap: int = DEFAULT_SCOUT_CAP) -> list:
     ideas grounded STRICTLY in capabilities Jarvis already has, so at least one scout
     always proposes things that need zero new integration."""
     caps = _capabilities_summary()
+    # each idea here runs ~500-600 tokens (the model elaborates heavily on
+    # jarvis_fit/method when grounding against real tool names) — 5+ ideas
+    # reliably overran even a 4000-token ceiling and got cut off mid-array
+    # (stop_reason: max_tokens), silently discarded as invalid JSON. Ask for
+    # fewer, force brevity, and give real headroom instead of chasing the
+    # overflow with an ever-bigger token limit.
+    n = min(cap, 4)
     try:
         arr = _extract_json(_call(
             "You generate money-making ideas for 'Jarvis', an autonomous AI assistant. Propose "
             f"ideas that use ONLY the capabilities listed — no new integrations. {HARD_EXCLUSIONS} "
-            "Prefer methods that run hands-off after a one-time setup. Return ONLY a JSON array, "
-            "same shape for each element:\n"
+            "Prefer methods that run hands-off after a one-time setup. Keep every field to ONE "
+            "sentence, no exceptions — these are scan-able summaries, not essays. Return ONLY a "
+            "JSON array, same shape for each element:\n"
             '{"name": "...", "url": "", "method": "...", "jarvis_fit": "...", '
             '"setup_effort": "small|medium|large", "est_monthly_profit": "...", '
             '"est_monthly_cost": "...", "signals": "grounded in existing capabilities", '
             '"red_flags": "..."}',
             f"Focus brief: {focus_brief}\n\nJarvis's ACTUAL current capabilities: {caps}\n\n"
-            f"Propose up to {min(cap, 8)} ideas."))
+            f"Propose EXACTLY {n} ideas — your best {n}, not more.", max_tokens=4000))
     except Exception:
         return []
     ideas = []
@@ -435,8 +497,11 @@ def run_money_scouts(focus_brief: str = "", sources: str = "all",
     jobs = [(name, _SCOUTS[name]) for name in wanted] or [("capability", capability_scout)]
 
     ideas = []
+    per_source = {}   # name -> count of structured ideas returned, before dedupe
     with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
-        for res in pool.map(lambda j: _safe_scout(j[1], brief, cap), jobs):
+        names = [j[0] for j in jobs]
+        for name, res in zip(names, pool.map(lambda j: _safe_scout(j[1], brief, cap), jobs)):
+            per_source[name] = len(res)
             ideas.extend(res)
 
     known = _existing_keys()
@@ -451,10 +516,18 @@ def run_money_scouts(focus_brief: str = "", sources: str = "all",
         if len(queued) >= cap:
             break
 
-    _audit("run_money_scouts", "agent", f"brief={brief[:60]}; {len(queued)} new", True)
+    # Per-source breakdown so "no new ideas" is never ambiguous — a source
+    # returning 0 structured ideas (broken query, blocked, truncated JSON)
+    # looks completely different from every idea being a known duplicate.
+    breakdown = ", ".join(f"{name}: {per_source.get(name, 0)}" for name in per_source)
+
+    _audit("run_money_scouts", "agent", f"brief={brief[:60]}; {len(queued)} new; {breakdown}", True)
     if not queued:
-        return f"Money scouts ran (focus: {brief[:80]}) — no NEW ideas (all duplicates or nothing viable)."
-    lines = [f"**Money scouts queued {len(queued)} new idea(s)** (focus: {brief[:80]})", ""]
+        return (f"Money scouts ran (focus: {brief[:80]}) — no NEW ideas queued. "
+                f"Per-source raw ideas found: {breakdown}. "
+                f"{'All were duplicates of known ideas.' if sum(per_source.values()) else 'Every source returned zero — check check_system_health for scout errors.'}")
+    lines = [f"**Money scouts queued {len(queued)} new idea(s)** (focus: {brief[:80]})",
+             f"Per-source: {breakdown}", ""]
     for row_id, idea in queued:
         lines.append(f"- #{row_id} [{idea.get('source')}] {idea.get('name')} — "
                      f"{idea.get('method', '')[:90]} (setup {idea.get('setup_effort', '?')})")
