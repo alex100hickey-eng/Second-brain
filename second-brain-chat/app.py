@@ -4437,6 +4437,64 @@ if task_manager.RUNTIME == "server" or os.environ.get("SCOUT_DAILY_LOCAL", "").l
     threading.Thread(target=_daily_scout_loop, daemon=True, name="jarvis-daily-scout").start()
     print("Daily expansion-scout scheduler started.")
 
+
+# ------------------------------------------------------------
+# Mail intake worker. iMessage has had a background watcher since day one, but
+# every mail scan (personal Gmail, school Gmail, iCloud) existed ONLY as a tool
+# the model could choose to call — nothing ever ran them on a schedule, so mail
+# never reached intake at all and the School/Personal widgets sat empty. This is
+# the missing periodic poller: read-only, budget-gated, and per-account isolated
+# so one dead connector can't stop the others.
+# ------------------------------------------------------------
+MAIL_SCAN_INTERVAL = int(os.environ.get("MAIL_SCAN_INTERVAL_SEC", "900"))  # 15 min
+
+
+def _mail_scan_pass() -> dict:
+    """One sweep of every configured mail account. Returns {account: result}."""
+    results = {}
+
+    def _try(name, fn):
+        try:
+            results[name] = fn()
+        except Exception as e:
+            results[name] = f"failed: {str(e)[:160]}"
+            try:
+                monitor.report_event("mail-intake", "warning", f"{name} scan failed", str(e)[:300])
+            except Exception:
+                pass
+
+    _try("gmail", lambda: intake.scan_gmail(newer_than="1d"))
+    _try("gmail_school", lambda: scan_school_gmail_intake_tool("1d", 15))
+    if icloud_intake._configured():
+        _try("icloud", lambda: icloud_intake.scan_icloud(days=2))
+    return results
+
+
+def _mail_intake_loop():
+    while True:
+        try:
+            if monitor.is_agent_allowed("intake"):
+                _mail_scan_pass()
+        except Exception as e:
+            try:
+                monitor.report_event("mail-intake", "warning", "mail scan cycle failed", str(e)[:300])
+            except Exception:
+                pass
+        time.sleep(MAIL_SCAN_INTERVAL)
+
+
+def start_mail_worker() -> None:
+    threading.Thread(target=_mail_intake_loop, daemon=True, name="jarvis-mail-intake").start()
+
+
+# Runs on the always-on server; locally opt-in via MAIL_SCAN_LOCAL=1 so the Mac
+# and the server don't both poll the same inboxes (dedupe would catch it, but
+# there's no reason to spend two sets of API calls on identical work).
+if task_manager.RUNTIME == "server" or os.environ.get("MAIL_SCAN_LOCAL", "").lower() in ("1", "true"):
+    start_mail_worker()
+    monitor.register_worker("jarvis-mail-intake", start_mail_worker)
+    print(f"Mail intake worker started (every {MAIL_SCAN_INTERVAL}s).")
+
 # Startup self-check — verify every dependency the system needs BEFORE a request hits a
 # missing one mid-conversation. Prints a readable summary to the log and caches a structured
 # report for the dashboard/health panel. A missing REQUIRED dep prints a loud error (the app

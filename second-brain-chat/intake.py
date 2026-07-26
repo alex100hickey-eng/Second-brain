@@ -375,8 +375,14 @@ def scan_gmail_account(composio_client, entity_user_id: str, source_tag: str,
     account — e.g. school Gmail) directly, bypassing the single default
     dispatch path. Same read-only contract as scan_gmail."""
     try:
+        # dangerously_skip_version_check: the default dispatch path (handle_tool_call)
+        # resolves a toolkit version implicitly, but direct tools.execute() calls
+        # require one explicitly and reject "latest". We deliberately track latest
+        # here so the secondary account behaves identically to the primary one —
+        # both are the same read-only GMAIL_FETCH_EMAILS call.
         result = composio_client.tools.execute(
             "GMAIL_FETCH_EMAILS", user_id=entity_user_id,
+            dangerously_skip_version_check=True,
             arguments={
                 "query": f"in:inbox newer_than:{newer_than} "
                          "-category:promotions -category:social",

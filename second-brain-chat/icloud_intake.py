@@ -73,10 +73,24 @@ def scan_icloud(days: int = 2, cap: int = 15) -> str:
 
         new, noise = 0, 0
         for msg_id in ids:
-            status, msg_data = conn.fetch(msg_id, "(RFC822)")
-            if status != "OK" or not msg_data or not msg_data[0]:
+            # BODY.PEEK[] rather than RFC822: verified live 2026-07-26 that iCloud
+            # answers RFC822 with an empty "44144 ()" and no body at all, so every
+            # message was silently skipped. PEEK is also the right call regardless —
+            # it's the variant defined not to set the \Seen flag, so this stays
+            # genuinely read-only even if the mailbox is ever opened writable.
+            status, msg_data = conn.fetch(msg_id, "(BODY.PEEK[])")
+            if status != "OK" or not msg_data:
                 continue
-            raw = msg_data[0][1]
+            # IMAP FETCH responses aren't uniformly shaped: the message body
+            # arrives as a (header, body) TUPLE, but the server also returns bare
+            # bytes items (flags, closing parens) in the same list. Indexing [0][1]
+            # blindly grabs a single int out of one of those bare items instead of
+            # the message — pick out the first real tuple payload instead.
+            raw = next((p[1] for p in msg_data
+                        if isinstance(p, tuple) and len(p) >= 2
+                        and isinstance(p[1], (bytes, bytearray))), None)
+            if raw is None:
+                continue
             msg = email.message_from_bytes(raw)
             ref = msg.get("Message-ID") or f"icloud-{msg_id.decode()}"
             sender = _decode(msg.get("From", "?"))
