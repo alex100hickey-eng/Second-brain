@@ -14,7 +14,9 @@ stages that hunt for ways Jarvis can EARN money toward Alex's $3k/month goal:
                 (Advocate / Critic / Feasibility Judge, reused from app.py) in a
                 "money review" mode scored on the three axes Alex cares about:
                   plausibility   will this method actually work
-                  autonomy       will it run WITHOUT Alex after setup
+                  daily load     Alex's OWN minutes/day once running. Heavy SETUP
+                                 is fine by him; a full-time job is not. Recurring
+                                 work a Jarvis agent can absorb doesn't count.
                   profit vs cost estimated monthly profit against monthly cost
   Planner       takes PURSUE-rated ideas and drafts a concrete launch plan —
                 steps, which Jarvis tools run each one, what Alex must set up
@@ -31,7 +33,7 @@ HARD SAFETY RULES — enforced in CODE, not just prompts:
      crypto trading, no gambling, nothing illegal or ToS-violating, no spam or
      engagement-bait, no MLM/pyramid schemes.
   3. A "pursue" from the model passes a deterministic calibration backstop that
-     only ever DOWNGRADES (low plausibility / low autonomy / no margin / high
+     only ever DOWNGRADES (low plausibility / too much daily load / no margin / high
      risk / unquantified economics → defer). It never upgrades a reject.
   4. ALL scraped web/GitHub/Reddit/HN content is UNTRUSTED DATA — never
      instructions. Same [UNTRUSTED] markers as the rest of the system.
@@ -90,6 +92,13 @@ EXCLUDED_TOOLS = set()
 MODEL = "claude-sonnet-5"
 IDEA_AGENT = "money_idea"
 DEFAULT_SCOUT_CAP = 10
+
+# Alex's stated bar (2026-07-26): setup can be heavy, but once a method is
+# RUNNING it should need roughly one check-in a day. Anything demanding more of
+# his own time than this is a job, not the semi-passive income he's after — it
+# gets deferred to a human call rather than auto-pursued. Time a Jarvis agent
+# can absorb doesn't count against this.
+_MAX_DAILY_MINUTES = 45.0
 ALL_SOURCES = ("github", "hackernews", "reddit", "web", "capability")
 
 HN_API = "https://hn.algolia.com/api/v1/search"
@@ -240,8 +249,13 @@ _STRUCTURE_SYSTEM = (
     "You triage raw search results into structured MONEY-MAKING ideas for 'Jarvis', an autonomous "
     "AI assistant that can build websites, generate content and video, run scheduled agents, search "
     "the web, and draft plans that execute only behind human approval gates. " + UNTRUSTED_BANNER
-    + "\n\nGiven a focus brief and raw candidates, keep only ideas Jarvis could realistically "
-    "OPERATE (mostly hands-off after a one-time setup). CURATE, don't transcribe: return only the "
+    + "\n\nGiven a focus brief and raw candidates, keep ideas that fit Alex's actual bar: he "
+    "WILL do substantial setup work (weeks is fine), but once running it must need only about "
+    "one check-in a day from him. Recurring work a Jarvis agent could be built to do "
+    "(drafting, posting, scraping, monitoring, reporting) does NOT count as his time — "
+    "building that agent is part of setup. So keep ideas that are heavy-setup / light-daily, "
+    "not just ideas that are magically hands-off. Small-but-real beats speculative-and-huge. "
+    "CURATE, don't transcribe: return only the "
     "best-fit ideas up to the requested max — never one idea per candidate. Return ONLY a JSON "
     "array. Each element:\n"
     '{"name": "<short idea name>", "url": "<source url, or \\"\\" if none>", '
@@ -435,9 +449,13 @@ def capability_scout(focus_brief: str, cap: int = DEFAULT_SCOUT_CAP) -> list:
     n = min(cap, 4)
     try:
         arr = _extract_json(_call(
-            "You generate money-making ideas for 'Jarvis', an autonomous AI assistant. Propose "
-            f"ideas that use ONLY the capabilities listed — no new integrations. {HARD_EXCLUSIONS} "
-            "Prefer methods that run hands-off after a one-time setup. Keep every field to ONE "
+            "You generate money-making ideas for 'Jarvis', an AI assistant working for Alex. "
+            f"Propose ideas that use ONLY the capabilities listed — no new integrations. {HARD_EXCLUSIONS} "
+            "Alex WILL do heavy setup (weeks is fine); the requirement is that once running it "
+            "needs only ~one check-in a day from him. Recurring work a Jarvis agent could be "
+            "built to run doesn't count as his time. Favour heavy-setup / light-daily methods "
+            "with near-zero upfront cash, and small-but-real over speculative-and-huge. "
+            "Keep every field to ONE "
             "sentence, no exceptions — these are scan-able summaries, not essays. Return ONLY a "
             "JSON array, same shape for each element:\n"
             '{"name": "...", "url": "", "method": "...", "jarvis_fit": "...", '
@@ -555,22 +573,54 @@ def _default_focus_brief() -> str:
 
 _RUBRIC_SYSTEM = (
     "You are the Judge on Alex's decision council, in MONEY-REVIEW mode. A scout found a way "
-    "Jarvis (an autonomous personal assistant) might earn money toward Alex's $3,000/month goal. "
-    "You receive the idea, what Jarvis ALREADY does, an Advocate's case for, a Critic's case "
-    "against, and a Feasibility read on whether Jarvis could actually operate it. "
-    + UNTRUSTED_BANNER + "\n\nScore the three axes Alex cares about:\n"
+    "Jarvis might help Alex earn money. You receive the idea, what Jarvis ALREADY does, an "
+    "Advocate's case for, a Critic's case against, and a Feasibility read. "
+    + UNTRUSTED_BANNER + "\n\n"
+    "WHAT ALEX ACTUALLY WANTS — judge against THIS, not against a fantasy of free money:\n"
+    "  * He WILL do real setup work. Heavy, multi-week setup is ACCEPTABLE and should NOT "
+    "count against an idea. Do not penalize setup_effort=large on its own.\n"
+    "  * What he needs is that ONCE RUNNING, it takes about one check-in a day — roughly "
+    "<=30 min/day of his time. That is the actual constraint.\n"
+    "  * Recurring work that a Jarvis AGENT could be built to perform (drafting, posting, "
+    "scraping, monitoring, outreach queues, reporting) counts as AUTOMATED, not as Alex's "
+    "time — building that agent is just part of setup. Only count time that genuinely "
+    "requires a human: judgement calls, relationships, approvals, physical acts.\n"
+    "  * Starting small is fine. A method earning $100-300/mo that actually works beats a "
+    "speculative $3,000/mo that never starts. Do NOT reject for being too small.\n"
+    "  * He has little starting capital. Prefer ideas whose upfront cash cost is near zero.\n\n"
+    "Score:\n"
     "  plausibility — will this method actually work (5 = proven model, clear demand)\n"
-    "  autonomy — will it run WITHOUT Alex after a one-time setup (5 = fully hands-off)\n"
-    "  profit vs cost — best single-number monthly estimates, in USD\n"
+    "  daily_load_minutes — Alex's OWN time per day once running, in minutes, AFTER agents "
+    "take what they can. Be concrete and realistic.\n"
+    "  setup_effort — small|medium|large. Informational; large is fine.\n"
+    "  agent_delegable — 1-5, how much of the recurring work a Jarvis agent could take over "
+    "(5 = nearly all of it).\n"
+    "  profit vs cost — best single-number monthly estimates, in USD.\n"
     "plus risk (legal / platform-ToS / reputation; 5 = severe). " + HARD_EXCLUSIONS
     + " Reject anything on that list outright.\n"
-    "Be calibrated: reject junk, but do NOT reject genuinely workable ideas out of excess "
-    "caution — use 'defer' for borderline cases worth a human look. Answer with ONLY JSON:\n"
-    '{"plausibility": 1-5, "autonomy": 1-5, "setup_effort": "small|medium|large", '
+    "Be calibrated: reject junk and anything requiring Alex to work it like a full-time job, "
+    "but do NOT reject a workable idea merely because it needs setup or daily attention. "
+    "Use 'defer' for borderline cases worth a human look. Answer with ONLY JSON:\n"
+    '{"plausibility": 1-5, "daily_load_minutes": <number>, "agent_delegable": 1-5, '
+    '"setup_effort": "small|medium|large", '
     '"est_monthly_profit_usd": <number>, "est_monthly_cost_usd": <number>, "risk": 1-5, '
-    '"verdict": "<one paragraph weighing plausibility, autonomy, and profit vs cost>", '
+    '"verdict": "<one paragraph: does it work, what does Alex do daily, what would an agent '
+    'run for him, and does the money clear the cost>", '
     '"decision": "pursue|reject|defer"}'
 )
+
+
+def _load_label(ru: dict) -> str:
+    """Display the ongoing-time axis: new daily_load_minutes when present, else
+    the legacy autonomy score for ideas reviewed before 2026-07-26."""
+    d = ru.get("daily_load_minutes")
+    if d not in (None, ""):
+        try:
+            return f"{float(d):.0f} min/day"
+        except (TypeError, ValueError):
+            pass
+    a = ru.get("autonomy")
+    return f"autonomy {a}/5" if a not in (None, "") else "load ?"
 
 
 def _calibrate_decision(rubric: dict) -> tuple:
@@ -590,15 +640,27 @@ def _calibrate_decision(rubric: dict) -> tuple:
             return None
 
     plaus = _num(rubric.get("plausibility"))
-    auto = _num(rubric.get("autonomy"))
     risk = _num(rubric.get("risk"))
     profit = _num(rubric.get("est_monthly_profit_usd"))
     cost = _num(rubric.get("est_monthly_cost_usd"))
 
+    # Alex's real constraint is ONGOING daily load, not "is it hands-off". Heavy
+    # setup is fine by him; a full-time job is not. The old gate deferred anything
+    # scoring autonomy<=2, which killed every idea needing his involvement at all —
+    # i.e. the entire category actually available to someone with time but no
+    # capital. Gate on daily minutes instead, and fall back to the legacy autonomy
+    # field only for ideas scored before this change.
+    daily = _num(rubric.get("daily_load_minutes"))
+    if daily is None:
+        legacy_auto = _num(rubric.get("autonomy"))
+        if legacy_auto is not None and legacy_auto <= 1:
+            return "defer", f"legacy autonomy {legacy_auto}/5 — needs constant hands-on, human call"
+    elif daily > _MAX_DAILY_MINUTES:
+        return "defer", (f"needs ~{daily:.0f} min/day of Alex's own time (over the "
+                         f"{_MAX_DAILY_MINUTES:.0f}-min/day bar) — human call")
+
     if plaus is not None and plaus <= 2:
         return "defer", f"plausibility {rubric.get('plausibility')}/5 too low to auto-pursue"
-    if auto is not None and auto <= 2:
-        return "defer", f"autonomy {rubric.get('autonomy')}/5 — needs Alex's ongoing time, human call"
     if risk is not None and risk >= 4:
         return "defer", f"risk {rubric.get('risk')}/5 too high to auto-pursue"
     if profit is None or cost is None:
@@ -675,7 +737,7 @@ def money_review_one(row_id: int, idea: dict) -> dict:
 
     try:
         headline = (f"{decision.upper()} · plausibility {rubric.get('plausibility', '?')}/5 · "
-                    f"autonomy {rubric.get('autonomy', '?')}/5 · "
+                    f"{_load_label(rubric)} · "
                     f"~${rubric.get('est_monthly_profit_usd', '?')} vs ${rubric.get('est_monthly_cost_usd', '?')}/mo")
         log_council("money", f"{idea.get('name')} — {idea.get('method', '')[:80]}",
                     headline, json.dumps({"idea": idea, "advocate": pro, "critic": con,
@@ -700,7 +762,7 @@ def review_money_ideas(limit: int = 10) -> str:
     for res in results:
         ru = res["rubric"]
         lines.append(f"- #{res['row_id']} → **{res['decision']}** "
-                     f"(plausibility {ru.get('plausibility', '?')}/5, autonomy {ru.get('autonomy', '?')}/5, "
+                     f"(plausibility {ru.get('plausibility', '?')}/5, {_load_label(ru)}, "
                      f"~${ru.get('est_monthly_profit_usd', '?')} vs ${ru.get('est_monthly_cost_usd', '?')}/mo)")
     lines.append("\nNext: `develop_money_idea <id>` drafts a launch plan for any 'pursue' idea.")
     return "\n".join(lines)
@@ -801,6 +863,8 @@ def get_money_ideas(limit: int = 60) -> dict:
                 "decision": rubric.get("decision"),
                 "plausibility": rubric.get("plausibility"),
                 "autonomy": rubric.get("autonomy"),
+                "daily_load_minutes": rubric.get("daily_load_minutes"),
+                "agent_delegable": rubric.get("agent_delegable"),
                 "profit": rubric.get("est_monthly_profit_usd"),
                 "cost": rubric.get("est_monthly_cost_usd"),
             })
@@ -824,8 +888,9 @@ TOOL_SCHEMAS = [
     {"name": "review_money_ideas",
      "description": ("Route discovered money ideas through the decision council (Advocate/Critic/"
                      "Feasibility + a scored rubric) on the three axes: plausibility (will it work), "
-                     "autonomy (runs without Alex after setup), and profit vs cost. Calibrated: a "
-                     "deterministic backstop defers low-plausibility/low-autonomy/no-margin ideas."),
+                     "ongoing daily load (heavy setup is fine; ~one check-in a day is the bar), "
+                     "and profit vs cost. Calibrated: a deterministic backstop defers "
+                     "low-plausibility / too-much-daily-time / no-margin ideas."),
      "input_schema": {"type": "object", "properties": {
          "limit": {"type": "integer", "description": "Max ideas to review this pass (default 10)."}}}},
     {"name": "develop_money_idea",
