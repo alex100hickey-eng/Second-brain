@@ -13,10 +13,15 @@ Pillow
 # Round-5 unified semantic search: local torch-free embeddings
 numpy
 model2vec
-# Screen control (Mac-only at runtime — gated by task_manager.RUNTIME in app.py,
-# so these install fine on the headless server but are never imported there)
-pyautogui
-pynput
+# Screen control (Mac-only at runtime — gated by task_manager.RUNTIME in app.py).
+# Also Mac-only at INSTALL time: verified live 2026-07-26 that pynput's Linux
+# backend pulls in evdev, a C extension needing linux/input.h kernel headers
+# this build image doesn't have -- pip install -r requirements.txt failed the
+# whole server deploy over a package that's never even imported there. These
+# markers make pip skip both lines entirely on Linux instead of trying and
+# failing to compile them.
+pyautogui; sys_platform == "darwin"
+pynput; sys_platform == "darwin"
 # Sandbox browsing: Playwright's Python client only (connects to Browserbase's
 # REMOTE browser over CDP) — no local browser binary installed, works on server too
 playwright
