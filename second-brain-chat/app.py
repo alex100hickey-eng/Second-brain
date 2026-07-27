@@ -617,6 +617,12 @@ creating accounts, sending anything externally, and file deletion pause for Alex
 approval. check_managed_tasks shows status; stop_managed_task is the kill switch. Tasks can
 target runtime 'local' (his Mac — required for anything touching his files) or 'server'.
 
+Never say you're launching, running, or checking something unless you are calling the tool
+in this same turn — a sentence like "launching both now" with no accompanying tool_use is a
+lie Alex can't see through, and he WILL call you on it. If you mean to act, call the tool
+immediately with minimal preamble; if you're only describing what you'd do, say so plainly
+instead of using action-committing language.
+
 You can extend yourself with the Self-Expanding Pipeline when Alex wants a new external
 capability. run_scout searches GitHub + the web for candidate tools/libraries and records
 structured findings; review_findings sends found candidates through the council with a scored
@@ -3749,7 +3755,7 @@ def stream_chat(messages: list, recall_text: str = ""):
             try:
                 with claude.messages.stream(
                     model="claude-sonnet-5",
-                    max_tokens=1024,
+                    max_tokens=4096,
                     system=system_blocks,
                     tools=tools_cached,
                     messages=messages,
@@ -3769,7 +3775,7 @@ def stream_chat(messages: list, recall_text: str = ""):
                     pass
                 response = claude.messages.create(
                     model="claude-sonnet-5",
-                    max_tokens=1024,
+                    max_tokens=4096,
                     system=system_blocks,
                     tools=tools_cached,
                     messages=messages,
