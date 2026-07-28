@@ -3614,7 +3614,8 @@ def _dispatch_tool_call(tool_name: str, tool_input: dict) -> str:
     if tool_name in ("screen_control_start", "screen_control_act",
                      "screen_control_screenshot", "screen_control_stop"):
         if task_manager.RUNTIME == "server":
-            return "Screen control only works on the Mac, not the server."
+            # Relay to the Mac; blocks until it answers or the command expires.
+            return screen_bridge.handle_tool_call(supabase, tool_name, tool_input)
         return screen_control.handle_tool_call(tool_name, tool_input)
     if tool_name == "check_notifications":
         return proactive.status_text()
@@ -4256,13 +4257,24 @@ TOOL_STATUS_LABELS["browse_web_sandbox"] = "Opening a sandboxed browser…"
 # Screen control (screen_control.py) — HIGH RISK, gated, local-only, hard
 # Escape kill-switch. Off by default; only loaded/offered on the Mac.
 # ------------------------------------------------------------
+import screen_bridge  # noqa: E402
+
 if task_manager.RUNTIME != "server":
+    # On the Mac: execute directly, no round-trip.
     import screen_control  # noqa: E402
     TOOLS.extend(screen_control.TOOL_SCHEMAS)
-    TOOL_STATUS_LABELS["screen_control_start"] = "Arming screen control — press Escape any time to stop…"
-    TOOL_STATUS_LABELS["screen_control_act"] = "Acting on your screen…"
-    TOOL_STATUS_LABELS["screen_control_screenshot"] = "Looking at your screen…"
-    TOOL_STATUS_LABELS["screen_control_stop"] = "Stopping screen control…"
+else:
+    # On the server: same tools, but each one is relayed to the Mac over
+    # Supabase (screen_bridge). Alex wants ONE CLARVIS rather than a separate
+    # local instance, so the server keeps the capability and the Mac does the
+    # actual clicking — the Escape kill-switch, session expiry and credential
+    # refusal all still live where execution happens.
+    TOOLS.extend(screen_bridge.TOOL_SCHEMAS)
+
+TOOL_STATUS_LABELS["screen_control_start"] = "Arming screen control — press Escape any time to stop…"
+TOOL_STATUS_LABELS["screen_control_act"] = "Acting on your screen…"
+TOOL_STATUS_LABELS["screen_control_screenshot"] = "Looking at your screen…"
+TOOL_STATUS_LABELS["screen_control_stop"] = "Stopping screen control…"
 
 
 # Proactive engine — the awareness pass + phone nudges (see proactive.py). Decides

@@ -326,3 +326,48 @@ described:
     prompt tells the model to always call `screen_control_stop` the moment a
     task is done — never leave a session armed — and treats screen content
     the same as any other untrusted input: reported, never obeyed.
+
+## 12. Server-driven screen control (screen_bridge) — 2026-07-28
+
+Alex asked for the deployed server to be able to drive his Mac's screen, rather
+than running a second local CLARVIS. He was walked through the tradeoff below
+and reaffirmed; this records the decision and what guards it.
+
+**Transport.** Supabase, which both nodes already use. The Mac **polls out** —
+it never listens on a port. No port-forwarding, no SSH exposure, nothing about
+the laptop becomes reachable from the internet. Server inserts a
+`screen_command` row; the Mac relay (`screen_relay.py`, launchd on login) claims
+it, executes via `screen_control.py`, and writes a `screen_result` row back.
+
+**Unchanged guards** — execution still happens inside `screen_control.py` on the
+Mac, so everything that made it safe locally still applies and cannot be
+overridden from the server:
+- physical Escape kill-switch (local to where the clicking happens)
+- `start_session()` preflights macOS Accessibility and refuses to arm if Escape
+  can't actually be caught
+- 5-minute session self-expiry
+- `type_text()` refuses anything resembling a credential
+- narrow action set; no shell/AppleScript escape hatch
+
+**New guard this layer adds — staleness.** A command older than
+`MAX_COMMAND_AGE` (120s) is discarded, never executed, and answers with an
+explicit "expired, NOT executed". Without this, a command queued while the Mac
+was asleep would fire the moment the lid opened, clicking against whatever
+happened to be on screen. Verified live 2026-07-28: a forged 601s-old click was
+correctly refused.
+
+**Vision.** Tool results are plain strings, so raw images can't be returned.
+`screen_control_screenshot` routes through `screen_watch`'s existing capture +
+Claude-vision path and returns a text description with approximate coordinates,
+so the model can see before it clicks rather than acting blind.
+
+**Accepted risk, stated plainly.** The server ingests untrusted content — email,
+scraped web pages, scout results. Bridging it to real mouse/keyboard input gives
+a prompt injection a path to Alex's cursor and his logged-in sessions that did
+not previously exist; before this, the worst such content could do server-side
+was produce bad text. Mitigating factors: the relay only runs while he is logged
+in and the Mac is awake, sessions expire in 5 minutes, Escape kills instantly,
+credentials are refused, and stale commands are dropped. Alex's stated usage
+constraint is that he only invokes screen control while sitting at the machine.
+If that stops being true, the right move is to unload the launchd agent —
+with the relay down, commands expire unexecuted.
