@@ -34,13 +34,64 @@ path to Alex's cursor that it did not have before. He accepted this on the
 condition that he only uses screen control while sitting at the machine.
 """
 
+import hashlib
+import hmac
 import json
+import os
 import time
 import uuid
 from datetime import datetime, timezone
 
 COMMAND_AGENT = "screen_command"
 RESULT_AGENT = "screen_result"
+
+# ------------------------------------------------------------
+# Command signing. Supabase RLS is currently permissive, so the anon key can
+# write to Agent Outputs — which, once a relay executes what it finds there,
+# would mean anyone holding that key could move Alex's real mouse. Transport
+# access must therefore NOT be sufficient to drive input.
+#
+# Every command carries an HMAC-SHA256 over its own fields, keyed by a secret
+# that lives only in the two nodes' env (never in Supabase). The relay refuses
+# anything it can't verify, so writing to the table gets an attacker nothing.
+#
+# Fails CLOSED and loudly: no secret configured -> the relay executes nothing
+# and says why, rather than silently accepting unsigned commands.
+# ------------------------------------------------------------
+SECRET_ENV = "SCREEN_RELAY_SECRET"
+
+
+def _secret() -> str:
+    return os.environ.get(SECRET_ENV, "").strip()
+
+
+def _canonical(cmd: dict) -> bytes:
+    """Stable byte representation of the fields that matter. Excludes 'sig'
+    and any mutable bookkeeping (status/claimed_at) so claiming a command
+    can't invalidate its own signature."""
+    return json.dumps({
+        "token": cmd.get("token"),
+        "action": cmd.get("action"),
+        "payload": cmd.get("payload") or {},
+        "sent_at": cmd.get("sent_at"),
+    }, sort_keys=True, separators=(",", ":")).encode()
+
+
+def sign(cmd: dict) -> str:
+    return hmac.new(_secret().encode(), _canonical(cmd), hashlib.sha256).hexdigest()
+
+
+def verify(cmd: dict) -> tuple:
+    """(ok, reason). Constant-time compare; never leaks which part mismatched."""
+    if not _secret():
+        return False, (f"{SECRET_ENV} is not set on this machine — refusing to execute "
+                       "anything. Set it in .env (must match the server's value).")
+    got = cmd.get("sig")
+    if not got:
+        return False, "command is unsigned — refusing (someone may be writing to the queue directly)"
+    if not hmac.compare_digest(str(got), sign(cmd)):
+        return False, "signature mismatch — refusing (forged or tampered command)"
+    return True, ""
 
 MAX_COMMAND_AGE = 120.0   # seconds; older commands are discarded, never executed
 POLL_INTERVAL = 1.5       # relay poll cadence
@@ -63,9 +114,13 @@ def send_command(supabase, action: str, payload: dict = None,
                  timeout: float = DEFAULT_TIMEOUT) -> str:
     """Enqueue one screen action and block until the Mac relay answers (or we
     time out). Returns the relay's result string."""
+    if not _secret():
+        return (f"Screen control is not configured: {SECRET_ENV} is missing on the server. "
+                "Set it (same value as the Mac's .env) — commands are refused without it.")
     token = uuid.uuid4().hex
     cmd = {"token": token, "action": action, "payload": payload or {},
            "sent_at": _now(), "sent_iso": _iso(), "status": "pending"}
+    cmd["sig"] = sign(cmd)
     try:
         supabase.table("Agent Outputs").insert(
             {"agent_name": COMMAND_AGENT, "output_text": json.dumps(cmd)}).execute()
@@ -190,6 +245,21 @@ def run_relay(supabase, claude_client=None, log=print):
                     _answer(supabase, token,
                             f"Command expired ({age:.0f}s old) and was NOT executed — "
                             "the Mac was asleep or the relay was down.")
+                    continue
+
+                # Verify BEFORE claiming or executing: holding the Supabase key
+                # must not be enough to drive real input.
+                ok, why = verify(cmd)
+                if not ok:
+                    seen.add(rid)
+                    cmd["status"] = "rejected"
+                    try:
+                        supabase.table("Agent Outputs").update(
+                            {"output_text": json.dumps(cmd)}).eq("id", rid).execute()
+                    except Exception:
+                        pass
+                    log(f"[screen-relay] REJECTED {cmd.get('action')}: {why}")
+                    _answer(supabase, token, f"Command REJECTED and not executed — {why}")
                     continue
 
                 if not _claim(supabase, rid, cmd):
