@@ -202,7 +202,10 @@ def login():
 # Wrap the Anthropic client so EVERY Claude call (chat, council, agents that receive this
 # client, summaries, vision) records token usage + cost against the current feature/trigger
 # for the observability layer. Fail-soft: recording never breaks a call.
-claude = observability.wrap_client(Anthropic(api_key=CLAUDE_API_KEY))
+# max_retries=4: the SDK retries transient errors (429/5xx/529 overloaded) with its own
+# backoff before we ever see the exception — the default of 2 wasn't enough during the
+# 2026-07-29 Anthropic overload incident.
+claude = observability.wrap_client(Anthropic(api_key=CLAUDE_API_KEY, max_retries=4))
 
 
 # ---- Thread-safe Supabase access --------------------------------------------
@@ -3734,6 +3737,19 @@ TOOL_STATUS_LABELS = {
 }
 
 
+def _is_transient_api_error(e: Exception) -> bool:
+    """True for Anthropic API errors worth retrying: overloaded (529), rate
+    limit (429), server errors (5xx), and dropped connections."""
+    status = getattr(e, "status_code", None)
+    if status in (429, 500, 502, 503, 504, 529):
+        return True
+    return type(e).__name__ == "APIConnectionError"
+
+
+# Backoff schedule (seconds) for transient API errors during chat.
+_CHAT_RETRY_DELAYS = (2, 5, 10, 20)
+
+
 def stream_chat(messages: list, recall_text: str = ""):
     """Runs the Claude tool-use loop, yielding events as they happen:
     {"type": "text", "delta": ...}    — a chunk of the reply as it's written
@@ -3774,13 +3790,25 @@ def stream_chat(messages: list, recall_text: str = ""):
                                          "streaming failed; used non-streaming fallback", str(e))
                 except Exception:
                     pass
-                response = claude.messages.create(
-                    model="claude-sonnet-5",
-                    max_tokens=4096,
-                    system=system_blocks,
-                    tools=tools_cached,
-                    messages=messages,
-                )
+                response = None
+                for attempt, delay in enumerate(_CHAT_RETRY_DELAYS + (None,)):
+                    try:
+                        response = claude.messages.create(
+                            model="claude-sonnet-5",
+                            max_tokens=4096,
+                            system=system_blocks,
+                            tools=tools_cached,
+                            messages=messages,
+                        )
+                        break
+                    except Exception as retry_err:
+                        if delay is None or not _is_transient_api_error(retry_err):
+                            raise
+                        print(f"Warning: chat fallback hit transient API error "
+                              f"({retry_err}); retrying in {delay}s.")
+                        yield {"type": "status",
+                               "label": "Claude's servers are busy — retrying…"}
+                        time.sleep(delay)
                 turns_text.append("".join(b.text for b in response.content if b.type == "text"))
                 yield {"type": "replace", "text": "".join(turns_text)}
 
@@ -5291,7 +5319,12 @@ def chat():
                     authoritative = event.get("text", authoritative)
                 yield json.dumps(event) + "\n"
         except Exception as e:
-            yield json.dumps({"type": "error", "message": str(e)}) + "\n"
+            if _is_transient_api_error(e):
+                message = ("Claude's servers are overloaded right now — I retried a few "
+                           "times but couldn't get through. Give it a minute and resend.")
+            else:
+                message = str(e)
+            yield json.dumps({"type": "error", "message": message}) + "\n"
         finally:
             # Save the authoritative text if we got one (so a mid-stream fallback is persisted
             # correctly), otherwise the concatenated deltas.
