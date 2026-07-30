@@ -4260,6 +4260,7 @@ TOOL_STATUS_LABELS.update(imessage_intake.TOOL_STATUS_LABELS)
 import icloud_intake  # noqa: E402
 icloud_intake.init(intake.record_raw)
 TOOLS.extend(icloud_intake.TOOL_SCHEMAS)
+TOOL_STATUS_LABELS.update(icloud_intake.TOOL_STATUS_LABELS)
 
 SCHOOL_GMAIL_ENTITY = "alex-school"
 

@@ -133,6 +133,10 @@ TOOL_SCHEMAS = [
      }}},
 ]
 
+TOOL_STATUS_LABELS = {
+    "scan_icloud_intake": "Checking your iCloud mail…",
+}
+
 
 def handle_tool_call(name: str, tool_input: dict) -> str:
     if name == "scan_icloud_intake":
