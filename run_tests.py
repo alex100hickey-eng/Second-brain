@@ -996,6 +996,75 @@ def suite_screen(app, live):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def suite_expansion_json(app, live):
+    """The scout produced ZERO findings for eight days with no error anywhere.
+    Two independent silent-failure bugs, both pinned here."""
+    section("expansion/money JSON extraction (the silent scout killer)")
+    import expansion_pipeline as ep
+    import money_pipeline as mp
+
+    # Bug 1: "{" was tried before "[", so a single-element array of objects came
+    # back as a dict. Callers checking isinstance(arr, list) then dropped the whole
+    # batch — a perfect model answer producing nothing, silently.
+    single = '```json\n[{"name": "a", "url": "https://x/y", "what": "thing"}]\n```'
+    for label, fn in (("expansion_pipeline", ep._extract_json), ("money_pipeline", mp._extract_json)):
+        got = fn(single)
+        check(f"{label}: single-element array stays a LIST (not the lone dict)",
+              isinstance(got, list) and len(got) == 1 and got[0]["name"] == "a")
+        check(f"{label}: multi-element array parses",
+              isinstance(fn('[{"a":1},{"a":2}]'), list))
+        check(f"{label}: array of strings parses",
+              fn('["one","two"]') == ["one", "two"])
+        check(f"{label}: bare object still parses as a dict",
+              fn('Here you go:\n{"allow": true}') == {"allow": True})
+        check(f"{label}: empty array parses", fn("[]") == [])
+        try:
+            fn("no json here at all")
+            check(f"{label}: junk raises rather than returning something bogus", False)
+        except ValueError:
+            check(f"{label}: junk raises rather than returning something bogus", True)
+
+    # Bug 2: a reply cut off at max_tokens was indistinguishable from a real one.
+    # The thinking block is billed against the SAME budget, so a too-small cap can
+    # return zero text blocks — which used to parse as "nothing relevant found".
+    class _FakeUsage:
+        output_tokens = 1500
+
+    class _FakeMsg:
+        stop_reason = "max_tokens"
+        usage = _FakeUsage()
+        content = []          # thinking ate the entire budget; no text block at all
+
+    class _FakeClient:
+        class messages:
+            @staticmethod
+            def create(**kw):
+                return _FakeMsg()
+
+    saved = ep.claude
+    ep.claude = _FakeClient()
+    try:
+        ep._call("sys", "user", max_tokens=1500)
+        check("truncated reply raises TruncatedReply instead of returning ''", False)
+    except ep.TruncatedReply:
+        check("truncated reply raises TruncatedReply instead of returning ''", True)
+    finally:
+        ep.claude = saved
+
+    # Structuring must survive a bad batch rather than losing the whole run.
+    check("structuring batches candidates so output length stays bounded",
+          ep.STRUCTURE_BATCH <= 15 and ep.STRUCTURE_MAX_TOKENS >= 4000)
+    check("empty candidate list structures to nothing without calling the model",
+          ep._structure_findings("brief", "github", []) == [])
+
+    # run_scout must not report "nothing relevant" when triage actually collapsed.
+    src = open(os.path.join(CHAT_DIR, "expansion_pipeline.py"), encoding="utf-8").read()
+    check("run_scout distinguishes 'triage produced nothing' from 'all duplicates'",
+          "NO structured findings" in src and "already-known URLs" in src)
+    check("GitHub non-200 responses are audited, not swallowed as 'no results'",
+          "GitHub search returned HTTP" in src)
+
+
 def suite_screen_agent(app, live):
     """The local see->act loop. Everything here is exercisable WITHOUT macOS
     Accessibility — the pure logic (context pruning, image encoding, result
@@ -1955,6 +2024,7 @@ SUITES = {
     "goals": suite_goals,
     "screen": suite_screen,
     "screenagent": suite_screen_agent,
+    "expansionjson": suite_expansion_json,
     "drafter": suite_drafter,
     "voice": suite_voice,
     "briefing": suite_briefing,

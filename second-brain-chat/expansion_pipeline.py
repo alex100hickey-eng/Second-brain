@@ -116,10 +116,20 @@ def _now_iso() -> str:
 
 
 def _extract_json(text: str):
-    """First JSON value (object or array) out of a model reply, tolerating fences."""
-    for opener, closer in (("{", "}"), ("[", "]")):
-        start = text.find(opener)
-        end = text.rfind(closer)
+    """First JSON value (object or array) out of a model reply, tolerating fences.
+
+    Order matters: whichever bracket appears FIRST is the real top-level value.
+    Trying "{" first silently mangled single-element arrays — for `[{...}]` the
+    {...} slice is itself valid JSON, so this returned the lone element as a dict
+    and every caller doing `isinstance(arr, list)` dropped the whole batch. That
+    is what emptied the scout even when the model answered perfectly."""
+    starts = []
+    for opener, closer in (("[", "]"), ("{", "}")):
+        pos = text.find(opener)
+        if pos != -1:
+            starts.append((pos, opener, closer))
+    for _, opener, closer in sorted(starts):
+        start, end = text.find(opener), text.rfind(closer)
         if start != -1 and end > start:
             try:
                 return json.loads(text[start:end + 1])
@@ -128,12 +138,27 @@ def _extract_json(text: str):
     raise ValueError(f"no JSON in reply: {text[:200]}")
 
 
-def _call(system: str, user: str, max_tokens: int = 1500) -> str:
+class TruncatedReply(RuntimeError):
+    """The model hit its token cap mid-answer. Raised rather than returned so a
+    caller can never mistake a half-written (or empty) reply for a real result —
+    the failure mode that silently emptied every scout run for eight days."""
+
+
+def _call(system: str, user: str, max_tokens: int = 4000) -> str:
     msg = claude.messages.create(
         model=MODEL, max_tokens=max_tokens, system=system,
         messages=[{"role": "user", "content": user}], timeout=120.0,
     )
-    return next((b.text for b in msg.content if b.type == "text"), "").strip()
+    # Join ALL text blocks: the model may emit a thinking block first, and that
+    # thinking is billed against the SAME max_tokens as the answer. A budget that
+    # only fits the thinking returns zero text blocks — which is exactly how this
+    # used to fail invisibly.
+    text = "".join(b.text for b in msg.content if b.type == "text").strip()
+    if msg.stop_reason == "max_tokens":
+        raise TruncatedReply(
+            f"reply hit the {max_tokens}-token cap "
+            f"(used {msg.usage.output_tokens}, got {len(text)} chars of text back)")
+    return text
 
 
 def _audit(tool: str, trigger: str, summary: str, success: bool = True,
@@ -226,29 +251,49 @@ _STRUCTURE_SYSTEM = (
 )
 
 
+# One structured finding is ~120 tokens of JSON, so a batch of 12 needs ~1500
+# for the answer alone — plus however much the model spends thinking first. Batch
+# the candidates so the output length is BOUNDED no matter how many raw hits the
+# scouts return, instead of scaling with them until it blows the cap.
+STRUCTURE_BATCH = 12
+STRUCTURE_MAX_TOKENS = 6000
+
+
 def _structure_findings(focus_brief: str, source: str, raw_items: list) -> list:
     """Turn raw scout hits into structured findings via the model. raw_items is a list
-    of dicts with at least a url; extra fields (stars, desc) are passed through as text."""
+    of dicts with at least a url; extra fields (stars, desc) are passed through as text.
+
+    Batches are independent: one unparseable batch loses its own candidates and is
+    audited, rather than silently emptying the whole run."""
     if not raw_items:
         return []
-    listing = "\n".join(
-        f"- {it.get('name') or it.get('title') or it.get('url')} | {it.get('url')} | "
-        f"{it.get('description') or it.get('snippet') or ''} | "
-        f"signals: {it.get('signals', '')}"
-        for it in raw_items
-    )
-    user = (f"Focus brief: {focus_brief}\nSource: {source}\n\n"
-            f"{UNTRUSTED_BANNER}\nRaw candidates:\n{listing}")
-    try:
-        arr = _extract_json(_call(_STRUCTURE_SYSTEM, user))
-    except (ValueError, json.JSONDecodeError):
-        return []
-    findings = []
-    if isinstance(arr, list):
-        for f in arr:
-            if isinstance(f, dict) and f.get("url"):
-                f["source"] = source
-                findings.append(f)
+    findings, failed = [], 0
+    for start in range(0, len(raw_items), STRUCTURE_BATCH):
+        batch = raw_items[start:start + STRUCTURE_BATCH]
+        listing = "\n".join(
+            f"- {it.get('name') or it.get('title') or it.get('url')} | {it.get('url')} | "
+            f"{it.get('description') or it.get('snippet') or ''} | "
+            f"signals: {it.get('signals', '')}"
+            for it in batch
+        )
+        user = (f"Focus brief: {focus_brief}\nSource: {source}\n\n"
+                f"{UNTRUSTED_BANNER}\nRaw candidates:\n{listing}")
+        try:
+            arr = _extract_json(_call(_STRUCTURE_SYSTEM, user, max_tokens=STRUCTURE_MAX_TOKENS))
+        except (ValueError, json.JSONDecodeError, TruncatedReply) as e:
+            failed += 1
+            _audit("scout_structure", "agent",
+                   f"{source}: batch of {len(batch)} produced no usable JSON",
+                   False, f"{type(e).__name__}: {str(e)[:200]}")
+            continue
+        if isinstance(arr, list):
+            for f in arr:
+                if isinstance(f, dict) and f.get("url"):
+                    f["source"] = source
+                    findings.append(f)
+    if failed:
+        _audit("scout_structure", "agent",
+               f"{source}: {failed} batch(es) failed, {len(findings)} finding(s) survived", False)
     return findings
 
 
@@ -261,13 +306,16 @@ def _distill_queries(focus_brief: str) -> list:
             "Turn this capability brief into up to 3 short, high-signal SEARCH QUERIES for finding "
             "tools/libraries/repos (3-6 keywords each, no full sentences, no punctuation). Prefer "
             "concrete tech nouns over verbs. Return ONLY a JSON array of strings.",
-            focus_brief, max_tokens=300)
+            focus_brief, max_tokens=1500)   # 300 didn't fit a thinking block + the answer
         arr = _extract_json(text)
         qs = [str(q).strip() for q in arr if str(q).strip()][:3] if isinstance(arr, list) else []
         if qs:
             return qs
-    except Exception:
-        pass
+    except Exception as e:
+        # The keyword fallback below still works, but a scout running on it is
+        # searching noticeably worse — say so rather than degrading in silence.
+        _audit("scout_queries", "agent", "query distillation failed; using keyword fallback",
+               False, f"{type(e).__name__}: {str(e)[:200]}")
     # Fallback: strip to keyword-ish (drop obvious filler), keep it short.
     words = re.findall(r"[a-zA-Z][a-zA-Z0-9.+-]{2,}", focus_brief)
     stop = {"tools", "that", "would", "help", "with", "recent", "work", "libraries", "skills", "for", "and", "the"}
@@ -290,9 +338,21 @@ def _github_search(query: str, want: int) -> list:
                           params={"q": query, "sort": sort, "order": "desc",
                                   "per_page": min(max(want, 10), 30)},
                           headers=headers, timeout=25)
-            items = r.json().get("items", []) if r.status_code == 200 else []
-        except Exception:
+            if r.status_code == 200:
+                items = r.json().get("items", [])
+            else:
+                # A rate-limited or rejected search used to look exactly like "no
+                # results". Unauthenticated search is only 10/min (30/min with
+                # GITHUB_TOKEN set), so this is a live failure mode, not theory.
+                items = []
+                _audit("scout_github", "agent",
+                       f"GitHub search returned HTTP {r.status_code} for {query[:40]!r}", False,
+                       f"remaining={r.headers.get('x-ratelimit-remaining')} "
+                       f"token={'set' if token else 'UNSET'}")
+        except Exception as e:
             items = []
+            _audit("scout_github", "agent", f"GitHub search failed for {query[:40]!r}", False,
+                   f"{type(e).__name__}: {str(e)[:160]}")
         for it in items:
             lic = (it.get("license") or {}).get("spdx_id") or "unknown"
             out.append({
@@ -377,9 +437,19 @@ def run_scout(focus_brief: str = "", sources: str = "both",
         if len(queued) >= cap:
             break
 
-    _audit("run_scout", "agent", f"brief={brief[:60]}; {len(queued)} new", True)
+    _audit("run_scout", "agent",
+           f"brief={brief[:60]}; {len(findings)} structured, {len(queued)} new", bool(findings))
     if not queued:
-        return f"Scouts ran (focus: {brief[:80]}) — no NEW findings (all were duplicates or nothing relevant)."
+        # "Nothing relevant" and "the structuring step returned nothing at all" look
+        # identical from here, and conflating them is what hid the truncation bug for
+        # eight days. Report which one actually happened.
+        if not findings:
+            return (f"Scouts ran (focus: {brief[:80]}) but produced NO structured findings — "
+                    f"the searches returned candidates and none survived triage, which usually "
+                    f"means the triage step is failing rather than the web being empty. "
+                    f"Check the audit log for `scout_structure` entries.")
+        return (f"Scouts ran (focus: {brief[:80]}) — found {len(findings)}, but all were "
+                f"already-known URLs. No new findings.")
     lines = [f"**Scouts queued {len(queued)} new finding(s)** (focus: {brief[:80]})", ""]
     for row_id, f in queued:
         lines.append(f"- #{row_id} [{f.get('source')}] {f.get('name')} — {f.get('what', '')[:90]} "

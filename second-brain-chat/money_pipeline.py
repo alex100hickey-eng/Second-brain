@@ -138,10 +138,22 @@ def _now_iso() -> str:
 
 
 def _extract_json(text: str):
-    """First JSON value (object or array) out of a model reply, tolerating fences."""
-    for opener, closer in (("{", "}"), ("[", "]")):
-        start = text.find(opener)
-        end = text.rfind(closer)
+    """First JSON value (object or array) out of a model reply, tolerating fences.
+
+    Order matters: whichever bracket appears FIRST is the real top-level value.
+    Trying "{" first silently mangled single-element arrays — for `[{...}]` the
+    {...} slice is itself valid JSON, so this returned the lone element as a dict
+    and callers doing `isinstance(arr, list)` dropped the batch. Note that asking
+    the model for AT MOST max_ideas makes one-element replies MORE likely here,
+    so this path was primed to bite. Same fix lives in expansion_pipeline.py;
+    run_tests keeps the two honest."""
+    starts = []
+    for opener, closer in (("[", "]"), ("{", "}")):
+        pos = text.find(opener)
+        if pos != -1:
+            starts.append((pos, opener, closer))
+    for _, opener, closer in sorted(starts):
+        start, end = text.find(opener), text.rfind(closer)
         if start != -1 and end > start:
             try:
                 return json.loads(text[start:end + 1])
