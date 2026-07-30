@@ -3198,6 +3198,23 @@ def get_background_tasks(limit: int = 6) -> list:
     return tasks
 
 
+def _tool_result_block(tool_use_id: str, result) -> dict:
+    """Build a tool_result content block. Most tools return a string; the
+    screen-control tools return a structured image dict (with '_image_b64')
+    so the model can SEE the real screen — turn that into an image block so
+    the acting model isn't clicking blind."""
+    if isinstance(result, dict) and result.get("_image_b64"):
+        content = [
+            {"type": "image", "source": {
+                "type": "base64", "media_type": "image/png",
+                "data": result["_image_b64"],
+            }},
+            {"type": "text", "text": result.get("text") or "Screenshot attached."},
+        ]
+        return {"type": "tool_result", "tool_use_id": tool_use_id, "content": content}
+    return {"type": "tool_result", "tool_use_id": tool_use_id, "content": result}
+
+
 def _run_background_task(row_id: int, task: dict) -> None:
     """Run one claimed task through a non-streaming Claude tool-use loop."""
     observability.set_trigger("agent")  # audit: this turn is a background agent, not Alex
@@ -3223,9 +3240,7 @@ def _run_background_task(row_id: int, task: dict) -> None:
             for block in response.content:
                 if block.type == "tool_use":
                     result = handle_tool_call(block.name, block.input)
-                    tool_results.append(
-                        {"type": "tool_result", "tool_use_id": block.id, "content": result}
-                    )
+                    tool_results.append(_tool_result_block(block.id, result))
             messages.append({"role": "user", "content": tool_results})
         else:
             raise RuntimeError("Task hit the 20-round tool limit without finishing.")
@@ -3827,13 +3842,7 @@ def stream_chat(messages: list, recall_text: str = ""):
                     "label": TOOL_STATUS_LABELS.get(block.name, "Working on it…"),
                 }
                 result = handle_tool_call(block.name, block.input)
-                tool_results.append(
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": block.id,
-                        "content": result,
-                    }
-                )
+                tool_results.append(_tool_result_block(block.id, result))
 
         messages.append({"role": "user", "content": tool_results})
 

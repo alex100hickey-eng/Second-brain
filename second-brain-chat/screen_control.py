@@ -33,7 +33,9 @@ Safety model (all four apply every time, no exceptions):
 
 import os
 import threading
+import base64
 import time
+from io import BytesIO
 
 import pyautogui
 from pynput import keyboard
@@ -41,6 +43,10 @@ from pynput import keyboard
 pyautogui.FAILSAFE = True   # native pyautogui failsafe too: mouse to a screen
                              # corner also aborts, on top of our Escape watchdog
 pyautogui.PAUSE = 0.05
+
+# How long to wait after an action before grabbing the "here's the result"
+# screenshot, so the UI has settled (menus opened, focus moved, etc.).
+POST_ACTION_SETTLE = 0.6
 
 SESSION_MAX_SECONDS = 300   # a session self-expires after 5 minutes regardless
 
@@ -167,6 +173,15 @@ def click(x: int = None, y: int = None, button: str = "left"):
     _audit("click", f"({x},{y}) {button}")
 
 
+def double_click(x: int = None, y: int = None):
+    _guard()
+    if x is not None and y is not None:
+        pyautogui.moveTo(x, y, duration=0.15)
+        _guard()
+    pyautogui.doubleClick()
+    _audit("double_click", f"({x},{y})")
+
+
 def type_text(text: str):
     """Types literal text. Refuses anything that looks like a secret being
     typed through this path — that must go through the user's own hands."""
@@ -197,18 +212,63 @@ def scroll(amount: int):
     _audit("scroll", str(amount))
 
 
-def screenshot_region() -> str:
-    """Takes a screenshot for CLARVIS to look at before acting (read step,
-    not a control step — but gated the same way, since it only makes sense
-    mid-session)."""
-    _guard()
-    import base64
-    from io import BytesIO
+def _logical_size() -> tuple:
+    """The coordinate space pyautogui's mouse actually uses (points, not
+    physical pixels). On a Retina Mac this is e.g. 1440x900 even though the
+    screen is 2880x1800."""
+    size = pyautogui.size()
+    return int(size.width), int(size.height)
+
+
+def capture_screen() -> dict:
+    """Grab the screen and return it in the SAME coordinate space the mouse
+    uses. This is the fix for the Retina bug: pyautogui.screenshot() returns
+    physical pixels (2x on Retina) but pyautogui.click() takes logical points,
+    so we downscale the capture to the logical size. The image the model sees
+    is therefore 1:1 with click coordinates — a pixel it points at in the
+    screenshot is exactly where the cursor will go.
+
+    Returns {"image_b64", "width", "height", "blank"}."""
+    logical_w, logical_h = _logical_size()
     img = pyautogui.screenshot()
+    # Downscale physical -> logical so screenshot pixels == click coordinates.
+    if (img.width, img.height) != (logical_w, logical_h):
+        try:
+            from PIL import Image
+            img = img.resize((logical_w, logical_h), Image.LANCZOS)
+        except Exception:
+            # Without Pillow we can't rescale; fall back to reporting the real
+            # capture size so the caller can still map coordinates itself.
+            logical_w, logical_h = img.width, img.height
+
+    # Blank/near-uniform capture almost always means Screen Recording
+    # permission is missing — flag it rather than hand back a black image.
+    blank = False
+    try:
+        from PIL import ImageStat
+        stat = ImageStat.Stat(img.convert("L"))
+        blank = (stat.stddev[0] if stat.stddev else 0.0) < 4.0
+    except Exception:
+        pass
+
     buf = BytesIO()
     img.save(buf, format="PNG")
-    _audit("screenshot", f"{img.width}x{img.height}")
-    return base64.b64encode(buf.getvalue()).decode()
+    return {
+        "image_b64": base64.b64encode(buf.getvalue()).decode(),
+        "width": logical_w,
+        "height": logical_h,
+        "blank": blank,
+    }
+
+
+def screenshot_region() -> dict:
+    """Takes a screenshot for CLARVIS to look at before acting (read step,
+    not a control step — but gated the same way, since it only makes sense
+    mid-session). Returns the structured capture dict from capture_screen()."""
+    _guard()
+    shot = capture_screen()
+    _audit("screenshot", f"{shot['width']}x{shot['height']}" + (" BLANK" if shot["blank"] else ""))
+    return shot
 
 
 def session_status() -> dict:
@@ -219,34 +279,45 @@ def session_status() -> dict:
     }
 
 
+# Shared coordinate contract, injected into every action/screenshot tool
+# description so the model always knows the rules. Coordinates are in the
+# SAME pixel space as the screenshot it just saw (which we've made 1:1 with
+# the mouse), so it should read a target's position straight off the image.
+_COORD_RULE = ("Coordinates are in the exact pixel space of the screenshot you were just shown "
+               "(its top-left is 0,0). Read the target's position straight off that image — do "
+               "not rescale or guess. Every screenshot and every action returns the current "
+               "screen image, so always look at the latest one before choosing coordinates.")
+
 TOOL_SCHEMAS = [
     {"name": "screen_control_start",
      "description": ("Arm literal control of Alex's Mac screen: mouse and keyboard. HIGH-RISK — "
                       "only use when Alex has explicitly asked for a task that needs it (sandbox "
                       "browsing can't do it — e.g. an action in a native app, not a webpage). "
                       "Self-expires in 5 minutes; Alex can kill it instantly by pressing Escape. "
-                      "Never type passwords, API keys, or payment info through this — tell Alex to "
-                      "type those himself."),
+                      "After arming, call screen_control_screenshot to SEE the screen before you "
+                      "touch anything. Never type passwords, API keys, or payment info through "
+                      "this — tell Alex to type those himself."),
      "input_schema": {"type": "object", "properties": {
          "reason": {"type": "string", "description": "One sentence: what you're about to do and why."}
      }, "required": ["reason"]}},
     {"name": "screen_control_act",
-     "description": ("Perform ONE screen action during an active screen-control session: move, "
-                      "click, type, press a key, a hotkey combo, or scroll. Call screen_control_start "
-                      "first. Take a screenshot (screen_control_screenshot) before clicking anything "
-                      "you haven't already located, and re-check after any action that might have "
-                      "changed the screen."),
+     "description": ("Perform ONE screen action during an active screen-control session, then get back "
+                      "a fresh screenshot showing the result. Actions: move, click, double_click, type, "
+                      "key, hotkey, scroll. " + _COORD_RULE + " Use double_click to open apps/icons/files; "
+                      "single click for buttons and links. For click/double_click/move, pass x and y."),
      "input_schema": {"type": "object", "properties": {
-         "kind": {"type": "string", "enum": ["move", "click", "type", "key", "hotkey", "scroll"]},
-         "x": {"type": "integer"}, "y": {"type": "integer"},
+         "kind": {"type": "string", "enum": ["move", "click", "double_click", "type", "key", "hotkey", "scroll"]},
+         "x": {"type": "integer", "description": "Target x in screenshot pixels (for move/click/double_click)."},
+         "y": {"type": "integer", "description": "Target y in screenshot pixels (for move/click/double_click)."},
          "button": {"type": "string", "enum": ["left", "right", "middle"]},
-         "text": {"type": "string"},
-         "key": {"type": "string"},
-         "keys": {"type": "array", "items": {"type": "string"}},
-         "amount": {"type": "integer"},
+         "text": {"type": "string", "description": "Text to type (for kind=type)."},
+         "key": {"type": "string", "description": "Single key to press, e.g. 'enter', 'esc' (for kind=key)."},
+         "keys": {"type": "array", "items": {"type": "string"}, "description": "Hotkey combo, e.g. ['command','space'] (for kind=hotkey)."},
+         "amount": {"type": "integer", "description": "Scroll amount; positive scrolls up, negative down (for kind=scroll)."},
      }, "required": ["kind"]}},
     {"name": "screen_control_screenshot",
-     "description": "See the current screen during an active screen-control session, before deciding the next action.",
+     "description": ("See the current screen during an active screen-control session. Returns the screen "
+                      "as an image. " + _COORD_RULE),
      "input_schema": {"type": "object", "properties": {}}},
     {"name": "screen_control_stop",
      "description": "End the screen-control session immediately. Always call this when the task is done — don't leave a session armed.",
@@ -254,21 +325,48 @@ TOOL_SCHEMAS = [
 ]
 
 
-def handle_tool_call(name: str, tool_input: dict) -> str:
+def _shot_result(note: str) -> dict:
+    """Wrap a fresh capture as the structured image result the chat loop turns
+    into an image tool_result. On a blank capture, return an error string
+    instead so the model gets actionable text, not a black rectangle."""
+    shot = capture_screen()
+    _audit("screenshot", f"{shot['width']}x{shot['height']}" + (" BLANK" if shot["blank"] else ""))
+    if shot["blank"]:
+        return ("Screen capture came back blank — this almost always means macOS Screen Recording "
+                "permission isn't granted to the app running CLARVIS. Tell Alex to enable it in "
+                "System Settings > Privacy & Security > Screen Recording, then restart the app.")
+    return {
+        "_image_b64": shot["image_b64"],
+        "width": shot["width"],
+        "height": shot["height"],
+        "text": f"{note} Screen is {shot['width']}x{shot['height']} px; coordinates are in this space.",
+    }
+
+
+def handle_tool_call(name: str, tool_input: dict):
+    """Returns a plain string for start/stop, or a structured image dict
+    (see _shot_result) for screenshot/act so the caller shows the model the
+    real screen."""
     try:
         if name == "screen_control_start":
-            return start_session(tool_input.get("reason", ""))
+            status = start_session(tool_input.get("reason", ""))
+            # If it armed, hand back the first screenshot so the model can see.
+            if is_active():
+                return _shot_result(status)
+            return status
         if name == "screen_control_stop":
             return stop_session(tool_input.get("reason", "task complete"))
         if name == "screen_control_screenshot":
-            screenshot_region()  # audits + guards; caller wires the image separately if needed
-            return "Screenshot taken."
+            _guard()
+            return _shot_result("Here's the screen.")
         if name == "screen_control_act":
             kind = tool_input.get("kind")
             if kind == "move":
                 move_to(tool_input["x"], tool_input["y"])
             elif kind == "click":
                 click(tool_input.get("x"), tool_input.get("y"), tool_input.get("button", "left"))
+            elif kind == "double_click":
+                double_click(tool_input.get("x"), tool_input.get("y"))
             elif kind == "type":
                 type_text(tool_input.get("text", ""))
             elif kind == "key":
@@ -279,7 +377,10 @@ def handle_tool_call(name: str, tool_input: dict) -> str:
                 scroll(tool_input.get("amount", 0))
             else:
                 return f"Unknown action kind: {kind}"
-            return f"Did: {kind}"
+            # Let the UI settle, then show the model the result of its action.
+            if not _stop_event.is_set():
+                time.sleep(POST_ACTION_SETTLE)
+            return _shot_result(f"Did: {kind}.")
     except ScreenControlStopped as e:
         return f"STOPPED — {e}"
     return "Unknown screen-control tool."

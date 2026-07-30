@@ -165,11 +165,16 @@ def _claim(supabase, row_id: int, cmd: dict) -> bool:
         return False
 
 
+# Screenshots travel back as base64 PNG in this field, so the old 8k cap would
+# shred them. A logical-resolution PNG is well under a few MB; cap generously.
+MAX_RESULT_CHARS = 8_000_000
+
+
 def _answer(supabase, token: str, result: str):
     try:
         supabase.table("Agent Outputs").insert({
             "agent_name": RESULT_AGENT,
-            "output_text": json.dumps({"token": token, "result": result[:8000],
+            "output_text": json.dumps({"token": token, "result": result[:MAX_RESULT_CHARS],
                                         "at": _iso()}),
         }).execute()
     except Exception:
@@ -177,33 +182,25 @@ def _answer(supabase, token: str, result: str):
 
 
 def _execute(action: str, payload: dict, claude_client=None) -> str:
-    """Run one action through the real screen_control module (Mac-only)."""
+    """Run one action through the real screen_control module (Mac-only) and
+    return a STRING for transport. screen_control now returns a structured
+    image dict for screenshot/act (so the server-side model can SEE the real
+    screen 1:1 with click coordinates); we JSON-encode that here and the
+    server side decodes it back into an image tool_result."""
     import screen_control
 
-    if action == "screenshot":
-        # Tool results are plain strings, so a raw image can't be returned.
-        # Route through screen_watch's vision instead: capture + describe, so
-        # CLARVIS can actually SEE the screen before deciding where to click.
-        try:
-            import screen_watch
-            if claude_client is None:
-                return "Screenshot skipped: no vision client available on the relay."
-            q = payload.get("question") or (
-                "Describe what is on screen: the frontmost app/window, and any "
-                "buttons, fields, or links worth acting on. Give approximate "
-                "pixel coordinates for anything clickable.")
-            return screen_watch.watch_screen(claude_client, question=q)
-        except Exception as e:
-            return f"Screenshot/vision failed: {str(e)[:200]}"
-
     tool = {
+        "screenshot": "screen_control_screenshot",
         "start": "screen_control_start",
         "stop": "screen_control_stop",
         "act": "screen_control_act",
     }.get(action)
     if not tool:
         return f"Unknown relay action: {action}"
-    return screen_control.handle_tool_call(tool, payload)
+    result = screen_control.handle_tool_call(tool, payload)
+    if isinstance(result, dict):
+        return json.dumps(result)
+    return result
 
 
 def run_relay(supabase, claude_client=None, log=print):
@@ -283,37 +280,41 @@ def run_relay(supabase, claude_client=None, log=print):
 
 # Tool schemas the SERVER registers — same shape/wording as the local ones so
 # the model behaves identically whichever node it runs on.
+_COORD_RULE = ("Coordinates are in the exact pixel space of the screenshot you were just shown "
+               "(its top-left is 0,0). Read the target's position straight off that image — do "
+               "not rescale or guess. Every screenshot and every action returns the current "
+               "screen image, so always look at the latest one before choosing coordinates.")
+
 TOOL_SCHEMAS = [
     {"name": "screen_control_start",
      "description": ("Arm literal control of Alex's Mac screen (mouse + keyboard), relayed "
                       "from the server to his Mac. HIGH-RISK — only when Alex explicitly asks "
                       "for something that needs his real desktop rather than a webpage "
                       "(browse_web_sandbox handles anything web-shaped). Requires his Mac awake "
-                      "with the relay running. Self-expires in 5 min; Alex kills it instantly "
-                      "with Escape. Never type passwords, API keys, or payment details."),
+                      "with the relay running. Returns a first screenshot so you can see the "
+                      "screen. Self-expires in 5 min; Alex kills it instantly with Escape. Never "
+                      "type passwords, API keys, or payment details."),
      "input_schema": {"type": "object", "properties": {
          "reason": {"type": "string", "description": "One sentence: what you're about to do and why."}
      }, "required": ["reason"]}},
     {"name": "screen_control_screenshot",
-     "description": ("LOOK at Alex's screen and get a description of what's on it, including "
-                      "approximate coordinates of clickable things. Do this BEFORE clicking "
-                      "anything you haven't already located, and again after any action that "
-                      "may have changed the screen."),
-     "input_schema": {"type": "object", "properties": {
-         "question": {"type": "string", "description": "Optional: what specifically to look for."}
-     }}},
+     "description": ("SEE Alex's screen — returns the current screen as an image. " + _COORD_RULE),
+     "input_schema": {"type": "object", "properties": {}}},
     {"name": "screen_control_act",
-     "description": ("Perform ONE screen action during an armed session: move, click, type, "
-                      "key, hotkey, or scroll. Call screen_control_start first, and look at the "
-                      "screen before acting blind."),
+     "description": ("Perform ONE screen action during an armed session, then get back a fresh "
+                      "screenshot showing the result. Actions: move, click, double_click, type, "
+                      "key, hotkey, scroll. " + _COORD_RULE + " Use double_click to open "
+                      "apps/icons/files; single click for buttons and links. For "
+                      "click/double_click/move, pass x and y."),
      "input_schema": {"type": "object", "properties": {
-         "kind": {"type": "string", "enum": ["move", "click", "type", "key", "hotkey", "scroll"]},
-         "x": {"type": "integer"}, "y": {"type": "integer"},
+         "kind": {"type": "string", "enum": ["move", "click", "double_click", "type", "key", "hotkey", "scroll"]},
+         "x": {"type": "integer", "description": "Target x in screenshot pixels (for move/click/double_click)."},
+         "y": {"type": "integer", "description": "Target y in screenshot pixels (for move/click/double_click)."},
          "button": {"type": "string", "enum": ["left", "right", "middle"]},
-         "text": {"type": "string"},
-         "key": {"type": "string"},
-         "keys": {"type": "array", "items": {"type": "string"}},
-         "amount": {"type": "integer"},
+         "text": {"type": "string", "description": "Text to type (for kind=type)."},
+         "key": {"type": "string", "description": "Single key to press, e.g. 'enter', 'esc' (for kind=key)."},
+         "keys": {"type": "array", "items": {"type": "string"}, "description": "Hotkey combo, e.g. ['command','space'] (for kind=hotkey)."},
+         "amount": {"type": "integer", "description": "Scroll amount; positive up, negative down (for kind=scroll)."},
      }, "required": ["kind"]}},
     {"name": "screen_control_stop",
      "description": "End the screen-control session immediately. Always call this when done — never leave a session armed.",
@@ -321,14 +322,25 @@ TOOL_SCHEMAS = [
 ]
 
 
-def handle_tool_call(supabase, name: str, tool_input: dict) -> str:
-    """Server-side dispatch: turn a tool call into a relayed command."""
+def handle_tool_call(supabase, name: str, tool_input: dict):
+    """Server-side dispatch: turn a tool call into a relayed command. Returns a
+    plain string for start/stop/errors, or a structured image dict (with an
+    '_image_b64' key) for screenshot/act — the chat loop turns that into an
+    image tool_result so the model sees the real screen."""
     action = {"screen_control_start": "start",
               "screen_control_stop": "stop",
               "screen_control_act": "act",
               "screen_control_screenshot": "screenshot"}.get(name)
     if not action:
         return f"Unknown screen tool: {name}"
-    # vision round-trips take longer than a click
-    timeout = 90.0 if action == "screenshot" else DEFAULT_TIMEOUT
-    return send_command(supabase, action, tool_input or {}, timeout=timeout)
+    # start/screenshot/act now round-trip a screenshot from the Mac, which is
+    # slower and larger than a bare click acknowledgement.
+    timeout = DEFAULT_TIMEOUT if action == "stop" else 90.0
+    result = send_command(supabase, action, tool_input or {}, timeout=timeout)
+    # The Mac ships image results as JSON; decode back to a dict for the loop.
+    if isinstance(result, str) and result.startswith("{") and "_image_b64" in result:
+        try:
+            return json.loads(result)
+        except (json.JSONDecodeError, ValueError):
+            pass
+    return result
