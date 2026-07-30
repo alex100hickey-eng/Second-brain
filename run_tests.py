@@ -51,7 +51,7 @@ import subprocess
 # Patterns that indicate ACTUAL mouse/keyboard control code — real imports or attribute
 # calls, NOT the mere mention of a library name in a docstring or safety rule (our safety
 # text legitimately says things like "no pyautogui-style control"). Screen-watch is
-# watch-only; this must never match anywhere in the project.
+# watch-only; this must never match outside the sanctioned modules below.
 _CONTROL_CODE_PATTERNS = [
     r"^\s*import\s+pyautogui\b", r"^\s*import\s+pynput\b",
     r"^\s*from\s+pyautogui\b", r"^\s*from\s+pynput\b",
@@ -63,6 +63,24 @@ _CONTROL_CODE_PATTERNS = [
 
 def _has_control_code(text: str) -> bool:
     return any(re.search(p, text, re.MULTILINE) for p in _CONTROL_CODE_PATTERNS)
+
+# The ONLY files allowed to drive the mouse/keyboard: the gated screen-control
+# capability Alex approved. Everything else in the project stays hands-off, and
+# the allowlist is not a blank cheque — _CONTROL_GATE_MARKERS below re-asserts
+# that these files still carry the gates that earned them the exemption.
+_CONTROL_CODE_ALLOWED = {
+    "second-brain-chat/screen_control.py",  # the only file that touches the mouse
+}
+
+# Each allowlisted file must still show these gates. Keyed by relpath.
+_CONTROL_GATE_MARKERS = {
+    "second-brain-chat/screen_control.py": [
+        (r"SESSION_MAX_SECONDS\s*=\s*\d+", "session self-expiry"),
+        (r"_escape_watchdog_will_actually_work", "Escape kill-switch preflight"),
+        (r"RUNTIME[^\n]*==\s*[\"']server[\"']", "server-disabled guard"),
+        (r"looks like a credential", "credential-typing refusal"),
+    ],
+}
 
 # --- make the app + agents importable, and protect the real vault ------------
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -978,6 +996,89 @@ def suite_screen(app, live):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def suite_screen_agent(app, live):
+    """The local see->act loop. Everything here is exercisable WITHOUT macOS
+    Accessibility — the pure logic (context pruning, image encoding, result
+    shaping) and the structural safety properties. Live click-landing needs
+    Accessibility granted and is verified by hand, not here."""
+    section("screen agent (local computer-use loop)")
+    import screen_agent as sa
+
+    src = open(os.path.join(CHAT_DIR, "screen_agent.py"), encoding="utf-8").read()
+
+    # Structural safety: no path to the mouse that skips screen_control's gates.
+    check("screen_agent has NO direct mouse/keyboard control code", not _has_control_code(src))
+    check("screen_agent acts only via screen_control", "import screen_control" in src)
+
+    # The human gate: a high-risk capability must not wire itself into the live app.
+    app_src = open(os.path.join(CHAT_DIR, "app.py"), encoding="utf-8").read()
+    check("screen_agent is NOT auto-registered in app.py (awaits Alex's approval)",
+          "import screen_agent" not in app_src)
+
+    # Step budget is clamped both ways.
+    check("MAX_STEPS_CAP bounds the step budget", sa.MAX_STEPS_CAP >= sa.MAX_STEPS_DEFAULT)
+
+    # Uninitialised / empty-goal guards return a message rather than exploding.
+    saved_client = sa.claude
+    sa.claude = None
+    check("uninitialised agent refuses to run", "not initialised" in sa.run_screen_task("do a thing"))
+    sa.claude = object()          # non-None, so we get past the init guard
+    check("empty goal is refused", sa.run_screen_task("   ") == "No goal given.")
+    sa.claude = saved_client
+
+    # Result shaping: an image result becomes a text+image tool_result; a plain
+    # string (error/refusal from screen_control) stays text-only.
+    try:
+        import base64 as _b64
+        from io import BytesIO
+        from PIL import Image
+        buf = BytesIO()
+        Image.new("RGB", (40, 30), (10, 20, 30)).save(buf, format="PNG")
+        png_b64 = _b64.b64encode(buf.getvalue()).decode()
+
+        res = sa._tool_result("tu_1", {"_image_b64": png_b64, "text": "Did: click."})
+        kinds = [p["type"] for p in res["content"]]
+        check("image result becomes text + image tool_result", kinds == ["text", "image"])
+        check("image is re-encoded as JPEG to bound cost",
+              res["content"][1]["source"]["media_type"] == "image/jpeg")
+
+        err = sa._tool_result("tu_2", "STOPPED — Escape was pressed.")
+        check("string result stays a text-only tool_result",
+              [p["type"] for p in err["content"]] == ["text"]
+              and "Escape" in err["content"][0]["text"])
+
+        # Pruning: build a conversation with 5 screenshots, keep the last 3.
+        def _img_msg(i):
+            return {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": f"t{i}", "content": [
+                    {"type": "text", "text": f"step {i}"},
+                    {"type": "image", "source": {"type": "base64",
+                                                 "media_type": "image/jpeg", "data": png_b64}}]}]}
+        msgs = [{"role": "user", "content": [{"type": "text", "text": "Goal: something"}]}]
+        for i in range(5):
+            msgs.append(_img_msg(i))
+
+        def _count_images(ms):
+            n = 0
+            for m in ms:
+                for b in m["content"]:
+                    if isinstance(b, dict) and b.get("type") == "tool_result":
+                        n += sum(1 for p in b["content"] if p.get("type") == "image")
+            return n
+
+        check("all 5 screenshots present before pruning", _count_images(msgs) == 5)
+        sa._prune_screenshots(msgs, keep=3)
+        check("pruning keeps only the most recent 3 screenshots", _count_images(msgs) == 3)
+        check("the goal message survives pruning", msgs[0]["content"][0]["text"].startswith("Goal:"))
+        dropped = msgs[1]["content"][0]["content"][1]
+        check("stale screenshot replaced by a placeholder, not deleted",
+              dropped["type"] == "text" and "dropped" in dropped["text"])
+        kept = msgs[4]["content"][0]["content"][1]
+        check("recent screenshots keep their image block", kept["type"] == "image")
+    except ImportError:
+        skip("screen-agent image/pruning checks", "Pillow not installed")
+
+
 def suite_drafter(app, live):
     section("run drafter (DRAFTS ONLY — verbatim safety, council, status flow)")
     import run_drafter as rd
@@ -1360,10 +1461,11 @@ def suite_security(app, live):
                         cwd=ROOT, capture_output=True, text=True)
     check("conversation_memory.db is NOT tracked", ls.stdout.strip() == "")
 
-    # 5. NO control code anywhere — screen-watch is watch-only; nothing drives mouse/keyboard.
-    # Detects real imports/calls only (this test file names the libs in its patterns, and
-    # the safety rules mention them in prose — those must NOT count as violations).
-    offenders = []
+    # 5. Control code is CONFINED to the gated screen-control modules — screen-watch and
+    # everything else stay watch-only. Detects real imports/calls only (this test file names
+    # the libs in its patterns, and the safety rules mention them in prose — those must NOT
+    # count as violations).
+    offenders, seen_allowed = [], set()
     for r, dirs, files in os.walk(ROOT):
         dirs[:] = [d for d in dirs if d not in (".git", "__pycache__", "_archive", "node_modules", ".venv")]
         for fn in files:
@@ -1374,9 +1476,21 @@ def suite_security(app, live):
                 text = open(fp, encoding="utf-8", errors="ignore").read()
             except OSError:
                 continue
-            if _has_control_code(text):
-                offenders.append(os.path.relpath(fp, ROOT))
-    check("no mouse/keyboard control code in any .py file", not offenders, str(offenders))
+            if not _has_control_code(text):
+                continue
+            rel = os.path.relpath(fp, ROOT)
+            if rel in _CONTROL_CODE_ALLOWED:
+                seen_allowed.add(rel)
+            else:
+                offenders.append(rel)
+    check("mouse/keyboard control code ONLY in the gated screen-control modules",
+          not offenders, str(offenders))
+
+    # The allowlist is not a blank cheque: whatever is on it must still carry its gates.
+    for rel in sorted(seen_allowed):
+        text = open(os.path.join(ROOT, rel), encoding="utf-8", errors="ignore").read()
+        lost = [why for pat, why in _CONTROL_GATE_MARKERS.get(rel, []) if not re.search(pat, text)]
+        check(f"{rel} still carries its safety gates", not lost, str(lost))
 
 
 # --- in-memory stand-in for the Supabase client, just enough for the undo log --
@@ -1840,6 +1954,7 @@ SUITES = {
     "memory": suite_memory,
     "goals": suite_goals,
     "screen": suite_screen,
+    "screenagent": suite_screen_agent,
     "drafter": suite_drafter,
     "voice": suite_voice,
     "briefing": suite_briefing,
