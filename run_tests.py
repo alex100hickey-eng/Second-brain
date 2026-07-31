@@ -1065,6 +1065,87 @@ def suite_expansion_json(app, live):
           "GitHub search returned HTTP" in src)
 
 
+def suite_expansion_aim(app, live):
+    """What the scout SEARCHES for. It used to summarise recent managed-task goals,
+    which pointed it at whatever Alex worked on rather than anything missing."""
+    section("expansion scout aim (capability gaps, not recent topics)")
+    import expansion_pipeline as ep
+
+    tmp = tempfile.mkdtemp(prefix="sbtest_friction_")
+    saved_file = ep.FRICTION_FILE
+    try:
+        path = os.path.join(tmp, "FRICTION.md")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("# FRICTION.md — the polish ledger\n\n"
+                    "- [x] [2026-07-01] this one is already fixed (fixed 2026-07-02, abc123)\n"
+                    "- [2026-07-22] Voice: wants conversation mode with VAD. "
+                    "(Design sketch: browser VAD via WebAudio RMS threshold)\n"
+                    "- [2026-07-23] search is too slow to be useful\n")
+        ep.FRICTION_FILE = path
+        items = ep._open_friction_items()
+        check("friction: fixed items are skipped", not any("already fixed" in i for i in items))
+        check("friction: open items are picked up", len(items) == 2)
+        check("friction: newest complaint comes first", "search is too slow" in items[0])
+        check("friction: design-sketch parentheticals are stripped (they aren't search terms)",
+              all("Design sketch" not in i for i in items))
+
+        # Tool failures: the pipeline's own audit noise must not become a "gap",
+        # and a bare tool name with no summary gives the scout nothing to search.
+        class _FakeObs:
+            @staticmethod
+            def tools_since(_since):
+                return [
+                    {"tool": "scout_github", "success": 0, "summary": "GitHub search returned HTTP 403"},
+                    {"tool": "run_scout", "success": 0, "summary": "boom"},
+                    {"tool": "send_email", "success": 0, "summary": ""},
+                    {"tool": "transcribe_audio", "success": 0, "summary": "whisper binary missing"},
+                    {"tool": "check_calendar", "success": 1, "summary": "fine"},
+                ]
+
+        import observability
+        saved_get = observability.get_observability
+        observability.get_observability = lambda: _FakeObs()
+        try:
+            fails = ep._recent_tool_failures()
+            check("failures: this pipeline's own audit entries are excluded",
+                  not any("scout_github" in f or "run_scout" in f for f in fails))
+            check("failures: entries with no summary are dropped (nothing searchable)",
+                  not any("send_email" in f for f in fails))
+            check("failures: a real failing tool IS surfaced",
+                  any("transcribe_audio" in f for f in fails))
+            check("failures: successful calls are not gaps",
+                  not any("check_calendar" in f for f in fails))
+
+            brief = ep._default_focus_brief()
+            check("brief is built from friction + observed failures",
+                  "conversation mode" in brief.lower() or "search is too slow" in brief.lower())
+            check("brief is framed as gaps to close, not recent work",
+                  "close these gaps" in brief)
+            check("brief stays short enough to distil into queries", len(brief) <= 600)
+        finally:
+            observability.get_observability = saved_get
+
+        # Unfinished goals are a FALLBACK only — they're what dragged job scrapers in.
+        src = open(os.path.join(CHAT_DIR, "expansion_pipeline.py"), encoding="utf-8").read()
+        body = src[src.index("def _default_focus_brief"):]
+        friction_first = body.index("_open_friction_items") < body.index("_unfinished_task_goals")
+        check("unfinished goals are only reached when there's no friction/failure signal",
+              friction_first and "if not parts:" in body)
+
+        # With no signal at all, it must still say something searchable.
+        ep.FRICTION_FILE = os.path.join(tmp, "does-not-exist.md")
+        observability.get_observability = lambda: (_ for _ in ()).throw(RuntimeError("no obs"))
+        try:
+            fallback = ep._default_focus_brief()
+            check("with no signals at all, the brief falls back to something searchable",
+                  len(fallback) > 40)
+        finally:
+            observability.get_observability = saved_get
+    finally:
+        ep.FRICTION_FILE = saved_file
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def suite_screen_agent(app, live):
     """The local see->act loop. Everything here is exercisable WITHOUT macOS
     Accessibility — the pure logic (context pruning, image encoding, result
@@ -2025,6 +2106,7 @@ SUITES = {
     "screen": suite_screen,
     "screenagent": suite_screen_agent,
     "expansionjson": suite_expansion_json,
+    "expansionaim": suite_expansion_aim,
     "drafter": suite_drafter,
     "voice": suite_voice,
     "briefing": suite_briefing,

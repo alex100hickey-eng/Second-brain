@@ -46,7 +46,7 @@ import subprocess
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 try:
@@ -466,25 +466,119 @@ def _safe_scout(fn, brief, cap):
         return []
 
 
-def _default_focus_brief() -> str:
-    """A capability-gap brief derived from recent managed tasks, so scouting is
-    grounded when Alex doesn't supply one."""
+FRICTION_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "FRICTION.md")
+
+
+def _open_friction_items(limit: int = 4) -> list:
+    """Alex's own unresolved complaints, verbatim — the highest-signal statement
+    of what this assistant can't do well. Format is set by app.log_friction:
+    `- [YYYY-MM-DD] complaint`, checked off as `- [x] ...` once fixed."""
+    try:
+        with open(FRICTION_FILE, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return []
+    out = []
+    for ln in reversed(lines):                      # newest complaints first
+        ln = ln.strip()
+        if not ln.startswith("- [") or ln.startswith("- [x]"):
+            continue
+        body = re.sub(r"^- \[\d{4}-\d{2}-\d{2}\]\s*", "", ln)
+        # Keep the ask, drop the parenthetical design sketches — they're notes to
+        # ourselves, not search terms.
+        body = re.split(r"\s*\(Design sketch:", body)[0].strip()
+        if body:
+            out.append(body[:180])
+        if len(out) >= limit:
+            break
+    return out
+
+
+# This pipeline's OWN audit entries are not capability gaps — a failing scout is a
+# bug to fix here, not something to go adopt off GitHub. Excluding them also keeps
+# the brief from feeding on this module's own debugging noise, which is exactly
+# what happened the first time it ran.
+_SELF_AUDIT_TOOLS = {"run_scout", "scout", "scout_github", "scout_structure",
+                     "scout_queries", "money_scout", "reddit_scout",
+                     "expansion_review", "apply_finding"}
+
+
+def _recent_tool_failures(limit: int = 4) -> list:
+    """Tools that actually failed recently: observed gaps, not hypothetical ones."""
+    try:
+        import observability
+        obs = observability.get_observability()
+        since = (datetime.now(ZoneInfo("America/New_York")) - timedelta(days=7)).isoformat()
+        rows = obs.tools_since(since)
+    except Exception:
+        return []
+    seen, out = set(), []
+    for r in rows:
+        if r.get("success"):
+            continue
+        tool = r.get("tool") or ""
+        summary = str(r.get("summary") or "").strip()
+        # A bare tool name with no summary tells the scout nothing searchable.
+        if not tool or not summary or tool in seen or tool in _SELF_AUDIT_TOOLS:
+            continue
+        seen.add(tool)
+        out.append(f"{tool} keeps failing ({summary[:70]})")
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _unfinished_task_goals(limit: int = 3) -> list:
+    """Managed tasks that did NOT succeed. The goals CLARVIS *completed* say
+    nothing about what it's missing — only the ones it couldn't finish do."""
     try:
         rows = (supabase.table("Agent Outputs").select("output_text")
                 .eq("agent_name", "jarvis_managed_task").order("id", desc=True)
-                .limit(8).execute().data or [])
-        goals = []
-        for r in rows:
-            try:
-                goals.append(json.loads(r["output_text"]).get("goal", ""))
-            except (json.JSONDecodeError, TypeError):
-                continue
-        if goals:
-            return ("Tools/libraries/skills that would help with recent work: "
-                    + "; ".join(g for g in goals if g)[:400])
+                .limit(30).execute().data or [])
     except Exception:
-        pass
-    return "General agent tooling: MCP servers, automation libraries, and skills for a personal AI assistant."
+        return []
+    out = []
+    for r in rows:
+        try:
+            t = json.loads(r["output_text"])
+        except (json.JSONDecodeError, TypeError):
+            continue
+        status = str(t.get("status", "")).lower()
+        result = str(t.get("result", "")).lower()
+        stuck = status in ("failed", "error") or "could not" in result or "couldn't" in result
+        if stuck and t.get("goal"):
+            out.append(str(t["goal"])[:140])
+        if len(out) >= limit:
+            break
+    return out
+
+
+_GENERIC_BRIEF = ("Capabilities a personal AI assistant is missing: MCP servers, agent "
+                  "automation libraries, voice/realtime interaction, and self-hosted "
+                  "integrations it could adopt.")
+
+
+def _default_focus_brief() -> str:
+    """A capability-GAP brief: what CLARVIS can't do yet.
+
+    This used to summarise the last 8 managed-task GOALS, which aimed the scout at
+    whatever Alex happened to work on rather than at anything missing — a day spent
+    on job-board research made it scout job scrapers, and the council rightly
+    rejected them at 1-2/5 usefulness. Goals CLARVIS already achieved are evidence
+    of what it CAN do. Gaps come from what Alex has complained about and what has
+    been observed breaking.
+
+    Unfinished task goals are only a FALLBACK. A goal Alex abandoned is weak
+    evidence of a missing capability — it's usually just a topic he moved on from,
+    and letting it into the brief is what dragged 'Apify actor store scraper' back
+    in on the first run of this very rewrite."""
+    parts = _open_friction_items() + _recent_tool_failures()
+    if not parts:
+        parts = _unfinished_task_goals()
+    if not parts:
+        return _GENERIC_BRIEF
+    return ("Tools, libraries or skills that would close these gaps in a personal AI "
+            "assistant: " + "; ".join(parts))[:600]
 
 
 # ============================================================
