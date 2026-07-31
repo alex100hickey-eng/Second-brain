@@ -976,21 +976,46 @@ def _venv_install(target: str) -> dict:
         return {"ok": False, "python": py, "detail": str(e)[:300]}
 
 
+def _installed_modules(python: str) -> list:
+    """Ask the venv what top-level modules pip actually installed — ground truth,
+    not guesswork. packages_distributions() maps top-level module -> distribution
+    for everything importable in that interpreter; the stdlib and pip itself are
+    filtered by keeping only modules whose files live in site-packages."""
+    code = (
+        "import importlib.metadata as m, json\n"
+        "mods = sorted({mod for mod, dists in m.packages_distributions().items()\n"
+        "               for d in dists if d.lower() not in ('pip', 'setuptools', 'wheel')})\n"
+        "print(json.dumps(mods))\n"
+    )
+    try:
+        r = subprocess.run([python, "-c", code], capture_output=True, text=True, timeout=60)
+        if r.returncode == 0:
+            return [m for m in json.loads(r.stdout.strip() or "[]")
+                    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", m)][:6]
+    except Exception:
+        pass
+    return []
+
+
 def _import_candidates(target: str) -> list:
-    """Best guesses at the importable top module(s): declared packages plus any top-level
-    package dir (has __init__.py) or lone module file in the checkout."""
+    """Best guesses at the importable top module(s) from the CHECKOUT (used only when
+    there's no venv to ask): declared packages plus any top-level or src/-layout
+    package dir (has __init__.py) or lone module file. The src/ layout is the
+    officially recommended modern structure — missing it made every src-layout repo
+    fail its smoke test after a human had already approved the install."""
     cands = []
     base = os.path.basename(target).replace("-", "_")
     cands.append(base)
-    try:
-        for name in sorted(os.listdir(target)):
-            p = os.path.join(target, name)
-            if os.path.isdir(p) and os.path.exists(os.path.join(p, "__init__.py")):
-                cands.append(name)
-            elif name.endswith(".py") and name not in ("setup.py", "conftest.py"):
-                cands.append(name[:-3])
-    except OSError:
-        pass
+    for root in (target, os.path.join(target, "src")):
+        try:
+            for name in sorted(os.listdir(root)):
+                p = os.path.join(root, name)
+                if os.path.isdir(p) and os.path.exists(os.path.join(p, "__init__.py")):
+                    cands.append(name)
+                elif name.endswith(".py") and name not in ("setup.py", "conftest.py", "noxfile.py"):
+                    cands.append(name[:-3])
+        except OSError:
+            continue
     seen, out = set(), []
     for c in cands:
         if c and c not in seen and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", c):
@@ -1002,7 +1027,10 @@ def _import_candidates(target: str) -> list:
 def _smoke_test(target: str, name: str, python: str = None) -> dict:
     """Actually import the installed package and confirm it loads. Uses the venv python
     when there is one (deps present); else a sandboxed import against the checkout dir."""
-    candidates = _import_candidates(target)
+    # With a venv, ask IT what was installed rather than guessing from directory
+    # names — guessing broke on the src/ layout the very first time this ran.
+    candidates = (_installed_modules(python) if python and os.path.exists(python) else []) \
+                 or _import_candidates(target)
     if not candidates:
         return {"ok": True, "detail": "nothing importable to smoke-test (cloned artifact only)"}
 

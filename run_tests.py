@@ -1066,6 +1066,45 @@ def suite_expansion_json(app, live):
           "GitHub search returned HTTP" in src)
 
 
+def suite_apply_finding(app, live):
+    """The installer's smoke-test targeting. Its first-ever end-to-end run (against
+    pypa/sampleproject, the official packaging example) failed because module names
+    were guessed from directory names and the src/ layout wasn't recognised — a
+    human-approved install rolled back for no real reason."""
+    section("apply_finding (installer smoke-test targeting)")
+    import expansion_pipeline as ep
+
+    tmp = tempfile.mkdtemp(prefix="sbtest_apply_")
+    try:
+        # src/ layout: package lives at src/<name>/, nothing importable at top level.
+        os.makedirs(os.path.join(tmp, "src", "samplepkg"))
+        open(os.path.join(tmp, "src", "samplepkg", "__init__.py"), "w").close()
+        open(os.path.join(tmp, "noxfile.py"), "w").close()
+        cands = ep._import_candidates(tmp)
+        check("src/-layout packages are found by the checkout heuristic", "samplepkg" in cands)
+        check("noxfile is not a smoke-test candidate", "noxfile" not in cands)
+
+        # Flat layout still works.
+        os.makedirs(os.path.join(tmp, "flatpkg"))
+        open(os.path.join(tmp, "flatpkg", "__init__.py"), "w").close()
+        check("flat-layout packages still found", "flatpkg" in ep._import_candidates(tmp))
+
+        # With a venv, ground truth beats guessing: _installed_modules asks the
+        # interpreter. Exercised against THIS python (any interpreter works).
+        mods = ep._installed_modules(sys.executable)
+        check("_installed_modules asks the interpreter, returns a clean list",
+              isinstance(mods, list) and all(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", m) for m in mods))
+        src = open(os.path.join(CHAT_DIR, "expansion_pipeline.py"), encoding="utf-8").read()
+        check("smoke test prefers the venv's own account of what was installed",
+              "_installed_modules(python)" in src)
+
+        # The hard gate stays hard: unapproved actions refuse in code.
+        check("unapproved install refuses in _execute_install (RULE 1)",
+              "refused: install action is not human-approved" in src)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def suite_tts_stream(app, live):
     """Streaming TTS: the reply gap fix. Offline checks only — the live latency
     numbers (530ms vs 2117ms to first audio) were measured against the real API."""
@@ -2519,6 +2558,7 @@ SUITES = {
     "expansionaim": suite_expansion_aim,
     "draftstore": suite_draft_store,
     "voicevad": suite_voice_vad,
+    "applyfinding": suite_apply_finding,
     "ttsstream": suite_tts_stream,
     "heartbeat": suite_heartbeat,
     "version": suite_version,
