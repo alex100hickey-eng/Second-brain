@@ -284,3 +284,45 @@
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; }
 }
+
+/* ---------- Mobile (stacked column; same widgets, no 1600px scene) ---------- */
+/* Under HUD.MOBILE_BREAK the deck stops being a scaled scene and becomes a
+   scrollable column. Same palette, same frames, same data — no scenery. */
+body.hud-mobile { overflow-x: hidden; overflow-y: auto; }
+body.hud-mobile #deck {
+  position: static;          /* the templates pin #deck absolute for the scene */
+  width: auto; height: auto;
+  transform: none;
+  padding: 10px 12px calc(96px + env(safe-area-inset-bottom));  /* room for the chat bar */
+}
+.hud-m-head {
+  display: flex; align-items: center; gap: 14px;
+  padding: 6px 2px 12px;
+}
+.hud-m-core { flex: 0 0 auto; }
+.hud-m-word {
+  font-family: 'Orbitron', sans-serif;
+  font-size: 22px; letter-spacing: 0.42em;
+  color: var(--hud-cyan); filter: var(--hud-glow);
+}
+.hud-m-col { display: flex; flex-direction: column; gap: 12px; }
+.hud-m-cell { display: flex; justify-content: center; }
+/* page title/sub on subpages are absolutely placed for the scene — reflow them */
+body.hud-mobile .pagetitle, body.hud-mobile .pagesub {
+  position: static !important; transform: none !important;
+  text-align: left; margin: 0 2px;
+}
+body.hud-mobile .pagesub { margin-bottom: 12px; }
+.hud-m-chatbar {
+  position: fixed; left: 12px; right: 12px;
+  bottom: calc(10px + env(safe-area-inset-bottom));
+  width: auto !important;
+  z-index: 60;
+}
+
+/* Subpages append .pagetitle/.pagesub AFTER the shell's column — flex-order them
+   back to the top on mobile instead of asking every page to reorder its DOM. */
+body.hud-mobile #deck { display: flex; flex-direction: column; }
+body.hud-mobile .hud-m-head { order: -3; }
+body.hud-mobile .pagetitle { order: -2; }
+body.hud-mobile .pagesub  { order: -1; }

@@ -1559,7 +1559,16 @@
      ============================================================ */
   HUD.widgetFrame = function (opts) {
     opts = opts || {};
-    const W = opts.width || 300, H = opts.height || 160;
+    let W = opts.width || 300, H = opts.height || 160;
+    // Mobile: desktop widths (~210px) were tuned for the 1600px scene. In the
+    // stacked column every widget spans the phone instead, with a bit more height
+    // so the same rows/stats breathe at full size. Pages don't change a thing.
+    if (HUD.isMobile && HUD.isMobile() && opts.title) {
+      W = Math.min(window.innerWidth, 430) - 24;
+      // Small home-deck widgets get room to breathe; the subpages' big panels
+      // already have it, and scaling them too just added blank scroll.
+      if (H <= 150) H = Math.round(H * 1.15) + 8;
+    }
     const shape = opts.shape || 'notch';
     const k = opts.cut || 13;                 // chamfer / point depth (soft by default)
     const o = 1.5;                            // stroke inset
@@ -1696,6 +1705,7 @@
       `top:${pad[0]}px;bottom:${pad[2] == null ? pad[0] : pad[2]}px;overflow:hidden`;
     div.appendChild(content);
     div._content = content;
+    div._titled = !!opts.title;   // the mobile shell keeps titled frames, drops bare ones
 
     // optional: the whole frame becomes a link to its expanded page
     if (opts.href) {
@@ -1849,7 +1859,9 @@
      ============================================================ */
   HUD.chatBar = function (opts) {
     opts = opts || {};
-    const W = opts.width || 620, H = 54;
+    let W = opts.width || 620;
+    const H = 54;
+    if (HUD.isMobile && HUD.isMobile()) W = Math.min(window.innerWidth, 430) - 24;
     const wrap = document.createElement('div');
     wrap.className = 'hud-chatbar';
     wrap.style.cssText = `position:relative;width:${W}px;height:${H}px`;
@@ -1884,7 +1896,10 @@
     const action = opts.action || '/chat-classic';
     const submit = () => {
       const v = input.value.trim();
-      window.location.href = v ? action + '?q=' + encodeURIComponent(v) : action;
+      // go=1: the user already pressed SEND here — landing on the chat page and
+      // having to press send AGAIN was a doorstop in the front door. Bare ?q=
+      // (dashboard quick actions) still only pre-fills, for editing canned prompts.
+      window.location.href = v ? action + '?q=' + encodeURIComponent(v) + '&go=1' : action;
     };
     send.addEventListener('click', submit);
     input.addEventListener('keydown', e => { if (e.key === 'Enter') submit(); });
@@ -1931,8 +1946,22 @@
      opts: {reactorHref, reactorX, reactorY, reactorSize, floorText,
             reactorTitle}
      ============================================================ */
+  // Below this width the 1600x1000 deck scales to a postage stamp (3px text,
+  // untappable widgets) — Alex's phone, where the PWA actually lives. Rather than
+  // shrink the scene, narrow screens get a stacked column of the SAME widgets:
+  // pages keep calling at()/atC()/label() exactly as before, and the shell decides
+  // that titled widgets + the chat bar are content (kept, full width) while
+  // decorative telemetry is scenery (skipped — glyph soup at phone size).
+  HUD.MOBILE_BREAK = 700;
+  HUD.isMobile = function () { return window.innerWidth < HUD.MOBILE_BREAK; };
+
   HUD.deckShell = function (deck, opts) {
     opts = opts || {};
+    if (HUD.isMobile()) return _mobileShell(deck, opts);
+    // Crossing the breakpoint (rotation, window resize) swaps layout systems —
+    // a reload is cheaper and safer than trying to morph one into the other.
+    window.matchMedia(`(max-width: ${HUD.MOBILE_BREAK - 1}px)`)
+      .addEventListener('change', () => location.reload());
     const W = 1600, H = 1000;
     function fit() {
       const sc = Math.min(window.innerWidth / W, window.innerHeight / H);
@@ -1976,6 +2005,59 @@
 
     return { at, atC, label, deck };
   };
+
+  function _mobileShell(deck, opts) {
+    document.body.classList.add('hud-mobile');
+    window.matchMedia(`(max-width: ${HUD.MOBILE_BREAK - 1}px)`)
+      .addEventListener('change', () => location.reload());
+    HUD.scanlineOverlay();
+    HUD.motionControl();
+
+    // Header: a small reactor (the same clickable core, sized like a glyph) beside
+    // the wordmark — the identity survives, the 560px scene doesn't.
+    const head = document.createElement('div');
+    head.className = 'hud-m-head';
+    const core = HUD.coreReactor({ size: 64, href: opts.reactorHref || '/chat-classic',
+      linkTitle: opts.reactorTitle || 'Open CLARVIS chat' });
+    core.classList.add('hud-m-core');
+    head.appendChild(core);
+    const word = document.createElement('div');
+    word.className = 'hud-m-word';
+    word.textContent = (opts.floorText || 'C.L.A.R.V.I.S').replace(/\./g, '');
+    head.appendChild(word);
+    deck.appendChild(head);
+
+    const col = document.createElement('div');
+    col.className = 'hud-m-col';
+    deck.appendChild(col);
+
+    function isContent(node) {
+      // Titled widget frames and the chat bar are content; bare frames, spinners,
+      // ladders, tick strips and friends are desktop scenery.
+      if (node.classList && node.classList.contains('hud-chatbar')) return true;
+      return node.classList && node.classList.contains('hud-widget') && node._titled;
+    }
+
+    function at(node, _x, _y, role) {
+      if (!isContent(node)) return node;           // scenery: built but not placed
+      if (node.classList.contains('hud-chatbar')) {
+        node.classList.add('hud-m-chatbar');
+        node.style.position = 'fixed';   // chatBar sets position:relative INLINE,
+        document.body.appendChild(node); // which would beat the class's fixed
+        return node;
+      }
+      const cell = document.createElement('div');
+      cell.className = 'hud-m-cell';
+      if (role) cell.dataset.role = role;
+      cell.appendChild(node);
+      col.appendChild(cell);
+      return cell;
+    }
+    const atC = at;
+    function label() { return document.createElement('div'); }  // micro-readouts: scenery
+
+    return { at, atC, label, deck };
+  }
 
   /* ============================================================
      FloorPlane — a trapezoid floor spanning the full bottom edge:

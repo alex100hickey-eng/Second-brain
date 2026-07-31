@@ -1066,6 +1066,38 @@ def suite_expansion_json(app, live):
           "GitHub search returned HTTP" in src)
 
 
+def suite_hud_mobile(app, live):
+    """The HUD's phone mode + chat-bar auto-send. Structural checks on what ships;
+    the rendered behavior was verified in a real browser at 390px and 1280px."""
+    section("HUD mobile + chat bar (phone-usable front door)")
+    js = open(os.path.join(CHAT_DIR, "static", "hud", "hud.js"), encoding="utf-8").read()
+    css = open(os.path.join(CHAT_DIR, "static", "hud", "hud.css"), encoding="utf-8").read()
+    hud = open(os.path.join(CHAT_DIR, "templates", "hud.html"), encoding="utf-8").read()
+    sub = open(os.path.join(CHAT_DIR, "templates", "subpage.html"), encoding="utf-8").read()
+    idx = open(os.path.join(CHAT_DIR, "templates", "index.html"), encoding="utf-8").read()
+
+    check("deckShell branches to a mobile shell under the breakpoint",
+          "_mobileShell" in js and "HUD.MOBILE_BREAK" in js)
+    check("mobile keeps titled widgets and drops bare-frame scenery",
+          "_titled" in js and "isContent" in js)
+    check("widgets span the phone width on mobile", "Math.min(window.innerWidth, 430)" in js)
+    check("crossing the breakpoint reloads rather than morphing layouts",
+          js.count("location.reload()") >= 2)
+    check("mobile body scrolls (the scene templates pin overflow hidden)",
+          "body.hud-mobile" in css and "overflow-y: auto" in css)
+    check("chat bar is pinned to the bottom with safe-area padding",
+          "hud-m-chatbar" in css and "safe-area-inset-bottom" in css)
+    check("subpage titles are flex-ordered above the column",
+          ".pagetitle { order: -2; }" in css)
+    check("both templates load the same bumped asset version",
+          hud.count("v=16") == 2 and sub.count("v=16") == 2)
+
+    check("HUD chat bar sends go=1 (user already pressed send once)",
+          "'&go=1'" in js or '"&go=1"' in js)
+    check("chat page auto-sends on go=1 and still only pre-fills bare ?q=",
+          "params.get('go') === '1'" in idx and "requestSubmit(), 120" in idx)
+
+
 def suite_smoothness(app, live):
     """The smoothness pass: worker prompt caching, history prefix caching, and
     cross-account mail dedupe (the twice-delivered basketball form)."""
@@ -2812,6 +2844,7 @@ SUITES = {
     "expansionaim": suite_expansion_aim,
     "draftstore": suite_draft_store,
     "voicevad": suite_voice_vad,
+    "hudmobile": suite_hud_mobile,
     "smoothness": suite_smoothness,
     "callhardening": suite_call_hardening,
     "retention": suite_retention,

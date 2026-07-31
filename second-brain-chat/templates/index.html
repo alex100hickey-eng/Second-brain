@@ -418,13 +418,23 @@
   const input = document.getElementById('message-input');
 
   // Dashboard quick actions link here with ?q=… to pre-fill (not auto-send) the box.
+  // The HUD chat bar adds &go=1: there the user ALREADY pressed send, so making
+  // them press it a second time here was pure friction — that message auto-sends.
   (function prefillFromQuery() {
     try {
-      const q = new URLSearchParams(location.search).get('q');
+      const params = new URLSearchParams(location.search);
+      const q = params.get('q');
+      const go = params.get('go') === '1';
       if (q) {
         input.value = q;
-        setTimeout(() => { input.focus(); input.setSelectionRange(q.length, q.length); }, 60);
         history.replaceState(null, '', location.pathname);
+        if (go) {
+          // Deferred: the submit handler is attached later in this script, and a
+          // requestSubmit before that would fall through to a native form post.
+          setTimeout(() => form.requestSubmit(), 120);
+        } else {
+          setTimeout(() => { input.focus(); input.setSelectionRange(q.length, q.length); }, 60);
+        }
       }
     } catch (e) { /* ignore */ }
   })();
