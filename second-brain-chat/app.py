@@ -3739,8 +3739,8 @@ def _dispatch_tool_call(tool_name: str, tool_input: dict) -> str:
         return screen_control.handle_tool_call(tool_name, tool_input)
     if tool_name == "run_screen_task":
         if task_manager.RUNTIME == "server":
-            return ("Screen tasks run on the Mac, which isn't reachable from here. "
-                    "Ask again from the Mac, or use the step-by-step screen controls.")
+            # Relayed to the Mac, where the loop actually runs (screen_bridge).
+            return screen_bridge.handle_tool_call(supabase, tool_name, tool_input)
         return screen_agent.handle_tool_call(tool_name, tool_input)
     if tool_name == "check_notifications":
         return proactive.status_text()
@@ -4416,7 +4416,6 @@ if task_manager.RUNTIME != "server":
     import screen_agent  # noqa: E402
     screen_agent.init(claude)
     TOOLS.extend(screen_agent.TOOL_SCHEMAS)
-    TOOL_STATUS_LABELS["run_screen_task"] = "Driving your screen…"
 else:
     # On the server: same tools, but each one is relayed to the Mac over
     # Supabase (screen_bridge). Alex wants ONE CLARVIS rather than a separate
@@ -4425,6 +4424,7 @@ else:
     # refusal all still live where execution happens.
     TOOLS.extend(screen_bridge.TOOL_SCHEMAS)
 
+TOOL_STATUS_LABELS["run_screen_task"] = "Driving your screen…"
 TOOL_STATUS_LABELS["screen_control_start"] = "Arming screen control — press Escape any time to stop…"
 TOOL_STATUS_LABELS["screen_control_act"] = "Acting on your screen…"
 TOOL_STATUS_LABELS["screen_control_screenshot"] = "Looking at your screen…"

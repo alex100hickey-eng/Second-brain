@@ -96,6 +96,10 @@ def verify(cmd: dict) -> tuple:
 MAX_COMMAND_AGE = 120.0   # seconds; older commands are discarded, never executed
 POLL_INTERVAL = 1.5       # relay poll cadence
 DEFAULT_TIMEOUT = 45.0    # how long the server waits for the Mac to answer
+# The agent loop answers once, after up to MAX_STEPS_CAP see->act rounds. What
+# really bounds it is screen_control's 5-minute session expiry, so this only has
+# to outlast that plus the final model turn.
+AGENT_TIMEOUT = 420.0
 
 
 def _now() -> float:
@@ -188,6 +192,22 @@ def _execute(action: str, payload: dict, claude_client=None) -> str:
     screen 1:1 with click coordinates); we JSON-encode that here and the
     server side decodes it back into an image tool_result."""
     import screen_control
+
+    if action == "agent":
+        # The local see->act loop runs HERE, on the Mac. Every step needs a fresh
+        # screenshot and a real click, so relaying step-by-step would put a
+        # Supabase round trip between each one; instead only the goal and the
+        # final report cross the wire. screen_agent still acts exclusively
+        # through screen_control, so the Escape kill-switch, session expiry and
+        # credential refusal all apply exactly as they do to a single click.
+        import screen_agent
+        if claude_client is None:
+            return ("Screen agent unavailable: the relay has no CLAUDE_API_KEY, so it "
+                    "cannot run the local loop. Add it to .env and restart the relay.")
+        screen_agent.init(claude_client)
+        goal = (payload or {}).get("goal", "")
+        steps = (payload or {}).get("max_steps") or screen_agent.MAX_STEPS_DEFAULT
+        return screen_agent.run_screen_task(goal, steps)
 
     tool = {
         "screenshot": "screen_control_screenshot",
@@ -319,6 +339,24 @@ TOOL_SCHEMAS = [
     {"name": "screen_control_stop",
      "description": "End the screen-control session immediately. Always call this when done — never leave a session armed.",
      "input_schema": {"type": "object", "properties": {}}},
+
+    # The whole see->act loop, run on the Mac in one shot. Prefer this over
+    # driving screen_control_act step by step: each relayed step costs a
+    # Supabase round trip, whereas this crosses the wire twice in total.
+    {"name": "run_screen_task",
+     "description": ("Do a multi-step task on Alex's actual Mac screen — HIGH RISK, and only "
+                     "when he's explicitly asked for something the sandboxed browser can't do "
+                     "(a native app, not a webpage). The whole see->act loop runs on the Mac: "
+                     "it takes its own screenshots, clicks, types and verifies each step, then "
+                     "reports back once. Much faster than stepping through screen_control_act "
+                     "yourself. Alex can kill it any time by pressing Escape, and it self-expires "
+                     "after 5 minutes. Requires the Mac relay to be running."),
+     "input_schema": {"type": "object", "properties": {
+         "goal": {"type": "string",
+                  "description": "What to accomplish, concretely, in one or two sentences."},
+         "max_steps": {"type": "integer",
+                       "description": "Step budget (default 20, cap 40)."},
+     }, "required": ["goal"]}},
 ]
 
 
@@ -330,12 +368,18 @@ def handle_tool_call(supabase, name: str, tool_input: dict):
     action = {"screen_control_start": "start",
               "screen_control_stop": "stop",
               "screen_control_act": "act",
-              "screen_control_screenshot": "screenshot"}.get(name)
+              "screen_control_screenshot": "screenshot",
+              "run_screen_task": "agent"}.get(name)
     if not action:
         return f"Unknown screen tool: {name}"
     # start/screenshot/act now round-trip a screenshot from the Mac, which is
-    # slower and larger than a bare click acknowledgement.
-    timeout = DEFAULT_TIMEOUT if action == "stop" else 90.0
+    # slower and larger than a bare click acknowledgement. The agent loop runs
+    # many steps before answering, and screen_control's own 5-minute session
+    # expiry is what actually bounds it — this timeout just has to outlast that.
+    if action == "agent":
+        timeout = AGENT_TIMEOUT
+    else:
+        timeout = DEFAULT_TIMEOUT if action == "stop" else 90.0
     result = send_command(supabase, action, tool_input or {}, timeout=timeout)
     # The Mac ships image results as JSON; decode back to a dict for the loop.
     if isinstance(result, str) and result.startswith("{") and "_image_b64" in result:

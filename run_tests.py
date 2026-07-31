@@ -1961,8 +1961,32 @@ def suite_screen_agent(app, live):
     agent_import = app_src.index("import screen_agent")
     check("screen_agent import is confined to the Mac branch (server never loads it)",
           mac_branch_start < agent_import < relay_else)
-    check("server-side run_screen_task refuses instead of relaying",
-          "Screen tasks run on the Mac" in app_src)
+    # Reachability (2026-07-31): Alex runs NO local Flask app — his Mac runs
+    # screen_relay.py and the server is the brain. A Mac-branch-only registration
+    # therefore never loads, so run_screen_task is also relayed like the other
+    # screen tools, and the loop executes inside the relay where the mouse is.
+    import screen_bridge as sb_mod
+    bridge_src = open(os.path.join(CHAT_DIR, "screen_bridge.py"), encoding="utf-8").read()
+
+    check("server relays run_screen_task instead of refusing",
+          "screen_bridge.handle_tool_call(supabase, tool_name, tool_input)" in
+          app_src.split("run_screen_task")[1][:300])
+    check("bridge maps run_screen_task to the agent action",
+          '"run_screen_task": "agent"' in bridge_src)
+    check("bridge executes the loop locally via screen_agent",
+          "import screen_agent" in bridge_src and "screen_agent.run_screen_task" in bridge_src)
+    check("run_screen_task is offered by the relayed tool set",
+          any(t.get("name") == "run_screen_task" for t in sb_mod.TOOL_SCHEMAS))
+    check("agent timeout outlasts screen_control's 5-minute session expiry",
+          getattr(sb_mod, "AGENT_TIMEOUT", 0) > 300)
+
+    # Negative halves: the relay must refuse rather than half-run, and the loop
+    # must still go through screen_control's gates rather than around them.
+    check("relay refuses the agent action with no Claude client",
+          "Screen agent unavailable" in sb_mod._execute("agent", {"goal": "x"}, None))
+    check("relayed agent still acts only through screen_control",
+          not _has_control_code(open(os.path.join(CHAT_DIR, "screen_agent.py"),
+                                     encoding="utf-8").read()))
 
     # Step budget is clamped both ways.
     check("MAX_STEPS_CAP bounds the step budget", sa.MAX_STEPS_CAP >= sa.MAX_STEPS_DEFAULT)
