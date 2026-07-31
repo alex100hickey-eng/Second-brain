@@ -1,43 +1,38 @@
 # NEEDS_ALEX.md — everything blocked on you
 
-Written 2026-07-31 after a long autonomous session. Suite is 435/0; 15 commits
-pushed, 1 held locally. Every item below is blocked on something only you can do:
-a credential, a physical permission, a judgment call, or your ears.
+**Updated 2026-07-31 evening. Suite 447/0. Everything is deployed and verified
+live on `c6a2829`.** The long-running deploy outage is over — see "Resolved
+today" below for what it actually was, because the cause was not what the
+earlier version of this file guessed.
 
 Ordered so the first item unblocks the value of everything else.
 
 ---
 
-## 1. 🔴 THE DEPLOY — your server is 30 commits / 6 days behind
+## 1. ✅ RESOLVED — the deploy outage (root cause found)
 
-**This is the whole ballgame.** Nothing built since July 25 is live: the screen-control
-relay, mail scan worker fix, task-launch fix, 529 API hardening, and all of today's
-work (heartbeats, `/api/version`, voice conversation mode, streaming TTS, scout fixes,
-phone HUD, SSRF fix).
+The server had been stuck on `0efd2a7` (2026-07-25) for six days. The earlier
+guess in this file — a dead webhook / bad `pyautogui` requirement — was **wrong**.
 
-**Confirmed, not guessed:** the live server's `hud.js` and `hud.css` byte-match commit
-`0efd2a7` (2026-07-25). Infra is fine — host pings, port 22 open, Coolify UI answers,
-app serves. Deploys just aren't happening.
+**Actual cause:** the Hetzner box is **2 GB RAM with zero swap**. With the app,
+Coolify and Docker resident, only ~170 MB was free. Every build froze at nixpacks
+step `#8 RUN nix-env -if ... && nix-collect-garbage -d` — the memory peak — and
+Coolify reports a starved build as "In Progress" **forever** rather than failing.
+One such zombie sat for 10 hours and wedged the whole queue behind it, which is
+what made it look like deploys "weren't triggering". The webhook was fine all
+along; every push did queue a deployment.
 
-**Likely origin:** `766819e` (07-25) added `pyautogui`/`pynput` to requirements, which
-breaks a headless Linux build. `821d11c` (07-26) fixed it with `sys_platform` markers —
-but that fix is itself undeployed. The cure is stuck behind the disease. Three separate
-"re-trigger deploy" commits (07-25, 07-28, 07-31) never took, which points at deploys
-not *triggering* rather than *failing*.
+**Fix applied 2026-07-31:** 2 GB swap file added (`/swapfile`, in `/etc/fstab`,
+survives reboot) and `docker builder prune -af` run (~9 GB reclaimed). The very
+next build shipped in **~5 minutes**, versus 43-48 minutes when starved.
 
-**Do this (Coolify UI, not SSH):**
-1. Coolify → app `second-brain-chat` (uuid `h72tei3gy97z4wlqyqpvuylg`) → **Deployments**
-2. Is there *any* attempt since 07-25? If yes → read its logs. If no → it's the trigger.
-3. Check **auto-deploy / webhook enabled** on the app. ← my main suspect
-4. If the webhook looks dead, reconnect the GitHub source (App "second-brain1")
-5. Hit **Redeploy** manually
-6. Verify: `curl https://clarvis.178.156.209.40.sslip.io/api/version`
-   → expect commit `afa40db` or later. **A 401 means it didn't take.**
-   *(Corrected 2026-07-31: earlier versions said `8854c6c`, but that commit is still
-   unpushed on the Mac under the deploy freeze — `afa40db` is the pushed tip and the
-   best possible result until the held batch is released.)*
+**Diagnosis, if it ever recurs:** a build with no new log output for >10 minutes
+at step #8 is starved, not slow. Check `free -m` first. `/api/version` and the
+static-file byte-fingerprint are the only trustworthy deploy signals — the
+Coolify deployments list has reported both false failures and false successes.
 
-I verified current requirements are server-safe, so the build should succeed once triggered.
+**Also learned:** Coolify's **Redeploy** button rebuilds the previously pinned
+commit, NOT the branch tip. To deploy new code, push (the webhook builds HEAD).
 
 ---
 
@@ -50,43 +45,36 @@ re-check with the same two calls.)
 
 ---
 
-## 3. 🟡 Talk to voice conversation mode — 2 minutes
+## 3. ✅ DONE — voice conversation mode
 
-Built and unit-tested, but the thresholds are educated guesses until a real voice hits them.
-**Tap the mic once** (don't hold) and just talk. Watch for:
-- Does it cut you off mid-thought? → `SILENCE_MS` too low
-- Does it wait awkwardly after you stop? → too high
-- Both knobs are at the top of the VAD block in `templates/index.html`
-
-Also judge **streaming TTS**: replies should start speaking ~4x sooner (measured 530ms vs
-2117ms to first audio). Listen for chunk-boundary artifacts.
-
-*Requires #1 first if you're testing on your phone.*
+Alex tested it 2026-07-31: "the mic works great now." No threshold tuning was
+needed; `SILENCE_MS` / `MIN_SPEECH_MS` in the VAD block of `templates/index.html`
+stay as shipped.
 
 ---
 
-## 4. 🟡 Go/no-go: wire in `screen_agent.py`
+## 4. ✅ DONE — `screen_agent.py` wired in (Alex approved 2026-07-31)
 
-A finished local computer-use loop — the model sees real screenshots, coordinates map 1:1
-to clicks, everything routes through the existing gates (Escape kill-switch, 5-min expiry,
-credential refusal). It is **deliberately not wired in**, with a test pinning it that way,
-because your rule is that a new capability passes a human once.
+Registered inside the Mac-only branch of `app.py` (after `import screen_control`),
+dispatched in `handle_tool_call`, status label "Driving your screen…". On the
+server the tool refuses with a message rather than relaying — the see->act loop
+must run where the mouse is. The pinning test in `run_tests.py` was flipped from
+"must NOT be wired" to guarding the wiring, with both halves negative-tested.
 
-Fable 5's recommendation was **go**. It's 3 lines, documented at the bottom of the module.
-Say the word and I'll wire it. *(Needs #2 to actually function.)*
+⚠️ **It only loads when the Mac-side app is running**, and that process was NOT
+running as of this update. Start the local app to actually use it.
 
 ---
 
-## 5. 🟢 Quick wins (2 minutes each)
+## 5. ✅ DONE — the quick wins
 
-- **`GITHUB_TOKEN`** — currently unset, so the scout gets 10 GitHub searches/min instead of
-  5,000/hr. Generate a classic token (public_repo scope is plenty) → add to `.env` and Coolify.
-- **SSH key** — half done: an ed25519 keypair was generated 2026-07-31
-  (`~/.ssh/id_ed25519`). Remaining: run `ssh-copy-id root@178.156.209.40` once
-  (enter the root password when prompted). With the key installed, future sessions
-  can act on the box when you name the exact command and host.
-- **4 stale expansion findings** sit in the review panel (job scrapers from before the
-  scout was re-aimed). Dismiss them or tell me to.
+- **`GITHUB_TOKEN`** — added to `~/second-brain/.env` and verified live (5000/hr
+  core, 30/min search, up from 10/min unauthenticated). Also added to Coolify.
+- **SSH key** — `~/.ssh/id_ed25519` generated and installed on the box with
+  `ssh-copy-id`; `ssh root@178.156.209.40` is now passwordless.
+- **Stale expansion findings** — the review queue is fully drained: 9 rejected,
+  5 deferred, 0 pending. The job-scraper items scored 2/5 usefulness and were
+  rejected by the council.
 
 ---
 
@@ -103,3 +91,22 @@ Say the word and I'll wire it. *(Needs #2 to actually function.)*
 
 15 commits, 435 passing checks, and one real security hole (SSRF) found and closed —
 see `VIBE_CODE_AUDIT.md`, `TOOL_AUDIT.md`, and today's git log.
+
+---
+
+## 7. 🟡 Genuinely still open (small)
+
+- **Look at the phone HUD.** The instrument bands shipped and are verified in the
+  served assets, but nobody has looked at them on a real phone yet.
+- **Heartbeat triage**, ~24h after 2026-07-31 18:37 UTC: if ntfy buzzed, forward
+  it; silence means healthy.
+- **Kernel reboot** — the box prints `*** System restart required ***`. Safe to do
+  now that builds aren't fragile.
+- **~9 GB of unused Docker images** could be reclaimed (`docker image prune -af`),
+  but that deletes rollback targets, so it's a deliberate choice, not routine.
+- **Dependency pinning is done** (15 of 16 exact; `gunicorn` left unpinned because
+  it isn't installed on the Mac, so no locally-verified version exists). Server
+  confirmed **Python 3.12** from the build log.
+- **`under_review` orphan bug** — an interrupted council run strands a finding in
+  a status `review_findings` never retries. Hit for real on 2026-07-31 (#4057).
+  A separate session is fixing it; see the spawned task.
