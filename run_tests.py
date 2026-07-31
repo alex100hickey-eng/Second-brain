@@ -2939,6 +2939,113 @@ def suite_jobs(app, live):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def suite_expansion(app, live):
+    """The stranded-review bug: expansion_review_one wrote status='under_review'
+    BEFORE its council calls, and review_findings() only ever selected status
+    =='found'. A crash, timeout, or kill in between left the row under_review
+    forever — it silently fell out of the queue with no error anywhere. Hit for
+    real on 2026-07-31 (finding #4057, killed by a 2-minute timeout)."""
+    section("expansion review queue (findings stranded in 'under_review')")
+    import expansion_pipeline as ep
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+
+    now = datetime.now(ZoneInfo("America/New_York"))
+    stale = (now - timedelta(seconds=ep.UNDER_REVIEW_STALE_SECONDS + 60)).isoformat()
+    fresh = (now - timedelta(seconds=5)).isoformat()
+
+    check("staleness threshold is well above a real council pass, and bounded",
+          60 <= ep.UNDER_REVIEW_STALE_SECONDS <= 1800, str(ep.UNDER_REVIEW_STALE_SECONDS))
+
+    # --- the predicate, both halves ---
+    check("stranded: an under_review finding older than the threshold IS stranded",
+          ep._is_stranded_under_review({"status": "under_review", "review_started_at": stale}, now))
+    check("NOT stranded: an under_review finding that just started is in flight",
+          not ep._is_stranded_under_review({"status": "under_review", "review_started_at": fresh}, now))
+    check("stranded: an under_review row with no start stamp (pre-fix orphan) IS stranded",
+          ep._is_stranded_under_review({"status": "under_review"}, now))
+    check("stranded: an unparseable start stamp counts as stranded, not in flight",
+          ep._is_stranded_under_review({"status": "under_review", "review_started_at": "nonsense"}, now))
+    for st in ("found", "approved", "rejected", "deferred", "installed", "failed"):
+        check(f"NOT stranded: status '{st}' is never treated as an orphaned review",
+              not ep._is_stranded_under_review({"status": st, "review_started_at": stale}))
+
+    # --- the queue selection, both halves ---
+    rows = [
+        {"id": 1, "finding": {"name": "plain-found", "status": "found"}},
+        {"id": 2, "finding": {"name": "stranded", "status": "under_review",
+                              "review_started_at": stale}},
+        {"id": 3, "finding": {"name": "in-flight", "status": "under_review",
+                              "review_started_at": fresh}},
+        {"id": 4, "finding": {"name": "done", "status": "approved"}},
+        {"id": 5, "finding": {"name": "orphan-no-stamp", "status": "under_review"}},
+    ]
+    saved_all = ep._all_findings
+    saved_update = ep._update_finding
+    saved_council = ep.council_call
+    saved_feas = ep.feasibility_judge
+    saved_log = ep.log_council
+    ep._all_findings = lambda limit=200: [dict(r, finding=dict(r["finding"])) for r in rows]
+    try:
+        picked = {r["id"] for r in ep._findings_awaiting_review(limit=10)}
+        check("queue picks up a plain 'found' finding", 1 in picked)
+        check("queue picks up a STRANDED under_review finding (the bug)", 2 in picked)
+        check("queue does NOT pick up a fresh, genuinely in-flight under_review finding "
+              "(a concurrent pass must not double-review it)", 3 not in picked, str(picked))
+        check("queue does not re-review an already-decided finding", 4 not in picked)
+        check("queue picks up a stamp-less under_review orphan", 5 in picked)
+        check("queue respects the limit cap", len(ep._findings_awaiting_review(limit=2)) == 2)
+
+        # --- the failure path: an exception must put the finding BACK in the queue ---
+        writes = []
+        ep._update_finding = lambda row_id, finding: writes.append((row_id, dict(finding)))
+        ep.log_council = lambda *a, **k: None
+        ep.feasibility_judge = None
+
+        def _boom(system, user):
+            raise RuntimeError("council timed out")
+
+        ep.council_call = _boom
+        target = {"name": "job-board-aggregator (GitHub)", "status": "found"}
+        try:
+            ep.expansion_review_one(4057, target)
+            check("a failing council review does NOT swallow the error", False,
+                  "expansion_review_one returned normally")
+        except RuntimeError:
+            check("a failing council review does NOT swallow the error", True)
+
+        check("the review stamps review_started_at BEFORE calling the council",
+              bool(writes) and writes[0][1]["status"] == "under_review"
+              and writes[0][1].get("review_started_at"), str(writes[:1]))
+        final = writes[-1][1]
+        check("a failed review resets the finding to 'found' so it is retried",
+              final["status"] == "found", str(final))
+        check("the reset clears review_started_at (no phantom in-flight pass)",
+              "review_started_at" not in final)
+        check("the failure is recorded on the finding, not lost",
+              "council timed out" in str(final.get("last_review_error", ""))
+              and final.get("last_review_error_at"))
+        check("the reset finding is picked up by the very next queue pass",
+              ep._is_stranded_under_review(final) is False and final["status"] == "found")
+
+        # --- review_findings survives a bad finding instead of dying mid-batch ---
+        ep._all_findings = lambda limit=200: [{"id": 1, "finding": {"name": "x", "status": "found"}}]
+        out = ep.review_findings(limit=1)
+        check("review_findings reports the failure instead of crashing the batch",
+              isinstance(out, str) and "could not review" in out, out)
+    finally:
+        ep._all_findings = saved_all
+        ep._update_finding = saved_update
+        ep.council_call = saved_council
+        ep.feasibility_judge = saved_feas
+        ep.log_council = saved_log
+
+    src = open(os.path.join(CHAT_DIR, "expansion_pipeline.py"), encoding="utf-8").read()
+    check("review_findings no longer filters on status=='found' alone",
+          "_findings_awaiting_review" in src
+          and 'if r["finding"].get("status") == "found"][:max(1, limit)]' not in src)
+
+
 SUITES = {
     "vault": suite_vault,
     "gate": suite_gate,
@@ -2955,6 +3062,7 @@ SUITES = {
     "goals": suite_goals,
     "screen": suite_screen,
     "screenagent": suite_screen_agent,
+    "expansion": suite_expansion,
     "expansionjson": suite_expansion_json,
     "expansionaim": suite_expansion_aim,
     "draftstore": suite_draft_store,

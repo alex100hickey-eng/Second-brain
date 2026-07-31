@@ -115,6 +115,43 @@ def _now_iso() -> str:
     return datetime.now(ZoneInfo("America/New_York")).isoformat()
 
 
+def _parse_iso(value) -> datetime:
+    """Parse an ISO timestamp we wrote ourselves. Returns None on anything unusable.
+    Naive strings are assumed to be ET, which is what _now_iso() writes."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        dt = datetime.fromisoformat(value.strip())
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=ZoneInfo("America/New_York"))
+    return dt
+
+
+# A council pass is three parallel calls plus a rubric call — well under a minute.
+# Anything sitting in "under_review" longer than this was stranded by a crash,
+# a timeout, or a kill, and must go back into the queue instead of vanishing.
+UNDER_REVIEW_STALE_SECONDS = 600
+
+
+def _is_stranded_under_review(finding: dict, now: datetime = None) -> bool:
+    """True when a finding is parked in 'under_review' with no live pass behind it.
+
+    This is the silent-failure guard: review_findings() only ever selected status
+    == 'found', so a process that died mid-council left the row under_review
+    forever and it silently dropped out of the queue (hit for real on finding
+    #4057, 2026-07-31). A missing/unparseable start stamp counts as stranded —
+    rows written before this field existed can only be orphans by now."""
+    if finding.get("status") != "under_review":
+        return False
+    started = _parse_iso(finding.get("review_started_at"))
+    if started is None:
+        return True
+    now = now or datetime.now(ZoneInfo("America/New_York"))
+    return (now - started).total_seconds() > UNDER_REVIEW_STALE_SECONDS
+
+
 def _extract_json(text: str):
     """First JSON value (object or array) out of a model reply, tolerating fences.
 
@@ -646,9 +683,38 @@ def expansion_review_one(row_id: int, finding: dict) -> dict:
                f"red flags noted by scout: {finding.get('red_flags')}\n\n"
                f"What Jarvis ALREADY does (judge overlap against this): {caps}")
 
+    # Stamp WHEN the pass started, not just that it did: without this a row parked
+    # in under_review is indistinguishable from one being worked on right now, and
+    # a crash between here and the final write strands it out of the queue forever.
     finding["status"] = "under_review"
+    finding["review_started_at"] = _now_iso()
     _update_finding(row_id, finding)
 
+    try:
+        return _expansion_review_council(row_id, finding, subject)
+    except BaseException as e:
+        # Anything at all — LLM error, timeout, KeyboardInterrupt from a kill —
+        # puts the finding back in the queue rather than leaving it stranded.
+        # The error is surfaced, never swallowed.
+        try:
+            finding["status"] = "found"
+            finding.pop("review_started_at", None)
+            finding["last_review_error"] = f"{type(e).__name__}: {e}"[:500]
+            finding["last_review_error_at"] = _now_iso()
+            _update_finding(row_id, finding)
+        except Exception as reset_err:  # pragma: no cover - defensive
+            print(f"  ⚠️  could not reset finding #{row_id} to 'found': {reset_err}")
+        print(f"  ⚠️  council review of finding #{row_id} failed, reset to 'found': "
+              f"{type(e).__name__}: {e}")
+        _audit("expansion_review", "agent",
+               f"{finding.get('name')} → review failed, reset to 'found'", False,
+               f"{type(e).__name__}: {e}")
+        raise
+
+
+def _expansion_review_council(row_id: int, finding: dict, subject: str) -> dict:
+    """The council body itself. Split out so expansion_review_one can wrap every
+    exit path in the status-reset guard above."""
     # Three independent voices, in parallel: Advocate, Critic, and the existing
     # Feasibility Judge (repurposed: can Jarvis actually integrate & run this?).
     def _feas():
@@ -708,12 +774,34 @@ def expansion_review_one(row_id: int, finding: dict) -> dict:
     return {"row_id": row_id, "decision": decision, "status": status, "rubric": rubric}
 
 
+def _findings_awaiting_review(limit: int = 10) -> list:
+    """Findings the council should pick up: anything still 'found', plus anything
+    STRANDED in 'under_review' past the staleness threshold. A finding whose pass
+    is genuinely in flight (fresh stamp) is left alone, so a concurrent pass does
+    not double-review it."""
+    now = datetime.now(ZoneInfo("America/New_York"))
+    return [
+        r for r in _all_findings(200)
+        if r["finding"].get("status") == "found" or _is_stranded_under_review(r["finding"], now)
+    ][:max(1, limit)]
+
+
 def review_findings(limit: int = 10) -> str:
     """Send every `found` finding through the council. Cap keeps a scout burst bounded."""
-    pending = [r for r in _all_findings(200) if r["finding"].get("status") == "found"][:max(1, limit)]
+    pending = _findings_awaiting_review(limit)
     if not pending:
-        return "No findings awaiting review (nothing in status 'found')."
-    results = [expansion_review_one(r["id"], r["finding"]) for r in pending]
+        return "No findings awaiting review (nothing in status 'found', nothing stranded)."
+    results = []
+    for r in pending:
+        try:
+            results.append(expansion_review_one(r["id"], r["finding"]))
+        except Exception as e:
+            # One bad finding must not kill the batch; it's already been reset to
+            # 'found' by expansion_review_one, so the next pass retries it.
+            print(f"  ⚠️  finding #{r['id']} skipped: {type(e).__name__}: {e}")
+    if not results:
+        return (f"Council could not review any of the {len(pending)} pending finding(s) — "
+                "every attempt errored; they stay queued as 'found'. See the audit log.")
     tally = {"approved": 0, "rejected": 0, "deferred": 0}
     for res in results:
         tally[res["status"]] = tally.get(res["status"], 0) + 1
