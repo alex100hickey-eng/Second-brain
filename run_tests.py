@@ -1066,6 +1066,36 @@ def suite_expansion_json(app, live):
           "GitHub search returned HTTP" in src)
 
 
+def suite_ssrf(app, live):
+    """web_fetch is reachable by an autonomous task whose context contains UNTRUSTED
+    web text — the classic prompt-injection path into SSRF. Public hosts only."""
+    section("SSRF guard on the task-manager web fetch")
+    import task_manager as tm
+
+    blocked = [
+        ("http://169.254.169.254/hetzner/v1/metadata", "cloud metadata service"),
+        ("http://127.0.0.1:5000/api/hud", "the app's own endpoints"),
+        ("http://localhost:8000", "coolify on the host"),
+        ("http://10.0.0.5/admin", "private network"),
+        ("http://192.168.1.1", "home router"),
+        ("http://[::1]:5000/", "ipv6 loopback"),
+        ("file:///etc/passwd", "file:// scheme"),
+        ("gopher://evil/", "non-http scheme"),
+        ("", "empty url"),
+    ]
+    for url, why in blocked:
+        check(f"blocks {why}", bool(tm._ssrf_check(url)), url)
+    for url in ("https://example.com", "http://example.com/page?q=1"):
+        check(f"allows public {url}", tm._ssrf_check(url) == "")
+
+    src = open(os.path.join(CHAT_DIR, "task_manager.py"), encoding="utf-8").read()
+    fn = src[src.index("def web_fetch"):src.index("def _audit_web_refusal")]
+    check("redirects are followed manually so every hop is re-checked",
+          "follow_redirects=False" in fn and fn.count("_ssrf_check") >= 2)
+    check("the redirect chain is bounded", "seen >= 5" in fn)
+    check("blocked fetches are audited, not silent", "_audit_web_refusal" in fn)
+
+
 def suite_hud_mobile(app, live):
     """The HUD's phone mode + chat-bar auto-send. Structural checks on what ships;
     the rendered behavior was verified in a real browser at 390px and 1280px."""
@@ -2844,6 +2874,7 @@ SUITES = {
     "expansionaim": suite_expansion_aim,
     "draftstore": suite_draft_store,
     "voicevad": suite_voice_vad,
+    "ssrf": suite_ssrf,
     "hudmobile": suite_hud_mobile,
     "smoothness": suite_smoothness,
     "callhardening": suite_call_hardening,
