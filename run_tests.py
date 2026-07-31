@@ -1066,6 +1066,128 @@ def suite_expansion_json(app, live):
           "GitHub search returned HTTP" in src)
 
 
+def suite_heartbeat(app, live):
+    """The silent-failure cure: subsystems beat after each successful pass, the
+    monitor flags anything quieter than its declared cadence, and the phone hears
+    about it through the existing respect-rules door."""
+    section("heartbeats (subsystem went quiet -> same-day alert)")
+    import monitor
+    import intake
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+
+    tz = ZoneInfo("America/New_York")
+
+    # In-memory intake-state stand-in so no real Supabase rows are written.
+    fake_states = {}
+
+    def fake_load(key):
+        return dict(fake_states.get(key, {"key": key}))
+
+    def fake_save(state):
+        fake_states[state["key"]] = dict(state)
+
+    saved_load, saved_save = intake._load_state, intake._save_state
+    intake._load_state, intake._save_state = fake_load, fake_save
+
+    class _FakeSB:
+        def table(self, _): return self
+        def select(self, _): return self
+        def eq(self, *_): return self
+        def order(self, *_, **__): return self
+        def limit(self, _): return self
+        def execute(self):
+            rows = [{"output_text": json.dumps(v)} for v in fake_states.values()]
+            return type("R", (), {"data": rows})()
+
+    saved_sb = monitor.supabase
+    monitor.supabase = _FakeSB()
+    sent = []
+    try:
+        import proactive
+        saved_nudge = proactive.send_nudge
+        proactive.send_nudge = lambda key, title, body, **kw: sent.append((key, title)) or "Nudge sent"
+        monitor._NUDGED_STALE.clear()
+
+        # A fresh beat is healthy.
+        monitor.beat("expansion-scout", stale_after_s=30 * 3600, note="5 findings")
+        check("beat() records a heartbeat row", "heartbeat:expansion-scout" in fake_states)
+        check("a fresh heartbeat raises no incident", monitor.check_heartbeats() == [])
+
+        # Age it past its own declared staleness -> incident + one nudge.
+        fake_states["heartbeat:expansion-scout"]["beat_at"] = (
+            datetime.now(tz) - timedelta(hours=40)).isoformat()
+        incs = monitor.check_heartbeats()
+        check("a stale heartbeat becomes an incident",
+              len(incs) == 1 and incs[0]["type"] == "heartbeat_stale"
+              and incs[0]["component"] == "expansion-scout", str(incs))
+        check("the incident says how long it's been quiet", "40.0h" in incs[0]["message"])
+        monitor._notify_stale(incs)
+        monitor._notify_stale(incs)   # second scan, same day
+        check("stale heartbeat nudges the phone exactly once per day",
+              len(sent) == 1 and "went quiet" in sent[0][1], str(sent))
+
+        # Each subsystem is judged by its OWN cadence: 90 minutes is stale for a
+        # 15-minute worker and perfectly healthy for a daily one.
+        fake_states.clear()
+        monitor.beat("proactive", stale_after_s=2 * 3600)
+        monitor.beat("expansion-scout", stale_after_s=30 * 3600)
+        for k in fake_states:
+            fake_states[k]["beat_at"] = (datetime.now(tz) - timedelta(hours=3)).isoformat()
+        names = [i["component"] for i in monitor.check_heartbeats()]
+        check("staleness is per-subsystem cadence, not one global clock",
+              names == ["proactive"], str(names))
+
+        # Malformed rows must not crash the scan.
+        fake_states["heartbeat:broken"] = {"key": "heartbeat:broken", "beat_at": "not-a-date",
+                                           "stale_after_s": 60}
+        fake_states["heartbeat:incomplete"] = {"key": "heartbeat:incomplete"}
+        check("malformed heartbeat rows are skipped, not fatal",
+              isinstance(monitor.check_heartbeats(), list))
+
+        # beat() itself must never raise, even with storage broken.
+        intake._load_state = lambda k: (_ for _ in ()).throw(RuntimeError("supabase down"))
+        try:
+            monitor.beat("anything", stale_after_s=60)
+            check("beat() never raises even when storage is down", True)
+        except Exception as e:
+            check("beat() never raises even when storage is down", False, str(e))
+        proactive.send_nudge = saved_nudge
+    finally:
+        intake._load_state, intake._save_state = saved_load, saved_save
+        monitor.supabase = saved_sb
+        monitor._NUDGED_STALE.clear()
+
+    # The workers must actually beat: source-level wiring checks.
+    app_src = open(os.path.join(CHAT_DIR, "app.py"), encoding="utf-8").read()
+    pro_src = open(os.path.join(CHAT_DIR, "proactive.py"), encoding="utf-8").read()
+    check("scout job beats after completing", 'monitor.beat("expansion-scout"' in app_src)
+    check("mail intake beats after each pass", 'monitor.beat("mail-intake"' in app_src)
+    check("proactive beats after each awareness pass", 'monitor.beat("proactive"' in pro_src)
+    check("health scan includes heartbeat incidents", "check_heartbeats()" in
+          open(os.path.join(CHAT_DIR, "monitor.py"), encoding="utf-8").read())
+
+
+def suite_version(app, live):
+    """/api/version: deploy verification by curl instead of SSH-and-exec."""
+    section("version endpoint (deploys verifiable without SSH)")
+    check("RUNNING_COMMIT is resolved at boot",
+          isinstance(app.RUNNING_COMMIT, str) and len(app.RUNNING_COMMIT) >= 7)
+    # On the Mac this must match the actual checkout.
+    r = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True)
+    if r.returncode == 0:
+        check("resolved commit matches the real HEAD",
+              r.stdout.strip().startswith(app.RUNNING_COMMIT), app.RUNNING_COMMIT)
+    with app.app.test_client() as c:
+        data = c.get("/api/version").get_json()
+        check("/api/version returns the running commit",
+              data and data.get("commit") == app.RUNNING_COMMIT, str(data))
+        check("/api/version reports the runtime", data.get("runtime") in ("local", "server"))
+    # The whole point is answering WITHOUT credentials: the gate must exempt it.
+    app_src = open(os.path.join(CHAT_DIR, "app.py"), encoding="utf-8").read()
+    check("/api/version is exempt from the login gate", '"api_version"' in app_src)
+
+
 def suite_voice_vad(app, live):
     """Conversation mode's turn-taking heuristic, driven by synthetic level traces.
 
@@ -2364,6 +2486,8 @@ SUITES = {
     "expansionaim": suite_expansion_aim,
     "draftstore": suite_draft_store,
     "voicevad": suite_voice_vad,
+    "heartbeat": suite_heartbeat,
+    "version": suite_version,
     "drafter": suite_drafter,
     "voice": suite_voice,
     "briefing": suite_briefing,

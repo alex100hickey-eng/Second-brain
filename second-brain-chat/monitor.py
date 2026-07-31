@@ -184,6 +184,91 @@ def _worker_liveness() -> dict:
             ("jarvis-managed-worker", "jarvis-task-worker", "jarvis-monitor")}
 
 
+# ============================================================
+# HEARTBEATS — the cure for the silent-failure class. Every subsystem that should
+# produce output on a cadence (daily scout, mail intake, proactive passes) writes a
+# `heartbeat:<name>` state row at the end of each successful pass, declaring its own
+# cadence. This scan flags any heartbeat older than its declared staleness. The rows
+# live in Supabase, so EITHER node can notice the other's worker has died — including
+# the case where the whole server is down and only the Mac is left to say so.
+# Born of the expansion scout finding nothing for 8 days with no error anywhere.
+# ============================================================
+
+def beat(name: str, stale_after_s: int, note: str = "") -> None:
+    """Record one successful pass. Never raises — a failed heartbeat write must not
+    break the work it is reporting on."""
+    try:
+        import intake
+        st = intake._load_state(f"heartbeat:{name}")
+        st["stale_after_s"] = int(stale_after_s)
+        st["note"] = note[:120]
+        st["beat_at"] = _now_iso()
+        intake._save_state(st)
+    except Exception:
+        pass
+
+
+def check_heartbeats() -> list:
+    """Stale-heartbeat incidents. Reads every heartbeat:* row — no hardcoded list,
+    so a future subsystem gets monitored by simply calling beat()."""
+    try:
+        import intake
+        rows = (supabase.table("Agent Outputs").select("output_text")
+                .eq("agent_name", intake.STATE_AGENT).order("id", desc=True)
+                .limit(100).execute().data or [])
+    except Exception:
+        return []
+    incidents, seen = [], set()
+    now = datetime.now(ZoneInfo("America/New_York"))
+    for row in rows:
+        try:
+            d = json.loads(row["output_text"])
+        except (json.JSONDecodeError, TypeError):
+            continue
+        key = str(d.get("key", ""))
+        if not key.startswith("heartbeat:") or key in seen:
+            continue
+        seen.add(key)          # newest row per key wins
+        name = key[len("heartbeat:"):]
+        beat_at, stale_after = d.get("beat_at"), d.get("stale_after_s")
+        if not beat_at or not stale_after:
+            continue
+        try:
+            age_s = (now - datetime.fromisoformat(beat_at)).total_seconds()
+        except ValueError:
+            continue
+        if age_s > float(stale_after):
+            hours = age_s / 3600
+            incidents.append({
+                "type": "heartbeat_stale", "component": name, "level": "error",
+                "message": (f"'{name}' has produced nothing for {hours:.1f}h "
+                            f"(expected within {float(stale_after) / 3600:.1f}h)."),
+                "key": key,
+            })
+    return incidents
+
+
+_NUDGED_STALE = set()          # per-process: one phone buzz per stale episode
+
+
+def _notify_stale(incidents: list) -> None:
+    """Push stale heartbeats to Alex's phone via the existing respect-rules door
+    (quiet hours, daily cap, dedupe). A recovered-then-stale-again subsystem nudges
+    again on a later day via the date in the key."""
+    for inc in incidents:
+        key = f"heartbeat:{inc['component']}:{datetime.now(ZoneInfo('America/New_York')).strftime('%Y-%m-%d')}"
+        if key in _NUDGED_STALE:
+            continue
+        _NUDGED_STALE.add(key)
+        try:
+            import proactive
+            proactive.send_nudge(key, f"🫀 {inc['component']} went quiet",
+                                 inc["message"] + " Check the dashboard health panel.",
+                                 priority="high", tags="broken_heart")
+        except Exception:
+            pass
+
+
 def run_health_scan() -> dict:
     """Combine static health (DBs/binaries/index/disk — health.py), worker liveness,
     and recent error/critical events into one picture."""
@@ -209,6 +294,9 @@ def run_health_scan() -> dict:
         incidents.append({"type": "reported_event", "component": e.get("component"),
                           "message": e.get("message"), "level": e.get("level"),
                           "event_id": e.get("id")})
+    stale = check_heartbeats()
+    incidents.extend(stale)
+    _notify_stale(stale)
 
     overall = static.get("overall", "healthy")
     if dead or any(i.get("level") == "critical" for i in incidents):

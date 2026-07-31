@@ -310,6 +310,14 @@ def run_awareness_pass(force: bool = False) -> str:
                                   force=force))
 
     sent = sum(1 for a in actions if a.startswith("Nudge sent"))
+    # Heartbeat: a pass that decides to send NOTHING is still a completed pass —
+    # nudge rows can't tell "quiet by choice" from "worker dead", this can.
+    try:
+        import monitor
+        monitor.beat("proactive", stale_after_s=8 * PASS_INTERVAL,   # 2h on a 15-min cadence
+                     note=f"{sent} sent")
+    except Exception:
+        pass
     return (f"Awareness pass: {len(picture['due_soon'])} due-soon, "
             f"{picture['new_intake']} untriaged → {sent} sent, "
             f"{len(actions) - sent} suppressed by respect rules.")

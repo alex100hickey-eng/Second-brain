@@ -164,13 +164,53 @@ LOGIN_LIMITER = login_limiter.LoginLimiter()
 def require_login():
     if not ACCESS_CODE:
         return None  # gate disabled — open access
-    if request.endpoint in ("login", "static"):
+    # api_version is deliberately ungated: it exposes only the deployed commit SHA,
+    # and its whole purpose is answering "did the deploy land?" WITHOUT credentials
+    # or SSH — the two things that made deploy verification need a human.
+    if request.endpoint in ("login", "static", "api_version"):
         return None
     if session.get("authed"):
         return None
     if request.method == "POST" or request.path.startswith("/api/"):
         return jsonify({"error": "Not logged in."}), 401
     return redirect("/login")
+
+
+# Resolved once at boot: the container never changes commit mid-life, and shelling
+# out to git per-request would be waste. Chain: SOURCE_COMMIT (Coolify/Nixpacks
+# builds set it; survives images with no .git dir) -> git rev-parse (local dev,
+# and Nixpacks builds that do copy .git) -> "unknown".
+def _resolve_running_commit() -> str:
+    env = (os.environ.get("SOURCE_COMMIT") or "").strip()
+    if env:
+        return env[:12]
+    try:
+        r = subprocess.run(["git", "rev-parse", "HEAD"],
+                           cwd=os.path.dirname(os.path.abspath(__file__)),
+                           capture_output=True, text=True, timeout=10)
+        if r.returncode == 0 and r.stdout.strip():
+            return r.stdout.strip()[:12]
+    except Exception:
+        pass
+    return "unknown"
+
+
+RUNNING_COMMIT = _resolve_running_commit()
+STARTED_AT = datetime.now().astimezone().isoformat()  # LOCAL_TZ isn't defined yet up here
+
+
+@app.route("/api/version")
+def api_version():
+    """Ungated (see require_login): answers "what code is actually running?" so a
+    deploy can be verified by curl instead of SSH-and-exec — the Coolify UI has
+    shown stale/cosmetically-wrong deploy state before, and this reads the truth
+    from inside the running process itself."""
+    import task_manager  # imported late in this module; resolved by request time
+    return jsonify({
+        "commit": RUNNING_COMMIT,
+        "runtime": getattr(task_manager, "RUNTIME", "unknown"),
+        "started_at": STARTED_AT,
+    })
 
 
 @app.route("/login", methods=["GET", "POST"])
@@ -4456,10 +4496,15 @@ def _job_scout(params: dict) -> str:
     # Daily discovery only: findings land in the review UI (dashboard Expansion
     # panel). Council review + apply stay human-triggered; nothing auto-applies —
     # that's structural (applicator blocks on the approval gate), not politeness.
-    return expansion_pipeline.run_scout(
+    result = expansion_pipeline.run_scout(
         focus_brief=params.get("focus_brief", ""),
         sources=params.get("sources", "both"),
         cap=params.get("cap", 8))
+    # Heartbeat AFTER the run completes: the scheduler marking "enqueued today" is
+    # not proof the scout ran — that distinction is exactly how 8 silent days
+    # happened. 30h staleness = one missed daily run buzzes the phone the same day.
+    monitor.beat("expansion-scout", stale_after_s=30 * 3600, note=result[:100])
+    return result
 
 
 JOB_HANDLERS = {"website": _job_website, "synthesis": _job_synthesis,
@@ -4560,6 +4605,12 @@ def _mail_scan_pass() -> dict:
     _try("gmail_school", lambda: scan_school_gmail_intake_tool("1d", 15))
     if icloud_intake._configured():
         _try("icloud", lambda: icloud_intake.scan_icloud(days=2))
+    # Beat even when individual accounts failed — those already report their own
+    # warnings above. This heartbeat answers a different question: is the WORKER
+    # still making passes at all? (2h staleness on a 15-min cadence.)
+    monitor.beat("mail-intake", stale_after_s=8 * MAIL_SCAN_INTERVAL,
+                 note="; ".join(f"{k}: ok" if not str(v).startswith("failed") else f"{k}: FAILED"
+                                for k, v in results.items()))
     return results
 
 
