@@ -867,9 +867,19 @@ def _run_managed(row_id: int, task: dict) -> None:
             tools = ([t for t in TOOLS if t.get("name") not in EXCLUDED_TOOLS]
                      + TASKMAN_TOOL_SCHEMAS
                      + [d["schema"] for d in ctx["dynamic"].values()])
+            # Prompt caching, ported from the chat path's 5.1 latency pass — this
+            # worker somehow never got it: up to MAX_ROUNDS rounds each re-sent ~90
+            # tool schemas + the full system prompt at full price. Cache points on
+            # the last tool and the system block make every round after the first
+            # read them at 10% cost. tools/system are stable within a task; a
+            # promote_tool mid-task changes the list, which just re-writes the
+            # cache once — correctness is unaffected.
+            tools_cached = tools[:-1] + [{**tools[-1], "cache_control": {"type": "ephemeral"}}]
             response = claude.messages.create(
-                model=MODEL, max_tokens=8000, system=system_prompt,
-                tools=tools, messages=messages, timeout=300.0,
+                model=MODEL, max_tokens=8000,
+                system=[{"type": "text", "text": system_prompt,
+                         "cache_control": {"type": "ephemeral"}}],
+                tools=tools_cached, messages=messages, timeout=300.0,
             )
             final_text = "".join(b.text for b in response.content if b.type == "text").strip()
             has_tool_calls = any(b.type == "tool_use" for b in response.content)

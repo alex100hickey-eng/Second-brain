@@ -255,6 +255,27 @@ _STOPWORDS = {"a", "an", "the", "to", "of", "on", "at", "in", "for", "with", "an
               "they", "them", "this", "that", "it", "up", "s"}
 
 
+# Sources that are EMAIL: the same underlying message can reach Alex through more
+# than one of these (school mail auto-forwarded to iCloud, CCs across accounts).
+_MAIL_SOURCES = {"gmail", "gmail_school", "icloud"}
+
+
+def _mail_fingerprint(sender: str, text: str, ts: str) -> str:
+    """Identity of an email independent of WHICH account received it: sender address
+    + normalized subject + day. The basketball-form email arrived via school Gmail
+    AND iCloud and made two triage items — per-source refs can't catch that, and the
+    item-level token dedupe demonstrably didn't. Day-scoped so a genuinely repeated
+    subject (weekly newsletter) on a later day is not swallowed."""
+    m = re.search(r"[\w.+-]+@[\w-]+\.[\w.-]+", sender or "")
+    addr = (m.group(0) if m else (sender or "")).lower().strip()
+    first_line = (text or "").split("\n", 1)[0]
+    subject = re.sub(r"^subject:\s*", "", first_line, flags=re.I)
+    subject = re.sub(r"^((re|fwd?|fw):\s*)+", "", subject.strip(), flags=re.I)
+    subject = re.sub(r"\s+", " ", subject).lower()[:150]
+    day = (ts or _now_iso())[:10]
+    return f"{day}|{addr}|{subject}"
+
+
 def record_raw(source: str, source_ref: str, sender: str, ts: str, text: str,
                items: list = None, preview: str = None) -> dict:
     """Ingest one raw thing. Extracts (unless items given), noise-filters, dedupes.
@@ -264,6 +285,12 @@ def record_raw(source: str, source_ref: str, sender: str, ts: str, text: str,
     source_ref = str(source_ref)
     if source_ref in _seen(source):
         return {"recorded": False, "reason": "duplicate"}
+    xfp = _mail_fingerprint(sender, text, ts) if source in _MAIL_SOURCES else None
+    if xfp and xfp in _seen("xmail"):
+        # Another account already delivered this exact email — one triage item is
+        # plenty. Remember the ref so this copy is never re-extracted either.
+        _remember_seen(source, [source_ref])
+        return {"recorded": False, "reason": "duplicate (same email via another account)"}
     if items is None:
         items = extract_items(source, sender, text, when=ts)
     if items:
@@ -280,6 +307,8 @@ def record_raw(source: str, source_ref: str, sender: str, ts: str, text: str,
     }
     row_id = _insert_event(event)          # if this raises, next poll retries the message
     _remember_seen(source, [source_ref])   # only marked seen once safely stored
+    if xfp:
+        _remember_seen("xmail", [xfp])     # cross-account: block other copies of this email
     return {"recorded": True, "row_id": row_id, "items": items}
 
 

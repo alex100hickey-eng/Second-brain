@@ -5414,6 +5414,28 @@ def _normalize_for_api(messages: list) -> list:
     return cleaned
 
 
+def _cache_history_prefix(messages: list, history_len: int) -> list:
+    """Cache point on the newest HISTORY message (5.1's flagged follow-up): between
+    turns the conversation grows append-only, so system+tools+history is a strict
+    prefix of the next turn's request and bills at 10% instead of full price.
+
+    Only while the window ISN'T rolling: load_chat_history keeps the newest 40, and
+    once a conversation exceeds that, every turn drops the oldest message — the
+    prefix shifts, every lookup misses, and each miss pays the 1.25x write premium
+    for nothing. Below the limit this is a pure win; at it, behavior is unchanged
+    from before this existed. (Breakpoint budget: static system + tools + this = 3
+    of the API's 4.)"""
+    if history_len < 1 or history_len >= 40 or len(messages) < 2:
+        return messages
+    out = [dict(m) for m in messages]
+    anchor = out[-2]                      # last history message; [-1] is the new turn
+    content = anchor["content"]
+    if isinstance(content, str):
+        anchor["content"] = [{"type": "text", "text": content,
+                              "cache_control": {"type": "ephemeral"}}]
+    return out
+
+
 def _load_shortcuts() -> dict:
     """User-editable command shortcuts (shortcuts.json at project root). Read fresh so
     edits apply without a restart. Keys starting with '_' (e.g. _comment) are ignored."""
@@ -5447,7 +5469,9 @@ def chat():
         yield json.dumps({"type": "status", "label": "Thinking…"}) + "\n"
 
         history = load_chat_history()
-        messages = _normalize_for_api(history + [{"role": "user", "content": user_message}])
+        messages = _cache_history_prefix(
+            _normalize_for_api(history + [{"role": "user", "content": user_message}]),
+            history_len=len(history))
         # Automatic long-term recall: pull relevant snippets from PAST conversations
         # before saving this message (so the current turn isn't matched against itself).
         try:

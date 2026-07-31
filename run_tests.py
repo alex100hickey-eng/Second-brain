@@ -1066,6 +1066,83 @@ def suite_expansion_json(app, live):
           "GitHub search returned HTTP" in src)
 
 
+def suite_smoothness(app, live):
+    """The smoothness pass: worker prompt caching, history prefix caching, and
+    cross-account mail dedupe (the twice-delivered basketball form)."""
+    section("smoothness (caching + cross-account mail dedupe)")
+    import intake
+
+    # --- mail fingerprint ---
+    fp = intake._mail_fingerprint
+    a = fp("Jon Schwartz <jon@case.edu>", "Subject: Sports Information Form\nPlease fill out...",
+           "2026-07-30T09:00:00-04:00")
+    b = fp("jon@case.edu", "Subject: RE: Sports Information Form\nReminder...",
+           "2026-07-30T15:00:00-04:00")
+    check("same email via two accounts fingerprints identically (Re: and display-name ignored)",
+          a == b, f"{a} vs {b}")
+    c = fp("jon@case.edu", "Subject: Sports Information Form\n...", "2026-08-06T09:00:00-04:00")
+    check("the same subject on a LATER DAY is a different email", a != c)
+    d = fp("someone-else@case.edu", "Subject: Sports Information Form\n...",
+           "2026-07-30T09:00:00-04:00")
+    check("same subject from a different sender is a different email", a != d)
+
+    # record_raw refuses the cross-account copy (fake state, no Supabase writes).
+    fake_states = {}
+    saved_load, saved_save = intake._load_state, intake._save_state
+    intake._load_state = lambda k: dict(fake_states.get(k, {"key": k}))
+    intake._save_state = lambda s: fake_states.__setitem__(s["key"], dict(s))
+    saved_insert = intake._insert_event
+    inserted = []
+    intake._insert_event = lambda e: inserted.append(e) or 999
+    saved_extract = intake.extract_items
+    intake.extract_items = lambda *a, **k: [{"text": "fill out the sports form", "due": ""}]
+    saved_loadev = intake._load_events
+    intake._load_events = lambda n: []
+    try:
+        r1 = intake.record_raw("gmail_school", "school-123", "jon@case.edu",
+                               "2026-07-30T09:00:00-04:00", "Subject: Sports Form\nfill it out")
+        r2 = intake.record_raw("icloud", "icloud-999", "Jon Schwartz <jon@case.edu>",
+                               "2026-07-30T09:05:00-04:00", "Subject: Re: Sports Form\nfill it out")
+        check("first copy records", r1.get("recorded") is True, str(r1))
+        check("second copy via another account is refused", r2.get("recorded") is False
+              and "another account" in r2.get("reason", ""), str(r2))
+        check("only one triage event was created", len(inserted) == 1)
+        check("the refused copy's ref is remembered (never re-extracted)",
+              "icloud-999" in str(fake_states.get("seen:icloud", {})))
+        r3 = intake.record_raw("inbox", "paste-1", "pasted by Alex",
+                               "2026-07-30T10:00:00-04:00", "Subject: Sports Form\nsame words")
+        check("non-mail sources are exempt from the mail fingerprint",
+              r3.get("recorded") is True, str(r3))
+    finally:
+        intake._load_state, intake._save_state = saved_load, saved_save
+        intake._insert_event = saved_insert
+        intake.extract_items = saved_extract
+        intake._load_events = saved_loadev
+
+    # --- history prefix caching ---
+    msgs = [{"role": "user", "content": "q1"}, {"role": "assistant", "content": "a1"},
+            {"role": "user", "content": "q2"}]
+    out = app._cache_history_prefix(msgs, history_len=2)
+    anchor = out[-2]["content"]
+    check("cache point lands on the newest HISTORY message",
+          isinstance(anchor, list) and anchor[0].get("cache_control") == {"type": "ephemeral"})
+    check("the new user turn itself is never cache-pointed",
+          isinstance(out[-1]["content"], str))
+    check("originals are not mutated", isinstance(msgs[-2]["content"], str))
+    check("a rolling window (>=40) disables the cache point — misses would bill 1.25x",
+          app._cache_history_prefix(msgs, history_len=40) == msgs)
+    check("a first turn with no history is untouched",
+          app._cache_history_prefix([{"role": "user", "content": "hi"}], 0)
+          == [{"role": "user", "content": "hi"}])
+
+    # --- managed-task worker caching ---
+    src = open(os.path.join(CHAT_DIR, "task_manager.py"), encoding="utf-8").read()
+    body = src[src.index("def _run_managed"):]
+    check("worker caches its tool schemas (was ~90 uncached schemas x 30 rounds)",
+          "tools_cached" in body and '"cache_control"' in body)
+    check("worker caches its system prompt", body.count("cache_control") >= 2)
+
+
 def suite_call_hardening(app, live):
     """The thinking-block/max_tokens silent-empty class, eradicated everywhere:
     all three _call sites now join text blocks and RAISE on truncation, and every
@@ -2735,6 +2812,7 @@ SUITES = {
     "expansionaim": suite_expansion_aim,
     "draftstore": suite_draft_store,
     "voicevad": suite_voice_vad,
+    "smoothness": suite_smoothness,
     "callhardening": suite_call_hardening,
     "retention": suite_retention,
     "applyfinding": suite_apply_finding,
