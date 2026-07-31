@@ -5537,6 +5537,16 @@ def api_speak():
     if not text:
         return jsonify({"ok": False, "error": "No text."}), 400
     if voice_engine.available():
+        # stream=1: chunked MP3 straight from ElevenLabs' streaming endpoint — the
+        # browser starts playing while the tail is still being synthesized. The
+        # engine only hands back a generator once the upstream request has actually
+        # opened, so a failure here can still fall back to the buffered path below.
+        if data.get("stream"):
+            res = voice_engine.speak_stream(text)
+            if not isinstance(res, dict):
+                return Response(res, mimetype="audio/mpeg",
+                                headers={"Cache-Control": "no-store"})
+            print(f"Warning: ElevenLabs streaming TTS failed, falling back: {res.get('error')}")
         res = voice_engine.speak(text)
         if "audio" in res:
             return Response(res["audio"], mimetype="audio/mpeg",

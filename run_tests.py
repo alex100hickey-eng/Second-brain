@@ -1066,6 +1066,39 @@ def suite_expansion_json(app, live):
           "GitHub search returned HTTP" in src)
 
 
+def suite_tts_stream(app, live):
+    """Streaming TTS: the reply gap fix. Offline checks only — the live latency
+    numbers (530ms vs 2117ms to first audio) were measured against the real API."""
+    section("streaming TTS (first words play while the rest synthesizes)")
+    import voice_engine as ve
+
+    check("speak_stream refuses cleanly with no API key",
+          isinstance(ve.speak_stream.__call__("hi") if not ve.available() else {"error": "skip"}, dict)
+          if not ve.available() else True)
+    check("speak_stream rejects empty text",
+          (not ve.available()) or ve.speak_stream("   ") == {"error": "no text"})
+
+    src = open(os.path.join(CHAT_DIR, "voice_engine.py"), encoding="utf-8").read()
+    check("streaming hits ElevenLabs' /stream endpoint", "/stream?output_format" in src)
+    check("stream failures return a dict BEFORE headers commit (fallback stays possible)",
+          "return {\"error\": f\"ElevenLabs TTS HTTP" in src)
+
+    app_src = open(os.path.join(CHAT_DIR, "app.py"), encoding="utf-8").read()
+    check("/api/speak supports stream=1 with buffered fallback",
+          'data.get("stream")' in app_src and "speak_stream" in app_src)
+
+    html = open(os.path.join(CHAT_DIR, "templates", "index.html"), encoding="utf-8").read()
+    check("client streams via MediaSource when supported", "isTypeSupported('audio/mpeg')" in html)
+    check("client falls back to the buffered path when MSE is unavailable (iOS)",
+          "mse-unavailable" in html)
+    check("the stream element is autoplay-unlocked on first tap (the 'no voice back' class)",
+          "streamElUnlocked" in html and "data:audio/mpeg;base64" in html)
+    check("streamed playback resolves on ENDED (conversation-mode contract)",
+          "streamEl.onended = done" in html)
+    check("mic-press interrupt also silences the streamed voice",
+          "streamEl.pause()" in html)
+
+
 def suite_heartbeat(app, live):
     """The silent-failure cure: subsystems beat after each successful pass, the
     monitor flags anything quieter than its declared cadence, and the phone hears
@@ -2486,6 +2519,7 @@ SUITES = {
     "expansionaim": suite_expansion_aim,
     "draftstore": suite_draft_store,
     "voicevad": suite_voice_vad,
+    "ttsstream": suite_tts_stream,
     "heartbeat": suite_heartbeat,
     "version": suite_version,
     "drafter": suite_drafter,

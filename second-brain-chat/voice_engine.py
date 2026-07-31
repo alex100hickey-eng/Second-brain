@@ -85,6 +85,50 @@ def transcribe(audio_bytes: bytes, filename: str = "clip.webm",
         return {"error": f"ElevenLabs STT failed: {e}"}
 
 
+def speak_stream(text: str):
+    """ElevenLabs TTS, streamed. Returns a generator of MP3 chunks, or a dict
+    {"error": ...} if the request can't even start (so the caller can fall back
+    BEFORE committing to a streaming response — once headers are sent it's too
+    late to switch).
+
+    Why this exists: speak() below buffers the whole MP3 before returning, so the
+    reply gap is full-generation + full-download. ElevenLabs' /stream endpoint
+    sends audio as it's synthesized — the first chunk arrives while the rest is
+    still being generated, and the browser starts playing it immediately."""
+    if not available():
+        return {"error": "ELEVENLABS_API_KEY not set"}
+    text = (text or "").strip()[:TTS_MAX_CHARS]
+    if not text:
+        return {"error": "no text"}
+    voice = (os.environ.get("ELEVENLABS_VOICE_ID") or DEFAULT_VOICE_ID).strip()
+    try:
+        payload = json.dumps({"text": text, "model_id": TTS_MODEL}).encode()
+        req = urllib.request.Request(
+            f"{API_BASE}/text-to-speech/{voice}/stream?output_format=mp3_44100_128",
+            data=payload, method="POST",
+            headers={"xi-api-key": _api_key(), "Content-Type": "application/json"})
+        resp = urllib.request.urlopen(req, timeout=60, context=_SSL_CTX)
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", errors="replace")[:300]
+        return {"error": f"ElevenLabs TTS HTTP {e.code}: {detail}"}
+    except Exception as e:
+        return {"error": f"ElevenLabs TTS failed: {e}"}
+
+    def _chunks():
+        try:
+            while True:
+                chunk = resp.read(8192)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            try:
+                resp.close()
+            except Exception:
+                pass
+    return _chunks()
+
+
 def speak(text: str) -> dict:
     """ElevenLabs TTS. Returns {"audio": <mp3 bytes>} or {"error": ...}. Never raises."""
     if not available():
