@@ -43,6 +43,7 @@ never touches the real Obsidian vault, and it drives the same code paths the cha
 import os
 import re
 import sys
+import json
 import time
 import shutil
 import tempfile
@@ -1063,6 +1064,118 @@ def suite_expansion_json(app, live):
           "NO structured findings" in src and "already-known URLs" in src)
     check("GitHub non-200 responses are audited, not swallowed as 'no results'",
           "GitHub search returned HTTP" in src)
+
+
+def suite_voice_vad(app, live):
+    """Conversation mode's turn-taking heuristic, driven by synthetic level traces.
+
+    This extracts the REAL decision code out of index.html and runs it under node, so
+    it tests what actually ships rather than a reimplementation. It cannot prove the
+    thresholds feel right against Alex's voice in Alex's room — only he can — but it
+    does prove the state machine ends turns, ignores blips, and can't hang."""
+    section("voice conversation mode (VAD turn-taking)")
+    if not _have("node"):
+        skip("VAD decision logic", "node not installed")
+        return
+
+    tpl = os.path.join(CHAT_DIR, "templates", "index.html")
+    html = open(tpl, encoding="utf-8").read()
+    try:
+        block = html.split("// --- VAD-DECISION-START")[1].split("// --- VAD-DECISION-END")[0]
+        block = block.split("\n", 1)[1]          # drop the remainder of the marker line
+    except IndexError:
+        check("VAD decision block is present in index.html", False)
+        return
+    check("VAD decision block is present in index.html", "function vadStep" in block)
+
+    # Config must match what the page actually uses, so the test can't drift from ship.
+    cfg = {}
+    for key in ("CALIBRATE_MS", "MARGIN", "FLOOR_MIN", "MIN_SPEECH_MS",
+                "SILENCE_MS", "START_GRACE_MS", "MAX_TURN_MS"):
+        m = re.search(rf"{key}:\s*([0-9.]+)", html)
+        if m:
+            cfg[key] = float(m.group(1))
+    check("VAD config parsed from the page", len(cfg) == 7, str(cfg))
+
+    harness = """
+%s
+const CFG = %s;
+const STEP = 60;            // the page samples every 60ms
+// Drive a trace of [level, durationMs] pairs and report the first terminal verdict.
+function run(trace) {
+  const s = vadNewTurn(0);
+  let now = 0;
+  for (const [level, dur] of trace) {
+    for (let t = 0; t < dur; t += STEP) {
+      const v = vadStep(s, level, now, CFG);
+      now += STEP;
+      if (v === 'endTurn' || v === 'noSpeech' || v === 'maxTurn') return {v, now};
+    }
+  }
+  return {v: 'listening', now};
+}
+const QUIET = 0.002, SPEECH = 0.08, ROOM = 0.02;
+const cases = {
+  // quiet room, a sentence, then a pause -> the turn should end
+  normal:      run([[QUIET,500],[SPEECH,2000],[QUIET,2000]]),
+  // a cough: over threshold but far shorter than MIN_SPEECH_MS, then silence.
+  // Must NOT count as speech, so it falls through to the no-speech exit.
+  cough:       run([[QUIET,500],[SPEECH,120],[QUIET,12000]]),
+  // nobody says anything at all
+  empty:       run([[QUIET,12000]]),
+  // someone talks continuously past the hard cap
+  runaway:     run([[QUIET,500],[SPEECH,40000]]),
+  // pauses mid-sentence shorter than SILENCE_MS must not cut Alex off
+  midpause:    run([[QUIET,500],[SPEECH,1500],[QUIET,700],[SPEECH,1500],[QUIET,2000]]),
+  // noisy room: the floor calibrates high, so room noise alone is not speech
+  noisyempty:  run([[ROOM,12000]]),
+  // ...but real speech still beats a noisy floor
+  noisyspeech: run([[ROOM,500],[SPEECH,2000],[ROOM,2000]]),
+};
+console.log(JSON.stringify(cases));
+""" % (block, json.dumps(cfg))
+
+    tmp = tempfile.mkdtemp(prefix="sbtest_vad_")
+    try:
+        path = os.path.join(tmp, "vad.js")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(harness)
+        r = subprocess.run(["node", path], capture_output=True, text=True, timeout=60)
+        if r.returncode != 0:
+            check("VAD harness runs under node", False, r.stderr[:300])
+            return
+        res = json.loads(r.stdout.strip())
+
+        check("a normal sentence followed by a pause ends the turn",
+              res["normal"]["v"] == "endTurn", str(res["normal"]))
+        check("the turn ends shortly after speech stops, not instantly",
+              cfg["SILENCE_MS"] <= res["normal"]["now"] - 2500 <= cfg["SILENCE_MS"] + 400,
+              str(res["normal"]))
+        check("a brief cough is not treated as speech",
+              res["cough"]["v"] == "noSpeech", str(res["cough"]))
+        check("an empty room exits conversation mode instead of recording forever",
+              res["empty"]["v"] == "noSpeech", str(res["empty"]))
+        check("continuous speech is capped rather than recording forever",
+              res["runaway"]["v"] == "maxTurn", str(res["runaway"]))
+        check("a short mid-sentence pause does NOT cut Alex off",
+              res["midpause"]["v"] == "endTurn" and res["midpause"]["now"] > 5000,
+              str(res["midpause"]))
+        check("steady room noise alone is not mistaken for speech",
+              res["noisyempty"]["v"] == "noSpeech", str(res["noisyempty"]))
+        check("real speech still registers over a noisy floor",
+              res["noisyspeech"]["v"] == "endTurn", str(res["noisyspeech"]))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    # The loop is only closed if the page re-opens the mic after a reply.
+    check("the reply is awaited before the mic re-opens (no self-recording)",
+          "await speak(fullText)" in html)
+    check("the conversation re-arms after every turn, including failures",
+          html.count("armListening()") >= 3)
+    check("spoken playback resolves when it ENDS, not when it starts",
+          "src.onended" in html and "u.onend = resolve" in html)
+    check("a mic that never opens can't strand conversation mode",
+          "mic-timeout" in html)
 
 
 def suite_draft_store(app, live):
@@ -2250,6 +2363,7 @@ SUITES = {
     "expansionjson": suite_expansion_json,
     "expansionaim": suite_expansion_aim,
     "draftstore": suite_draft_store,
+    "voicevad": suite_voice_vad,
     "drafter": suite_drafter,
     "voice": suite_voice,
     "briefing": suite_briefing,

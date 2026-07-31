@@ -314,6 +314,18 @@
     color: #ff5c5c;
     animation: micPulse 1.2s ease-in-out infinite;
   }
+  /* Conversation mode: the mic stays armed between turns, so it reads as a steady
+     held state (cyan) rather than the red "recording right now" pulse. Both classes
+     can be on at once — the cyan border wins while the red pulse keeps running, so
+     Alex can still see the exact moment it's capturing him. */
+  .mic-btn.conversation {
+    border-color: var(--accent, #45d6ff);
+    color: var(--accent, #45d6ff);
+    box-shadow: 0 0 0 1px var(--accent, #45d6ff) inset;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .mic-btn.listening { animation: none; }
+  }
 
   /* Attached-video chip shown above the input row */
   .attach-chip {
@@ -667,7 +679,9 @@
 
       removeThinking();
       removeToolStatus();
-      if ((voiceOn || lastVoiceTurn) && fullText) { speak(fullText); }
+      // AWAIT the reply being spoken: in conversation mode the mic can only re-open
+      // once CLARVIS has finished talking, or it records its own voice.
+      if ((voiceOn || lastVoiceTurn) && fullText) { await speak(fullText); }
       lastVoiceTurn = false;
     } catch (err) {
       removeThinking();
@@ -678,6 +692,9 @@
       sendBtn.disabled = false;
       status.textContent = 'Online';
       input.focus();
+      // Close the loop — including after an error, so one failed turn doesn't
+      // silently drop Alex out of a hands-free conversation.
+      armListening();
     }
   });
 
@@ -698,7 +715,10 @@
   function updateVoiceUI() {
     voiceToggle.classList.toggle('active', voiceOn);
     micBtn.classList.toggle('listening', recording);
-    micBtn.title = recording ? 'Recording — tap to stop & transcribe' : 'Tap and speak (local transcription)';
+    micBtn.classList.toggle('conversation', convoMode);
+    micBtn.title = convoMode
+      ? 'Conversation mode — just talk. Tap to end.'
+      : (recording ? 'Recording — release to send' : 'Hold to talk, or tap for conversation mode');
   }
 
   // Turn markdown into something worth hearing.
@@ -727,28 +747,39 @@
   function stopVoicePlayback() {
     if (currentVoiceSrc) { try { currentVoiceSrc.stop(); } catch (e) {} currentVoiceSrc = null; }
   }
+  // Resolves when playback actually FINISHES (not when it starts) — conversation
+  // mode can only re-open the mic once CLARVIS has stopped talking, or it would
+  // record its own voice. stopVoicePlayback() fires onended too, so an interrupted
+  // reply resolves rather than hanging the turn.
   async function playVoice(arrayBuffer) {
     ensureAudioCtx();
     if (!audioCtx) throw new Error('no AudioContext');
     const buf = await audioCtx.decodeAudioData(arrayBuffer);
     stopVoicePlayback();
-    const src = audioCtx.createBufferSource();
-    src.buffer = buf;
-    src.connect(audioCtx.destination);
-    src.start();
-    currentVoiceSrc = src;
+    return new Promise((resolve) => {
+      const src = audioCtx.createBufferSource();
+      src.buffer = buf;
+      src.connect(audioCtx.destination);
+      src.onended = () => { if (currentVoiceSrc === src) currentVoiceSrc = null; resolve(); };
+      src.start();
+      currentVoiceSrc = src;
+    });
   }
   let lastVoiceTurn = false;  // voice in → voice out, even with the Voice toggle off
 
   function browserSpeak(text) {
-    if (!canSpeak) return;
-    speechSynthesis.cancel();
-    const u = new SpeechSynthesisUtterance(text);
-    u.rate = 1.05;
-    const voice = speechSynthesis.getVoices().find(v => v.lang.startsWith('en') && v.localService)
-      || speechSynthesis.getVoices().find(v => v.lang.startsWith('en'));
-    if (voice) u.voice = voice;
-    speechSynthesis.speak(u);
+    return new Promise((resolve) => {
+      if (!canSpeak) return resolve();
+      speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(text);
+      u.rate = 1.05;
+      const voice = speechSynthesis.getVoices().find(v => v.lang.startsWith('en') && v.localService)
+        || speechSynthesis.getVoices().find(v => v.lang.startsWith('en'));
+      if (voice) u.voice = voice;
+      u.onend = resolve;
+      u.onerror = resolve;   // a failed utterance must not strand the conversation
+      speechSynthesis.speak(u);
+    });
   }
 
   async function speak(md) {
@@ -768,9 +799,9 @@
         return;
       }
       const data = await res.json().catch(() => ({}));
-      if (data.ok) return;  // the Mac spoke via `say`
+      if (data.ok) return;  // the Mac already spoke it via `say` (synchronous server-side)
     } catch (err) { /* fall through to browser voices */ }
-    browserSpeak(text);
+    await browserSpeak(text);
   }
 
   if (canSpeak) speechSynthesis.getVoices(); // warm the voice list (loads async)
@@ -801,42 +832,207 @@
         // Voice should feel like conversation: send immediately unless Alex turned
         // auto-send off (localStorage jarvis-voice-autosend = 'off').
         lastVoiceTurn = true;  // spoken question → spoken answer, toggle or not
-        if (localStorage.getItem('jarvis-voice-autosend') !== 'off') {
+        // Conversation mode is a hands-free loop by definition, so it always sends —
+        // the auto-send preference only governs one-shot hold-to-talk.
+        if (convoMode || localStorage.getItem('jarvis-voice-autosend') !== 'off') {
           form.requestSubmit();
         }
       } else {
         input.placeholder = data.note ? ('Didn\'t catch that — ' + data.note) : 'Didn\'t catch that. Try again.';
+        armListening();   // a missed turn shouldn't silently end the conversation
       }
     } catch (err) {
       input.placeholder = 'Transcription failed — type instead.';
+      armListening();
     } finally {
       micBtn.classList.remove('busy');
       setTimeout(() => { input.placeholder = 'Ask or tell me something...'; }, 2500);
     }
   }
 
-  async function startRecording() {
-    try {
-      micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    } catch (err) {
-      input.placeholder = 'Mic permission needed — allow it and try again.';
-      setTimeout(() => { input.placeholder = 'Ask or tell me something...'; }, 3000);
-      return;
+  // ===== CONVERSATION MODE (VAD) =====
+  // Tap the mic ONCE and just talk: an analyser watches the mic's RMS level, decides
+  // when Alex has stopped speaking, sends that turn, speaks the reply, and re-opens
+  // the mic — no button press per turn. The threshold is calibrated against the room's
+  // own noise floor at the start of every turn rather than hardcoded, because a quiet
+  // office and a noisy kitchen have wildly different baselines.
+  const VAD = {
+    CALIBRATE_MS: 400,      // sample the room before judging anything as speech
+    MARGIN: 2.2,            // speech must beat noiseFloor * MARGIN
+    FLOOR_MIN: 0.008,       // ...and this absolute floor, for near-silent rooms
+    MIN_SPEECH_MS: 250,     // ignore coughs, clicks and door bumps
+    SILENCE_MS: 1100,       // silence after real speech that ends the turn
+    START_GRACE_MS: 9000,   // no speech at all this long => Alex walked away
+    MAX_TURN_MS: 30000,     // hard cap so a stuck mic can't record forever
+  };
+  let convoMode = false;
+  let vadAnalyser = null, vadSource = null, vadTimer = null;
+  let discardTurn = false;   // set when a turn should be dropped, not transcribed
+
+  // --- VAD-DECISION-START (pure; extracted and unit-tested in run_tests.py) ---
+  // Split out from the audio plumbing deliberately: the thresholds are the part most
+  // likely to be wrong and the part Alex will want to tune, and they can be exercised
+  // against synthetic level traces without a microphone. Everything above this is I/O;
+  // everything here is arithmetic.
+  function vadNewTurn(now) {
+    return { t0: now, noiseFloor: 0, calibN: 0, speechStart: 0, lastLoud: 0, sawSpeech: false };
+  }
+
+  // Advances `s` by one sample. Returns what the turn should do next:
+  //   'calibrating' | 'listening' | 'endTurn' | 'noSpeech' | 'maxTurn'
+  function vadStep(s, rms, now, cfg) {
+    // Learn the room's own noise floor first — a quiet office and a noisy kitchen
+    // have wildly different baselines, so a hardcoded threshold suits neither.
+    if (now - s.t0 < cfg.CALIBRATE_MS) {
+      s.noiseFloor = (s.noiseFloor * s.calibN + rms) / (s.calibN + 1);
+      s.calibN++;
+      return 'calibrating';
     }
-    chunks = [];
-    mediaRecorder = new MediaRecorder(micStream);
-    mediaRecorder.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
-    mediaRecorder.onstop = () => {
-      if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
-      const mime = (mediaRecorder && mediaRecorder.mimeType) || 'audio/webm';
-      if (chunks.length) transcribeBlob(new Blob(chunks, { type: mime }));
-    };
-    mediaRecorder.start();
-    recording = true;
+    const threshold = Math.max(s.noiseFloor * cfg.MARGIN, cfg.FLOOR_MIN);
+    if (rms > threshold) {
+      if (!s.speechStart) s.speechStart = now;
+      s.lastLoud = now;
+      // Sustained, not instantaneous: a cough or a door bump clears the threshold
+      // for a moment but never for MIN_SPEECH_MS.
+      if (!s.sawSpeech && now - s.speechStart >= cfg.MIN_SPEECH_MS) s.sawSpeech = true;
+    }
+    if (s.sawSpeech && s.lastLoud && now - s.lastLoud >= cfg.SILENCE_MS) return 'endTurn';
+    if (!s.sawSpeech && now - s.t0 >= cfg.START_GRACE_MS) return 'noSpeech';
+    if (now - s.t0 >= cfg.MAX_TURN_MS) return 'maxTurn';
+    return 'listening';
+  }
+  // --- VAD-DECISION-END ---
+
+  function stopVad() {
+    if (vadTimer) { clearInterval(vadTimer); vadTimer = null; }
+    if (vadSource) { try { vadSource.disconnect(); } catch (e) {} vadSource = null; }
+    vadAnalyser = null;
+  }
+
+  function startVad() {
+    stopVad();
+    ensureAudioCtx();
+    // No AudioContext (or no stream) means no VAD — the turn then simply runs until
+    // MAX_TURN_MS or a tap, rather than the mic silently never closing.
+    if (!audioCtx || !micStream) return false;
+    try {
+      vadSource = audioCtx.createMediaStreamSource(micStream);
+      vadAnalyser = audioCtx.createAnalyser();
+      vadAnalyser.fftSize = 1024;
+      vadSource.connect(vadAnalyser);
+    } catch (e) { stopVad(); return false; }
+
+    const data = new Float32Array(vadAnalyser.fftSize);
+    const state = vadNewTurn(performance.now());
+
+    // setInterval, not requestAnimationFrame: rAF is throttled to ~0 in a background
+    // tab, which would freeze the turn mid-sentence the moment Alex switches away.
+    vadTimer = setInterval(() => {
+      if (!recording || !convoMode || !vadAnalyser) { stopVad(); return; }
+      vadAnalyser.getFloatTimeDomainData(data);
+      let sum = 0;
+      for (let i = 0; i < data.length; i++) sum += data[i] * data[i];
+      const rms = Math.sqrt(sum / data.length);
+
+      switch (vadStep(state, rms, performance.now(), VAD)) {
+        case 'endTurn':
+        case 'maxTurn':
+          stopVad(); stopRecording();          // turn over -> transcribe + send
+          break;
+        case 'noSpeech':
+          setConvoMode(false, 'Conversation mode off — I didn\'t hear anything.');
+          break;
+      }
+    }, 60);
+    return true;
+  }
+
+  // Re-open the mic after a reply. The short delay lets the tail of the spoken reply
+  // (and any speaker ring-out) die down before the analyser calibrates the room.
+  function armListening() {
+    if (!convoMode || recording) return;
+    setTimeout(() => {
+      if (convoMode && !recording) startRecording(true);
+    }, 350);
+  }
+
+  async function setConvoMode(on, note) {
+    convoMode = on;
+    if (on) {
+      if (canSpeak) speechSynthesis.cancel();
+      stopVoicePlayback();
+      updateVoiceUI();                    // show the armed state while the mic opens
+      if (!recording) {
+        // If the mic never opens, startRecording has already cleared convoMode and
+        // explained why — don't leave the UI claiming to be in a conversation.
+        if (!await startRecording(true)) { updateVoiceUI(); return; }
+      } else {
+        startVad();
+      }
+    } else {
+      stopVad();
+      if (recording) { discardTurn = true; stopRecording(); }
+    }
+    if (note) {
+      input.placeholder = note;
+      setTimeout(() => { input.placeholder = 'Ask or tell me something...'; }, 3000);
+    }
     updateVoiceUI();
   }
 
+  async function startRecording(useVad) {
+    try {
+      // Echo cancellation matters most in conversation mode: without it the mic
+      // hears the speakers, and CLARVIS answers itself.
+      // getUserMedia can hang indefinitely rather than reject (no device, or a
+      // permission prompt nobody answers). Racing it against a timeout is what
+      // stops conversation mode sitting there claiming to listen while it isn't.
+      micStream = await Promise.race([
+        navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('mic-timeout')), 10000)),
+      ]);
+    } catch (err) {
+      convoMode = false;
+      input.placeholder = err && err.message === 'mic-timeout'
+        ? 'Mic didn\'t open — check that a microphone is connected.'
+        : 'Mic permission needed — allow it and try again.';
+      setTimeout(() => { input.placeholder = 'Ask or tell me something...'; }, 3000);
+      updateVoiceUI();
+      return false;
+    }
+    // Everything past getUserMedia can throw too — MediaRecorder construction fails
+    // on some devices/codecs even after permission is granted. Unguarded, that left
+    // conversation mode stranded: UI armed, nothing actually listening.
+    try {
+      chunks = [];
+      mediaRecorder = new MediaRecorder(micStream);
+      mediaRecorder.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+      mediaRecorder.onstop = () => {
+        if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
+        const mime = (mediaRecorder && mediaRecorder.mimeType) || 'audio/webm';
+        if (discardTurn) { discardTurn = false; chunks = []; return; }
+        if (chunks.length) transcribeBlob(new Blob(chunks, { type: mime }));
+      };
+      mediaRecorder.start();
+    } catch (err) {
+      if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
+      convoMode = false;
+      recording = false;
+      input.placeholder = 'Couldn\'t start recording on this device — type instead.';
+      setTimeout(() => { input.placeholder = 'Ask or tell me something...'; }, 3000);
+      updateVoiceUI();
+      return false;
+    }
+    recording = true;
+    if (useVad) startVad();
+    updateVoiceUI();
+    return true;
+  }
+
   function stopRecording() {
+    stopVad();
     if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
     recording = false;
     updateVoiceUI();
@@ -845,30 +1041,34 @@
   if (!canRecord) {
     micBtn.style.display = 'none'; // no mic API here — typing (incl. dictation tools) still works
   } else {
-    // HOLD to talk (release = transcribe + auto-send), or quick-TAP to toggle
-    // recording on/off — both feel natural; hold is the conversation mode.
+    // HOLD to talk (release = transcribe + send) for a one-shot question, or quick
+    // TAP to enter CONVERSATION MODE and just keep talking. Recording starts on
+    // pointerdown either way, so a tap loses none of the first word — the release
+    // timing decides which mode that already-running recording belongs to.
     let pressT = 0, held = false;
     const HOLD_MS = 350;
     micBtn.addEventListener('pointerdown', (e) => {
       e.preventDefault();
+      if (convoMode) { setConvoMode(false, 'Conversation mode off.'); return; }
       pressT = Date.now(); held = false;
       if (!recording) {
         if (canSpeak) speechSynthesis.cancel();
-        stopVoicePlayback();  // pressing the mic interrupts Jarvis mid-sentence
-        startRecording();
-        held = true;  // started by this press — release may stop it (hold mode)
+        stopVoicePlayback();  // pressing the mic interrupts CLARVIS mid-sentence
+        startRecording(false);
+        held = true;  // started by this press — release decides hold vs conversation
       }
     });
     micBtn.addEventListener('pointerup', (e) => {
       e.preventDefault();
+      if (convoMode) return;
       const dur = Date.now() - pressT;
       if (held && dur >= HOLD_MS) stopRecording();       // hold-to-talk release
-      else if (!held && recording) stopRecording();      // tap while recording = stop
-      // quick tap that STARTED recording (dur < HOLD_MS): leave it running (toggle mode)
+      else if (held) setConvoMode(true);                 // quick tap = conversation mode
+      else if (recording) stopRecording();               // tap while recording = stop
     });
     micBtn.addEventListener('pointerleave', () => {
       // Finger slid off mid-hold: treat as release so recording doesn't run away.
-      if (held && recording && Date.now() - pressT >= HOLD_MS) stopRecording();
+      if (!convoMode && held && recording && Date.now() - pressT >= HOLD_MS) stopRecording();
     });
     micBtn.addEventListener('contextmenu', (e) => e.preventDefault()); // no long-press menu on iOS
   }
