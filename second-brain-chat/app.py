@@ -3737,6 +3737,11 @@ def _dispatch_tool_call(tool_name: str, tool_input: dict) -> str:
             # Relay to the Mac; blocks until it answers or the command expires.
             return screen_bridge.handle_tool_call(supabase, tool_name, tool_input)
         return screen_control.handle_tool_call(tool_name, tool_input)
+    if tool_name == "run_screen_task":
+        if task_manager.RUNTIME == "server":
+            return ("Screen tasks run on the Mac, which isn't reachable from here. "
+                    "Ask again from the Mac, or use the step-by-step screen controls.")
+        return screen_agent.handle_tool_call(tool_name, tool_input)
     if tool_name == "check_notifications":
         return proactive.status_text()
     if tool_name == "set_notification_rules":
@@ -4403,6 +4408,15 @@ if task_manager.RUNTIME != "server":
     # On the Mac: execute directly, no round-trip.
     import screen_control  # noqa: E402
     TOOLS.extend(screen_control.TOOL_SCHEMAS)
+
+    # The local see->act loop (screen_agent.py). Alex passed the human gate on
+    # 2026-07-31. Mac-only by construction: the loop takes its own screenshots
+    # and clicks between model turns, so it must live where the mouse is — the
+    # server offers no relayed equivalent.
+    import screen_agent  # noqa: E402
+    screen_agent.init(claude)
+    TOOLS.extend(screen_agent.TOOL_SCHEMAS)
+    TOOL_STATUS_LABELS["run_screen_task"] = "Driving your screen…"
 else:
     # On the server: same tools, but each one is relayed to the Mac over
     # Supabase (screen_bridge). Alex wants ONE CLARVIS rather than a separate

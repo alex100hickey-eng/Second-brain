@@ -1925,10 +1925,27 @@ def suite_screen_agent(app, live):
     check("screen_agent has NO direct mouse/keyboard control code", not _has_control_code(src))
     check("screen_agent acts only via screen_control", "import screen_control" in src)
 
-    # The human gate: a high-risk capability must not wire itself into the live app.
+    # The human gate WAS passed: Alex approved wiring on 2026-07-31. What the
+    # gate protected still has to hold, so we now pin the wiring itself — that
+    # it exists, that it dispatches, and that it stays Mac-only.
     app_src = open(os.path.join(CHAT_DIR, "app.py"), encoding="utf-8").read()
-    check("screen_agent is NOT auto-registered in app.py (awaits Alex's approval)",
-          "import screen_agent" not in app_src)
+    check("screen_agent is registered in app.py (Alex approved 2026-07-31)",
+          "import screen_agent" in app_src)
+    check("screen_agent is initialised with the Claude client",
+          "screen_agent.init(claude)" in app_src)
+    check("run_screen_task is dispatched in handle_tool_call",
+          "screen_agent.handle_tool_call" in app_src)
+    check("run_screen_task has a status label", '"run_screen_task"' in app_src)
+
+    # Mac-only by construction: the import must sit inside the non-server branch
+    # (after `import screen_control`, before the `else:` that relays to the Mac).
+    mac_branch_start = app_src.index("import screen_control")
+    relay_else = app_src.index("TOOLS.extend(screen_bridge.TOOL_SCHEMAS)")
+    agent_import = app_src.index("import screen_agent")
+    check("screen_agent import is confined to the Mac branch (server never loads it)",
+          mac_branch_start < agent_import < relay_else)
+    check("server-side run_screen_task refuses instead of relaying",
+          "Screen tasks run on the Mac" in app_src)
 
     # Step budget is clamped both ways.
     check("MAX_STEPS_CAP bounds the step budget", sa.MAX_STEPS_CAP >= sa.MAX_STEPS_DEFAULT)

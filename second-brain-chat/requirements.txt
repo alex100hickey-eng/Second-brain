@@ -1,18 +1,22 @@
-flask
-anthropic
-supabase
-gunicorn
-python-dotenv
+# Pinned 2026-07-31 (Alex's go-ahead). Versions are exactly what the Mac has
+# installed and what the 435-check suite passes against, so a rebuild can no
+# longer silently pull a newer release that breaks something. Bumping is now a
+# deliberate edit: change the number, run `python3 run_tests.py`, commit.
+flask==3.1.3
+anthropic==0.116.0
+supabase==2.31.0
+gunicorn  # server-only; not installed locally, so no locally-verified version to pin
+python-dotenv==1.2.2
 composio==0.18.0
 composio-anthropic==0.18.0
 # Round-2 features (video input, data synthesizer, website creator, video toolkit):
-ddgs
-beautifulsoup4
-lxml
-Pillow
+ddgs==9.14.4
+beautifulsoup4==4.15.0
+lxml==6.1.1
+Pillow==12.3.0
 # Round-5 unified semantic search: local torch-free embeddings
-numpy
-model2vec
+numpy==2.5.1
+model2vec==0.8.2
 # Screen control (Mac-only at runtime — gated by task_manager.RUNTIME in app.py).
 # Also Mac-only at INSTALL time: verified live 2026-07-26 that pynput's Linux
 # backend pulls in evdev, a C extension needing linux/input.h kernel headers
@@ -20,9 +24,9 @@ model2vec
 # whole server deploy over a package that's never even imported there. These
 # markers make pip skip both lines entirely on Linux instead of trying and
 # failing to compile them.
-pyautogui; sys_platform == "darwin"
-pynput; sys_platform == "darwin"
+pyautogui==0.9.54; sys_platform == "darwin"
+pynput==1.8.2; sys_platform == "darwin"
 # Sandbox browsing: Playwright's Python client only (connects to Browserbase's
 # REMOTE browser over CDP) — no local browser binary installed, works on server too
-playwright
+playwright==1.61.0
 # System deps (brew, not pip): ffmpeg, whisper-cpp + models/ggml-base.en.bin — see ../requirements.txt
