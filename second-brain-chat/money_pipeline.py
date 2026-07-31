@@ -167,7 +167,15 @@ def _call(system: str, user: str, max_tokens: int = 4000) -> str:
         model=MODEL, max_tokens=max_tokens, system=system,
         messages=[{"role": "user", "content": user}], timeout=120.0,
     )
-    return next((b.text for b in msg.content if b.type == "text"), "").strip()
+    # Join ALL text blocks (a thinking block bills against the same max_tokens and
+    # used to displace the answer entirely), and RAISE on truncation — every caller
+    # already wraps this in try/except with its own fallback. Same bug class that
+    # silently emptied the expansion scout for 8 days; see expansion_pipeline._call.
+    text = "".join(b.text for b in msg.content if b.type == "text").strip()
+    if msg.stop_reason == "max_tokens":
+        raise ValueError(f"reply hit the {max_tokens}-token cap "
+                         f"({len(text)} chars of text survived)")
+    return text
 
 
 def _audit(tool: str, trigger: str, summary: str, success: bool = True,
@@ -329,7 +337,7 @@ def _distill_queries(focus_brief: str) -> list:
             "AI assistant could earn money online (3-6 keywords each, no full sentences, no "
             "punctuation). Prefer concrete method nouns (e.g. 'newsletter sponsorship automation') "
             "over vague ones ('make money'). Return ONLY a JSON array of strings.",
-            focus_brief, max_tokens=300)
+            focus_brief, max_tokens=1500)   # 300 didn't fit a thinking block + the answer
         arr = _extract_json(text)
         qs = [str(q).strip() for q in arr if str(q).strip()][:3] if isinstance(arr, list) else []
         if qs:

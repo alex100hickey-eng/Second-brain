@@ -52,10 +52,23 @@ def _check_db(name, path) -> dict:
         return {"name": f"DB: {name}", "ok": False, "status": "UNREADABLE", "detail": str(e)}
 
 
-def _check_binary(name, hint="") -> dict:
+# Which node is this? Same convention as task_manager: the server sets
+# JARVIS_RUNTIME=server in Coolify; Alex's Mac defaults to local.
+_IS_SERVER = (os.environ.get("JARVIS_RUNTIME") or "local").strip().lower() == "server"
+
+
+def _check_binary(name, hint="", required=True) -> dict:
     path = shutil.which(name)
     if path:
         return {"name": f"binary: {name}", "ok": True, "status": "present", "detail": path}
+    if not required:
+        # ok=None is "notice", not failure. whisper-cli/ffmpeg are MAC tools (server
+        # STT is ElevenLabs; video work is Mac-side) — flagging them CRITICAL on every
+        # server boot logged a red incident per restart for a week. A critical that
+        # fires on every healthy boot teaches Alex to ignore criticals, which is the
+        # silent-failure disease inverted.
+        return {"name": f"binary: {name}", "ok": None,
+                "status": "absent (optional on this node)", "detail": hint}
     return {"name": f"binary: {name}", "ok": False, "status": "MISSING", "detail": hint}
 
 
@@ -126,8 +139,8 @@ def run_health_check() -> dict:
     for name, path in _DBS.items():
         checks.append(_check_db(name, path))
     checks.append(_check_index())
-    checks.append(_check_binary("whisper-cli", "brew install whisper-cpp"))
-    checks.append(_check_binary("ffmpeg", "brew install ffmpeg"))
+    checks.append(_check_binary("whisper-cli", "brew install whisper-cpp", required=not _IS_SERVER))
+    checks.append(_check_binary("ffmpeg", "brew install ffmpeg", required=not _IS_SERVER))
     checks.append(_check_disk_for_backups())
     checks.append(_check_backups_present())
     checks.append(_check_last_test_pass())
@@ -228,8 +241,8 @@ def run_startup_check(supabase_client=None) -> dict:
         checks.append(_check_db(name, path))
     checks.append(_check_index())
     checks.append(_check_embedding_model())
-    checks.append(_check_binary("whisper-cli", "brew install whisper-cpp"))
-    checks.append(_check_binary("ffmpeg", "brew install ffmpeg"))
+    checks.append(_check_binary("whisper-cli", "brew install whisper-cpp", required=not _IS_SERVER))
+    checks.append(_check_binary("ffmpeg", "brew install ffmpeg", required=not _IS_SERVER))
     checks.append(_check_disk_for_backups())
     checks.append(_check_supabase(supabase_client))
 

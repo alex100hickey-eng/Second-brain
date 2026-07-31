@@ -1066,6 +1066,93 @@ def suite_expansion_json(app, live):
           "GitHub search returned HTTP" in src)
 
 
+def suite_call_hardening(app, live):
+    """The thinking-block/max_tokens silent-empty class, eradicated everywhere:
+    all three _call sites now join text blocks and RAISE on truncation, and every
+    caller routes that into its designed fallback (the council fails CLOSED)."""
+    section("_call hardening (truncation raises; council fails closed)")
+    import task_manager as tm
+    import money_pipeline as mp
+
+    class _FakeUsage:
+        output_tokens = 300
+
+    def _fake_client(stop_reason, blocks):
+        class _Msg:
+            pass
+        m = _Msg()
+        m.stop_reason = stop_reason
+        m.usage = _FakeUsage()
+        m.content = blocks
+
+        class _C:
+            class messages:
+                @staticmethod
+                def create(**kw):
+                    return m
+        return _C()
+
+    class _Block:
+        def __init__(self, type_, text=""):
+            self.type = type_
+            self.text = text
+
+    for label, mod in (("task_manager", tm), ("money_pipeline", mp)):
+        saved = mod.claude
+        try:
+            # Thinking ate the whole budget: zero text, stop=max_tokens -> raises.
+            mod.claude = _fake_client("max_tokens", [_Block("thinking")])
+            try:
+                mod._call("sys", "user", max_tokens=300)
+                check(f"{label}: truncated-empty reply raises instead of returning ''", False)
+            except ValueError:
+                check(f"{label}: truncated-empty reply raises instead of returning ''", True)
+            # Thinking + text, finished cleanly -> text comes through.
+            mod.claude = _fake_client("end_turn", [_Block("thinking"), _Block("text", '{"ok":1}')])
+            check(f"{label}: text after a thinking block is joined, not lost",
+                  mod._call("s", "u") == '{"ok":1}')
+        finally:
+            mod.claude = saved
+
+    # Council resilience: a raising _call becomes a fail-closed verdict, not a crash.
+    saved = tm.claude
+    try:
+        tm.claude = _fake_client("max_tokens", [_Block("thinking")])
+        v = tm.guardrail_council("spending cap", "test goal")
+        check("a council whose members truncate fails CLOSED (guardrail applied)",
+              v.get("apply") is True and v.get("strictness") == "high", str(v))
+    finally:
+        tm.claude = saved
+
+    # Source-level: enforcer and planner _calls live INSIDE their fallback trys.
+    src = open(os.path.join(CHAT_DIR, "task_manager.py"), encoding="utf-8").read()
+    enforcer = src[src.index("guardrail enforcer for an autonomous task agent") - 600:]
+    check("enforcer truncation lands in the fail-closed branch",
+          enforcer.index("try:") < enforcer.index("reply = _call"))
+    check("enforcer has headroom for a thinking block", "max_tokens=1000" in src)
+
+    # Server boot: Mac-only binaries are notices there, not criticals.
+    import importlib
+    import health as h
+    saved_env = os.environ.get("JARVIS_RUNTIME")
+    try:
+        os.environ["JARVIS_RUNTIME"] = "server"
+        importlib.reload(h)
+        r = h._check_binary("definitely-not-installed-xyz", "hint", required=not h._IS_SERVER)
+        check("missing Mac-only binary on the SERVER is a notice, not critical",
+              r["ok"] is None, str(r))
+        os.environ["JARVIS_RUNTIME"] = "local"
+        importlib.reload(h)
+        r = h._check_binary("definitely-not-installed-xyz", "hint", required=not h._IS_SERVER)
+        check("missing binary on the MAC is still a hard failure", r["ok"] is False)
+    finally:
+        if saved_env is None:
+            os.environ.pop("JARVIS_RUNTIME", None)
+        else:
+            os.environ["JARVIS_RUNTIME"] = saved_env
+        importlib.reload(h)
+
+
 def suite_retention(app, live):
     """Cross-node tool-audit mirror + whitelist-only retention sweep."""
     section("audit mirror + retention (bounded junk drawer)")
@@ -2648,6 +2735,7 @@ SUITES = {
     "expansionaim": suite_expansion_aim,
     "draftstore": suite_draft_store,
     "voicevad": suite_voice_vad,
+    "callhardening": suite_call_hardening,
     "retention": suite_retention,
     "applyfinding": suite_apply_finding,
     "ttsstream": suite_tts_stream,

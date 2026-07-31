@@ -91,7 +91,7 @@ def _parse_ts(ts: str) -> datetime:
     return datetime.fromisoformat(ts.replace("Z", "+00:00"))
 
 
-def _call(system: str, user: str, max_tokens: int = 1200) -> str:
+def _call(system: str, user: str, max_tokens: int = 2000) -> str:
     msg = claude.messages.create(
         model=MODEL,
         max_tokens=max_tokens,
@@ -99,7 +99,16 @@ def _call(system: str, user: str, max_tokens: int = 1200) -> str:
         messages=[{"role": "user", "content": user}],
         timeout=120.0,
     )
-    return next((b.text for b in msg.content if b.type == "text"), "").strip()
+    # Join ALL text blocks — the model may emit a thinking block first, and that
+    # thinking bills against the same max_tokens. A truncated reply raises rather
+    # than returning half-JSON/empty: every caller already catches ValueError with
+    # its designed fallback (the guardrail enforcer fails CLOSED), which beats
+    # parsing garbage. Same bug class that silently emptied the expansion scout.
+    text = "".join(b.text for b in msg.content if b.type == "text").strip()
+    if msg.stop_reason == "max_tokens":
+        raise ValueError(f"council reply hit the {max_tokens}-token cap "
+                         f"({len(text)} chars of text survived)")
+    return text
 
 
 def _extract_json(text: str):
@@ -119,6 +128,17 @@ def _extract_json(text: str):
 # ============================================================
 
 def guardrail_council(guardrail: str, task_context: str) -> dict:
+    try:
+        return _guardrail_council_inner(guardrail, task_context)
+    except Exception as e:
+        # A council member failing (truncated reply, API error) must not crash the
+        # whole task queue — and the safe verdict for an UNDELIBERATED guardrail is
+        # to apply it strictly. Same fail-closed stance as the enforcer.
+        return {"guardrail": guardrail, "apply": True, "strictness": "high",
+                "details": f"council errored ({str(e)[:120]}) — applied fail-closed"}
+
+
+def _guardrail_council_inner(guardrail: str, task_context: str) -> dict:
     subject = f"Proposed guardrail: {guardrail}\nTask context: {task_context}"
 
     # Advocate and Critic are blind to each other, so they can run concurrently.
@@ -207,17 +227,19 @@ def run_managed_task(request: str, runtime: str = None) -> str:
                     f"{existing['task']['status']} — not queueing a duplicate. "
                     f"Use check_managed_tasks to see its progress.")
 
-    plan_text = _call(
-        "You plan tasks for an autonomous agent. From the user's raw request, extract the "
-        "underlying goal and enumerate the guardrail categories genuinely relevant to it "
-        "(examples: spending cap, approved methods, forbidden actions, directory scope, deletion "
-        "permission, backup requirement, time limit, allowed tools). Only categories that matter "
-        "for THIS task — usually 2 to 5. Answer with ONLY JSON:\n"
-        '{"goal": "<one sentence>", "candidates": [{"guardrail": "<short name>", '
-        '"why": "<one line>"}]}',
-        request,
-    )
     try:
+        # _call inside the try: it now RAISES on a truncated reply (instead of
+        # returning half-JSON), and that failure should take this same fallback.
+        plan_text = _call(
+            "You plan tasks for an autonomous agent. From the user's raw request, extract the "
+            "underlying goal and enumerate the guardrail categories genuinely relevant to it "
+            "(examples: spending cap, approved methods, forbidden actions, directory scope, deletion "
+            "permission, backup requirement, time limit, allowed tools). Only categories that matter "
+            "for THIS task — usually 2 to 5. Answer with ONLY JSON:\n"
+            '{"goal": "<one sentence>", "candidates": [{"guardrail": "<short name>", '
+            '"why": "<one line>"}]}',
+            request,
+        )
         plan = _extract_json(plan_text)
         goal = plan["goal"]
         candidates = plan.get("candidates", [])[:6]
@@ -324,17 +346,19 @@ def _check_guardrails(task: dict, tool_name: str, tool_input: dict) -> dict:
     rails = "\n".join(
         f"- {g['guardrail']} ({g['strictness']}): {g['details']}" for g in applied
     )
-    reply = _call(
-        "You are the guardrail enforcer for an autonomous task agent. Given the active guardrails "
-        "and one proposed tool call, decide whether it may proceed. BLOCK only if a guardrail "
-        "clearly forbids or scopes out this action; if it's genuinely ambiguous whether a "
-        "high-strictness guardrail applies, block. Answer with ONLY JSON: "
-        '{"allow": true|false, "reason": "<one line>"}',
-        f"Task goal: {task['goal']}\n\nActive guardrails:\n{rails}\n\n"
-        f"Proposed tool call: {tool_name}\nArguments: {json.dumps(tool_input)[:1500]}",
-        max_tokens=300,
-    )
     try:
+        # _call inside the try: a truncated reply now raises, and truncation must
+        # land in the same fail-closed branch as unparseable output.
+        reply = _call(
+            "You are the guardrail enforcer for an autonomous task agent. Given the active guardrails "
+            "and one proposed tool call, decide whether it may proceed. BLOCK only if a guardrail "
+            "clearly forbids or scopes out this action; if it's genuinely ambiguous whether a "
+            "high-strictness guardrail applies, block. Answer with ONLY JSON: "
+            '{"allow": true|false, "reason": "<one line>"}',
+            f"Task goal: {task['goal']}\n\nActive guardrails:\n{rails}\n\n"
+            f"Proposed tool call: {tool_name}\nArguments: {json.dumps(tool_input)[:1500]}",
+            max_tokens=1000,   # 300 left no room for a thinking block; truncation here = spurious BLOCK
+        )
         check = _extract_json(reply)
         return {"allow": bool(check.get("allow")), "reason": str(check.get("reason", ""))[:300]}
     except (ValueError, json.JSONDecodeError):
