@@ -292,6 +292,30 @@ composio = Composio(provider=AnthropicProvider(), api_key=COMPOSIO_API_KEY)
 # this is a no-op on Alex's Mac where nothing was lost in the first place.
 draft_store.init(supabase)
 note_capture.on_capture = lambda name, md: draft_store.save(draft_store.KIND_NOTE, name, md)
+
+# Cross-node tool-audit mirror: every log_tool also writes a compact Supabase row
+# tagged with which node it ran on. This is what makes usage audits two-eyed — the
+# server's local ledger dies with its container. Daemon thread: never on the
+# critical path of the tool call being recorded.
+import retention  # noqa: E402
+retention.init(supabase)
+
+
+def _mirror_tool_audit(tool: str, trigger: str, ok: bool, ms: int) -> None:
+    def _write():
+        try:
+            supabase.table("Agent Outputs").insert({
+                "agent_name": "jarvis_tool_audit",
+                "output_text": json.dumps({"tool": tool, "trigger": trigger, "ok": ok,
+                                           "ms": ms, "node": task_manager.RUNTIME
+                                           if "task_manager" in globals() else "local"}),
+            }).execute()
+        except Exception:
+            pass
+    threading.Thread(target=_write, daemon=True).start()
+
+
+observability.on_tool_logged = _mirror_tool_audit
 try:
     _restored = (draft_store.rehydrate(draft_store.KIND_AGENT, AGENTS_DIR)
                  + draft_store.rehydrate(draft_store.KIND_TOOL, PROPOSED_TOOLS_DIR)
@@ -442,6 +466,7 @@ INTERNAL_AGENT_NAMES = {
     "jarvis_draft_agent",  # redeploy-survival mirror of agents/ drafts (see draft_store.py)
     "jarvis_draft_tool",  # redeploy-survival mirror of proposed_tools/ drafts (draft_store.py)
     "jarvis_draft_note",  # redeploy-survival mirror of vault_inbox/ captures (draft_store.py)
+    "jarvis_tool_audit",  # cross-node tool-usage mirror (observability.on_tool_logged)
 }
 
 SYSTEM_PROMPT = """You are Alex's personal assistant — the brain of his "second brain" system.
@@ -4574,6 +4599,36 @@ def _daily_scout_loop():
 if task_manager.RUNTIME == "server" or os.environ.get("SCOUT_DAILY_LOCAL", "").lower() in ("1", "true"):
     threading.Thread(target=_daily_scout_loop, daemon=True, name="jarvis-daily-scout").start()
     print("Daily expansion-scout scheduler started.")
+
+
+# Daily retention sweep — keeps the shared Agent Outputs table bounded (whitelist-only
+# TTLs, see retention.py). Same hourly-wake/once-per-day shape as the scout scheduler;
+# runs in the small hours so it never competes with anything Alex is doing.
+def _daily_retention_loop():
+    while True:
+        try:
+            st = intake._load_state("retention:daily")
+            today = datetime.now(LOCAL_TZ).strftime("%Y-%m-%d")
+            if st.get("last_run", "") != today and datetime.now(LOCAL_TZ).hour >= 3:
+                result = retention.sweep()
+                st["last_run"] = today
+                st["last_result"] = {k: str(v) for k, v in result.items()}
+                intake._save_state(st)
+                if result:
+                    print(retention.sweep_summary(result), flush=True)
+                monitor.beat("retention", stale_after_s=50 * 3600,
+                             note=retention.sweep_summary(result)[:100])
+        except Exception as e:
+            try:
+                monitor.report_event("retention", "warning", "retention sweep failed", str(e))
+            except Exception:
+                pass
+        time.sleep(3600)
+
+
+if task_manager.RUNTIME == "server" or os.environ.get("RETENTION_LOCAL", "").lower() in ("1", "true"):
+    threading.Thread(target=_daily_retention_loop, daemon=True, name="jarvis-retention").start()
+    print("Daily retention sweep scheduler started.")
 
 
 # ------------------------------------------------------------

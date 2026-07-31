@@ -1066,6 +1066,96 @@ def suite_expansion_json(app, live):
           "GitHub search returned HTTP" in src)
 
 
+def suite_retention(app, live):
+    """Cross-node tool-audit mirror + whitelist-only retention sweep."""
+    section("audit mirror + retention (bounded junk drawer)")
+    import retention as rt
+    import observability as obs
+
+    # --- mirror hook ---
+    calls = []
+    saved_hook = obs.on_tool_logged
+    obs.on_tool_logged = lambda tool, trigger, ok, ms: calls.append((tool, trigger, ok, ms))
+    tmp = tempfile.mkdtemp(prefix="sbtest_ret_")
+    try:
+        o = obs.Observability(os.path.join(tmp, "obs.db"))
+        o.log_tool("read_note", "user", "some personal note title", True, "detail text", 12)
+        check("log_tool fires the cross-node mirror hook",
+              calls == [("read_note", "user", True, 12)], str(calls))
+        check("the mirror never receives input summaries (privacy)",
+              all(len(c) == 4 for c in calls))
+        obs.on_tool_logged = lambda *a: (_ for _ in ()).throw(RuntimeError("mirror down"))
+        try:
+            o.log_tool("read_note", "user", "x", True)
+            check("a failing mirror never breaks the tool call", True)
+        except Exception as e:
+            check("a failing mirror never breaks the tool call", False, str(e))
+        check("app wires the hook to a Supabase writer", app.observability.on_tool_logged is not None)
+        check("mirror rows are hidden from agent-output views",
+              "jarvis_tool_audit" in app.INTERNAL_AGENT_NAMES)
+    finally:
+        obs.on_tool_logged = saved_hook
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    # --- retention whitelist ---
+    for tag in ("jarvis_memory", "jarvis_chat", "expansion_finding", "intake_event",
+                "jarvis_draft_tool", "jarvis_pending_action", "jarvis_managed_task"):
+        check(f"retention can never touch {tag} (not on the whitelist)",
+              tag not in rt.RETENTION_DAYS)
+    check("everything on the whitelist keeps at least a week",
+          all(d >= 7 for d in rt.RETENTION_DAYS.values()))
+
+    # --- sweep behavior against a fake table ---
+    import json as _json
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+    old = (datetime.now(ZoneInfo("America/New_York")) - timedelta(days=400)).isoformat()
+    new = datetime.now(ZoneInfo("America/New_York")).isoformat()
+
+    class _FakeSB:
+        def __init__(self):
+            self.rows = [
+                {"id": 1, "agent_name": "jarvis_nudge", "created_at": old},
+                {"id": 2, "agent_name": "jarvis_nudge", "created_at": new},
+                {"id": 3, "agent_name": "jarvis_memory", "created_at": old},  # sacred
+            ]
+        def table(self, _): return self
+        def select(self, _c): self._mode = "sel"; self._f = []; return self
+        def delete(self): self._mode = "del"; self._f = []; return self
+        def eq(self, k, v): self._f.append(lambda r: r.get(k) == v); return self
+        def lt(self, k, v): self._f.append(lambda r: r.get(k, "") < v); return self
+        def in_(self, k, vs): self._f.append(lambda r: r.get(k) in vs); return self
+        def order(self, *_a, **_k): return self
+        def limit(self, _n): return self
+        def execute(self):
+            hit = [r for r in self.rows if all(f(r) for f in self._f)]
+            if self._mode == "del":
+                self.rows = [r for r in self.rows if r not in hit]
+                return type("R", (), {"data": []})()
+            return type("R", (), {"data": [dict(r) for r in hit]})()
+
+    fake = _FakeSB()
+    saved_sb = rt.supabase
+    rt.supabase = fake
+    try:
+        res = rt.sweep()
+        ids = {r["id"] for r in fake.rows}
+        check("sweep removes only aged rows of whitelisted tags",
+              res.get("jarvis_nudge") == 1 and ids == {2, 3}, f"res={res} left={ids}")
+        check("sweep with nothing to do reports empty", rt.sweep() == {})
+        rt.supabase = None
+        check("sweep without a client is a silent no-op", rt.sweep() == {})
+    finally:
+        rt.supabase = saved_sb
+
+    # The daily loop exists on the server path and heartbeats.
+    app_src = open(os.path.join(CHAT_DIR, "app.py"), encoding="utf-8").read()
+    check("daily retention loop is scheduled server-side",
+          "_daily_retention_loop" in app_src and "jarvis-retention" in app_src)
+    check("the sweep itself is heartbeat-monitored",
+          'monitor.beat("retention"' in app_src)
+
+
 def suite_apply_finding(app, live):
     """The installer's smoke-test targeting. Its first-ever end-to-end run (against
     pypa/sampleproject, the official packaging example) failed because module names
@@ -2558,6 +2648,7 @@ SUITES = {
     "expansionaim": suite_expansion_aim,
     "draftstore": suite_draft_store,
     "voicevad": suite_voice_vad,
+    "retention": suite_retention,
     "applyfinding": suite_apply_finding,
     "ttsstream": suite_tts_stream,
     "heartbeat": suite_heartbeat,

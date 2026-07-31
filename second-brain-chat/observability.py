@@ -33,6 +33,11 @@ _TZ = ZoneInfo("America/New_York")
 DEFAULT_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "observability.db")
 PRICING_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "pricing.json")
 
+# Optional cross-node mirror for tool-audit rows: app.py points this at a function
+# (tool, trigger, ok, ms) -> None that writes a compact Supabase row. Module stays
+# stdlib-only and Supabase-unaware, same pattern as note_capture.on_capture.
+on_tool_logged = None
+
 
 def _now():
     return datetime.now(_TZ)
@@ -173,6 +178,16 @@ class Observability:
                 self._conn.commit()
         except Exception as e:
             print(f"observability: log_tool failed: {e}")
+        # Cross-node mirror hook (set by app.py). The server's copy of THIS SQLite
+        # file dies with its container, which made every usage audit one-eyed: 81 of
+        # 93 tools looked unused because the node where Alex's phone lands kept no
+        # durable ledger. The hook gets only (tool, trigger, ok, ms) — deliberately
+        # never input_summary/detail, which can carry personal text.
+        if on_tool_logged:
+            try:
+                on_tool_logged(tool, trigger, bool(success), int(ms))
+            except Exception:
+                pass   # a failed mirror must never break the tool call it records
 
     def log_usage(self, feature: str, trigger: str, model: str, input_tokens: int,
                   output_tokens: int, cache_read: int = 0, cache_write: int = 0):
