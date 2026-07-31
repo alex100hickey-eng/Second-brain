@@ -32,22 +32,21 @@ not *triggering* rather than *failing*.
 4. If the webhook looks dead, reconnect the GitHub source (App "second-brain1")
 5. Hit **Redeploy** manually
 6. Verify: `curl https://clarvis.178.156.209.40.sslip.io/api/version`
-   → expect commit `8854c6c` or later. **Anything else means it didn't take.**
+   → expect commit `afa40db` or later. **A 401 means it didn't take.**
+   *(Corrected 2026-07-31: earlier versions said `8854c6c`, but that commit is still
+   unpushed on the Mac under the deploy freeze — `afa40db` is the pushed tip and the
+   best possible result until the held batch is released.)*
 
 I verified current requirements are server-safe, so the build should succeed once triggered.
 
 ---
 
-## 2. 🟡 macOS permissions — screen control literally cannot click
+## 2. ✅ DONE (verified 2026-07-31) — macOS permissions granted
 
-`AXIsProcessTrusted` is `False`. Until this is granted, screen control refuses to start
-(by design — it won't pretend the Escape kill-switch works when it can't).
-
-**System Settings → Privacy & Security →**
-- **Accessibility** → enable for Terminal (or whatever runs the app)
-- **Screen Recording** → same (needed for captures; without it you get black images)
-
-Then restart the app.
+Alex granted both. Verified live from a shell:
+`AXIsProcessTrusted()` → **True**, `CGPreflightScreenCaptureAccess()` → **True**.
+(If the app is ever launched by a *different* parent app than the one granted,
+re-check with the same two calls.)
 
 ---
 
@@ -82,9 +81,10 @@ Say the word and I'll wire it. *(Needs #2 to actually function.)*
 
 - **`GITHUB_TOKEN`** — currently unset, so the scout gets 10 GitHub searches/min instead of
   5,000/hr. Generate a classic token (public_repo scope is plenty) → add to `.env` and Coolify.
-- **SSH key** — run `ssh-copy-id root@178.156.209.40` once from this Mac. Right now there
-  are *no* keys here and access is password-only, which is why I couldn't run the restart
-  you authorized. With a key, future sessions can do it when you name the command.
+- **SSH key** — half done: an ed25519 keypair was generated 2026-07-31
+  (`~/.ssh/id_ed25519`). Remaining: run `ssh-copy-id root@178.156.209.40` once
+  (enter the root password when prompted). With the key installed, future sessions
+  can act on the box when you name the exact command and host.
 - **4 stale expansion findings** sit in the review panel (job scrapers from before the
   scout was re-aimed). Dismiss them or tell me to.
 
