@@ -2031,15 +2031,25 @@
     col.className = 'hud-m-col';
     deck.appendChild(col);
 
+    // Decorative pieces are held back rather than discarded, then woven into thin
+    // instrument bands between the widgets (see _weaveBands). HUD_STYLE's density
+    // rule — "sparse layouts look wrong" — applies to the phone too; what doesn't
+    // work is the desktop scene shrunk, not the instrumentation itself.
+    const scenery = [];
+    const readouts = [];
+
     function isContent(node) {
       // Titled widget frames and the chat bar are content; bare frames, spinners,
-      // ladders, tick strips and friends are desktop scenery.
+      // ladders, tick strips and friends are decorative instruments.
       if (node.classList && node.classList.contains('hud-chatbar')) return true;
       return node.classList && node.classList.contains('hud-widget') && node._titled;
     }
 
     function at(node, _x, _y, role) {
-      if (!isContent(node)) return node;           // scenery: built but not placed
+      if (!isContent(node)) {
+        if (node && node.nodeType === 1) scenery.push(node);   // banded, not binned
+        return node;
+      }
       if (node.classList.contains('hud-chatbar')) {
         node.classList.add('hud-m-chatbar');
         node.style.position = 'fixed';   // chatBar sets position:relative INLINE,
@@ -2054,9 +2064,68 @@
       return cell;
     }
     const atC = at;
-    function label() { return document.createElement('div'); }  // micro-readouts: scenery
+    function label(text, _x, _y, hi) {
+      // Micro decimal readouts ride along in the bands as filler, per HUD_STYLE.
+      const d = document.createElement('div');
+      d.className = 'hud-m-readout' + (hi ? ' hi' : '');
+      d.textContent = text || '';
+      if (d.textContent) readouts.push(d);
+      return d;
+    }
+
+    // Pages place content first and scenery last, so bands can only be dealt once
+    // everything has been handed to at(). One frame later is after that script.
+    requestAnimationFrame(function () { _weaveBands(col, scenery, readouts); });
 
     return { at, atC, label, deck };
+  }
+
+  /* Deal the held-back instruments into thin bands, one between each pair of
+     widgets, so the column reads as an instrument panel rather than a list of
+     boxes. Each piece is measured once in place and scaled to fit its slot —
+     the desktop sizes (a 330px ruler, a 140px ladder) would otherwise blow out
+     a 390px screen. */
+  const _BAND_W = 64, _BAND_H = 42;   // per-slot budget, in CSS px
+
+  function _weaveBands(col, scenery, readouts) {
+    const cells = [].slice.call(col.querySelectorAll(':scope > .hud-m-cell'));
+    if (!cells.length || !scenery.length) return;
+    const gaps = Math.max(1, cells.length - 1);
+    const per = Math.max(2, Math.ceil(scenery.length / gaps));
+    const bands = [];
+    let s = 0, r = 0;
+
+    for (let i = 0; i < gaps && s < scenery.length; i++) {
+      const band = document.createElement('div');
+      band.className = 'hud-m-band';
+      for (let k = 0; k < per && s < scenery.length; k++, s++) {
+        const slot = document.createElement('div');
+        slot.className = 'hud-m-slot';
+        slot.appendChild(scenery[s]);
+        band.appendChild(slot);
+      }
+      if (r < readouts.length) band.appendChild(readouts[r++]);
+      cells[i].insertAdjacentElement('afterend', band);
+      bands.push(band);
+    }
+
+    // Measure after every band is in the document: one layout pass, not N.
+    bands.forEach(function (band) {
+      [].slice.call(band.querySelectorAll('.hud-m-slot')).forEach(function (slot) {
+        const node = slot.firstElementChild;
+        if (!node) return;
+        const w = node.offsetWidth || _BAND_W, h = node.offsetHeight || _BAND_H;
+        const sc = Math.min(_BAND_W / w, _BAND_H / h, 1);
+        if (sc < 1) {
+          node.style.transformOrigin = 'center center';
+          node.style.transform = 'scale(' + sc.toFixed(3) + ')';
+        }
+        // transform doesn't shrink the layout box, so pin the slot to the
+        // scaled size or a wide piece would still reserve its desktop width.
+        slot.style.width = Math.round(w * sc) + 'px';
+        slot.style.height = Math.round(h * sc) + 'px';
+      });
+    });
   }
 
   /* ============================================================

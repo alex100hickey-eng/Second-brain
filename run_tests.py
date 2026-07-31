@@ -1108,8 +1108,25 @@ def suite_hud_mobile(app, live):
 
     check("deckShell branches to a mobile shell under the breakpoint",
           "_mobileShell" in js and "HUD.MOBILE_BREAK" in js)
-    check("mobile keeps titled widgets and drops bare-frame scenery",
+    check("mobile keeps titled widgets as the column's content",
           "_titled" in js and "isContent" in js)
+
+    # Instrument bands (2026-07-31): the decorative pieces are no longer discarded
+    # on phones — they're held back and dealt into strips between the widgets, per
+    # HUD_STYLE's density rule. Verified rendered at a real 390px viewport:
+    # 10 widgets, 9 bands, 45 instruments, 6 readouts, no overflow.
+    check("decorative pieces are held for banding, not discarded",
+          "scenery.push(node)" in js and "_weaveBands" in js)
+    check("bands are dealt between widgets, not appended in a lump",
+          "insertAdjacentElement('afterend'" in js)
+    check("micro readouts survive as band filler (HUD_STYLE density)",
+          "hud-m-readout" in js and "hud-m-readout" in css)
+    check("each instrument is scaled to a slot budget",
+          "_BAND_W" in js and "transform = 'scale(" in js)
+    check("a crowded band wraps instead of clipping",
+          "flex-wrap: wrap" in css)
+    check("slots clip the un-scaled layout box (no phantom overflow)",
+          ".hud-m-slot" in css and "overflow: hidden" in css)
     check("widgets span the phone width on mobile", "Math.min(window.innerWidth, 430)" in js)
     check("crossing the breakpoint reloads rather than morphing layouts",
           js.count("location.reload()") >= 2)
@@ -1120,7 +1137,7 @@ def suite_hud_mobile(app, live):
     check("subpage titles are flex-ordered above the column",
           ".pagetitle { order: -2; }" in css)
     check("both templates load the same bumped asset version",
-          hud.count("v=16") == 2 and sub.count("v=16") == 2)
+          hud.count("v=17") == 2 and sub.count("v=17") == 2)
 
     check("HUD chat bar sends go=1 (user already pressed send once)",
           "'&go=1'" in js or '"&go=1"' in js)
@@ -2399,7 +2416,13 @@ def suite_security(app, live):
     # count as violations).
     offenders, seen_allowed = [], set()
     for r, dirs, files in os.walk(ROOT):
-        dirs[:] = [d for d in dirs if d not in (".git", "__pycache__", "_archive", "node_modules", ".venv")]
+        # .claude holds agent git worktrees — checkouts of THIS repo. Scanning them
+        # re-reports the same allowlisted modules under a worktree path that can never
+        # match the allowlist, so a background agent's worktree fails this check with
+        # no new code existing. Real source is still scanned in full, and the secret
+        # scanner above deliberately keeps looking inside .claude.
+        dirs[:] = [d for d in dirs if d not in (".git", ".claude", "__pycache__",
+                                                "_archive", "node_modules", ".venv")]
         for fn in files:
             if not fn.endswith(".py") or fn == "run_tests.py":  # the scanner names the libs itself
                 continue
@@ -2417,6 +2440,11 @@ def suite_security(app, live):
                 offenders.append(rel)
     check("mouse/keyboard control code ONLY in the gated screen-control modules",
           not offenders, str(offenders))
+    # The exclusions above must not blind the scanner: if it stopped finding the
+    # modules that legitimately hold control code, "no offenders" would be vacuous.
+    check("the control-code scanner still reaches the real modules",
+          seen_allowed == set(_CONTROL_CODE_ALLOWED),
+          f"missing {sorted(set(_CONTROL_CODE_ALLOWED) - seen_allowed)}")
 
     # The allowlist is not a blank cheque: whatever is on it must still carry its gates.
     for rel in sorted(seen_allowed):
