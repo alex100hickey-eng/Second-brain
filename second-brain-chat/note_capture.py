@@ -31,6 +31,12 @@ _TZ = ZoneInfo("America/New_York")
 VAULT_FOLDERS = ["Schedule", "Learning", "Money", "School", "Athletics"]
 
 INBOX_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "vault_inbox")
+
+# Optional hook, set by app.py to draft_store.save. vault_inbox/ isn't a volume, so
+# captures staged on the server die at the next redeploy — before Alex has had the
+# chance to file them, which is the entire point of staging. This module stays
+# stdlib-only and Supabase-unaware; the caller decides where a backup goes.
+on_capture = None
 SYNTH_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "synthesized")
 
 MODEL = "claude-sonnet-5"
@@ -237,6 +243,11 @@ def capture_note(content: str, source_type: str = "pasted", title_hint: str = ""
         n += 1
     with open(dest, "w", encoding="utf-8") as f:
         f.write(md)
+    if on_capture:
+        try:
+            on_capture(os.path.splitext(os.path.basename(dest))[0], md)
+        except Exception:
+            pass          # a failed backup must never lose the note just written
 
     return {
         "ok": True, "path": dest, "filename": os.path.basename(dest),

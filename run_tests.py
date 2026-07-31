@@ -1065,6 +1065,148 @@ def suite_expansion_json(app, live):
           "GitHub search returned HTTP" in src)
 
 
+def suite_draft_store(app, live):
+    """Drafts Jarvis writes for ITSELF live on the container filesystem, which a
+    Coolify redeploy wipes — during exactly the window a human is meant to review
+    them. draft_store mirrors them to Supabase and restores them at boot."""
+    section("draft store (self-authored drafts survive a redeploy)")
+    import draft_store as ds
+
+    # In-memory stand-in: rows keyed by agent_name, newest id first on read.
+    class _FakeSB:
+        def __init__(self):
+            self.rows, self._next = [], 1
+
+        def table(self, _name):
+            return self
+
+        def insert(self, payload):
+            payload = dict(payload, id=self._next)
+            self._next += 1
+            self.rows.append(payload)
+            self._sel = [payload]      # insert().execute() reads this back
+            return self
+
+        def select(self, _cols):
+            self._sel = list(self.rows)
+            return self
+
+        def eq(self, field, val):
+            self._sel = [r for r in getattr(self, "_sel", self.rows) if r.get(field) == val]
+            return self
+
+        def order(self, _f, desc=True):
+            self._sel = sorted(self._sel, key=lambda r: r["id"], reverse=desc)
+            return self
+
+        def limit(self, _n):
+            return self
+
+        def delete(self):
+            self._deleting, self._sel = True, list(self.rows)
+            return self
+
+        def execute(self):
+            if getattr(self, "_deleting", False):
+                for r in self._sel:
+                    if r in self.rows:
+                        self.rows.remove(r)
+                self._deleting = False
+                return type("R", (), {"data": []})()
+            return type("R", (), {"data": list(self._sel)})()
+
+    fake = _FakeSB()
+    saved_sb = ds.supabase
+    tmp = tempfile.mkdtemp(prefix="sbtest_drafts_")
+    try:
+        ds.init(fake)
+        d = os.path.join(tmp, "proposed_tools")
+        os.makedirs(d)
+        with open(os.path.join(d, "get_word_count.py"), "w") as f:
+            f.write("ORIGINAL CODE\n")
+
+        check("save mirrors a draft", ds.save(ds.KIND_TOOL, "get_word_count", "ORIGINAL CODE\n"))
+
+        # The redeploy: the whole directory goes away.
+        shutil.rmtree(d)
+        restored = ds.rehydrate(ds.KIND_TOOL, d)
+        check("rehydrate restores a draft the redeploy wiped", restored == ["get_word_count"])
+        check("restored content is byte-identical",
+              open(os.path.join(d, "get_word_count.py")).read() == "ORIGINAL CODE\n")
+
+        # A file already on disk must never be clobbered by an older mirror.
+        with open(os.path.join(d, "get_word_count.py"), "w") as f:
+            f.write("NEWER LOCAL EDIT\n")
+        again = ds.rehydrate(ds.KIND_TOOL, d)
+        check("rehydrate never overwrites a file that exists on disk", again == [])
+        check("the newer local edit survives",
+              open(os.path.join(d, "get_word_count.py")).read() == "NEWER LOCAL EDIT\n")
+
+        # Newest mirrored copy wins when several saves exist, and re-saving the same
+        # name must SUPERSEDE rather than pile up — otherwise every boot and every
+        # re-capture grows the table until real drafts fall past the read limit.
+        ds.save(ds.KIND_TOOL, "second_tool", "V1\n")
+        ds.save(ds.KIND_TOOL, "second_tool", "V2\n")
+        ds.save(ds.KIND_TOOL, "second_tool", "V3\n")
+        ds.rehydrate(ds.KIND_TOOL, d)
+        check("the newest mirrored version is the one restored",
+              open(os.path.join(d, "second_tool.py")).read() == "V3\n")
+        kept = [r for r in fake.rows
+                if r["agent_name"] == ds.KIND_TOOL and '"second_tool"' in r["output_text"]]
+        check("re-saving supersedes instead of accumulating rows", len(kept) == 1)
+
+        # forget() must stop a rehydrate resurrecting something a human deleted.
+        ds.forget(ds.KIND_TOOL, "second_tool")
+        os.remove(os.path.join(d, "second_tool.py"))
+        check("a forgotten draft is not resurrected",
+              "second_tool" not in ds.rehydrate(ds.KIND_TOOL, d))
+
+        # Backfill: drafts written before this module existed must get protected too.
+        with open(os.path.join(d, "pre_existing.py"), "w") as f:
+            f.write("OLD DRAFT\n")
+        with open(os.path.join(d, "README.md"), "w") as f:
+            f.write("not a draft\n")
+        added = ds.backfill(ds.KIND_TOOL, d)
+        check("backfill mirrors a pre-existing draft", added == ["pre_existing"])
+        check("backfill skips non-draft files", "README" not in str(added))
+        check("backfill is idempotent", ds.backfill(ds.KIND_TOOL, d) == [])
+        os.remove(os.path.join(d, "pre_existing.py"))
+        check("a backfilled draft can then be restored",
+              ds.rehydrate(ds.KIND_TOOL, d) == ["pre_existing"])
+
+        # Path-traversal defence: a name is a bare filename, never a path.
+        ds.save(ds.KIND_TOOL, "../../escaped", "PWNED\n")
+        ds.rehydrate(ds.KIND_TOOL, d)
+        check("a traversing draft name is refused, not written outside the directory",
+              not os.path.exists(os.path.join(tmp, "escaped.py")))
+
+        # Failures must never break the write that just succeeded.
+        ds.init(None)
+        check("save is a no-op (not a crash) with no Supabase client",
+              ds.save(ds.KIND_TOOL, "x", "y") is False)
+        check("rehydrate is a no-op with no Supabase client",
+              ds.rehydrate(ds.KIND_TOOL, d) == [])
+        ds.init(fake)
+        check("an unknown draft kind is refused", ds.save("not_a_kind", "x", "y") is False)
+        check("an oversized draft is refused",
+              ds.save(ds.KIND_TOOL, "huge", "x" * (ds.MAX_DRAFT_BYTES + 1)) is False)
+
+        # The mirror tags must be hidden from agent-output views.
+        for kind in (ds.KIND_AGENT, ds.KIND_TOOL, ds.KIND_NOTE):
+            check(f"{kind} is filtered out of agent-output views",
+                  kind in app.INTERNAL_AGENT_NAMES)
+
+        # note_capture must expose the hook app.py wires up.
+        import note_capture
+        check("note_capture exposes an on_capture hook for staged captures",
+              hasattr(note_capture, "on_capture"))
+        check("app.py wires the capture hook to the draft store",
+              app.note_capture.on_capture is not None)
+    finally:
+        ds.init(saved_sb)
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def suite_expansion_aim(app, live):
     """What the scout SEARCHES for. It used to summarise recent managed-task goals,
     which pointed it at whatever Alex worked on rather than anything missing."""
@@ -2107,6 +2249,7 @@ SUITES = {
     "screenagent": suite_screen_agent,
     "expansionjson": suite_expansion_json,
     "expansionaim": suite_expansion_aim,
+    "draftstore": suite_draft_store,
     "drafter": suite_drafter,
     "voice": suite_voice,
     "briefing": suite_briefing,

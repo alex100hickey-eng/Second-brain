@@ -113,6 +113,10 @@ AGENTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "age
 # Where drafted *tool* proposals for this app itself get written (self-expansion).
 # Never auto-merged into app.py — see create_new_tool.
 PROPOSED_TOOLS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "proposed_tools")
+# Neither directory above is a volume, so a Coolify redeploy wipes anything Jarvis
+# drafted for itself. draft_store mirrors drafts into Supabase and restores them at
+# boot — see its docstring for why the filesystem stays the source of truth.
+import draft_store  # noqa: E402
 # ----------------------------------------------------
 
 # Access gate. If ACCESS_CODE is set in the environment (.env), every page and
@@ -244,6 +248,28 @@ class _ThreadLocalSupabase:
 supabase = _ThreadLocalSupabase(lambda: create_client(SUPABASE_URL, SUPABASE_KEY))
 composio = Composio(provider=AnthropicProvider(), api_key=COMPOSIO_API_KEY)
 
+# Restore any self-authored drafts a redeploy wiped. Existing files always win, so
+# this is a no-op on Alex's Mac where nothing was lost in the first place.
+draft_store.init(supabase)
+note_capture.on_capture = lambda name, md: draft_store.save(draft_store.KIND_NOTE, name, md)
+try:
+    _restored = (draft_store.rehydrate(draft_store.KIND_AGENT, AGENTS_DIR)
+                 + draft_store.rehydrate(draft_store.KIND_TOOL, PROPOSED_TOOLS_DIR)
+                 + draft_store.rehydrate(draft_store.KIND_NOTE, note_capture.INBOX_DIR, ".md"))
+    if _restored:
+        print(f"Draft store: restored {len(_restored)} draft(s) lost to a redeploy: "
+              f"{', '.join(_restored)}", flush=True)
+    # Then protect anything already on disk that predates the mirror — otherwise the
+    # oldest, longest-unreviewed drafts stay the only unprotected ones.
+    _backfilled = (draft_store.backfill(draft_store.KIND_AGENT, AGENTS_DIR)
+                   + draft_store.backfill(draft_store.KIND_TOOL, PROPOSED_TOOLS_DIR)
+                   + draft_store.backfill(draft_store.KIND_NOTE, note_capture.INBOX_DIR, ".md"))
+    if _backfilled:
+        print(f"Draft store: backed up {len(_backfilled)} pre-existing draft(s): "
+              f"{', '.join(_backfilled)}", flush=True)
+except Exception as _e:
+    print(f"Warning: draft rehydrate failed ({_e}) — drafts may be missing.", flush=True)
+
 
 # ---- Conversation memory (durable, searchable, auto-summarized) -------------
 # Every chat message is mirrored into a local SQLite database (gitignored), grouped
@@ -373,6 +399,9 @@ INTERNAL_AGENT_NAMES = {
     "jarvis_budget_state",  # Monitoring Agent budget-tier transitions (see monitor.py)
     "intake_event",  # unified intake stream events (see intake.py) — own triage panel
     "intake_state",  # intake cursors/seen-caches (see intake.py)
+    "jarvis_draft_agent",  # redeploy-survival mirror of agents/ drafts (see draft_store.py)
+    "jarvis_draft_tool",  # redeploy-survival mirror of proposed_tools/ drafts (draft_store.py)
+    "jarvis_draft_note",  # redeploy-survival mirror of vault_inbox/ captures (draft_store.py)
 }
 
 SYSTEM_PROMPT = """You are Alex's personal assistant — the brain of his "second brain" system.
@@ -1942,6 +1971,10 @@ def _execute_adopt_tool(action: dict) -> dict:
         git("add", "-A", cwd=wt)
         git("commit", "-m", f"Jarvis proposes extension tool: {name}\n\nDrafted via create_new_tool, adopted via approval queue.", cwd=wt)
         git("push", "-u", "origin", branch, cwd=wt)
+        # Safely in git now, so the redeploy-survival mirror has done its job. Drop
+        # it — otherwise a later rehydrate could resurrect a proposal after a human
+        # deliberately deleted the local file.
+        draft_store.forget(draft_store.KIND_TOOL, name)
         return {"ok": True, "detail": f"Pushed branch {branch}"}
     except (RuntimeError, subprocess.TimeoutExpired) as e:
         return {"ok": False, "error": str(e)[:400]}
@@ -2446,6 +2479,9 @@ def create_new_agent(name: str, purpose: str) -> str:
 
     with open(dest, "w", encoding="utf-8") as f:
         f.write(script + "\n")
+    # Mirror to Supabase: the container's filesystem doesn't survive a redeploy,
+    # and the whole point of a draft is that a human approves it later.
+    draft_store.save(draft_store.KIND_AGENT, name, script + "\n")
 
     return (
         f"Drafted agents/{name}.py — NOT run or deployed. Review the script before executing it "
@@ -2521,6 +2557,7 @@ def create_new_tool(name: str, purpose: str) -> str:
 
     with open(dest, "w", encoding="utf-8") as f:
         f.write(header + draft + "\n")
+    draft_store.save(draft_store.KIND_TOOL, name, header + draft + "\n")
 
     return (
         f"Drafted proposed_tools/{name}.py — a proposal only. It is NOT part of my live tools yet and "
