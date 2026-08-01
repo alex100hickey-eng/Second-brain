@@ -12,24 +12,37 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="CLARVIS">
 <style>
+  @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400..900&family=Share+Tech+Mono&display=swap');
+  /* Palette pinned to HUD_STYLE.md so the dashboard sits on the same deck as the
+     HUD and the chat. Structural colours are remapped exactly; the three status
+     colours (good / warn / bad) are kept, because they carry meaning that cyan
+     cannot — a failing check has to look different from a passing one. */
   :root {
-    --bg: #081226;
-    --bg-2: #0d1e3f;
-    --panel: rgba(12, 28, 56, 0.72);
-    --line: #1b3a66;
-    --line-bright: #2e5ea6;
-    --text: #dcecfd;
-    --text-dim: #6284b3;
-    --accent: #45d6ff;
-    --accent2: #3d7dff;
-    --accent-soft: #a6ecff;
-    --accent-dim: #123e63;
-    --accent-glow: rgba(69, 214, 255, 0.55);
+    --hud-cyan:   #4fd4e8;
+    --hud-blue:   #2f6aa8;
+    --hud-accent: #9bf2fa;
+    --hud-white:  #e8fdff;
+    --hud-glow:        drop-shadow(0 0 4px rgba(79, 212, 232, 0.6));
+    --hud-glow-strong: drop-shadow(0 0 4px rgba(79, 212, 232, 0.6))
+                       drop-shadow(0 0 12px rgba(155, 242, 250, 0.5));
+
+    --bg: #010a20;
+    --bg-2: #123a6e;
+    --panel: rgba(79, 212, 232, 0.05);
+    --line: rgba(79, 212, 232, 0.25);
+    --line-bright: rgba(79, 212, 232, 0.45);
+    --text: #d8f4fb;
+    --text-dim: rgba(150, 225, 245, 0.72);
+    --accent: #4fd4e8;
+    --accent2: #2f6aa8;
+    --accent-soft: #9bf2fa;
+    --accent-dim: rgba(79, 212, 232, 0.25);
+    --accent-glow: rgba(79, 212, 232, 0.55);
     --warn: #ffb454;
     --warn-dim: #4a3a1a;
     --good: #6ee7a0;
     --bad: #ff7a7a;
-    --mono: "SF Mono", "Menlo", "Courier New", monospace;
+    --mono: 'Share Tech Mono', "SF Mono", monospace;
   }
 
   * { box-sizing: border-box; }
@@ -38,11 +51,11 @@
   body {
     margin: 0;
     color: var(--text);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-family: 'Share Tech Mono', monospace;
     background:
-      radial-gradient(ellipse 80% 60% at 50% 38%, rgba(32, 82, 160, 0.38), transparent 70%),
-      radial-gradient(ellipse 40% 30% at 50% 42%, rgba(69, 214, 255, 0.09), transparent 70%),
-      linear-gradient(160deg, #0d1e3f 0%, var(--bg) 55%, #050b18 100%);
+      radial-gradient(ellipse 80% 60% at 50% 38%, rgba(18, 58, 110, 0.55), transparent 70%),
+      radial-gradient(ellipse 40% 30% at 50% 42%, rgba(79, 212, 232, 0.10), transparent 70%),
+      linear-gradient(160deg, #123a6e 0%, var(--bg) 55%, #010a20 100%);
     min-height: 100vh;
     overflow-x: hidden;
   }
@@ -87,6 +100,7 @@
     display: flex;
     align-items: center;
     gap: 10px;
+    font-family: 'Orbitron', sans-serif;   /* headings are Orbitron, per HUD_STYLE */
     font-size: 13px;
     letter-spacing: 0.28em;
     color: var(--accent);
@@ -109,7 +123,8 @@
   }
   .clock .time {
     display: block;
-    color: var(--accent-soft);
+    font-family: 'Orbitron', sans-serif;   /* all numbers are Orbitron */
+    color: var(--hud-white);               /* key numbers use the reserved white */
     font-size: 20px;
     letter-spacing: 0.1em;
     text-shadow: 0 0 10px var(--accent-glow);
@@ -310,8 +325,9 @@
   }
   .rstat { text-align: center; }
   .rstat .val {
+    font-family: 'Orbitron', sans-serif;
     font-size: 22px;
-    color: var(--accent-soft);
+    color: var(--hud-white);
     text-shadow: 0 0 12px var(--accent-glow);
   }
   .rstat .val.warm { color: var(--warn); text-shadow: 0 0 12px rgba(255,180,84,0.5); }

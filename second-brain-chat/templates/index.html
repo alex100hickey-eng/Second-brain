@@ -12,24 +12,48 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="CLARVIS">
 <style>
+  @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400..900&family=Share+Tech+Mono&display=swap');
+  /* Palette and type follow HUD_STYLE.md so the chat reads as part of the deck.
+     Chrome (header, nav, labels, buttons) takes the strict rules — Orbitron /
+     Share Tech Mono, uppercase, 0.15em. Message text is CONTENT and takes the
+     documented widget-content exception: natural case, 0.02-0.04em, readable
+     size. Forcing tracking onto a conversation makes it unreadable. */
   :root {
-    --bg: #0a0e14;
-    --panel: #0f1520;
-    --line: #1c2534;
-    --text: #e7ecf5;
-    --text-dim: #6b7688;
-    --accent: #3fd0ff;
-    --accent-dim: #1a4a5c;
-    --user-bubble: #16202f;
+    --hud-bg-edge:   #010a20;
+    --hud-bg-center: #123a6e;
+    --hud-cyan:      #4fd4e8;
+    --hud-blue:      #2f6aa8;
+    --hud-accent:    #9bf2fa;
+    --hud-white:     #e8fdff;
+    --hud-cyan-45: rgba(79, 212, 232, 0.45);
+    --hud-cyan-25: rgba(79, 212, 232, 0.25);
+    --hud-cyan-12: rgba(79, 212, 232, 0.12);
+    --hud-fill:    rgba(79, 212, 232, 0.05);
+    --hud-label:   rgba(150, 225, 245, 0.72);
+    --hud-glow:        drop-shadow(0 0 4px rgba(79, 212, 232, 0.6));
+    --hud-glow-strong: drop-shadow(0 0 4px rgba(79, 212, 232, 0.6))
+                       drop-shadow(0 0 12px rgba(155, 242, 250, 0.5));
+
+    /* Legacy names kept so the rest of the sheet keeps working, remapped to the deck. */
+    --bg: var(--hud-bg-edge);
+    --panel: rgba(79, 212, 232, 0.05);
+    --line: rgba(79, 212, 232, 0.25);
+    --text: #d8f4fb;
+    --text-dim: rgba(150, 225, 245, 0.72);
+    --accent: #4fd4e8;
+    --accent-dim: rgba(79, 212, 232, 0.25);
+    --user-bubble: rgba(79, 212, 232, 0.12);
   }
 
   * { box-sizing: border-box; }
 
   body {
     margin: 0;
-    background: var(--bg);
+    /* the deck's radial glow, not a flat panel */
+    background: radial-gradient(ellipse at 50% 42%, var(--hud-bg-center) 0%, var(--hud-bg-edge) 68%);
+    background-attachment: fixed;
     color: var(--text);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-family: 'Share Tech Mono', "SF Mono", monospace;
     height: 100vh;
     display: flex;
     flex-direction: column;
@@ -37,7 +61,7 @@
 
   header {
     padding: 18px 24px;
-    border-bottom: 1px solid var(--line);
+    border-bottom: 1px solid var(--hud-cyan-25);
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -47,11 +71,12 @@
     display: flex;
     align-items: center;
     gap: 10px;
-    font-family: "SF Mono", "Courier New", monospace;
+    font-family: 'Orbitron', sans-serif;
     font-size: 13px;
-    letter-spacing: 0.12em;
+    letter-spacing: 0.28em;
     text-transform: uppercase;
-    color: var(--text-dim);
+    color: var(--hud-cyan);
+    filter: var(--hud-glow);
   }
 
   .pulse {
@@ -69,9 +94,13 @@
   }
 
   .title {
-    font-size: 15px;
+    font-family: 'Orbitron', sans-serif;
+    font-size: 14px;
     font-weight: 600;
-    color: var(--text);
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--hud-cyan);
+    filter: var(--hud-glow);
   }
 
   header nav {
@@ -80,13 +109,21 @@
   }
 
   header nav a {
-    color: var(--text-dim);
+    color: var(--hud-label);
     text-decoration: none;
-    font-size: 13px;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
     margin-left: 8px;
     padding: 6px 12px;
-    border-radius: 6px;
+    border-radius: 0;                    /* the deck cuts corners, it doesn't round them */
     border: 1px solid transparent;
+  }
+  header nav a:hover {
+    color: var(--hud-cyan);
+    border-color: var(--hud-cyan-25);
+    filter: var(--hud-glow);
   }
 
   header nav a.active {
@@ -115,7 +152,7 @@
   }
 
   .empty-state .glyph {
-    font-family: "SF Mono", "Courier New", monospace;
+    font-family: 'Share Tech Mono', monospace;
     font-size: 11px;
     letter-spacing: 0.2em;
     color: var(--accent);
@@ -130,18 +167,24 @@
 
   .msg.user { justify-content: flex-end; }
 
+  /* CONTENT, not chrome — HUD_STYLE's widget-content exception applies: natural
+     case, loose-but-not-HUD tracking, readable size. */
   .bubble {
     max-width: 78%;
     padding: 12px 16px;
-    border-radius: 10px;
-    line-height: 1.5;
+    border-radius: 0;
+    line-height: 1.6;
     font-size: 14.5px;
+    letter-spacing: 0.03em;
     white-space: pre-wrap;
+    text-transform: none;
   }
 
   .msg.user .bubble {
-    background: var(--user-bubble);
-    border: 1px solid var(--line);
+    background: var(--hud-cyan-12);
+    border: 1px solid var(--hud-cyan-25);
+    /* the deck's cut corner, so a message reads as a panel on the same grid */
+    clip-path: polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 12px 100%, 0 calc(100% - 12px));
   }
 
   .msg.assistant .bubble {
@@ -164,7 +207,7 @@
   .bubble ul, .bubble ol { margin: 8px 0; padding-left: 22px; }
   .bubble li { margin: 3px 0; }
   .bubble code {
-    font-family: "SF Mono", "Courier New", monospace;
+    font-family: 'Share Tech Mono', monospace;
     font-size: 13px;
     background: var(--panel);
     border: 1px solid var(--line);
@@ -202,7 +245,7 @@
     gap: 8px;
     padding: 6px 0 6px 14px;
     color: var(--accent);
-    font-family: "SF Mono", "Courier New", monospace;
+    font-family: 'Share Tech Mono', monospace;
     font-size: 12px;
     letter-spacing: 0.04em;
     animation: statusPulse 1.6s ease-in-out infinite;
@@ -255,9 +298,10 @@
   .input-row {
     display: flex;
     gap: 10px;
-    background: var(--panel);
-    border: 1px solid var(--line);
-    border-radius: 12px;
+    background: var(--hud-fill);
+    border: 1px solid var(--hud-cyan-25);
+    border-radius: 0;
+    clip-path: polygon(0 0, calc(100% - 14px) 0, 100% 14px, 100% 100%, 14px 100%, 0 calc(100% - 14px));
     padding: 6px 6px 6px 16px;
   }
 
@@ -271,7 +315,9 @@
     border: none;
     outline: none;
     color: var(--text);
+    font-family: 'Share Tech Mono', monospace;
     font-size: 14.5px;
+    letter-spacing: 0.03em;      /* what you type is content, not chrome */
     padding: 10px 0;
   }
 
@@ -280,16 +326,21 @@
   }
 
   button {
-    background: var(--accent);
-    color: #05171d;
-    border: none;
-    border-radius: 8px;
+    background: var(--hud-cyan-12);
+    color: var(--hud-accent);
+    border: 1px solid var(--hud-cyan-45);
+    border-radius: 0;
     padding: 10px 18px;
-    font-size: 14px;
+    font-family: 'Orbitron', sans-serif;
+    font-size: 12px;
     font-weight: 600;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
     cursor: pointer;
-    transition: opacity 0.15s;
+    filter: var(--hud-glow);
+    transition: opacity 0.15s, background 0.15s;
   }
+  button:hover:not(:disabled) { background: var(--hud-cyan-25); }
 
   button:disabled {
     opacity: 0.4;

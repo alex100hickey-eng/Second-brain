@@ -299,7 +299,9 @@ body.hud-mobile #deck {
   display: flex; align-items: center; gap: 14px;
   padding: 6px 2px 12px;
 }
-.hud-m-core { flex: 0 0 auto; }
+/* The header reactor doubles as the back-to-deck control on subpages, so it is
+   sized as a thumb target and gets a generous hit area. */
+.hud-m-core { flex: 0 0 auto; touch-action: manipulation; }
 .hud-m-word {
   font-family: 'Orbitron', sans-serif;
   font-size: 22px; letter-spacing: 0.42em;
@@ -307,29 +309,6 @@ body.hud-mobile #deck {
 }
 .hud-m-col { display: flex; flex-direction: column; gap: 12px; }
 .hud-m-cell { display: flex; justify-content: center; }
-/* Instrument bands — the decorative pieces the desktop scatters around the deck,
-   dealt into thin strips between the widgets. Density per HUD_STYLE; the scale
-   that makes them fit is measured per piece in _weaveBands(). */
-.hud-m-band {
-  display: flex; align-items: center; justify-content: space-around;
-  flex-wrap: wrap;              /* a crowded band adds a row rather than clipping */
-  gap: 6px; padding: 0 2px; min-height: 44px;
-  opacity: 0.9;
-}
-.hud-m-slot {
-  flex: 0 0 auto;
-  display: flex; align-items: center; justify-content: center;
-  /* the piece is scaled by transform, so its layout box still carries the
-     desktop size — clip it to the slot or the band reports phantom overflow */
-  overflow: hidden;
-}
-.hud-m-readout {
-  flex: 0 0 auto;
-  font-family: 'Share Tech Mono', monospace;
-  font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase;
-  color: var(--hud-label); filter: var(--hud-glow); white-space: nowrap;
-}
-.hud-m-readout.hi { color: var(--hud-cyan); }
 /* page title/sub on subpages are absolutely placed for the scene — reflow them */
 body.hud-mobile .pagetitle, body.hud-mobile .pagesub {
   position: static !important; transform: none !important;

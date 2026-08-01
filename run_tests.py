@@ -1111,22 +1111,22 @@ def suite_hud_mobile(app, live):
     check("mobile keeps titled widgets as the column's content",
           "_titled" in js and "isContent" in js)
 
-    # Instrument bands (2026-07-31): the decorative pieces are no longer discarded
-    # on phones — they're held back and dealt into strips between the widgets, per
-    # HUD_STYLE's density rule. Verified rendered at a real 390px viewport:
-    # 10 widgets, 9 bands, 45 instruments, 6 readouts, no overflow.
-    check("decorative pieces are held for banding, not discarded",
-          "scenery.push(node)" in js and "_weaveBands" in js)
-    check("bands are dealt between widgets, not appended in a lump",
-          "insertAdjacentElement('afterend'" in js)
-    check("micro readouts survive as band filler (HUD_STYLE density)",
-          "hud-m-readout" in js and "hud-m-readout" in css)
-    check("each instrument is scaled to a slot budget",
-          "_BAND_W" in js and "transform = 'scale(" in js)
-    check("a crowded band wraps instead of clipping",
-          "flex-wrap: wrap" in css)
-    check("slots clip the un-scaled layout box (no phantom overflow)",
-          ".hud-m-slot" in css and "overflow: hidden" in css)
+    # Instrument bands were tried on 2026-07-31 and REMOVED the same day: on a
+    # phone the decorative pieces read as clutter between the things Alex taps.
+    # HUD_STYLE's density rule earns its keep on the desktop scene, not in a
+    # scroll column. Pin the removal so they don't creep back in.
+    check("decorative pieces stay dropped on phones (no instrument bands)",
+          "_weaveBands" not in js and "hud-m-band" not in css)
+    check("micro readouts stay scenery on phones",
+          "hud-m-readout" not in js and "hud-m-readout" not in css)
+
+    # The header reactor is the way back to the deck from a subpage, so it has to
+    # stay a real thumb target (>= ~44px). Verified rendered at 390px: 112x112,
+    # linking '/' on subpages and '/chat-classic' on the deck itself.
+    check("mobile header reactor is a thumb-sized target, not a glyph",
+          "HUD.coreReactor({ size: 112" in js)
+    check("subpages point the header reactor home",
+          "reactorHref: '/'," in sub)
     check("widgets span the phone width on mobile", "Math.min(window.innerWidth, 430)" in js)
     check("crossing the breakpoint reloads rather than morphing layouts",
           js.count("location.reload()") >= 2)
@@ -1137,7 +1137,23 @@ def suite_hud_mobile(app, live):
     check("subpage titles are flex-ordered above the column",
           ".pagetitle { order: -2; }" in css)
     check("both templates load the same bumped asset version",
-          hud.count("v=17") == 2 and sub.count("v=17") == 2)
+          hud.count("v=18") == 2 and sub.count("v=18") == 2)
+
+    # Chat and dashboard were restyled onto the deck's language (2026-07-31) so the
+    # three pages read as one system. Chrome takes the strict rules; message text
+    # keeps the documented widget-content exception so a conversation stays readable.
+    check("chat page loads the HUD typefaces",
+          "Orbitron" in idx and "Share+Tech+Mono" in idx)
+    check("chat page uses the HUD palette, not its own blues",
+          "--hud-cyan:      #4fd4e8" in idx or "--hud-cyan:" in idx)
+    check("chat message text keeps the readable-content exception",
+          "text-transform: none" in idx and "letter-spacing: 0.03em" in idx)
+    dash = open(os.path.join(CHAT_DIR, "templates", "dashboard.html"), encoding="utf-8").read()
+    check("dashboard loads the HUD typefaces", "Orbitron" in dash and "Share+Tech+Mono" in dash)
+    check("dashboard headings/numbers are Orbitron",
+          dash.count("'Orbitron', sans-serif") >= 3)
+    check("dashboard keeps semantic status colours (meaning cyan can't carry)",
+          "--good:" in dash and "--bad:" in dash and "--warn:" in dash)
 
     check("HUD chat bar sends go=1 (user already pressed send once)",
           "'&go=1'" in js or '"&go=1"' in js)
