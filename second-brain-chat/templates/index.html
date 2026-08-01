@@ -60,7 +60,9 @@
   }
 
   header {
-    padding: 18px 24px;
+    /* the PWA runs with viewport-fit=cover and a translucent status bar, so
+       without this inset the header sits UNDER the notch / Dynamic Island */
+    padding: calc(18px + env(safe-area-inset-top)) 24px 18px;
     border-bottom: 1px solid var(--hud-cyan-25);
     display: flex;
     align-items: center;
@@ -295,15 +297,44 @@
     margin: 0 auto;
   }
 
+  /* Matches HUD.chatBar on the deck: the same angled frame (14px cuts on the
+     same two corners), the same accent stroke and glow, the same translucent
+     navy fill. The deck draws it in SVG because it sits in a scaled scene;
+     here a clip-path over a bordered box gets the identical silhouette without
+     the scene machinery. */
+  /* Two clipped layers: ::before is the accent stroke (and carries the glow, so
+     the glow never lands on the text), ::after is the navy fill inset by 1.2px.
+     Net result is the deck's outlined octagon without an SVG. */
   .input-row {
+    position: relative;
     display: flex;
-    gap: 10px;
-    background: var(--hud-fill);
-    border: 1px solid var(--hud-cyan-25);
+    align-items: center;
+    gap: 8px;
+    min-height: 54px;
+    background: transparent;
+    border: 0;
     border-radius: 0;
-    clip-path: polygon(0 0, calc(100% - 14px) 0, 100% 14px, 100% 100%, 14px 100%, 0 calc(100% - 14px));
-    padding: 6px 6px 6px 16px;
+    padding: 6px 14px 6px 22px;
   }
+  .input-row::before, .input-row::after {
+    content: "";
+    position: absolute;
+    pointer-events: none;
+  }
+  .input-row::before {
+    inset: 0;
+    background: var(--hud-accent);
+    filter: var(--hud-glow);
+    clip-path: polygon(14px 0, calc(100% - 14px) 0, 100% 14px, 100% calc(100% - 14px),
+                       calc(100% - 14px) 100%, 14px 100%, 0 calc(100% - 14px), 0 14px);
+  }
+  .input-row::after {
+    inset: 1.2px;
+    background: rgba(6, 20, 48, 0.62);
+    clip-path: polygon(13px 0, calc(100% - 13px) 0, 100% 13px, 100% calc(100% - 13px),
+                       calc(100% - 13px) 100%, 13px 100%, 0 calc(100% - 13px), 0 13px);
+  }
+  .input-row > * { position: relative; z-index: 1; }
 
   .input-row:focus-within {
     border-color: var(--accent-dim);
@@ -325,12 +356,14 @@
     color: var(--text-dim);
   }
 
+  /* Same silhouette as HUD.chatBar's glyph buttons: 32px, transparent, cyan
+     stroke, one clipped corner. */
   button {
-    background: var(--hud-cyan-12);
-    color: var(--hud-accent);
+    background: transparent;
+    color: var(--hud-cyan);
     border: 1px solid var(--hud-cyan-45);
     border-radius: 0;
-    padding: 10px 18px;
+    padding: 10px 16px;
     font-family: 'Orbitron', sans-serif;
     font-size: 12px;
     font-weight: 600;
@@ -338,9 +371,21 @@
     text-transform: uppercase;
     cursor: pointer;
     filter: var(--hud-glow);
-    transition: opacity 0.15s, background 0.15s;
+    clip-path: polygon(6px 0, 100% 0, 100% calc(100% - 6px), calc(100% - 6px) 100%, 0 100%, 0 6px);
+    transition: color 140ms linear, border-color 140ms linear, background 140ms linear;
   }
-  button:hover:not(:disabled) { background: var(--hud-cyan-25); }
+  button:hover:not(:disabled) { color: var(--hud-accent); border-color: var(--hud-accent); }
+
+  .input-row .mic-btn, .input-row #send-btn {
+    width: 32px; height: 32px; padding: 0;
+    display: flex; align-items: center; justify-content: center;
+    flex: 0 0 auto;
+  }
+  .input-row #send-btn {
+    width: auto; padding: 0 12px; height: 32px;   /* SEND stays a word, not a glyph:
+      the deck's bar is a launcher, this one sends real messages and the label earns
+      its width. Everything else about it matches. */
+  }
 
   button:disabled {
     opacity: 0.4;
@@ -410,15 +455,42 @@
 
   @media (max-width: 480px) {
     .bubble { max-width: 88%; }
-    header { padding: 14px 16px; }
+    header { padding: calc(14px + env(safe-area-inset-top)) 16px 14px; }
     main { padding: 16px; }
-    form {
-      padding: 12px 16px;
-      padding-bottom: max(16px, env(safe-area-inset-bottom));
-    }
     .title { display: none; }  /* hide "Online" text — the pulse dot says it */
     .brand span { white-space: nowrap; }
-    header nav a { padding: 6px 8px; margin-left: 2px; }
+  }
+
+  /* Phone navigation (2026-08-01). Two real problems on Alex's phone: the links
+     sat under the status bar (no safe-area inset, above), and five of them
+     overflowed a 390px header — "Voice" and "Clear" ran off the right edge.
+     Below the HUD's own 700px breakpoint the nav becomes a fixed bottom bar:
+     nothing overflows, and it's where a thumb already is. */
+  @media (max-width: 699px) {
+    header nav {
+      position: fixed;
+      left: 0; right: 0; bottom: 0;
+      z-index: 70;
+      justify-content: space-around;
+      gap: 2px;
+      background: rgba(1, 10, 32, 0.94);
+      border-top: 1px solid var(--hud-cyan-25);
+      padding: 8px 4px calc(8px + env(safe-area-inset-bottom));
+      backdrop-filter: blur(6px);
+    }
+    header nav a {
+      margin-left: 0;
+      font-size: 10px;
+      letter-spacing: 0.1em;
+      padding: 8px 4px;
+      flex: 1 1 0;
+      text-align: center;
+    }
+    /* keep the composer clear of the fixed bar */
+    form {
+      padding: 12px 16px;
+      padding-bottom: calc(62px + env(safe-area-inset-bottom));
+    }
   }
 </style>
 </head>
@@ -454,7 +526,7 @@
     <button type="button" id="attach-clear" title="Remove attachment">&times;</button>
   </div>
   <div class="input-row">
-    <input type="text" id="message-input" placeholder="Ask or tell me something..." autocomplete="off" />
+    <input type="text" id="message-input" placeholder="Ask CLARVIS…" autocomplete="off" />
     <input type="file" id="video-input" accept="video/mp4,video/quicktime,video/webm,video/x-matroska,video/x-msvideo,.mp4,.mov,.webm,.mkv,.avi,.m4v" style="display:none" />
     <button type="button" class="mic-btn" id="attach-btn" title="Attach a video to analyze">&#128206;</button>
     <button type="button" class="mic-btn" id="mic-btn" title="Hold a conversation — tap and speak">&#127908;</button>

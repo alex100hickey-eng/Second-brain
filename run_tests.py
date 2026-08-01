@@ -1155,6 +1155,29 @@ def suite_hud_mobile(app, live):
     check("dashboard keeps semantic status colours (meaning cyan can't carry)",
           "--good:" in dash and "--bad:" in dash and "--warn:" in dash)
 
+    # Phone navigation (2026-08-01). Alex's nav sat under the Dynamic Island and
+    # ran off the right edge — five links overflowed a 390px header. Both pages
+    # now inset for the notch and move the nav to a fixed bottom bar.
+    # Verified rendered at 390px: nav 798-844, 0 links offscreen, no overflow.
+    for name, src in (("chat", idx), ("dashboard", dash)):
+        check(f"{name} header clears the notch (safe-area inset)",
+              "env(safe-area-inset-top)" in src)
+        check(f"{name} nav is a fixed bottom bar on phones",
+              "position: fixed" in src and "env(safe-area-inset-bottom)" in src)
+    # backdrop-filter makes an element the containing block for fixed children,
+    # which anchored the dashboard nav to the header instead of the viewport.
+    # If the blur comes back on the mobile header, the bottom nav silently breaks.
+    check("dashboard mobile header drops backdrop-filter (it traps fixed children)",
+          "backdrop-filter: none" in dash)
+
+    # The composer on both pages wears HUD.chatBar's octagon: stroke layer, then
+    # fill inset 1.2px, so the glow lands on the frame and not the text.
+    for name, src in (("chat", idx), ("dashboard", dash)):
+        check(f"{name} composer uses the deck's octagon frame",
+              "polygon(14px 0, calc(100% - 14px) 0" in src)
+        check(f"{name} composer draws stroke and fill as separate layers",
+              "inset: 1.2px" in src and "rgba(6, 20, 48, 0.62)" in src)
+
     check("HUD chat bar sends go=1 (user already pressed send once)",
           "'&go=1'" in js or '"&go=1"' in js)
     check("chat page auto-sends on go=1 and still only pre-fills bare ?q=",

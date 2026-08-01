@@ -89,8 +89,9 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 12px 22px;
-    background: linear-gradient(180deg, rgba(4,9,16,0.96), rgba(4,9,16,0.82));
+    /* safe-area inset: without it the bar sits under the notch in the PWA */
+    padding: calc(12px + env(safe-area-inset-top)) 22px 12px;
+    background: linear-gradient(180deg, rgba(1,10,32,0.96), rgba(1,10,32,0.82));
     border-bottom: 1px solid var(--line);
     backdrop-filter: blur(6px);
     font-family: var(--mono);
@@ -394,11 +395,35 @@
     position: fixed;
     left: 0; right: 0; bottom: 0;
     z-index: 30;
-    background: linear-gradient(180deg, rgba(4,9,16,0.88), rgba(4,9,16,0.98));
+    background: linear-gradient(180deg, rgba(1,10,32,0.88), rgba(1,10,32,0.98));
     border-top: 1px solid var(--line-bright);
     backdrop-filter: blur(8px);
     padding: 10px 18px calc(12px + env(safe-area-inset-bottom));
   }
+
+  /* The composer wears the deck's chat bar: same octagon, accent stroke, glow
+     and navy fill as HUD.chatBar and the chat page's input row. Two clipped
+     layers — stroke, then fill inset 1.2px — so the glow never lands on text. */
+  .chat-row {
+    position: relative;
+    min-height: 54px;
+    padding: 6px 14px 6px 22px;
+  }
+  .chat-row::before, .chat-row::after { content: ""; position: absolute; pointer-events: none; }
+  .chat-row::before {
+    inset: 0;
+    background: var(--hud-accent);
+    filter: var(--hud-glow);
+    clip-path: polygon(14px 0, calc(100% - 14px) 0, 100% 14px, 100% calc(100% - 14px),
+                       calc(100% - 14px) 100%, 14px 100%, 0 calc(100% - 14px), 0 14px);
+  }
+  .chat-row::after {
+    inset: 1.2px;
+    background: rgba(6, 20, 48, 0.62);
+    clip-path: polygon(13px 0, calc(100% - 13px) 0, 100% 13px, 100% calc(100% - 13px),
+                       calc(100% - 13px) 100%, 13px 100%, 0 calc(100% - 13px), 0 13px);
+  }
+  .chat-row > * { position: relative; z-index: 1; }
   .chat-log {
     max-width: 980px;
     margin: 0 auto 8px;
@@ -434,32 +459,39 @@
     font-size: 15px;
     flex: none;
   }
+  /* sits INSIDE the octagon frame drawn by .chat-row, so it carries no box of
+     its own — a bordered input inside a bordered bar reads as two nested boxes */
   #chat-input {
     flex: 1;
-    background: rgba(8, 18, 32, 0.8);
-    border: 1px solid var(--line);
-    color: var(--text);
-    font-family: var(--mono);
+    background: transparent;
+    border: 0;
+    color: var(--hud-white);
+    font-family: 'Share Tech Mono', monospace;
     font-size: 14px;
-    padding: 11px 14px;
+    letter-spacing: 0.03em;
+    padding: 11px 4px;
     outline: none;
-    clip-path: polygon(8px 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%, 0 8px);
   }
+  #chat-input::placeholder { color: var(--hud-label); opacity: 0.8; }
   #chat-input:focus { border-color: var(--accent); box-shadow: 0 0 16px rgba(63,208,255,0.15); }
   #chat-input::placeholder { color: var(--text-dim); }
+  /* same outlined glyph-button silhouette as HUD.chatBar's controls */
   #chat-send {
-    border: 1px solid var(--line-bright);
-    background: rgba(63,208,255,0.08);
-    color: var(--accent);
-    font-family: var(--mono);
-    font-size: 12px;
-    letter-spacing: 0.14em;
-    padding: 11px 22px;
+    border: 1px solid rgba(79, 212, 232, 0.45);
+    background: transparent;
+    color: var(--hud-cyan);
+    font-family: 'Orbitron', sans-serif;
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    padding: 0 14px;
+    height: 32px;
     cursor: pointer;
     text-transform: uppercase;
-    clip-path: polygon(8px 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%, 0 8px);
+    filter: var(--hud-glow);
+    clip-path: polygon(6px 0, 100% 0, 100% calc(100% - 6px), calc(100% - 6px) 100%, 0 100%, 0 6px);
+    transition: color 140ms linear, border-color 140ms linear;
   }
-  #chat-send:hover { background: rgba(63,208,255,0.16); box-shadow: 0 0 18px rgba(63,208,255,0.25); }
+  #chat-send:hover { color: var(--hud-accent); border-color: var(--hud-accent); }
   #chat-send:disabled { opacity: 0.4; cursor: default; }
 
   .refresh-note {
@@ -820,13 +852,39 @@
     .center-col { grid-column: 1 / -1; grid-row: 1; }
   }
   @media (max-width: 700px) {
-    .deck { grid-template-columns: 1fr; padding-bottom: 140px; }
+    .deck { grid-template-columns: 1fr; padding-bottom: 200px; }
     .center-col { grid-column: auto; }
-    header { padding: 10px 14px; }
+    header {
+      padding: calc(10px + env(safe-area-inset-top)) 14px 10px;
+      /* backdrop-filter makes an element the containing block for fixed
+         descendants, which anchored the nav below to the HEADER instead of the
+         viewport. The gradient background carries the bar on its own. */
+      backdrop-filter: none;
+    }
     .clock .time { font-size: 16px; }
     .clock #clock-date { display: none; }
     .brand span { display: none; } /* pulse dot only — the reactor carries the name */
     .hud-frame { display: none; }
+
+    /* Same fixed bottom nav as the chat page, so switching decks is one thumb
+       reach from either screen and the two pages behave identically. */
+    header nav {
+      position: fixed;
+      left: 0; right: 0; bottom: 0;
+      z-index: 70;
+      gap: 2px;
+      justify-content: space-around;
+      background: rgba(1, 10, 32, 0.94);
+      border-top: 1px solid var(--line);
+      padding: 8px 4px calc(8px + env(safe-area-inset-bottom));
+      backdrop-filter: blur(6px);
+    }
+    header nav a {
+      font-size: 10px; letter-spacing: 0.1em;
+      padding: 8px 4px; flex: 1 1 0; text-align: center;
+    }
+    /* the dashboard's own composer has to clear the fixed bar too */
+    .chat-dock { bottom: calc(58px + env(safe-area-inset-bottom)); }
   }
 </style>
 </head>
