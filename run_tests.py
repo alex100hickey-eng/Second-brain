@@ -1178,6 +1178,37 @@ def suite_hud_mobile(app, live):
         check(f"{name} composer draws stroke and fill as separate layers",
               "inset: 1.2px" in src and "rgba(6, 20, 48, 0.62)" in src)
 
+    # ROUTE -> TEMPLATE. /dashboard serves home.html, NOT dashboard.html (which is
+    # the legacy page at /hud-classic). A restyle went to the wrong file on
+    # 2026-08-01 purely because the names suggest otherwise. Pin the mapping so
+    # the next person edits the page Alex actually opens.
+    app_src = open(os.path.join(CHAT_DIR, "app.py"), encoding="utf-8").read()
+    dash_route = app_src.index('@app.route("/dashboard")')
+    check("/dashboard still serves home.html (NOT dashboard.html)",
+          'render_template("home.html")' in app_src[dash_route:dash_route + 400])
+    check("dashboard.html is the legacy page behind /hud-classic",
+          '@app.route("/hud-classic")' in app_src)
+
+    # home.html is the page behind /dashboard, so it gets the same phone
+    # treatment as the chat page. Verified rendered at 390px: nav fixed 798-844,
+    # 4 links, none off-screen, including the HUD link back to the deck.
+    home = open(os.path.join(CHAT_DIR, "templates", "home.html"), encoding="utf-8").read()
+    check("/dashboard page loads the HUD typefaces",
+          "Orbitron" in home and "Share+Tech+Mono" in home)
+    check("/dashboard page header clears the notch",
+          "env(safe-area-inset-top)" in home)
+    check("/dashboard page nav is a fixed bottom bar on phones",
+          "position: fixed" in home and "env(safe-area-inset-bottom)" in home)
+    check("/dashboard page drops backdrop-filter on the mobile header",
+          "backdrop-filter: none" in home)
+    check("/dashboard page keeps a link back to the deck",
+          'href="/hud"' in home)
+
+    # The chat mic is HUD.chatBar's SVG glyph, not an emoji — the glyph inherits
+    # currentColor, which is what makes the listening/conversation states show.
+    check("chat mic uses the deck's SVG glyph, not an emoji",
+          "M 3.5 8.5 a 5.5 5.5 0 0 0 11 0" in idx and "&#127908;" not in idx)
+
     check("HUD chat bar sends go=1 (user already pressed send once)",
           "'&go=1'" in js or '"&go=1"' in js)
     check("chat page auto-sends on go=1 and still only pre-fills bare ?q=",

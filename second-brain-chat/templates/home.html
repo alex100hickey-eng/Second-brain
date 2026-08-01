@@ -12,30 +12,42 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="CLARVIS">
 <style>
+  @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400..900&family=Share+Tech+Mono&display=swap');
+  /* Palette pinned to HUD_STYLE.md so this page sits on the same deck as / and
+     /chat-classic. Panel CONTENT keeps the documented widget-content exception —
+     natural case, readable size — while chrome takes the strict rules. The two
+     status colours stay: a warning has to look different from a healthy row. */
   :root {
-    --bg: #0a0e14;
-    --panel: #0f1520;
-    --panel-2: #121a28;
-    --line: #1c2534;
-    --text: #e7ecf5;
-    --text-dim: #6b7688;
-    --accent: #3fd0ff;
-    --accent-dim: #1a4a5c;
+    --hud-cyan:   #4fd4e8;
+    --hud-accent: #9bf2fa;
+    --hud-white:  #e8fdff;
+    --hud-glow:   drop-shadow(0 0 4px rgba(79, 212, 232, 0.6));
+
+    --bg: #010a20;
+    --panel: rgba(79, 212, 232, 0.05);
+    --panel-2: rgba(79, 212, 232, 0.09);
+    --line: rgba(79, 212, 232, 0.25);
+    --text: #d8f4fb;
+    --text-dim: rgba(150, 225, 245, 0.72);
+    --accent: #4fd4e8;
+    --accent-dim: rgba(79, 212, 232, 0.45);
     --good: #52e0a0;
     --warn: #ffb84d;
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; }
   body {
-    background: var(--bg);
+    background: radial-gradient(ellipse at 50% 36%, #123a6e 0%, #010a20 68%) fixed;
     color: var(--text);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-family: 'Share Tech Mono', monospace;
     min-height: 100vh;
     -webkit-font-smoothing: antialiased;
   }
 
   header {
-    padding: 16px 20px;
+    /* safe-area inset: viewport-fit=cover + a translucent status bar means that
+       without this the bar sits UNDER the notch / Dynamic Island */
+    padding: calc(16px + env(safe-area-inset-top)) 20px 16px;
     border-bottom: 1px solid var(--line);
     display: flex;
     align-items: center;
@@ -43,9 +55,22 @@
     gap: 12px;
     position: sticky;
     top: 0;
-    background: rgba(10,14,20,0.92);
+    background: rgba(1, 10, 32, 0.92);
     backdrop-filter: blur(8px);
     z-index: 10;
+  }
+  .brand {
+    font-family: 'Orbitron', sans-serif;
+    letter-spacing: 0.28em;
+    text-transform: uppercase;
+    color: var(--hud-cyan);
+    filter: var(--hud-glow);
+  }
+  .panel h2 {
+    font-family: 'Orbitron', sans-serif;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--hud-cyan);
   }
   .brand { display: flex; align-items: center; gap: 10px;
     font-family: "SF Mono", "Courier New", monospace; font-size: 12px;
@@ -55,9 +80,11 @@
     animation: pulse 2.4s ease-in-out infinite; }
   @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
   nav { display: flex; align-items: center; gap: 4px; }
-  nav a { color: var(--text-dim); text-decoration: none; font-size: 13px;
-    padding: 6px 12px; border-radius: 6px; border: 1px solid transparent; }
-  nav a:hover { color: var(--text); border-color: var(--line); }
+  nav a { color: var(--text-dim); text-decoration: none; font-size: 11px;
+    font-family: 'Share Tech Mono', monospace;
+    letter-spacing: 0.15em; text-transform: uppercase;
+    padding: 6px 12px; border-radius: 0; border: 1px solid transparent; }
+  nav a:hover { color: var(--hud-cyan); border-color: var(--line); filter: var(--hud-glow); }
   nav a.active { color: var(--accent); border-color: var(--accent-dim); }
   .refreshed { font-size: 11px; color: var(--text-dim); font-family: "SF Mono", monospace; }
 
@@ -65,12 +92,17 @@
 
   /* Quick actions */
   .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 22px; }
+  /* the deck cuts corners, it doesn't round them */
   .action {
     display: inline-flex; align-items: center; gap: 8px;
-    padding: 10px 16px; border-radius: 10px; cursor: pointer;
-    background: var(--panel); border: 1px solid var(--line); color: var(--text);
-    font-size: 14px; text-decoration: none; transition: border-color .15s, transform .05s;
+    padding: 11px 16px; border-radius: 0; cursor: pointer;
+    background: var(--panel); border: 1px solid var(--line); color: var(--hud-cyan);
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase;
+    text-decoration: none; transition: border-color .15s, color .15s;
+    clip-path: polygon(9px 0, 100% 0, 100% calc(100% - 9px), calc(100% - 9px) 100%, 0 100%, 0 9px);
   }
+  .action:hover { color: var(--hud-accent); border-color: var(--accent-dim); }
   .action:hover { border-color: var(--accent-dim); }
   .action:active { transform: translateY(1px); }
   .action.primary { background: linear-gradient(180deg, #14344a, #0f2536); border-color: var(--accent-dim); color: var(--accent); }
@@ -85,7 +117,9 @@
   .panel {
     background: var(--panel);
     border: 1px solid var(--line);
-    border-radius: 14px;
+    border-radius: 0;
+    /* the deck's widget frame: two corners cut, same 14px as the chat bar */
+    clip-path: polygon(14px 0, 100% 0, 100% calc(100% - 14px), calc(100% - 14px) 100%, 0 100%, 0 14px);
     padding: 16px 16px 8px;
     min-width: 0;
   }
@@ -156,9 +190,39 @@
   .notify-form input[type="checkbox"] { width: 16px; height: 16px; }
 
   @media (max-width: 560px) {
-    main { padding: 14px 10px 50px; }
     .grid { grid-template-columns: 1fr; }
     .action { flex: 1 1 44%; justify-content: center; }
+  }
+
+  /* Phone navigation (2026-08-01). This is the page /dashboard actually serves,
+     and its nav — including the HUD link back to the deck — sat under the notch
+     and out of thumb reach. Same fixed bottom bar as /chat-classic so both
+     screens behave identically. */
+  @media (max-width: 699px) {
+    header {
+      /* backdrop-filter makes an element the containing block for fixed
+         descendants, which would anchor the bar below to the HEADER rather than
+         the viewport. The solid background carries the bar without it. */
+      backdrop-filter: none;
+    }
+    nav {
+      position: fixed;
+      left: 0; right: 0; bottom: 0;
+      z-index: 70;
+      display: flex;
+      gap: 2px;
+      justify-content: space-around;
+      background: rgba(1, 10, 32, 0.94);
+      border-top: 1px solid var(--line);
+      padding: 8px 4px calc(8px + env(safe-area-inset-bottom));
+      backdrop-filter: blur(6px);
+    }
+    nav a {
+      flex: 1 1 0; text-align: center;
+      font-size: 10px; letter-spacing: 0.1em; padding: 8px 4px;
+    }
+    /* clear the fixed bar */
+    main { padding: 14px 10px calc(74px + env(safe-area-inset-bottom)); }
   }
 </style>
 </head>

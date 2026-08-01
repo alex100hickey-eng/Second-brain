@@ -393,16 +393,21 @@
   }
 
   /* Voice: mic button in the input row + spoken-replies toggle in the nav */
+  /* mic carries HUD.chatBar's SVG glyph now, so this is the deck's button:
+     transparent, cyan stroke, one clipped corner, glow — the glyph inherits
+     currentColor, which is what makes the listening/conversation states read. */
   .mic-btn {
     background: transparent;
-    border: 1px solid var(--line);
-    border-radius: 8px;
-    padding: 8px 12px;
-    font-size: 16px;
+    border: 1px solid var(--hud-cyan-45);
+    border-radius: 0;
+    padding: 0;
     line-height: 1;
     cursor: pointer;
-    color: var(--text-dim);
+    color: var(--hud-cyan);
+    filter: var(--hud-glow);
+    clip-path: polygon(6px 0, 100% 0, 100% calc(100% - 6px), calc(100% - 6px) 100%, 0 100%, 0 6px);
   }
+  .mic-btn svg { display: block; }
 
   .mic-btn.busy { opacity: .5; pointer-events: none; }
   .mic-btn.listening {
@@ -529,7 +534,7 @@
     <input type="text" id="message-input" placeholder="Ask CLARVIS…" autocomplete="off" />
     <input type="file" id="video-input" accept="video/mp4,video/quicktime,video/webm,video/x-matroska,video/x-msvideo,.mp4,.mov,.webm,.mkv,.avi,.m4v" style="display:none" />
     <button type="button" class="mic-btn" id="attach-btn" title="Attach a video to analyze">&#128206;</button>
-    <button type="button" class="mic-btn" id="mic-btn" title="Hold a conversation — tap and speak">&#127908;</button>
+    <button type="button" class="mic-btn" id="mic-btn" title="Hold a conversation — tap and speak"><svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><rect x="6" y="2" width="6" height="9" rx="3" fill="currentColor"/><path d="M 3.5 8.5 a 5.5 5.5 0 0 0 11 0 M 9 14 v 3 M 6 17 h 6" fill="none" stroke="currentColor" stroke-width="1.5"/></svg></button>
     <button type="submit" id="send-btn">Send</button>
   </div>
 </form>
