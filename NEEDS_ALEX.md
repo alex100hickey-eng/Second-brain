@@ -83,7 +83,9 @@ running as of this update. Start the local app to actually use it.
 - **Tool prune** — 93 registered, 12 used on the Mac. The cross-node audit mirror shipped
   07-30; give it ~a week of real two-node data, then we prune with evidence. See `TOOL_AUDIT.md`.
 - **`app.py` is ~5,600 lines** — real structural debt, not urgent. Best done *with* the prune.
-- **Dependency pinning** — only 4 of 16 pinned. I can do this myself; just say when.
+- ~~**Dependency pinning**~~ ✅ DONE 2026-07-31 — 15 of 16 pinned in
+  `second-brain-chat/requirements.txt`. `gunicorn` stays unpinned on purpose: it's
+  server-only, so there's no locally-verified version to pin it to.
 
 ---
 
