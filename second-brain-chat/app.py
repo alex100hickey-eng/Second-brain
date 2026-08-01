@@ -643,6 +643,21 @@ channel. The always-on server runs the awareness pass automatically every 15 min
 Nudges are short, specific, and deep-link back to the dashboard. If Alex says he's
 getting too many (or too few) notifications, adjust the rules with him immediately.
 
+THE AUGUST MONEY PLAN is Alex's live priority: $1,000/month recurring by Aug 31 from
+an ad-creative service sold to DTC brands. Its execution state lives in the vault at
+Money/August Execution Tracker.md. Use check_august_plan whenever he asks what needs
+him, what's next, where things stand, or how the plan is going — never answer that
+from memory, because the tracker is the only current source. Use complete_august_step
+when he says he's finished something; it reports what that unblocks. The awareness
+pass nudges him about steps that are overdue or due today, and only about steps he
+can actually start — never ones blocked upstream.
+
+Two things about that plan you must hold firm on. First, NO AUTONOMOUS OUTBOUND: you
+draft every prospect email, Alex reviews and sends every one himself, and there is
+deliberately no send path in the code. Second, the word "AI" appears in NO
+client-facing artifact — the product is the testing process and the monthly readout,
+not the tooling. Both are load-bearing, not preferences.
+
 You have a persistent memory. Facts you've saved appear below under "Saved memories" — treat
 them as things you know about Alex. When he tells you something worth keeping long-term (a
 preference, a goal, a recurring commitment, a fact about his life), or asks you to remember
@@ -2963,6 +2978,14 @@ def build_morning_briefing() -> str:
     except Exception as e:
         print(f"briefing drafts failed: {e}")
 
+    # 3a. The August plan's next action. Deliberately ABOVE follow-ups and agent
+    # chatter: it's the only section on the critical path to Aug 31, and burying it
+    # under status noise is how a plan quietly stops being executed.
+    try:
+        out.append("\n" + august_tracker.summary_text(limit=4))
+    except Exception as e:
+        print(f"briefing august plan failed: {e}")
+
     # 3b. Prospect follow-ups due (August money plan). CLARVIS drafts; Alex sends —
     # this line exists so the +3d/+7d touches never silently slip.
     try:
@@ -3776,6 +3799,10 @@ def _dispatch_tool_call(tool_name: str, tool_input: dict) -> str:
             brand=tool_input["brand"], variant=tool_input.get("variant", "first_touch"))
     if tool_name == "check_ad_pipeline":
         return ad_creative_pipeline.check_ad_pipeline(limit=tool_input.get("limit", 12))
+    if tool_name == "check_august_plan":
+        return august_tracker.check_august_plan()
+    if tool_name == "complete_august_step":
+        return august_tracker.complete_august_step(step_id=tool_input["step_id"])
     if tool_name == "check_intake":
         rows = intake.list_intake(status=tool_input.get("status", "new"))
         if not rows:
@@ -4400,6 +4427,21 @@ ad_creative_pipeline.init(
 )
 TOOLS.extend(ad_creative_pipeline.TOOL_SCHEMAS)
 TOOL_STATUS_LABELS.update(ad_creative_pipeline.TOOL_STATUS_LABELS)
+
+# The August plan as live state (see august_tracker.py). The tracker document lives
+# in the vault so Alex edits it in Obsidian and any Claude Code session can read it;
+# completion is mirrored in Supabase because the phone reaches the SERVER node, whose
+# vault is a pull-only mirror.
+import august_tracker  # noqa: E402
+
+august_tracker.init(
+    supabase_client=supabase,
+    vault_dir=VAULT_PATH,
+    local_tz=LOCAL_TZ,
+    node_runtime=task_manager.RUNTIME,
+)
+TOOLS.extend(august_tracker.TOOL_SCHEMAS)
+TOOL_STATUS_LABELS.update(august_tracker.TOOL_STATUS_LABELS)
 
 # Unified intake layer — everything happening in Alex's life lands in one normalized,
 # noise-filtered, triageable stream (see intake.py). iMessage feeds it from the Mac

@@ -254,12 +254,37 @@ def _gather() -> dict:
     return picture
 
 
+def _august_actions() -> list:
+    """Nudges sourced from the August plan tracker.
+
+    The tracker decides WHAT is worth raising (only steps that are actionable now —
+    never ones blocked upstream, which would be noise Alex can't act on); this layer
+    still applies quiet hours, the daily cap and per-key dedup like any other nudge.
+    Fail-soft: an unreadable tracker must not take down the awareness pass."""
+    out = []
+    try:
+        import august_tracker
+        for n in august_tracker.nudges_due():
+            out.append(send_nudge(n["key"], n["title"], n["body"],
+                                  priority=n.get("priority", "default"),
+                                  tags="calendar"))
+    except Exception as e:
+        if report_event:
+            try:
+                report_event("proactive", "warning",
+                             "august tracker nudges unavailable", str(e)[:300])
+            except Exception:
+                pass
+    return out
+
+
 def run_awareness_pass(force: bool = False) -> str:
     """One decision cycle. Deterministic triggers; the model only phrases text."""
     cfg = get_config()
     picture = _gather()
     now = picture["now"]
     actions = []
+    actions.extend(_august_actions())
 
     # 1. Deadlines approaching (one nudge per item, keyed by ref+day)
     for d in picture["due_soon"]:

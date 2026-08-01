@@ -3671,6 +3671,202 @@ def suite_ad_pipeline(app, live):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def suite_august(app, live):
+    """The August plan as live state: parsing the vault tracker, dependency gating,
+    the warmup clock, completion that survives the phone→server path, and the nudge
+    rules. The load-bearing property is that a step Alex CANNOT start is never
+    nudged about — a proactive assistant that nags about blocked work gets muted."""
+    section("august plan tracker (what needs Alex, when)")
+    import august_tracker as at
+
+    saved = (at.supabase, at.vault_path, at.runtime, at.LOCAL_TZ)
+    tmp = tempfile.mkdtemp(prefix="sbtest_august_")
+    try:
+        os.makedirs(os.path.join(tmp, "Money"), exist_ok=True)
+        tracker = os.path.join(tmp, "Money", "August Execution Tracker.md")
+
+        def write(body):
+            with open(tracker, "w", encoding="utf-8") as f:
+                f.write(body)
+
+        # An in-memory stand-in for the Supabase half, so completion is exercised
+        # without touching the real table.
+        store = {"done": []}
+
+        class _FakeSB:
+            def table(self, _):
+                return self
+            def select(self, *_a, **_k):
+                return self
+            def eq(self, *_a, **_k):
+                return self
+            def order(self, *_a, **_k):
+                return self
+            def limit(self, *_a, **_k):
+                return self
+            def execute(self):
+                return type("R", (), {"data": [
+                    {"id": 1, "output_text": json.dumps(
+                        {"key": at.STATE_KEY, "done": store["done"],
+                         "updated_at": "2026-08-01T09:00:00-04:00"})}]})()
+            def insert(self, payload):
+                store["done"] = json.loads(payload["output_text"])["done"]
+                return self
+
+        at.init(_FakeSB(), tmp, None, "local")
+
+        write("""# T
+### Gate A
+- [ ] **Name the service** `#name-service` · owner: alex · due: 2026-08-01 · needs: —
+- [ ] **Register the .com** `#buy-domain` · owner: alex · due: 2026-08-01 · needs: name-service
+- [ ] **Mailbox + DNS** `#mailbox-dns` · owner: alex · due: 2026-08-02 · needs: buy-domain
+### Gate B
+- [x] **Already finished thing** `#done-thing` · owner: alex · due: 2026-07-30 · needs: —
+- [ ] **Render the site** `#render-site` · owner: clarvis · due: 2026-08-02 · needs: name-service
+- [ ] **Long overdue thing** `#stale-thing` · owner: alex · due: 2026-07-20 · needs: —
+- Just a normal bullet, not a step
+""")
+
+        steps = at.load_steps()
+        check("every tracked step parses (and plain bullets are ignored)",
+              len(steps) == 6, f"got {len(steps)}")
+        by_id = {s["id"]: s for s in steps}
+        check("ids, owners and due dates are read",
+              by_id["name-service"]["owner"] == "alex"
+              and by_id["name-service"]["due"] == "2026-08-01"
+              and by_id["render-site"]["owner"] == "clarvis")
+        check("'needs: —' means no dependency, not a dependency called '—'",
+              by_id["name-service"]["needs"] == [])
+        check("a ticked box counts as done", by_id["done-thing"]["done"])
+        check("section headings are captured", by_id["name-service"]["section"] == "Gate A")
+
+        # --- dependency gating: the property the whole design rests on ---
+        check("a step with unmet needs is blocked", by_id["buy-domain"]["blocked"])
+        check("and it names what blocks it",
+              by_id["buy-domain"]["blocked_by"] == ["name-service"])
+        check("a step with no needs is actionable", not by_id["name-service"]["blocked"])
+        check("transitive blocking works (mailbox is behind domain behind name)",
+              by_id["mailbox-dns"]["blocked"])
+
+        ready = at.actionable("alex")
+        check("only unblocked, undone, alex-owned steps are actionable, due order first",
+              [s["id"] for s in ready] == ["stale-thing", "name-service"],
+              str([s["id"] for s in ready]))
+        # CLARVIS's own work is gated the same way — it can't render a site for a
+        # service with no name, and pretending otherwise would put fake work on the board.
+        check("clarvis work is blocked by the same dependency graph",
+              at.actionable("clarvis") == [])
+
+        # --- the nudge rules ---
+        nudges = at.nudges_due()
+        keys = " ".join(n["key"] for n in nudges)
+        check("blocked steps are NEVER nudged about", "buy-domain" not in keys
+              and "mailbox-dns" not in keys, keys)
+        check("a step due TODAY is nudged", "august:due:name-service" in keys, keys)
+        check("a step past its date is nudged as overdue",
+              "august:overdue:stale-thing" in keys, keys)
+        check("overdue is high priority, due-today is not",
+              [n["priority"] for n in nudges if "overdue:stale-thing" in n["key"]] == ["high"]
+              and [n["priority"] for n in nudges if "due:name-service" in n["key"]] == ["default"])
+        check("a step is never nudged twice in one pass (overdue OR due, not both)",
+              len([n for n in nudges if "stale-thing" in n["key"]]) == 1)
+        check("the nudge says why it matters, not just what it is",
+              any("Blocks the domain" in n["body"] for n in nudges))
+        check("nudge keys are day-scoped so they don't repeat all day",
+              all(n["key"].count(":") >= 2 for n in nudges))
+        check("the warmup clock gets its own nudge while it hasn't started",
+              any("clock" in n["key"] for n in nudges))
+
+        # --- the clock ---
+        clock = at.warmup_clock()
+        check("warmup is correctly reported as not started", not clock["warmup_started"])
+        check("it computes the earliest possible send date", bool(clock["earliest_send"]))
+        check("and how many selling days that leaves",
+              isinstance(clock["selling_days_if_started_today"], int))
+
+        # --- completion: the phone→server path ---
+        res = at.mark_done("name-service")
+        check("marking a step done succeeds", res.get("ok"), str(res))
+        check("it reports what that unblocks",
+              "Register the .com" in (res.get("unblocked") or []), str(res.get("unblocked")))
+        check("completion persists in the shared store (survives phone→server)",
+              "name-service" in store["done"])
+        after = {s["id"]: s for s in at.load_steps()}
+        check("the newly unblocked step becomes actionable", not after["buy-domain"]["blocked"])
+        check("and the next actionable step advances",
+              [s["id"] for s in at.actionable("alex")] == ["stale-thing", "buy-domain"],
+              str([s["id"] for s in at.actionable("alex")]))
+        check("completing a step also releases CLARVIS's dependent work",
+              [s["id"] for s in at.actionable("clarvis")] == ["render-site"])
+
+        # --- reconcile: the vault file Alex reads must not go stale ---
+        body = open(tracker, encoding="utf-8").read()
+        check("the vault checkbox is ticked back so Obsidian matches",
+              re.search(r"- \[x\] \*\*Name the service\*\*", body) is not None, body[:200])
+        check("unrelated steps are left alone",
+              "- [ ] **Register the .com**" in body)
+
+        check("an unknown step id is refused with the valid ids listed",
+              at.mark_done("no-such-step")["ok"] is False)
+        check("marking an already-done step is idempotent",
+              at.mark_done("name-service").get("already") is True)
+
+        # The server must not write the vault — its copy is a pull-only mirror and
+        # the write would be silently reverted, or conflict the next pull.
+        at.init(_FakeSB(), tmp, None, "server")
+        store["done"] = ["mailbox-dns"]
+        check("the server node never writes to the vault", at.reconcile_vault() is False)
+        check("but it still READS completion from the shared store",
+              {s["id"]: s for s in at.load_steps()}["mailbox-dns"]["done"])
+        at.init(_FakeSB(), tmp, None, "local")
+
+        # --- rendering + failure modes ---
+        text = at.summary_text()
+        check("the summary names Alex's next step", "next step" in text.lower(), text[:200])
+        check("the summary surfaces the warmup clock", "armup" in text)
+
+        write("# Tracker with no steps at all\n")
+        check("an empty tracker degrades to a clear message, not a crash",
+              "isn't readable" in at.summary_text() or at.load_steps() == [])
+        os.remove(tracker)
+        check("a missing tracker file yields no steps rather than raising",
+              at.load_steps() == [])
+        check("and nudges_due() stays quiet rather than erroring", at.nudges_due() == [])
+    finally:
+        at.supabase, at.vault_path, at.runtime, at.LOCAL_TZ = saved
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    # --- wiring: the "sacred pattern" (schema + routing + label + prompt) ---
+    names = [t["name"] for t in at.TOOL_SCHEMAS]
+    check("both tools are registered on the app",
+          all(any(t.get("name") == n for t in app.TOOLS) for n in names), str(names))
+    check("both have UI status labels",
+          all(n in app.TOOL_STATUS_LABELS for n in names))
+    check("the plan is described in SYSTEM_PROMPT so the model reaches for it",
+          "check_august_plan" in app.SYSTEM_PROMPT and "complete_august_step" in app.SYSTEM_PROMPT)
+    check("the prompt restates the two load-bearing rules",
+          "NO AUTONOMOUS OUTBOUND" in app.SYSTEM_PROMPT
+          and 'word "AI" appears in NO' in app.SYSTEM_PROMPT)
+    # The nudge path must be fail-soft: proactive.py runs every 15 min server-side.
+    psrc = open(os.path.join(CHAT_DIR, "proactive.py"), encoding="utf-8").read()
+    check("the awareness pass sources august nudges", "_august_actions" in psrc)
+    check("and a broken tracker can't take the awareness pass down",
+          "except Exception" in psrc.split("_august_actions")[1][:900])
+    # The real vault tracker must exist and parse — this is the artifact Alex reads.
+    real = os.path.join(os.environ["OBSIDIAN_VAULT_PATH"], at.TRACKER_REL)
+    if os.path.exists(real):
+        at.init(None, os.environ["OBSIDIAN_VAULT_PATH"], None, "local")
+        real_steps = at.load_steps()
+        check("the real vault tracker parses", len(real_steps) >= 10, f"{len(real_steps)} steps")
+        check("every real step has an owner and a due date",
+              all(s["owner"] and s["due"] for s in real_steps))
+        ids = {s["id"] for s in real_steps}
+        check("every declared dependency refers to a real step",
+              all(n in ids for s in real_steps for n in s["needs"]),
+              str([n for s in real_steps for n in s["needs"] if n not in ids]))
+        at.supabase, at.vault_path, at.runtime, at.LOCAL_TZ = saved
+
+
 def suite_portfolio(app, live):
     """The portfolio site's render step: one command applies the naming decision,
     and it refuses to emit a page that breaks the plan's client-facing rules —
@@ -3852,6 +4048,7 @@ SUITES = {
     "jobs": suite_jobs,
     "adpipeline": suite_ad_pipeline,
     "portfolio": suite_portfolio,
+    "august": suite_august,
     "retrieval": suite_retrieval,
     "distillation": suite_distillation,
 }
