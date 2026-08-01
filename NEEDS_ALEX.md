@@ -9,6 +9,37 @@ Ordered so the first item unblocks the value of everything else.
 
 ---
 
+## 0a. 🔴 URGENT 2026-08-01 morning — the Hetzner box's DISK IS FULL again
+
+Found while deploying the overnight work. Evidence: the `54dbf8d` build died at
+04:32 UTC with `mkdir: No space left on device` at the nix step (Coolify showed
+it "In Progress" for 8.5h — cancelled it, which unwedged the queue), and the
+Coolify UI itself now 500s with "Redis … unable to persist to disk". The RUNNING
+app is fine (serving `abb5d74`, which includes the jobs.db fix), but **no new
+build can land and Coolify's own state can't persist** until disk is freed.
+Note: vault pulls and jobs.db writes share that disk — don't sit on this.
+
+Fix (you run it; from your Mac):
+```bash
+ssh root@178.156.209.40 "df -h / && docker builder prune -af && docker image prune -af && df -h /"
+```
+(`image prune -af` deletes rollback images — you okayed weighing this before;
+`builder prune` alone freed ~9 GB last time and may be enough. While you're
+there, the pending kernel reboot from §7 is 15 seconds: `reboot`.)
+
+Then deploy the tip — push anything, or:
+```bash
+cd ~/second-brain && git commit --allow-empty -m "redeploy" && git push
+```
+Verify: `curl -s https://clarvis.178.156.209.40.sslip.io/api/version` → `38f27e8`
+(or later). Two suite-green commits are waiting: `30f1b91` (the ad pipeline) +
+`38f27e8` (review fixes). **Your Mac node already runs them** — restarted on
+`38f27e8` at 09:04 ET, so CLARVIS has the full pipeline locally regardless.
+Worth asking why disk refilled: 8 builds ran 03:00-04:30 UTC; if this recurs,
+a scheduled `docker builder prune` (keep-storage cap) is the durable fix.
+
+---
+
 ## 0. NEW 2026-08-01 — August Money Plan: your morning list
 
 The finalized plan (council-amended) is in the vault: **`Money/August Money Plan
