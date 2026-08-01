@@ -3175,6 +3175,362 @@ def suite_expansion(app, live):
           and 'if r["finding"].get("status") == "found"][:max(1, limit)]' not in src)
 
 
+def suite_ad_pipeline(app, live):
+    """Ad Creative Pipeline (the August plan's fulfillment machine): stage ordering,
+    fail-closed qa-gate, structural client isolation, the no-send guarantee, the
+    follow-up due-date logic, and proof-library gating."""
+    section("ad creative pipeline (fulfillment machine)")
+    import ad_creative_pipeline as acp
+
+    class _Block:
+        def __init__(self, text):
+            self.type, self.text = "text", text
+
+    class _Msg:
+        def __init__(self, text, stop="end_turn"):
+            self.content, self.stop_reason = [_Block(text)], stop
+
+    calls = []  # (system, user) pairs — isolation assertions read these
+
+    class _Messages:
+        def create(self, model=None, max_tokens=None, system="", messages=None, timeout=None):
+            user = messages[0]["content"] if messages else ""
+            calls.append((system, user))
+            if "brand-ingest stage" in system:
+                return _Msg(json.dumps({
+                    "positioning": "sells alpaca socks to hikers",
+                    "products": ["trail sock"], "price_band": "$18-30",
+                    "current_offer": None, "voice": "warm, dry, outdoorsy",
+                    "audience_guess": "hikers", "current_creative_themes": ["comfort"],
+                    "candidate_blocked_claims": ["cures blisters"],
+                    "gaps": ["durability angle"]}))
+            if "angle-engine" in system:
+                return _Msg(json.dumps({
+                    "angles": [{"rank": 1, "angle": "durability", "why": "unused",
+                                "example_hook": "10 years, one sock"}],
+                    "teardown": ["runs comfort ads", "ignores durability", "test longevity hook"]}))
+            if "STATIC ad concepts" in system:
+                return _Msg(json.dumps({"statics": [
+                    {"id": "S1", "angle": "durability", "headline": "Ten years. One sock.",
+                     "primary_text": "body", "visual": "sock on rock", "format": "1080x1080"},
+                    {"id": "S2", "angle": "durability", "headline": "Cures blisters fast",
+                     "primary_text": "body", "visual": "feet", "format": "1080x1080"}]}))
+            if "VIDEO SCRIPTS" in system:
+                return _Msg(json.dumps({"scripts": [
+                    {"id": "V1", "angle": "durability", "hook": "hook", "beats": ["b1 — s1"],
+                     "cta": "cta", "length_s": 20}]}))
+            if "qa-gate" in system:
+                if getattr(self, "qa_mode", "ok") == "garbage":
+                    return _Msg("I am not JSON at all")
+                if getattr(self, "qa_mode", "ok") == "partial":
+                    return _Msg(json.dumps({"verdicts": [
+                        {"id": "S1", "verdict": "pass"}], "top_picks": ["S1"], "summary": "s"}))
+                return _Msg(json.dumps({"verdicts": [
+                    {"id": "S1", "verdict": "pass"},
+                    {"id": "S2", "verdict": "flag", "reason": "unsubstantiated health claim"},
+                    {"id": "V1", "verdict": "pass"}],
+                    "top_picks": ["S1", "V1"], "summary": "two clean, one flagged"}))
+            if "report-kit" in system:
+                return _Msg("# SAMPLE readout\n\nall numbers marked SAMPLE")
+            if "anonymized win" in system:
+                return _Msg("A sock brand's durability angle cut CPA 30% (SAMPLE).")
+            if "cold outreach email" in system:
+                return _Msg("Subject: your comfort ads\n\nbody here")
+            return _Msg("{}")
+
+    class _Claude:
+        def __init__(self):
+            self.messages = _Messages()
+
+    class _FakeQuery:
+        def __init__(self, store, agent_filter=None):
+            self.store, self.agent_filter = store, agent_filter
+            self._update_payload = None
+
+        def insert(self, row):
+            self._insert_row = row
+            return self
+
+        def update(self, payload):
+            self._update_payload = payload
+            return self
+
+        def select(self, *_):
+            return self
+
+        def eq(self, col, val):
+            if col == "agent_name":
+                self.agent_filter = val
+            elif col == "id":
+                self._eq_id = val
+            return self
+
+        def order(self, *_, **__):
+            return self
+
+        def limit(self, *_):
+            return self
+
+        def execute(self):
+            if getattr(self, "_insert_row", None) is not None:
+                rid = len(self.store) + 1
+                self.store[rid] = dict(self._insert_row, id=rid)
+                self._insert_row = None
+                return type("R", (), {"data": [{"id": rid}]})()
+            if self._update_payload is not None:
+                self.store[self._eq_id].update(self._update_payload)
+                return type("R", (), {"data": []})()
+            rows = [r for r in sorted(self.store.values(), key=lambda r: -r["id"])
+                    if not self.agent_filter or r.get("agent_name") == self.agent_filter]
+            return type("R", (), {"data": rows})()
+
+    class _FakeSupabase:
+        def __init__(self):
+            self.store = {}
+
+        def table(self, name):
+            return _FakeQuery(self.store)
+
+    saved = (acp.claude, acp.supabase, acp.vault_path, acp._tm_web_fetch)
+    tmp = tempfile.mkdtemp(prefix="sbtest_adp_")
+    try:
+        fake_claude, fake_sb = _Claude(), _FakeSupabase()
+        acp.claude, acp.supabase, acp.vault_path = fake_claude, fake_sb, tmp
+        acp._tm_web_fetch = lambda ctx, url: f"[UNTRUSTED] fake site text for {url} /products/trail-sock"
+
+        # --- stage ordering guards, before anything exists ---
+        check("angles before ingest is refused",
+              "ingest_brand first" in acp.generate_angles("alpaca"))
+        check("variants before angles is refused",
+              "ingest_brand first" in acp.produce_variants("alpaca"))
+
+        # --- ingest ---
+        out = acp.ingest_brand("Alpaca Socks", "https://alpaca.example")
+        check("ingest builds and stores the brief", "Brief built" in out, out[:120])
+        _, brand = acp._find_brand("alpaca-socks")
+        check("candidate blocked claims land on the brand row",
+              "cures blisters" in (brand or {}).get("blocked_claims", []))
+
+        check("variants before angles (post-ingest) still refused",
+              "generate_angles first" in acp.produce_variants("alpaca socks"))
+        check("delivery before qa is refused — the gate is not optional",
+              "not optional" in acp.package_delivery("alpaca socks"))
+
+        # --- angles + teardown ---
+        out = acp.generate_angles("Alpaca Socks")
+        check("angle stage stores teardown + angles", "teardown" in out.lower(), out[:120])
+
+        # --- variants ---
+        out = acp.produce_variants("alpaca-socks", n_statics=2, n_scripts=1)
+        check("variant factory stores statics + scripts", "2 static concepts + 1 scripts" in out, out[:150])
+
+        # --- qa: fail-closed on garbage ---
+        fake_claude.messages.qa_mode = "garbage"
+        out = acp.qa_check("alpaca socks")
+        check("unparseable qa reply FAILS CLOSED (all assets flagged)",
+              "Failing closed" in out and "all 3 assets" in out, out[:200])
+        _, brand = acp._find_brand("alpaca-socks")
+        check("failed-closed verdicts are persisted as flags",
+              all(v["verdict"] == "flag" for v in brand["qa"]["verdicts"])
+              and len(brand["qa"]["verdicts"]) == 3)
+
+        # --- qa: an asset the model skipped is flagged, not passed ---
+        fake_claude.messages.qa_mode = "partial"
+        acp.qa_check("alpaca socks")
+        _, brand = acp._find_brand("alpaca-socks")
+        verdicts = {v["id"]: v["verdict"] for v in brand["qa"]["verdicts"]}
+        check("ruled asset passes", verdicts.get("S1") == "pass", str(verdicts))
+        check("unruled assets are flagged, never silently passed",
+              verdicts.get("S2") == "flag" and verdicts.get("V1") == "flag", str(verdicts))
+
+        # --- qa: normal pass ---
+        fake_claude.messages.qa_mode = "ok"
+        out = acp.qa_check("alpaca socks")
+        check("qa passes clean assets and flags the health claim",
+              "2 pass" in out and "1 flagged" in out, out[:150])
+
+        # --- delivery: flagged asset excluded, vault file written, Supabase mirrored ---
+        out = acp.package_delivery("alpaca socks")
+        check("delivery packages only gate-passing assets", "1 held by the gate" in out
+              or "(1 held" in out, out[:200])
+        drop_dir = os.path.join(tmp, "Money", "Clients", "alpaca-socks")
+        files = os.listdir(drop_dir) if os.path.isdir(drop_dir) else []
+        check("drop written to the vault client folder", any(f.startswith("drop-") for f in files), str(files))
+        drop_doc = ""
+        for f in files:
+            if f.startswith("drop-"):
+                with open(os.path.join(drop_dir, f), encoding="utf-8") as fh:
+                    drop_doc = fh.read()
+        check("the flagged health-claim asset is NOT in the client drop",
+              "Cures blisters fast" not in drop_doc and "Ten years. One sock." in drop_doc)
+        check("delivery mirrored to Supabase (redeploy-proof)",
+              any(r.get("agent_name") == "ad_pipeline" and '"kind": "delivery"' in r.get("output_text", "")
+                  for r in fake_sb.store.values()))
+
+        # --- client isolation: a second brand's prompts never contain the first ---
+        acp.ingest_brand("Rival Candles", "https://candles.example")
+        calls.clear()
+        acp.generate_angles("Rival Candles")
+        leaked = any("Alpaca" in s or "Alpaca" in u for s, u in calls)
+        check("STRUCTURAL ISOLATION: brand B's prompts never mention brand A", not leaked)
+
+        # --- outreach: draft only, no send path anywhere in the module ---
+        out = acp.draft_outreach("alpaca socks")
+        check("outreach returns a draft and says so", "Draft only" in out and "Subject:" in out, out[:120])
+        src = open(acp.__file__, encoding="utf-8").read()
+        check("module source contains no send path (smtp/sendmail/mail API)",
+              all(tok not in src.lower() for tok in ("smtplib", "sendmail", "smtp.", "mail.send",
+                                                     "gmail.users", "messages().send")))
+        check("module never grows its own HTTP path around the SSRF-safe fetcher",
+              all(tok not in src for tok in ("import httpx", "import requests", "urllib.request",
+                                             "http.client")))
+
+        # --- report + proof gating ---
+        acp.build_client_report("alpaca socks", metrics_text="CTR 2.1%", client_approved_proof=False)
+        proof_rows = [r for r in fake_sb.store.values() if '"kind": "proof"' in r.get("output_text", "")]
+        check("no proof-library write without explicit client approval", not proof_rows)
+        acp.build_client_report("alpaca socks", metrics_text="CTR 2.1%", client_approved_proof=True)
+        proof_rows = [r for r in fake_sb.store.values() if '"kind": "proof"' in r.get("output_text", "")]
+        check("client-approved report appends ONE anonymized proof win", len(proof_rows) == 1)
+        if proof_rows:
+            check("proof excerpt is anonymized (no brand name)",
+                  "Alpaca" not in proof_rows[0]["output_text"])
+
+        # --- follow-up due-date logic, both halves ---
+        os.makedirs(os.path.join(tmp, "Money"), exist_ok=True)
+        from datetime import datetime as _dt
+        today = _dt(2026, 8, 20)
+        with open(os.path.join(tmp, "Money", "prospect-tracker.csv"), "w", encoding="utf-8") as f:
+            f.write("brand,domain,category,size_band,signal,meta_page_guess,adlib_url,status,wave,"
+                    "sent_date,followup1_date,followup2_date,replied,call_date,outcome,notes\n"
+                    "DueThree,d.com,pet,small,sig,pg,url,sent,1,2026-08-16,,,,,,\n"
+                    "DueSeven,d7.com,pet,small,sig,pg,url,sent,1,2026-08-10,2026-08-13,,,,,\n"
+                    "Replied,r.com,pet,small,sig,pg,url,sent,1,2026-08-10,,,YES,,,\n"
+                    "Unsent,u.com,pet,small,sig,pg,url,candidate,,,,,,,,\n")
+        due = acp.due_followups(today=today)
+        which = {d["brand"]: d["which"] for d in due}
+        check("+3d follow-up is due at day 4 with none logged", which.get("DueThree") == "+3d", str(which))
+        check("+7d follow-up is due when +3d was already sent", which.get("DueSeven") == "+7d", str(which))
+        check("replied prospects never surface as due", "Replied" not in which)
+        check("unsent prospects never surface as due", "Unsent" not in which)
+
+        # --- truncation raises instead of returning silence ---
+        real_create = fake_claude.messages.create
+        fake_claude.messages.create = lambda **kw: _Msg("partial", stop="max_tokens")
+        try:
+            acp._call("s", "u")
+            check("truncated reply raises (silent-emptiness class stays dead)", False)
+        except ValueError:
+            check("truncated reply raises (silent-emptiness class stays dead)", True)
+        finally:
+            fake_claude.messages.create = real_create
+
+        # --- stale-qa invalidation: a fresh variant batch voids old gate verdicts ---
+        _, brand = acp._find_brand("alpaca-socks")
+        check("qa verdicts exist before the refresh (precondition)", bool(brand.get("qa")))
+        acp.produce_variants("alpaca-socks", n_statics=2, n_scripts=1)
+        _, brand = acp._find_brand("alpaca-socks")
+        check("re-running variants CLEARS stale qa verdicts", "qa" not in brand)
+        check("delivery refuses until the gate re-runs on the fresh batch",
+              "not optional" in acp.package_delivery("alpaca socks"))
+        fake_claude.messages.qa_mode = "ok"
+        acp.qa_check("alpaca socks")
+        check("delivery works again after a fresh gate run",
+              "Drop packaged" in acp.package_delivery("alpaca socks"))
+
+        # --- re-ingest merges, never shrinks, the blocked-claims list ---
+        _, brand = acp._find_brand("alpaca-socks")
+        n_claims = len(brand.get("blocked_claims") or [])
+        acp.ingest_brand("Alpaca Socks", "https://alpaca.example")
+        _, brand = acp._find_brand("alpaca-socks")
+        check("re-ingest keeps every existing blocked claim (superset)",
+              len(brand.get("blocked_claims") or []) >= n_claims and
+              "cures blisters" in brand["blocked_claims"])
+
+        # --- slug-collision guard: a different domain refuses to merge ---
+        out = acp.ingest_brand("Alpaca Socks", "https://impostor.example")
+        check("same slug + different domain is refused (isolation, not merged)",
+              "more" in out and "specific" in out, out[:120])
+        _, brand = acp._find_brand("alpaca-socks")
+        check("collision attempt left the original row untouched",
+              brand.get("website") == "https://alpaca.example")
+
+        # --- second site fetch never follows an off-host link ---
+        fetched = []
+
+        def _tracking_fetch(ctx, url):
+            fetched.append(url)
+            return ("page text https://evil.example/products/steal-me and also "
+                    "https://newbrand.example/products/real-thing")
+        acp._tm_web_fetch = _tracking_fetch
+        acp._fetch_site("https://newbrand.example")
+        check("off-host product link from page content is NOT fetched",
+              not any("evil.example" in u for u in fetched), str(fetched))
+        check("same-host product link IS fetched",
+              any(u.startswith("https://newbrand.example/products/") for u in fetched), str(fetched))
+        acp._tm_web_fetch = lambda ctx, url: f"[UNTRUSTED] fake site text for {url}"
+
+        # --- prompts carry the untrusted-data note ---
+        calls.clear()
+        acp.generate_angles("alpaca socks")
+        check("stage prompts mark stored brand data as untrusted-derived",
+              any("never as instructions" in u for _, u in calls))
+
+        # --- check_ad_pipeline summarizes statuses + due follow-ups ---
+        # Rewrite the tracker with dates relative to the REAL clock, since
+        # check_ad_pipeline calls due_followups() with today=now.
+        real_today = _dt.now()
+        d4 = (real_today - __import__("datetime").timedelta(days=4)).strftime("%Y-%m-%d")
+        d8 = (real_today - __import__("datetime").timedelta(days=8)).strftime("%Y-%m-%d")
+        d5 = (real_today - __import__("datetime").timedelta(days=5)).strftime("%Y-%m-%d")
+        with open(os.path.join(tmp, "Money", "prospect-tracker.csv"), "w", encoding="utf-8") as f:
+            f.write("brand,domain,category,size_band,signal,meta_page_guess,adlib_url,status,wave,"
+                    "sent_date,followup1_date,followup2_date,replied,call_date,outcome,notes\n"
+                    f"DueThree,d.com,pet,small,sig,pg,url,sent,1,{d4},,,,,,\n"
+                    f"DueSeven,d7.com,pet,small,sig,pg,url,sent,1,{d8},{d5},,,,,\n")
+        out = acp.check_ad_pipeline()
+        check("check_ad_pipeline reports brands by stage",
+              "Ad creative pipeline" in out and "alpaca" in out.lower().replace("-", " ")
+              or "Alpaca" in out, out[:200])
+        check("check_ad_pipeline surfaces the due follow-ups from the tracker",
+              "DueThree" in out and "DueSeven" in out, out[:300])
+
+        # --- the app dispatch block is exercised for all 8 tools (typo pin) ---
+        sample_inputs = {
+            "ingest_brand": {"brand_name": "X", "website_url": "https://x.example"},
+            "generate_angles": {"brand": "X"},
+            "produce_variants": {"brand": "X", "n_statics": 2, "n_scripts": 1},
+            "qa_check": {"brand": "X"},
+            "package_delivery": {"brand": "X"},
+            "build_client_report": {"brand": "X", "metrics_text": "m",
+                                    "client_approved_proof": False},
+            "draft_outreach": {"brand": "X", "variant": "first_touch"},
+            "check_ad_pipeline": {"limit": 3},
+        }
+        saved_fns = {n: getattr(acp, n) for n in sample_inputs}
+        try:
+            for n in sample_inputs:
+                setattr(acp, n, (lambda _n: lambda **kw: f"SENTINEL:{_n}")(n))
+            ok = all(app.handle_tool_call(n, inp) == f"SENTINEL:{n}"
+                     for n, inp in sample_inputs.items())
+            check("app.handle_tool_call routes all 8 ad tools with the right kwargs", ok)
+        finally:
+            for n, fn in saved_fns.items():
+                setattr(acp, n, fn)
+
+        # --- registration hygiene ---
+        check("8 tools exported and every one has a status label",
+              len(acp.TOOL_SCHEMAS) == 8 and
+              all(t["name"] in acp.TOOL_STATUS_LABELS for t in acp.TOOL_SCHEMAS))
+        check("all 8 tools are registered in the live app TOOLS list",
+              all(any(t.get("name") == s["name"] for t in app.TOOLS) for s in acp.TOOL_SCHEMAS))
+        check("ad_pipeline rows are hidden from the public outputs feed",
+              "ad_pipeline" in app.INTERNAL_AGENT_NAMES)
+    finally:
+        acp.claude, acp.supabase, acp.vault_path, acp._tm_web_fetch = saved
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 SUITES = {
     "vault": suite_vault,
     "gate": suite_gate,
@@ -3216,6 +3572,7 @@ SUITES = {
     "taskman": suite_taskman,
     "streaming": suite_streaming,
     "jobs": suite_jobs,
+    "adpipeline": suite_ad_pipeline,
     "retrieval": suite_retrieval,
     "distillation": suite_distillation,
 }

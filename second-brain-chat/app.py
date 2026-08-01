@@ -459,6 +459,7 @@ INTERNAL_AGENT_NAMES = {
                            # SQLite only, no Supabase) — kept so any future mirror rows stay hidden
     "expansion_finding",  # Self-Expanding Pipeline findings (see expansion_pipeline.py)
     "money_idea",  # Money Pipeline ideas (see money_pipeline.py)
+    "ad_pipeline",  # Ad Creative Pipeline brands/drops/reports (see ad_creative_pipeline.py)
     "system_event",  # Monitoring Agent incident/notice log (see monitor.py)
     "jarvis_budget_state",  # Monitoring Agent budget-tier transitions (see monitor.py)
     "intake_event",  # unified intake stream events (see intake.py) — own triage panel
@@ -2930,6 +2931,17 @@ def build_morning_briefing() -> str:
     except Exception as e:
         print(f"briefing drafts failed: {e}")
 
+    # 3b. Prospect follow-ups due (August money plan). CLARVIS drafts; Alex sends —
+    # this line exists so the +3d/+7d touches never silently slip.
+    try:
+        due = ad_creative_pipeline.due_followups()
+        if due:
+            out.append("\n**Outreach follow-ups due** (I draft, you send):")
+            for d in due[:6]:
+                out.append(f"- {d['brand']} — {d['which']} (first sent {d['sent']})")
+    except Exception as e:
+        print(f"briefing followups failed: {e}")
+
     # 4. Recent agent/council activity
     try:
         acts = get_home_agent_outputs(limit=3)
@@ -3701,6 +3713,37 @@ def _dispatch_tool_call(tool_name: str, tool_input: dict) -> str:
         return money_pipeline.develop_money_idea(idea_id=tool_input["idea_id"])
     if tool_name == "check_money_ideas":
         return money_pipeline.check_money_ideas(limit=tool_input.get("limit", 12))
+    if tool_name == "ingest_brand":
+        return ad_creative_pipeline.ingest_brand(
+            brand_name=tool_input["brand_name"],
+            website_url=tool_input["website_url"],
+            ad_library_notes=tool_input.get("ad_library_notes", ""),
+            client_id=tool_input.get("client_id", ""),
+        )
+    if tool_name == "generate_angles":
+        return ad_creative_pipeline.generate_angles(brand=tool_input["brand"])
+    if tool_name == "produce_variants":
+        return ad_creative_pipeline.produce_variants(
+            brand=tool_input["brand"],
+            n_statics=tool_input.get("n_statics", 12),
+            n_scripts=tool_input.get("n_scripts", 5),
+        )
+    if tool_name == "qa_check":
+        return ad_creative_pipeline.qa_check(brand=tool_input["brand"])
+    if tool_name == "package_delivery":
+        return ad_creative_pipeline.package_delivery(brand=tool_input["brand"])
+    if tool_name == "build_client_report":
+        return ad_creative_pipeline.build_client_report(
+            brand=tool_input["brand"],
+            metrics_text=tool_input.get("metrics_text", ""),
+            period=tool_input.get("period", ""),
+            client_approved_proof=bool(tool_input.get("client_approved_proof", False)),
+        )
+    if tool_name == "draft_outreach":
+        return ad_creative_pipeline.draft_outreach(
+            brand=tool_input["brand"], variant=tool_input.get("variant", "first_touch"))
+    if tool_name == "check_ad_pipeline":
+        return ad_creative_pipeline.check_ad_pipeline(limit=tool_input.get("limit", 12))
     if tool_name == "check_intake":
         rows = intake.list_intake(status=tool_input.get("status", "new"))
         if not rows:
@@ -4311,6 +4354,20 @@ money_pipeline.init(
     feasibility_fn=feasibility_judge,
 )
 TOOLS.extend(money_pipeline.TOOL_SCHEMAS)
+
+# Ad Creative Pipeline — the fulfillment machine for the August Money Plan (vault:
+# Money/August Money Plan (FINAL).md): ingest → angles → variants → qa-gate →
+# delivery, plus the monthly report-kit and outreach DRAFTS. No send path exists
+# in the module; every outbound email goes through Alex by hand.
+import ad_creative_pipeline  # noqa: E402 — needs the objects above to exist first
+
+ad_creative_pipeline.init(
+    claude_client=claude,
+    supabase_client=supabase,
+    vault_dir=VAULT_PATH,
+)
+TOOLS.extend(ad_creative_pipeline.TOOL_SCHEMAS)
+TOOL_STATUS_LABELS.update(ad_creative_pipeline.TOOL_STATUS_LABELS)
 
 # Unified intake layer — everything happening in Alex's life lands in one normalized,
 # noise-filtered, triageable stream (see intake.py). iMessage feeds it from the Mac
