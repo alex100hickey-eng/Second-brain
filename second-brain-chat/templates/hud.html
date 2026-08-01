@@ -53,6 +53,13 @@
     title: 'Assignments', href: '/school', linkTitle: 'Open school' }, 1304, 322);
   const wRev = widget({ width: 216, height: 102, shape: 'cutbr', role: 'w-br',
     title: 'Revenue', href: '/revenue', linkTitle: 'Open revenue' }, 1288, 630);
+  // AUGUST — the money plan. Its own tile and its own tab, deliberately separate
+  // from Revenue (which is the idea-scouting pipeline): this is one project with a
+  // deadline, and burying it inside a general revenue view is how it stops being
+  // the thing Alex looks at first.
+  const wAugust = widget({ width: 230, height: 126, shape: 'header', role: 'w-b1',
+    title: 'August', href: '/august', linkTitle: 'Open the August money plan' },
+    1010, 640);
   // PERSONAL comms — texts + non-school mail (left, opposite school mail)
   const wPersonal = widget({ width: 200, height: 126, shape: 'header', role: 'w-l2',
     title: 'Personal', href: '/personal', linkTitle: 'Open personal inbox' }, 66, 320);
@@ -201,6 +208,29 @@
   }
   renderLearnings(null, null);
   HUD.bindLive({ url: '/api/learnings', every: 0, render: renderLearnings });
+
+  // August tile: its own feed, so the shared /api/hud poll doesn't pay for reading
+  // the vault tracker and prospect CSV on every deck refresh. The tile answers the
+  // only two questions worth answering at a glance — how long is left, and what is
+  // waiting on Alex — and the tab has the detail.
+  function renderAugust(d, err) {
+    const c = (d && d.clock) || {}, n = d && d.next, k = (d && d.counts) || {};
+    HUD.fill(wAugust._content, [
+      HUD.bigStat({ value: err ? '—' : String((d && d.days_to_deadline) || 0),
+        sub: err ? 'Data unavailable' : 'days to Aug 31' }),
+      HUD.listRows({
+        empty: '',
+        rows: err ? [] : [
+          [clip(n ? n.title : 'Nothing waiting', 24), n && n.overdue ? 'overdue' : '',
+           !!(n && n.overdue)],
+          ['Warmup', c.warmup_started ? 'running' : 'not started', !c.warmup_started],
+          ['Steps', (k.done || 0) + '/' + (k.total || 0)]
+        ]
+      })
+    ]);
+  }
+  renderAugust(null, null);
+  HUD.bindLive({ url: '/api/august', every: 60000, render: renderAugust });
 
   // --- open frames, awaiting assignment ---
   at(HUD.widgetFrame({ width: 170, height: 72, shape: 'layered', role: 'w-t2' }), 972, 42);

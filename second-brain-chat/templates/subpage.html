@@ -46,6 +46,17 @@
   const money2 = v => '$' + (Math.round((v || 0) * 100) / 100).toFixed(2);
   const rows = (list, empty) => HUD.listRows({ rows: list, empty: empty });
 
+  /* Cap a list to what the panel can actually show, and SAY what was hidden.
+     Panels are fixed-height frames, so an uncapped list silently clips — which
+     reads as "that's everything" when it isn't. A trailing "+N more" row is the
+     difference between a truncated list and a lying one. */
+  function more(list, n, map) {
+    const out = (list || []).slice(0, n).map(map);
+    const hidden = (list || []).length - n;
+    if (hidden > 0) out.push(['+' + hidden + ' more', '', false]);
+    return out;
+  }
+
   // a headline + wrapped body paragraph, for the learnings cards
   function card(head, body, foot) {
     const w = document.createElement('div');
@@ -356,6 +367,91 @@
             return wrap; } }
       ]
     },
+    /* ===== AUGUST — the money plan, kept deliberately separate from the rest
+       of the deck. Eight panels so every aspect has its own spot: the clock, the
+       single next move, everything waiting on Alex, everything waiting on CLARVIS,
+       what's blocked and by what, gate-by-gate progress, the fulfillment machine,
+       and the prospect list. On the phone these stack into one column in this
+       order, so the two that decide the month (clock, next move) are what he sees
+       without scrolling. ===== */
+    august: {
+      title: 'August', sub: '$1,000/mo by Aug 31 · ad creative for DTC brands',
+      feed: '/api/august', every: 60000,
+      panels: [
+        { title: 'Mission clock', shape: 'header', x: 60, y: 380, w: 355, h: 190,
+          fill: (d, gone) => {
+            const c = (d && d.clock) || {}, wrap = document.createElement('div');
+            wrap.appendChild(HUD.bigStat({
+              value: gone ? '—' : String((d && d.days_to_deadline) || 0),
+              sub: gone || 'days to Aug 31' }));
+            if (!gone) {
+              const started = !!c.warmup_started;
+              const days = started ? (c.selling_days || 0)
+                                   : (c.selling_days_if_started_today || 0);
+              const b = HUD.dataBar({ width: 300, segments: 14,
+                value: Math.max(0, Math.min(100, Math.round(days / 30 * 100))), flat: true });
+              b.style.margin = '6px 0';
+              wrap.appendChild(b);
+              wrap.appendChild(rows([
+                ['Warmup', started ? 'running' : 'not started', !started],
+                ['First send', c.earliest_send || '—'],
+                ['Selling days', String(days)]], ''));
+            }
+            return wrap; } },
+
+        { title: 'Your next move', shape: 'header', x: 435, y: 380, w: 355, h: 190,
+          fill: (d, gone) => {
+            const n = d && d.next;
+            if (gone || !n) return rows([], gone || 'Nothing waiting on you');
+            return card(clip(n.title, 40), n.why,
+              (n.overdue ? 'OVERDUE · was due ' : 'due ') + (n.due || '—')); } },
+
+        { title: 'Needs you', shape: 'header', x: 810, y: 380, w: 355, h: 190,
+          fill: (d, gone) => rows(more((d && d.needs_you) || [], 6, s =>
+            [clip(s.title, 30), s.overdue ? 'overdue' : (s.due || '').slice(5), s.overdue]),
+            gone || 'Nothing waiting on you') },
+
+        { title: 'Waiting on CLARVIS', shape: 'cutbr', x: 1185, y: 380, w: 355, h: 190,
+          fill: (d, gone) => rows(more((d && d.clarvis_queue) || [], 6, s =>
+            [clip(s.title, 30), (s.due || '').slice(5)]),
+            gone || 'Nothing queued for me') },
+
+        { title: 'Blocked upstream', shape: 'header', x: 60, y: 586, w: 276, h: 190,
+          fill: (d, gone) => rows(more((d && d.blocked) || [], 6, s =>
+            [clip(s.title, 20), 'needs ' + clip((s.blocked_by || [])[0] || '', 10)]),
+            gone || 'Nothing blocked') },
+
+        { title: 'Gates', shape: 'header', x: 356, y: 586, w: 276, h: 190,
+          fill: (d, gone) => rows(((d && d.gates) || []).map(g =>
+            [g.name, g.done + '/' + g.total, g.done === g.total]),
+            gone || 'No gates') },
+
+        { title: 'Fulfillment', shape: 'header', x: 652, y: 586, w: 276, h: 190,
+          fill: (d, gone) => {
+            const p = (d && d.pipeline) || {};
+            if (gone) return rows([], gone);
+            const list = more(p.brands || [], 4, b => [clip(b.name, 18), b.status || '']);
+            return rows(list.concat([['Brands', String(p.n_brands || 0)],
+                                     ['Drops', String(p.n_drops || 0)]]),
+                        'No brands ingested yet'); } },
+
+        { title: 'Prospects', shape: 'header', x: 948, y: 586, w: 276, h: 190,
+          fill: (d, gone) => {
+            const p = (d && d.prospects) || {}, f = (d && d.followups) || [];
+            if (gone) return rows([], gone);
+            return rows([
+              ['Candidates', String(p.total || 0)],
+              ['Qualified', String(p.qualified || 0), !!p.qualified],
+              ['Sent', String(p.sent || 0)],
+              ['Replied', String(p.replied || 0), !!p.replied],
+              ['Follow-ups due', String(f.length), !!f.length]],
+              'No tracker on this node'); } },
+
+        { title: 'Guardrails', shape: 'cutbr', x: 1244, y: 586, w: 276, h: 190,
+          fill: (d, gone) => rows(((d && d.guardrails) || []).map(g => [g[0], g[1]]),
+            gone || 'Guardrails unavailable') }
+      ]
+    },
     tasks: {
       title: 'Task queue', sub: 'What CLARVIS is working on',
       panels: [
@@ -417,9 +513,11 @@
   }
   render(null, null);
   // most pages read the shared HUD feed; a page may name its own endpoint via
-  // `feed` (the learnings card is generated once a day, so it isn't polled)
+  // `feed`. A custom feed defaults to no polling (the learnings card is generated
+  // once a day), but a page can ask for a cadence with `every` — the August tab
+  // tracks live state and would otherwise go stale while it's open.
   HUD.bindLive({ url: page.feed || '/api/hud',
-    every: page.feed ? 0 : 60000, render });
+    every: page.every != null ? page.every : (page.feed ? 0 : 60000), render });
 
   /* ===== shared chrome: back hint, chat bar, light decoration ===== */
   label('◄ Core — back to the deck', 668, 366, true);

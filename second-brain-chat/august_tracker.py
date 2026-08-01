@@ -432,6 +432,83 @@ def _why(step) -> str:
     return reasons.get(step["id"], "On the critical path for Aug 31.")
 
 
+# --- prospect list -----------------------------------------------------------
+
+def prospect_summary() -> dict:
+    """Counts from the 97-row prospect CSV. Read-only, and fail-soft to zeros so a
+    missing tracker degrades one HUD panel instead of the whole page."""
+    path = os.path.join(vault_path or "", "Money", "prospect-tracker.csv")
+    out = {"total": 0, "by_status": {}, "qualified": 0, "sent": 0, "replied": 0}
+    try:
+        import csv
+        with open(path, encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                out["total"] += 1
+                st = (row.get("status") or "candidate").strip() or "candidate"
+                out["by_status"][st] = out["by_status"].get(st, 0) + 1
+                if st == "qualified":
+                    out["qualified"] += 1
+                if (row.get("sent_date") or "").strip():
+                    out["sent"] += 1
+                if (row.get("replied") or "").strip():
+                    out["replied"] += 1
+    except (OSError, ImportError, ValueError):
+        pass
+    return out
+
+
+# --- HUD feed ----------------------------------------------------------------
+
+# Short display names for the tracker's "### Gate X — ..." headings. The HUD has
+# ~30 characters of panel width; the full heading is written for a human reading
+# the document, not for a 355px column.
+def _gate_label(section: str) -> str:
+    s = (section or "Other").split("—")[0].strip()
+    return s or "Other"
+
+
+def deck_data() -> dict:
+    """Everything the August HUD tab renders, in one shot.
+
+    Shaped for display rather than for correctness-of-record: pre-sorted,
+    pre-truncated, already grouped by gate. The HUD should render a payload, not
+    compute a plan."""
+    steps = load_steps()
+    st = status()
+    today = _today()
+    deadline = date(2026, 8, 31)
+
+    def brief(s):
+        return {"id": s["id"], "title": s["title"], "due": s["due"],
+                "owner": s["owner"], "why": _why(s),
+                "overdue": _is_overdue(s, today),
+                "blocked_by": s["blocked_by"]}
+
+    gates, order = {}, []
+    for s in steps:
+        g = _gate_label(s.get("section"))
+        if g not in gates:
+            gates[g] = {"name": g, "done": 0, "total": 0}
+            order.append(g)
+        gates[g]["total"] += 1
+        if s["done"]:
+            gates[g]["done"] += 1
+
+    ready_alex = [s for s in st["ready"] if s["owner"] == "alex"]
+    return {
+        "clock": st["clock"],
+        "days_to_deadline": max(0, (deadline - today).days),
+        "counts": {"done": st["done"], "total": st["total"],
+                   "ready": len(st["ready"]), "blocked": len(st["blocked"])},
+        "next": brief(st["next_for_alex"]) if st["next_for_alex"] else None,
+        "needs_you": [brief(s) for s in ready_alex],
+        "clarvis_queue": [brief(s) for s in st["ready"] if s["owner"] == "clarvis"],
+        "blocked": [brief(s) for s in st["blocked"]],
+        "gates": [gates[g] for g in order],
+        "prospects": prospect_summary(),
+    }
+
+
 # --- tool surface ------------------------------------------------------------
 
 TOOL_SCHEMAS = [

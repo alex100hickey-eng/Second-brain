@@ -3852,6 +3852,45 @@ def suite_august(app, live):
     check("the awareness pass sources august nudges", "_august_actions" in psrc)
     check("and a broken tracker can't take the awareness pass down",
           "except Exception" in psrc.split("_august_actions")[1][:900])
+    # --- the August HUD tab ---------------------------------------------------
+    # Alex drives this from his phone, so the failure that matters is a panel that
+    # silently clips real data — it reads as "that's everything" when it isn't.
+    app_src = open(os.path.join(CHAT_DIR, "app.py"), encoding="utf-8").read()
+    sub = open(os.path.join(CHAT_DIR, "templates", "subpage.html"), encoding="utf-8").read()
+    check("the august page is registered in subpage.html", "\n    august: {" in sub)
+    aug_block = sub.split("\n    august: {", 1)[1].split("\n    tasks: {", 1)[0]
+    PANELS = ["Mission clock", "Your next move", "Needs you", "Waiting on CLARVIS",
+              "Blocked upstream", "Gates", "Fulfillment", "Prospects", "Guardrails"]
+    missing = [p for p in PANELS if f"title: '{p}'" not in aug_block]
+    check("every aspect has its own panel (9 of them)", not missing, str(missing))
+    check("the page reads its own feed, not the shared one", "/api/august" in aug_block)
+    check("and it polls, so an open tab doesn't go stale", "every: 60000" in aug_block)
+    # Capped lists must SAY what they hid; silent truncation is the bug.
+    check("long lists are capped with a '+N more' row",
+          "more(" in aug_block and "'+' + hidden + ' more'" in sub)
+    check("the capped lists are the ones that actually grow",
+          all(f"more((d && d.{k})" in aug_block or f"more(p.{k}" in aug_block
+              for k in ("needs_you", "clarvis_queue", "blocked")))
+    # Panels must not collide with the shared chrome the template places itself.
+    ys = [int(m) for m in re.findall(r"y: (\d+), w: \d+, h: \d+", aug_block)]
+    hs = [int(m) for m in re.findall(r"y: \d+, w: \d+, h: (\d+)", aug_block)]
+    check("all 9 panels are positioned", len(ys) == 9 and len(hs) == 9, f"{len(ys)}/{len(hs)}")
+    if ys and hs:
+        check("no panel starts above the shared back-label at y=366",
+              min(ys) >= 380, f"topmost {min(ys)}")
+        check("no panel runs under the chat bar at y=790",
+              max(y + h for y, h in zip(ys, hs)) <= 786,
+              f"lowest {max(y + h for y, h in zip(ys, hs))}")
+    check("the route is served", '@app.route("/august")' in app_src)
+    check("the feed endpoint exists", '@app.route("/api/august")' in app_src)
+    check("the deck has a tile linking to the tab",
+          "href: '/august'" in open(os.path.join(CHAT_DIR, "templates", "hud.html"),
+                                    encoding="utf-8").read())
+    # HUD_STYLE.md forbids off-palette colour anywhere in the UI.
+    offpalette = re.findall(r"#(?!4fd4e8|9bf2fa|2f6aa8|e8fdff|010a20|123a6e|a9d9ea|93c9dd)"
+                            r"[0-9a-fA-F]{6}\b", aug_block)
+    check("the tab introduces no off-palette colour", not offpalette, str(offpalette))
+
     # The real vault tracker must exist and parse — this is the artifact Alex reads.
     real = os.path.join(os.environ["OBSIDIAN_VAULT_PATH"], at.TRACKER_REL)
     if os.path.exists(real):

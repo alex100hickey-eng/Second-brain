@@ -4884,6 +4884,56 @@ def chat_classic():
 @app.route("/school")
 @app.route("/revenue")
 @app.route("/schedule")
+@app.route("/api/august")
+def api_august():
+    """Feed for the August tab. Its own endpoint rather than another section of
+    /api/hud: this is a self-contained project with its own refresh cadence, and
+    folding it into the shared feed would make every other page pay for reading
+    the vault tracker and the prospect CSV.
+
+    Every section is independently fail-soft — a missing prospect CSV should blank
+    one panel, never 500 the page Alex checks from his phone."""
+    def safe(fn, default):
+        try:
+            return fn()
+        except Exception as e:
+            print(f"Warning: /api/august section failed: {e}")
+            return default
+
+    data = safe(august_tracker.deck_data, {})
+    data["followups"] = safe(ad_creative_pipeline.due_followups, [])
+    data["pipeline"] = safe(_august_pipeline, {})
+    # Static, but rendered as data so the phone shows them: these are the rules the
+    # whole plan is load-bearing on, and they belong where Alex actually looks.
+    data["guardrails"] = [
+        ["No autonomous outbound", "I draft, you send"],
+        ["No “AI” in client-facing text", "the product is the process"],
+        ["No unapproved brand shown as work", "packs were unsolicited"],
+        ["Money & accounts", "always you"],
+    ]
+    return jsonify(data)
+
+
+def _august_pipeline() -> dict:
+    """Brands and drops from the fulfillment machine, counted for display."""
+    rows = ad_creative_pipeline._all_rows()
+    brands = [r["data"] for r in rows if r["data"].get("kind") == "brand"]
+    drops = [r["data"] for r in rows if r["data"].get("kind") == "delivery"]
+    by_status = {}
+    for b in brands:
+        st = b.get("status", "?")
+        by_status[st] = by_status.get(st, 0) + 1
+    return {
+        "brands": [{"name": b.get("name"), "status": b.get("status", "")}
+                   for b in brands[:10]],
+        "by_status": by_status,
+        "drops": [{"brand": d.get("brand"), "date": d.get("date"),
+                   "assets": d.get("n_assets")} for d in drops[:6]],
+        "n_brands": len(brands), "n_drops": len(drops),
+    }
+
+
+@app.route("/august")
 @app.route("/tasks")
 @app.route("/personal")
 @app.route("/learnings")
