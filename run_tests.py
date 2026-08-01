@@ -2130,6 +2130,15 @@ def suite_voice(app, live):
         skip("local transcription", "whisper-cli not installed")
         return
     import video_processor as vp
+    # The ggml model is a gitignored binary that lives in the main checkout only, so a
+    # git WORKTREE resolves _PROJECT_ROOT somewhere without a models/ dir. transcribe_file
+    # then returns text='' with an explanatory note — which used to surface as a bare
+    # FAIL on repr('') and read exactly like a whisper regression. Missing asset = SKIP;
+    # a present model that transcribes nothing still FAILS.
+    if not os.path.isfile(vp.WHISPER_MODEL):
+        skip("local transcription", f"whisper model not at {vp.WHISPER_MODEL} "
+                                    "(gitignored — normal in a worktree)")
+        return
     tmp = tempfile.mkdtemp(prefix="sbtest_voice_")
     try:
         aiff = os.path.join(tmp, "sample.aiff")
@@ -2152,7 +2161,9 @@ def suite_voice(app, live):
             res = vp.transcribe_file(aiff, work_dir=tmp)
             check("local whisper transcribes the sample",
                   bool(res["text"]) and any(w in res["text"].lower() for w in ("sprint", "clip", "remind", "edit")),
-                  repr(res["text"])[:120])
+                  # Carry the note: transcribe_file explains WHY it produced nothing, and
+                  # a bare repr('') hides that reason behind a generic-looking failure.
+                  f"{repr(res['text'])[:120]}{' | note: ' + res['note'] if res.get('note') else ''}")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
