@@ -28,6 +28,16 @@ the duplicate Mac morning-brief launchd job is retired (plist archived at
 `scripts/archive/com.secondbrain.morningbrief.plist.disabled` — the in-app
 brief + 08:15 phone nudge remain the single brief path).
 
+ALSO done overnight (`30f1b91`): the full fulfillment machine
+(`ad_creative_pipeline.py`, 8 tools, suite 547/0), smoke-tested end-to-end on
+THREE real brands — draft spec packs, sample readouts, and outreach drafts are
+in the vault under `Money/` awaiting your taste pass. The council's smoke-test
+gate is already satisfied; your morning list starts at "name the service."
+Accepted residuals (documented, low risk): `client_approved_proof` is an
+honor-gated tool arg (anonymized output, your own DB); `_all_rows` caps at 300
+rows (fine at August scale); the SSRF guard's DNS-rebinding TOCTOU is inherited
+app-wide, not new here.
+
 ---
 
 ## 1. ✅ RESOLVED — the deploy outage (root cause found)

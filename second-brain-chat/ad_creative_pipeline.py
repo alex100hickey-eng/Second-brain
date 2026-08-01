@@ -197,8 +197,28 @@ def _all_rows(limit: int = 300) -> list:
 
 def _find_brand(brand: str):
     """(row_id, data) for a brand by slug or name — the ONLY way stage functions
-    obtain brand data. One brand in, one brand out: isolation lives here."""
+    obtain brand data. One brand in, one brand out: isolation lives here.
+    Tries a targeted slug query first so an old brand can't fall out of the
+    recent-rows window and get silently re-created as a duplicate; falls back to
+    the recent-rows scan (which also handles name-based lookups)."""
     want = _slugify(brand)
+    if want:
+        try:
+            rows = (
+                supabase.table("Agent Outputs").select("*")
+                .eq("agent_name", ROW_AGENT)
+                .like("output_text", f'%"slug": "{want}"%')
+                .order("id", desc=True).limit(10).execute().data or []
+            )
+            for row in rows:
+                try:
+                    d = json.loads(row["output_text"])
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                if d.get("kind") == "brand" and d.get("slug") == want:
+                    return row["id"], d
+        except Exception:
+            pass  # storage without like() → the scan below still works
     for row in _all_rows():
         d = row["data"]
         if d.get("kind") != "brand":
@@ -297,6 +317,11 @@ def ingest_brand(brand_name: str, website_url: str, ad_library_notes: str = "",
     if not brand_name or not website_url:
         return "Need at least a brand name and a website URL."
     slug = _slugify(brand_name)
+    if not slug:
+        # A name with no [a-z0-9] slugifies to "" — every such brand would share
+        # one row, which is a client-isolation breach waiting to happen.
+        return (f"'{brand_name}' produces an empty identifier — give the brand an "
+                "ASCII working name (e.g. transliterate it) and try again.")
     row_id, existing = _find_brand(slug)
     # Slug collision guard: two different brands must never silently merge into one
     # row — that would be a client-isolation breach, not a convenience.
@@ -312,6 +337,19 @@ def ingest_brand(brand_name: str, website_url: str, ad_library_notes: str = "",
                     "specific brand name so the two can't merge.")
 
     site_text = _fetch_site(website_url)
+    # FAIL CLOSED on a bad fetch: with no real site content the model would
+    # fabricate a plausible brief from the brand name alone, and that invention
+    # would drive every downstream stage for a real prospect. Refuse instead.
+    body = "\n".join(ln for ln in site_text.splitlines() if not ln.startswith("== "))
+    if ("(fetcher unavailable)" in site_text
+            or body.strip().startswith(("Fetch failed:", "refused:"))
+            or len(body.strip()) < 200):
+        if not (ad_library_notes and len(ad_library_notes.strip()) >= 200):
+            _audit("ingest_brand", f"{brand_name} fetch unusable", False, site_text[:150])
+            return (f"Couldn't fetch usable site content for {brand_name} "
+                    f"({site_text.strip()[:120]}). Refusing to build a brief from "
+                    "nothing — retry, or paste real site/ad copy into ad_library_notes "
+                    "(200+ chars) and run this again.")
     user = (f"{UNTRUSTED_BANNER}\nSITE CONTENT:\n{site_text[:11000]}")
     if ad_library_notes.strip():
         user += ("\n\nAD LIBRARY NOTES (from Alex's manual lookup — what this brand is "
@@ -548,7 +586,11 @@ def package_delivery(brand: str) -> str:
     variants = data.get("variants") or {}
     assets = {a.get("id"): a for a in (variants.get("statics") or []) + (variants.get("scripts") or [])}
     qa = data["qa"]
-    passing = {v["id"] for v in qa.get("verdicts", []) if v.get("verdict") == "pass"}
+    # .get + intersect with real asset ids: a malformed verdict (no id) must not
+    # crash delivery, and a hallucinated verdict for a nonexistent id must not
+    # skew the counts in the client-facing doc.
+    passing = {v.get("id") for v in qa.get("verdicts", [])
+               if v.get("verdict") == "pass"} & set(assets)
     picks = [assets[i] for i in qa.get("top_picks", []) if i in assets and i in passing]
     rest = [a for i, a in assets.items() if i in passing and a not in picks]
     flagged_n = len(assets) - len(passing)

@@ -3258,6 +3258,10 @@ def suite_ad_pipeline(app, live):
         def select(self, *_):
             return self
 
+        def like(self, col, pattern):
+            self._like = pattern.strip("%")
+            return self
+
         def eq(self, col, val):
             if col == "agent_name":
                 self.agent_filter = val
@@ -3282,6 +3286,8 @@ def suite_ad_pipeline(app, live):
                 return type("R", (), {"data": []})()
             rows = [r for r in sorted(self.store.values(), key=lambda r: -r["id"])
                     if not self.agent_filter or r.get("agent_name") == self.agent_filter]
+            if getattr(self, "_like", None):
+                rows = [r for r in rows if self._like in r.get("output_text", "")]
             return type("R", (), {"data": rows})()
 
     class _FakeSupabase:
@@ -3296,7 +3302,9 @@ def suite_ad_pipeline(app, live):
     try:
         fake_claude, fake_sb = _Claude(), _FakeSupabase()
         acp.claude, acp.supabase, acp.vault_path = fake_claude, fake_sb, tmp
-        acp._tm_web_fetch = lambda ctx, url: f"[UNTRUSTED] fake site text for {url} /products/trail-sock"
+        _long_fake_site = ("[UNTRUSTED] fake site text for {} /products/trail-sock — "
+                           + "alpaca wool trail socks, warm, durable, guaranteed comfort. " * 6)
+        acp._tm_web_fetch = lambda ctx, url: _long_fake_site.format(url)
 
         # --- stage ordering guards, before anything exists ---
         check("angles before ingest is refused",
@@ -3468,7 +3476,33 @@ def suite_ad_pipeline(app, live):
               not any("evil.example" in u for u in fetched), str(fetched))
         check("same-host product link IS fetched",
               any(u.startswith("https://newbrand.example/products/") for u in fetched), str(fetched))
-        acp._tm_web_fetch = lambda ctx, url: f"[UNTRUSTED] fake site text for {url}"
+        acp._tm_web_fetch = lambda ctx, url: _long_fake_site.format(url)
+
+        # --- ingest fails CLOSED on an unusable fetch (no fabricated briefs) ---
+        acp._tm_web_fetch = lambda ctx, url: "Fetch failed: DNS lookup timed out"
+        out = acp.ingest_brand("Ghost Brand", "https://ghost.example")
+        check("fetch failure refuses to build a brief (fail closed, no fabrication)",
+              "Refusing" in out, out[:150])
+        check("no brand row was created from the failed fetch",
+              acp._find_brand("ghost-brand") == (None, None))
+        out = acp.ingest_brand("Ghost Brand", "https://ghost.example",
+                              ad_library_notes="real pasted ad copy " * 15)
+        check("pasted 200+ char notes override a dead fetch (manual path stays open)",
+              "Brief built" in out, out[:120])
+        acp._tm_web_fetch = lambda ctx, url: _long_fake_site.format(url)
+
+        # --- empty slug is refused, never a shared row ---
+        check("a name with no ascii chars is refused (empty-slug isolation guard)",
+              "empty identifier" in acp.ingest_brand("株式会社", "https://jp.example"))
+
+        # --- malformed/hallucinated qa verdicts can't crash or skew delivery ---
+        rid, brand = acp._find_brand("alpaca-socks")
+        brand["qa"]["verdicts"].append({"verdict": "pass"})            # no id
+        brand["qa"]["verdicts"].append({"id": "GHOST9", "verdict": "pass"})  # nonexistent
+        acp._update_row(rid, brand)
+        out = acp.package_delivery("alpaca socks")
+        check("id-less and hallucinated pass verdicts don't crash or inflate the drop",
+              "Drop packaged" in out and "-1" not in out, out[:150])
 
         # --- prompts carry the untrusted-data note ---
         calls.clear()
