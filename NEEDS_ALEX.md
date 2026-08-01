@@ -61,8 +61,21 @@ server the tool refuses with a message rather than relaying — the see->act loo
 must run where the mouse is. The pinning test in `run_tests.py` was flipped from
 "must NOT be wired" to guarding the wiring, with both halves negative-tested.
 
-⚠️ **It only loads when the Mac-side app is running**, and that process was NOT
-running as of this update. Start the local app to actually use it.
+⚠️ **It only loads when the Mac-side app is running.** ✅ Started 2026-08-01 and
+verified: `screen_control` + `screen_agent` import cleanly, `RUNTIME=local`, so the
+screen tools register. The Mac node serves on **http://127.0.0.1:5001** (not 5000).
+
+To start it yourself after a reboot:
+
+```bash
+cd ~/second-brain/second-brain-chat && python3 app.py
+```
+
+There is no LaunchAgent for the main app — it's deliberate and manual. (The
+`screenrelay`, `morningbrief`, and `vaultsync` agents ARE installed and load on their
+own.) A healthy boot prints `Startup self-check: DEGRADED` — that is expected and only
+means the optional Tavily/Serper/Brave search keys aren't set, so search falls back to
+keyless DuckDuckGo. Every REQUIRED check passes.
 
 ---
 
