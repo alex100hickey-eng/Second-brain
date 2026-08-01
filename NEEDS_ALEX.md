@@ -9,6 +9,27 @@ Ordered so the first item unblocks the value of everything else.
 
 ---
 
+## 0. NEW 2026-08-01 — August Money Plan: your morning list
+
+The finalized plan (council-amended) is in the vault: **`Money/August Money Plan
+(FINAL).md`**. Its "FIRST 72 HOURS" section is your complete ordered checklist.
+The two items that touch this repo's infra:
+
+- **Set `FLASK_SECRET_KEY` in Coolify** (app `second-brain-chat`): any long random
+  string (e.g. `python3 -c "import secrets;print(secrets.token_hex(32))"`). The code
+  already prefers it; today sessions key off the access code. 2 minutes.
+- **Pause the `money_clips_agent` Scheduled Task in Coolify** (resource
+  `money-clips-agent`): it still burns a daily API call generating YouTube Shorts
+  concepts for the superseded strategy. 10 seconds.
+
+Done overnight so you don't have to: jobs.db now survives server redeploys
+(parks on the vault volume under `.appstate/`, `JOBS_DB_PATH` overridable), and
+the duplicate Mac morning-brief launchd job is retired (plist archived at
+`scripts/archive/com.secondbrain.morningbrief.plist.disabled` — the in-app
+brief + 08:15 phone nudge remain the single brief path).
+
+---
+
 ## 1. ✅ RESOLVED — the deploy outage (root cause found)
 
 The server had been stuck on `0efd2a7` (2026-07-25) for six days. The earlier

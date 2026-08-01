@@ -3032,6 +3032,38 @@ def suite_jobs(app, live):
 
         counts = q3.counts()
         check("counts summarize job states", counts.get("done", 0) >= 1 and counts.get("failed", 0) >= 1, str(counts))
+
+        # --- DB path resolution (the redeploy-wipes-job-state fix), all three branches ---
+        saved_env = {k: os.environ.get(k) for k in ("JOBS_DB_PATH", "JARVIS_RUNTIME", "VAULT_PATH")}
+        try:
+            os.environ["JOBS_DB_PATH"] = "/tmp/explicit-jobs.db"
+            os.environ["JARVIS_RUNTIME"] = "server"
+            check("JOBS_DB_PATH override beats everything",
+                  jq._default_db_path() == "/tmp/explicit-jobs.db")
+
+            os.environ.pop("JOBS_DB_PATH", None)
+            fake_vault = os.path.join(tmp, "vault")
+            os.makedirs(fake_vault, exist_ok=True)
+            os.environ["VAULT_PATH"] = fake_vault
+            p = jq._default_db_path()
+            check("server runtime parks the DB on the persistent vault volume (.appstate)",
+                  p == os.path.join(fake_vault, ".appstate", "jobs.db") and
+                  os.path.isdir(os.path.dirname(p)), p)
+
+            os.environ["VAULT_PATH"] = os.path.join(tmp, "no-such-vault")
+            check("server runtime with a missing vault falls back to the module dir",
+                  jq._default_db_path() == os.path.join(os.path.dirname(os.path.abspath(jq.__file__)), "jobs.db"))
+
+            os.environ["JARVIS_RUNTIME"] = "local"
+            os.environ["VAULT_PATH"] = fake_vault
+            check("local runtime keeps the module-dir DB even when a vault exists",
+                  jq._default_db_path() == os.path.join(os.path.dirname(os.path.abspath(jq.__file__)), "jobs.db"))
+        finally:
+            for k, v in saved_env.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

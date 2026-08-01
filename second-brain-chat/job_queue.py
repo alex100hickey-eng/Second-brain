@@ -29,7 +29,31 @@ from zoneinfo import ZoneInfo
 
 _TZ = ZoneInfo("America/New_York")
 _HERE = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_DB = os.path.join(_HERE, "jobs.db")
+
+
+def _default_db_path() -> str:
+    """Where the queue DB lives. On the server the module dir is inside the container's
+    ephemeral layer, so every redeploy silently wiped job state — the one thing this
+    queue exists to persist. The only disk that survives a redeploy there is the vault
+    volume, so the DB parks in a dot-folder on it (Obsidian hides dot-folders; the vault
+    repo never tracks it, and server-side `git pull` is untouched by untracked files).
+    JOBS_DB_PATH overrides everything for tests or a future dedicated volume."""
+    env = (os.environ.get("JOBS_DB_PATH") or "").strip()
+    if env:
+        return env
+    if (os.environ.get("JARVIS_RUNTIME") or "local").strip().lower() == "server":
+        vault = (os.environ.get("VAULT_PATH") or "/data/vault").strip()
+        if os.path.isdir(vault):
+            state_dir = os.path.join(vault, ".appstate")
+            try:
+                os.makedirs(state_dir, exist_ok=True)
+                return os.path.join(state_dir, "jobs.db")
+            except OSError:
+                pass  # unwritable volume → fall through to the ephemeral default
+    return os.path.join(_HERE, "jobs.db")
+
+
+DEFAULT_DB = _default_db_path()
 
 
 def _now() -> str:
