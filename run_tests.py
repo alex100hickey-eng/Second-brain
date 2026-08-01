@@ -1694,6 +1694,89 @@ def suite_version(app, live):
     app_src = open(os.path.join(CHAT_DIR, "app.py"), encoding="utf-8").read()
     check("/api/version is exempt from the login gate", '"api_version"' in app_src)
 
+    # --- disk early-warning (the Hetzner box has filled twice; nothing watched it) ---
+    snap = app._disk_snapshot("/")
+    check("disk snapshot reports percent used, free and total",
+          snap and all(k in snap for k in ("pct_used", "free_gb", "total_gb")), str(snap))
+    check("percent used is a sane integer 0-100",
+          isinstance(snap["pct_used"], int) and 0 <= snap["pct_used"] <= 100, str(snap))
+    check("free never exceeds total", snap["free_gb"] <= snap["total_gb"], str(snap))
+    # Fail-soft is the load-bearing property: /api/version must survive a bad path,
+    # because a deploy check that 500s is worse than one with no disk number.
+    check("an unreadable path degrades to None, it does not raise",
+          app._disk_snapshot("/no/such/path/for/tests") is None)
+    with app.app.test_client() as c:
+        vdata = c.get("/api/version").get_json()
+        check("/api/version carries the disk block", isinstance(vdata.get("disk"), dict),
+              str(vdata.get("disk")))
+    # Read per-request, not frozen at boot — a disk filling under a long-lived
+    # process is exactly the case this exists to catch.
+    check("disk is read per-request, not cached at boot",
+          '"disk": _disk_snapshot()' in app_src)
+
+    # --- the poller that turns the reading into a warning ---
+    guard = os.path.join(ROOT, "scripts", "check_disk.py")
+    check("check_disk.py exists", os.path.exists(guard))
+    if os.path.exists(guard):
+        gsrc = open(guard, encoding="utf-8").read()
+        check("a full disk is reported as an incident, not just printed",
+              "report_event.py" in gsrc)
+        check("check_disk.py polls both nodes", '"local"' in gsrc and '"server"' in gsrc)
+        # Banding is pure arithmetic — negative-test it rather than trusting the ladder.
+        sys.path.insert(0, os.path.dirname(guard))
+        try:
+            import check_disk
+            srv = dict(zip(("local", "server"), (n[2] for n in check_disk.NODES)))["server"]
+            loc = dict(zip(("local", "server"), (n[2] for n in check_disk.NODES)))["local"]
+            check("server banding: 74 ok, 75 notice, 85 warning, 92 critical",
+                  tuple(check_disk.band(p, srv) for p in (74, 75, 85, 92))
+                  == ("ok", "notice", "warning", "critical"))
+            # The Mac sat at 93% with nothing wrong the day this shipped. On the
+            # server's ladder that is CRITICAL every single run, and an alarm that
+            # never stops is an alarm nobody reads — which is how the outage this
+            # whole thing exists to prevent went unnoticed in the first place.
+            check("a workstation at 93% does NOT cry wolf on the local ladder",
+                  check_disk.band(93, loc) in ("ok", "notice"), f"local bands={loc}")
+            check("but the local ladder still escalates when headroom is truly gone",
+                  check_disk.band(97, loc) == "critical")
+            check("the server's ladder is strictly tighter than the workstation's",
+                  all(s < l for s, l in zip(srv, loc)), f"server={srv} local={loc}")
+            check("each node carries its own thresholds",
+                  all(len(n) == 3 and isinstance(n[2], tuple) for n in check_disk.NODES))
+            dead, why = check_disk.probe("http://127.0.0.1:59999/api/version", timeout=2)
+            check("an unreachable node yields None rather than a crash", dead is None)
+            check("and it says WHY (a TLS trust issue is not an outage)", bool(why), why)
+            # certifi roots, because the framework Python has no CA bundle and would
+            # otherwise report the healthy server as permanently unreachable.
+            check("TLS verification stays on, sourced from certifi",
+                  "certifi.where()" in gsrc and "CERT_NONE" not in gsrc
+                  and "_create_unverified" not in gsrc)
+        except Exception as e:
+            check("check_disk imports cleanly", False, str(e))
+        finally:
+            sys.path.pop(0)
+
+    # --- the server-side prune cron (Alex installs it; it must not delete rollbacks) ---
+    sguard = os.path.join(ROOT, "scripts", "server-disk-guard.sh")
+    check("server-disk-guard.sh exists", os.path.exists(sguard))
+    if os.path.exists(sguard):
+        ssrc = open(sguard, encoding="utf-8").read()
+        # Assert against EXECUTABLE lines only. The header documents the manual
+        # `-af` recovery on purpose, and a substring match over the whole file
+        # would fail on its own prose rather than on what the script runs.
+        code = "\n".join(ln for ln in ssrc.splitlines()
+                         if ln.strip() and not ln.lstrip().startswith("#"))
+        check("prunes the build cache under a keep-storage cap, not with -af",
+              "--keep-storage" in code and "builder prune -af" not in code)
+        # The one thing that must never be automated: `image prune -af` deletes
+        # rollback targets, and Alex kept that as a deliberate human call.
+        check("never runs `docker image prune -af` (rollback images are Alex's call)",
+              "image prune -af" not in code and "image prune -a " not in code)
+        check("only prunes under real disk pressure", "THRESHOLD_PCT" in ssrc)
+        if _have("bash"):
+            rb = subprocess.run(["bash", "-n", sguard], capture_output=True, text=True)
+            check("server-disk-guard.sh is valid bash", rb.returncode == 0, rb.stderr[:200])
+
 
 def suite_voice_vad(app, live):
     """Conversation mode's turn-taking heuristic, driven by synthetic level traces.
@@ -3565,6 +3648,144 @@ def suite_ad_pipeline(app, live):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def suite_portfolio(app, live):
+    """The portfolio site's render step: one command applies the naming decision,
+    and it refuses to emit a page that breaks the plan's client-facing rules —
+    no half-branded placeholders, no 'AI' anywhere, and no unapproved brand shown
+    as work (the three spec packs were built unsolicited; those brands have never
+    been contacted)."""
+    section("portfolio site (render + client-facing guarantees)")
+    site = os.path.join(ROOT, "portfolio-site")
+    renderer = os.path.join(site, "render.py")
+    check("render.py exists", os.path.exists(renderer))
+    if not os.path.exists(renderer):
+        return
+
+    def run(*extra):
+        return subprocess.run([sys.executable, renderer, *extra],
+                              capture_output=True, text=True, timeout=60)
+
+    tmp = tempfile.mkdtemp(prefix="sbtest_site_")
+    try:
+        out = os.path.join(tmp, "dist")
+        r = run("--name", "Testbrand", "--email", "hi@testbrand.com", "--out", out)
+        check("a named render succeeds", r.returncode == 0, r.stderr[:300])
+        html_path = os.path.join(out, "index.html")
+        check("it writes index.html and style.css",
+              os.path.exists(html_path) and os.path.exists(os.path.join(out, "style.css")))
+
+        if os.path.exists(html_path):
+            html = open(html_path, encoding="utf-8").read()
+            check("the service name is substituted throughout", html.count("Testbrand") >= 4)
+            check("no placeholder survives the render", "{{" not in html)
+            check("the contact address is substituted", "hi@testbrand.com" in html)
+            # The plan's hard rule, asserted on shipped output rather than intent.
+            check("the rendered page contains no 'AI'", not re.search(r"\bAI\b", html))
+            check("no unapproved brand is listed as work",
+                  not any(b in html for b in ("Fishwife", "Golde", "Portland Pet Food")))
+            check("spec packs carry honest category labels", "pet food brand" in html)
+
+        # --- the refusals. Each must fail CLOSED, with a non-zero exit. ---
+        r = run("--name", "X", "--email", "a@b.com", "--out", os.path.join(tmp, "d2"),
+                "--brands", "Fishwife", "Golde", "Portland Pet Food")
+        check("naming real brands without approval is refused", r.returncode != 0)
+        check("and the refusal explains why", "client relationship" in r.stderr)
+        check("the refused render leaves nothing on disk",
+              not os.path.isdir(os.path.join(tmp, "d2")))
+
+        r = run("--name", "X", "--email", "a@b.com", "--out", os.path.join(tmp, "d3"),
+                "--brands", "Fishwife", "Golde", "Portland Pet Food", "--brands-approved")
+        check("an explicit approval flag DOES allow real names", r.returncode == 0, r.stderr[:200])
+
+        r = run("--name", " ", "--email", "a@b.com", "--out", os.path.join(tmp, "d4"))
+        check("a blank name is refused", r.returncode != 0)
+        r = run("--name", "X", "--email", "notanemail", "--out", os.path.join(tmp, "d5"))
+        check("a malformed contact address is refused", r.returncode != 0)
+
+        # A banned term reaching the scaffold must stop the render, not ship quietly.
+        rogue = os.path.join(tmp, "rogue")
+        shutil.copytree(site, rogue, ignore=shutil.ignore_patterns("dist", "__pycache__"))
+        rogue_html = os.path.join(rogue, "index.html")
+        src = open(rogue_html, encoding="utf-8").read().replace(
+            "creative testing engine", "AI-powered automated engine", 1)
+        open(rogue_html, "w", encoding="utf-8").write(src)
+        rr = subprocess.run(
+            [sys.executable, os.path.join(rogue, "render.py"), "--name", "X",
+             "--email", "a@b.com", "--out", os.path.join(tmp, "d6")],
+            capture_output=True, text=True, timeout=60)
+        check("an 'AI' claim in the scaffold blocks the render", rr.returncode != 0)
+        check("the block names the offending term", "AI" in rr.stderr)
+        check("no bad site is left behind after a block",
+              not os.path.isdir(os.path.join(tmp, "d6")))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    # The scaffold itself must stay placeholder-driven — a name committed into the
+    # source would defeat the whole point of the render step.
+    scaffold = open(os.path.join(site, "index.html"), encoding="utf-8").read()
+    check("the committed scaffold still uses placeholders",
+          "{{SERVICE_NAME}}" in scaffold and "{{CONTACT_EMAIL}}" in scaffold)
+    check("rendered output is gitignored (the scaffold is the source)",
+          "portfolio-site/dist/" in open(os.path.join(ROOT, ".gitignore"), encoding="utf-8").read())
+
+    # --- pre-send lint for documents a client actually receives ---
+    # The proposal template carries a "delete before sending" block; fill the
+    # placeholders, forget the block, and the prospect reads an instruction telling
+    # the sender never to call the work AI-generated. Memory was the only guard.
+    lint = os.path.join(ROOT, "scripts", "check_client_doc.py")
+    check("check_client_doc.py exists", os.path.exists(lint))
+    if os.path.exists(lint):
+        tmp2 = tempfile.mkdtemp(prefix="sbtest_doclint_")
+        try:
+            def write(nm, body):
+                path = os.path.join(tmp2, nm)
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(body)
+                return path
+
+            def lint_run(*files):
+                return subprocess.run([sys.executable, lint, *files],
+                                      capture_output=True, text=True, timeout=60)
+
+            clean = write("clean.md", "# First Drop Proposal\n\nPrepared for Acme.\n"
+                                      "Eight statics and three scripts, delivered in 72 hours.\n"
+                                      "Details available on request; email alex@example.com.\n")
+            r = lint_run(clean)
+            check("a properly filled document passes", r.returncode == 0, r.stdout[:200])
+            # 'Details'/'available'/'email' contain the letters a-i — the check must be
+            # word-boundary, or every honest sentence trips it.
+            check("substrings like 'email' and 'available' do NOT trip the AI rule",
+                  "AI" not in r.stdout)
+
+            leftover = write("leftover.md",
+                             "# Proposal\n\n> **TEMPLATE NOTES (delete before sending)**\n"
+                             "> - Never describe the work as AI-generated.\n\nHello Acme.\n")
+            r = lint_run(leftover)
+            check("a surviving internal note is caught", r.returncode != 0)
+            check("and so is the 'AI' inside it", "'AI'" in r.stdout)
+
+            half = write("half.md", "# Proposal for {{CLIENT_BRAND}}\n\nPrice: {{drop_price}}.\n")
+            r = lint_run(half)
+            check("unfilled placeholders are caught", r.returncode != 0)
+            check("every placeholder is reported, not just the first",
+                  "{{CLIENT_BRAND}}" in r.stdout and "{{drop_price}}" in r.stdout)
+
+            r = lint_run(write("sys.md", "We run this through CLARVIS nightly.\n"))
+            check("the internal system name is caught", r.returncode != 0)
+
+            r = lint_run(clean, half)
+            check("a mixed batch fails on the bad file", r.returncode != 0)
+            check("and still reports the good one as clean", "clean.md" in r.stdout)
+
+            r = lint_run(os.path.join(tmp2, "does-not-exist.md"))
+            check("an unreadable path is reported, not crashed on", r.returncode != 0)
+            check("the lint never edits or sends anything",
+                  all(tok not in open(lint, encoding="utf-8").read()
+                      for tok in ("smtplib", "sendmail", '"w"', "os.remove")))
+        finally:
+            shutil.rmtree(tmp2, ignore_errors=True)
+
+
 SUITES = {
     "vault": suite_vault,
     "gate": suite_gate,
@@ -3607,6 +3828,7 @@ SUITES = {
     "streaming": suite_streaming,
     "jobs": suite_jobs,
     "adpipeline": suite_ad_pipeline,
+    "portfolio": suite_portfolio,
     "retrieval": suite_retrieval,
     "distillation": suite_distillation,
 }

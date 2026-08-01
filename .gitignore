@@ -52,3 +52,6 @@ second-brain-chat/observability.db-shm
 # run drafts are text (tracked on purpose), but the launch state index stays local
 # (kept tracked — small JSON; drafts are useful history)
 second-brain-chat/imessage_cursor.json
+
+# Rendered portfolio site (regenerate: portfolio-site/render.py). The scaffold is the source.
+portfolio-site/dist/

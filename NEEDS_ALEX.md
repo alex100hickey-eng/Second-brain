@@ -35,8 +35,36 @@ Verify: `curl -s https://clarvis.178.156.209.40.sslip.io/api/version` → `38f27
 (or later). Two suite-green commits are waiting: `30f1b91` (the ad pipeline) +
 `38f27e8` (review fixes). **Your Mac node already runs them** — restarted on
 `38f27e8` at 09:04 ET, so CLARVIS has the full pipeline locally regardless.
-Worth asking why disk refilled: 8 builds ran 03:00-04:30 UTC; if this recurs,
-a scheduled `docker builder prune` (keep-storage cap) is the durable fix.
+
+**Nothing has been pushed.** The tip commits are sitting local on purpose: a push
+auto-triggers a build, that build dies on the full disk, and last time a dead
+build wedged the queue for 8.5 hours. Free the disk first, then push once.
+
+### The durable fix is now built and waiting for you (2026-08-01 midday)
+
+The recurrence risk in this section is closed in code — it just needs installing,
+because it runs on the box and remote shell is your call, not Claude's.
+
+1. **The box now announces its own disk before it fills.** `/api/version` carries a
+   `disk` block (percent used, GB free), so the endpoint you already curl to verify
+   a deploy also answers "is it about to wedge?". Both nodes degrade gracefully:
+   the field is simply absent on older code.
+2. **`scripts/check_disk.py`** polls both nodes and escalates by band — quiet under
+   75%, prints at 75%, and files a `system_event` (so it lands in the incident log
+   and the HUD) at 85% / 92%. Run it hourly or by hand: `python3 scripts/check_disk.py`.
+3. **`scripts/server-disk-guard.sh`** is the hourly root cron for the box. It prunes
+   the *build cache under a 10 GB keep-storage cap* — not `-af`, so ordinary rebuilds
+   stay warm — and only under real pressure (>70%). It deliberately **never** runs
+   `docker image prune -af`; deleting rollback targets stays your deliberate call,
+   and the test suite pins that. Install (two lines, both yours to run):
+   ```bash
+   scp ~/second-brain/scripts/server-disk-guard.sh root@178.156.209.40:/usr/local/bin/
+   ssh root@178.156.209.40 'chmod +x /usr/local/bin/server-disk-guard.sh && \
+     (crontab -l 2>/dev/null | grep -v server-disk-guard; \
+      echo "17 * * * * /usr/local/bin/server-disk-guard.sh >> /var/log/disk-guard.log 2>&1") | crontab -'
+   ```
+   Do this *after* the manual prune above — the guard prevents the next fill, it
+   won't dig you out of this one.
 
 ---
 
@@ -62,6 +90,37 @@ Done overnight so you don't have to: jobs.db now survives server redeploys
 the duplicate Mac morning-brief launchd job is retired (plist archived at
 `scripts/archive/com.secondbrain.morningbrief.plist.disabled` — the in-app
 brief + 08:15 phone nudge remain the single brief path).
+
+**Naming the service is still item #1, and it is now a one-command decision.**
+The portfolio site no longer needs an editing pass — `portfolio-site/render.py`
+applies the name everywhere at once:
+
+```bash
+python3 portfolio-site/render.py --name "Northrun" --email hello@northrun.com
+# → portfolio-site/dist/ ; preview: python3 -m http.server -d portfolio-site/dist 8080
+```
+
+It refuses to emit a page that breaks a plan rule: any surviving `{{placeholder}}`,
+or the word "AI" anywhere (word-boundary, so "email" and "available" are fine).
+**One change you should know about, because it's a judgment call I made for you:**
+the three spec-pack tiles under the "work" heading now render as *category* labels
+("pet food brand", "wellness brand", "food & beverage brand") rather than
+Portland Pet Food / Golde / Fishwife. Those packs were built unsolicited from
+public ads and none of those brands has been contacted — naming them under a
+heading called "work" on a public page implies a client relationship that does not
+exist. If you want the real names there, it takes an explicit
+`--brands ... --brands-approved`, and it should follow an actual conversation
+with them, not precede one.
+
+**Related, and worth 10 seconds before your first send:** `scripts/check_client_doc.py`
+lints anything a client will read. `Templates/proposal-template.md` carries a
+"delete before sending" notes block whose own text says *never describe the work as
+AI-generated* — fill the placeholders, forget the block, and the prospect reads that
+sentence. Memory was the only thing preventing it.
+
+```bash
+python3 scripts/check_client_doc.py path/to/your-filled-proposal.md
+```
 
 ALSO done overnight (`30f1b91`): the full fulfillment machine
 (`ad_creative_pipeline.py`, 8 tools, suite 547/0), smoke-tested end-to-end on

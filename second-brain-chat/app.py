@@ -15,6 +15,7 @@ import json
 import time
 import hmac
 import hashlib
+import shutil
 import threading
 import subprocess
 import secrets as pysecrets
@@ -199,6 +200,34 @@ RUNNING_COMMIT = _resolve_running_commit()
 STARTED_AT = datetime.now().astimezone().isoformat()  # LOCAL_TZ isn't defined yet up here
 
 
+def _disk_snapshot(path: str = "/") -> dict | None:
+    """Coarse free-space reading for the filesystem this node runs on.
+
+    Exists because the Hetzner box has now filled twice, and both times the first
+    symptom was a BUILD dying on "No space left on device" — hours after the disk
+    was already unrecoverable, with Coolify's own Redis unable to persist. Nothing
+    reported the slope, so nobody saw it coming. Riding this on /api/version means
+    the one endpoint that is already polled to verify deploys also answers "is the
+    box about to wedge?", with no new surface to authenticate or keep alive.
+
+    Deliberately coarse (integer percent, one decimal of GB) because /api/version
+    is ungated. Fail-soft to None: a deploy check that 500s is strictly worse than
+    a deploy check with no disk number in it.
+    """
+    try:
+        usage = shutil.disk_usage(path)
+        if usage.total <= 0:
+            return None
+        return {
+            "path": path,
+            "pct_used": round(100 * (usage.total - usage.free) / usage.total),
+            "free_gb": round(usage.free / (1024 ** 3), 1),
+            "total_gb": round(usage.total / (1024 ** 3), 1),
+        }
+    except Exception:
+        return None
+
+
 @app.route("/api/version")
 def api_version():
     """Ungated (see require_login): answers "what code is actually running?" so a
@@ -210,6 +239,9 @@ def api_version():
         "commit": RUNNING_COMMIT,
         "runtime": getattr(task_manager, "RUNTIME", "unknown"),
         "started_at": STARTED_AT,
+        # Read live (not at boot): the point is to catch a disk filling under a
+        # long-lived process, which a boot-time snapshot would never show.
+        "disk": _disk_snapshot(),
     })
 
 
