@@ -47,6 +47,7 @@ import json
 import time
 import shutil
 import tempfile
+import threading
 import subprocess
 
 # Patterns that indicate ACTUAL mouse/keyboard control code — real imports or attribute
@@ -115,6 +116,29 @@ def check(name, cond, detail=""):
 
 def skip(name, why):
     print(f"  \033[33mSKIP\033[0m  {name}  ({why})")
+
+
+def my_thread_only(real, fake):
+    """A monkeypatch that binds to the thread installing it; every other thread
+    keeps calling the real function.
+
+    Importing app starts real background workers, and `jarvis-imessage-intake`
+    polls every 180s through the very module globals these suites stub out — a
+    single pass runs for minutes (one model call per message). Proven on
+    2026-08-01: with the plain stubs in place, a watcher pass landing inside the
+    patched window appended its own event to the capture list, so
+    "only one triage event was created" saw 2 and failed. The leak also ran the
+    other way — the watcher's real state writes vanished into the test's fake
+    dict — which would have silently re-triaged real messages later.
+
+    Binding the stub to one thread closes both directions and keeps the
+    assertions exactly as strict as they were written.
+    """
+    owner = threading.get_ident()
+
+    def dispatch(*a, **k):
+        return (fake if threading.get_ident() == owner else real)(*a, **k)
+    return dispatch
 
 
 # ------------------------------------------------------------------- fakes ---
@@ -1236,17 +1260,23 @@ def suite_smoothness(app, live):
     check("same subject from a different sender is a different email", a != d)
 
     # record_raw refuses the cross-account copy (fake state, no Supabase writes).
+    # Every stub here is my_thread_only: the iMessage watcher polls through these
+    # same globals from its own thread, and its events used to land in `inserted`.
     fake_states = {}
     saved_load, saved_save = intake._load_state, intake._save_state
-    intake._load_state = lambda k: dict(fake_states.get(k, {"key": k}))
-    intake._save_state = lambda s: fake_states.__setitem__(s["key"], dict(s))
+    intake._load_state = my_thread_only(
+        saved_load, lambda k: dict(fake_states.get(k, {"key": k})))
+    intake._save_state = my_thread_only(
+        saved_save, lambda s: fake_states.__setitem__(s["key"], dict(s)))
     saved_insert = intake._insert_event
     inserted = []
-    intake._insert_event = lambda e: inserted.append(e) or 999
+    intake._insert_event = my_thread_only(
+        saved_insert, lambda e: inserted.append(e) or 999)
     saved_extract = intake.extract_items
-    intake.extract_items = lambda *a, **k: [{"text": "fill out the sports form", "due": ""}]
+    intake.extract_items = my_thread_only(
+        saved_extract, lambda *a, **k: [{"text": "fill out the sports form", "due": ""}])
     saved_loadev = intake._load_events
-    intake._load_events = lambda n: []
+    intake._load_events = my_thread_only(saved_loadev, lambda n: [])
     try:
         r1 = intake.record_raw("gmail_school", "school-123", "jon@case.edu",
                                "2026-07-30T09:00:00-04:00", "Subject: Sports Form\nfill it out")
@@ -1563,7 +1593,8 @@ def suite_heartbeat(app, live):
         fake_states[state["key"]] = dict(state)
 
     saved_load, saved_save = intake._load_state, intake._save_state
-    intake._load_state, intake._save_state = fake_load, fake_save
+    intake._load_state = my_thread_only(saved_load, fake_load)
+    intake._save_state = my_thread_only(saved_save, fake_save)
 
     class _FakeSB:
         def table(self, _): return self
@@ -1621,7 +1652,8 @@ def suite_heartbeat(app, live):
               isinstance(monitor.check_heartbeats(), list))
 
         # beat() itself must never raise, even with storage broken.
-        intake._load_state = lambda k: (_ for _ in ()).throw(RuntimeError("supabase down"))
+        intake._load_state = my_thread_only(
+            saved_load, lambda k: (_ for _ in ()).throw(RuntimeError("supabase down")))
         try:
             monitor.beat("anything", stale_after_s=60)
             check("beat() never raises even when storage is down", True)
