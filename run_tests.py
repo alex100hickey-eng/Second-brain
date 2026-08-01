@@ -1766,13 +1766,36 @@ def suite_version(app, live):
         # would fail on its own prose rather than on what the script runs.
         code = "\n".join(ln for ln in ssrc.splitlines()
                          if ln.strip() and not ln.lstrip().startswith("#"))
-        check("prunes the build cache under a keep-storage cap, not with -af",
-              "--keep-storage" in code and "builder prune -af" not in code)
+        # Docker 29 renamed --keep-storage to --reserved-space; the script probes for
+        # whichever the daemon speaks. Accept either, but require a cap and never -af.
+        check("prunes the build cache under a size cap, not with -af",
+              ("--reserved-space" in code or "--keep-storage" in code)
+              and "builder prune -af" not in code)
+        check("it probes for the flag rather than assuming one Docker version",
+              "--reserved-space" in code and "--keep-storage" in code)
         # The one thing that must never be automated: `image prune -af` deletes
         # rollback targets, and Alex kept that as a deliberate human call.
         check("never runs `docker image prune -af` (rollback images are Alex's call)",
               "image prune -af" not in code and "image prune -a " not in code)
-        check("only prunes under real disk pressure", "THRESHOLD_PCT" in ssrc)
+        check("cache prune is gated on real disk pressure", "THRESHOLD_PCT" in ssrc)
+
+        # --- generational image retention (Alex chose keep-3 on 2026-08-01) ---
+        # The growth driver: every deploy leaves a ~1.94 GB image and nothing removed
+        # the old one, so 25 piled up in 26 hours and filled the box twice.
+        check("keeps a bounded number of image generations per app",
+              "KEEP_IMAGES" in code and "prune_old_images" in code)
+        check("the default retention is 3 (live + 2 rollback targets)",
+              re.search(r'KEEP_IMAGES="\$\{DISK_GUARD_KEEP_IMAGES:-3\}"', code) is not None)
+        check("retention is per-app, newest-first, not a blanket wipe",
+              "docker images --format" in code and "keep=\"$KEEP_IMAGES\"" in code)
+        # The load-bearing safety property: a live container's image is never removed.
+        check("an image backing a running container is never deleted",
+              "--filter \"ancestor=$id\"" in code)
+        check("dangling images are left to the dedicated prune, not this loop",
+              '"<none>"' in code)
+        # Distinct from `image prune -af`, which would take the previous build too.
+        check("rollback to recent builds still works after a run",
+              "image prune -af" not in code)
         if _have("bash"):
             rb = subprocess.run(["bash", "-n", sguard], capture_output=True, text=True)
             check("server-disk-guard.sh is valid bash", rb.returncode == 0, rb.stderr[:200])

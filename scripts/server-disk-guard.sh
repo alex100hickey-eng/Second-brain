@@ -33,11 +33,51 @@ set -uo pipefail
 
 THRESHOLD_PCT="${DISK_GUARD_THRESHOLD:-70}"   # start reclaiming at this % used
 KEEP_CACHE="${DISK_GUARD_KEEP:-10GB}"         # build cache allowed to survive
+KEEP_IMAGES="${DISK_GUARD_KEEP_IMAGES:-3}"    # image generations kept per app
 
 ts() { date -u "+%Y-%m-%dT%H:%M:%SZ"; }
 pct_used() { df --output=pcent / | tail -1 | tr -dc '0-9'; }
 
 BEFORE="$(pct_used)"
+
+# --- Generational image retention -------------------------------------------
+# THE actual growth driver. Every Coolify deploy leaves a ~1.94 GB image behind
+# and nothing ever removes the old one: 25 of them (~20 GB) had piled up within
+# 26 hours, which is what filled the box twice.
+#
+# This is NOT `docker image prune -af`. That deletes every unused image including
+# the previous build, which is why it stayed a human decision. This keeps the
+# newest KEEP_IMAGES generations PER APP, so rolling back to a recent build still
+# works — it only drops the ones nobody would ever roll back to. Alex chose 3
+# (live + 2 rollback targets) on 2026-08-01.
+#
+# Runs unconditionally, not just under pressure: bounded retention is the whole
+# point. Letting 20 GB pile up and then dumping it means the box lives near-full,
+# which is the state that caused every failure so far.
+prune_old_images() {
+    local deleted=0 skipped=0 id repo
+    # `docker images` lists newest-first, so anything past the Nth for a given
+    # repository is an older generation.
+    while read -r repo id; do
+        [ -z "${id:-}" ] && continue
+        [ "$repo" = "<none>" ] && continue      # dangling; handled separately
+        # Never touch an image backing a live container, even if it looks old.
+        if [ -n "$(docker ps -q --filter "ancestor=$id" 2>/dev/null)" ]; then
+            skipped=$((skipped + 1))
+            continue
+        fi
+        if docker rmi "$id" >/dev/null 2>&1; then
+            deleted=$((deleted + 1))
+        else
+            skipped=$((skipped + 1))            # in use by a stopped container, or shared layers
+        fi
+    done < <(docker images --format '{{.Repository}} {{.ID}}' 2>/dev/null \
+             | awk -v keep="$KEEP_IMAGES" '{c[$1]++; if (c[$1] > keep) print $1, $2}')
+
+    echo "[$(ts)] images — kept newest $KEEP_IMAGES per app; removed $deleted, skipped $skipped."
+}
+
+prune_old_images
 
 if [ "$BEFORE" -lt "$THRESHOLD_PCT" ]; then
     echo "[$(ts)] OK — / at ${BEFORE}%, below ${THRESHOLD_PCT}% threshold; nothing pruned."
@@ -46,8 +86,16 @@ fi
 
 echo "[$(ts)] PRESSURE — / at ${BEFORE}%; pruning build cache to ${KEEP_CACHE}."
 
-# Build cache first: the actual growth driver, and the cheapest thing to lose.
-docker builder prune -f --keep-storage "$KEEP_CACHE" 2>&1 | tail -3
+# Build cache first: the cheapest thing to lose.
+# Docker 29 renamed --keep-storage to --reserved-space and warns on the old name.
+# Probe once and use whichever this daemon speaks, so the script works on the box
+# today and doesn't silently become a no-op when the deprecated flag is removed.
+if docker builder prune --help 2>&1 | grep -q -- "--reserved-space"; then
+    CACHE_FLAG="--reserved-space"
+else
+    CACHE_FLAG="--keep-storage"
+fi
+docker builder prune -f "$CACHE_FLAG" "$KEEP_CACHE" 2>&1 | tail -3
 
 AFTER_CACHE="$(pct_used)"
 echo "[$(ts)] after builder prune — / at ${AFTER_CACHE}%."

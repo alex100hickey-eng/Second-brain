@@ -9,6 +9,40 @@ Ordered so the first item unblocks the value of everything else.
 
 ---
 
+## 0a. ✅ RESOLVED 2026-08-01 evening — disk freed, deploy landed, recurrence fixed
+
+Alex delegated terminal execution ("I can't run anything, I'm remote control — if
+you want to run anything in terminal do it"), so this was carried out rather than
+handed over. What happened, in order:
+
+- **Disk was 100% full, 271 MB free.** `docker builder prune -af` freed 9.8 GB
+  (100% → 80%). Rollback images deliberately untouched at that stage.
+- **The push still didn't deploy.** Root cause was NOT the disk: deployment #251
+  had been stuck `in_progress` since 13:29 with four orphaned `coolify-helper`
+  containers, so every later deploy queued behind a corpse. Cleared the zombies,
+  retired the stale queue rows.
+- **It still didn't deploy** — the queue *worker* was dead too: when the disk
+  filled, Redis lost the job payloads, leaving DB rows with no job behind them.
+  Restarting `coolify-redis` + `coolify` (control plane only; the app container
+  served throughout) fixed it. A fresh push then built normally.
+- **Live on `d161281`**, verified by `/api/version`, which now carries the `disk`
+  block on both nodes. `FLASK_SECRET_KEY` is active as of that restart.
+- **The real recurrence cause, found and fixed:** every deploy leaves a ~1.94 GB
+  image and nothing removed the old one — **25 had piled up in 26 hours (~20 GB)**.
+  The guard now keeps the **newest 3 generations per app** (Alex's call, chosen
+  over keep-5 / leave-alone / `prune -af`). It never deletes an image backing a
+  running container. First run removed 19 images, skipped 0: **89% → 48%,
+  4.1 GB → 19 GB free**, with `d161281` + two rollback targets preserved.
+- **Installed** at `/usr/local/bin/server-disk-guard.sh`, hourly root cron at :17,
+  logging to `/var/log/disk-guard.log`.
+
+Residual worth knowing: the box is 38 GB total and each build needs ~2 GB. Keep-3
+holds steady state near 48%, so there's real headroom now. `scripts/check_disk.py`
+warns long before it matters.
+
+<details>
+<summary>Original entry (kept for the record)</summary>
+
 ## 0a. 🔴 URGENT 2026-08-01 morning — the Hetzner box's DISK IS FULL again
 
 Found while deploying the overnight work. Evidence: the `54dbf8d` build died at
@@ -65,6 +99,8 @@ because it runs on the box and remote shell is your call, not Claude's.
    ```
    Do this *after* the manual prune above — the guard prevents the next fill, it
    won't dig you out of this one.
+
+</details>
 
 ---
 
