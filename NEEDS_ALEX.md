@@ -134,8 +134,12 @@ see `VIBE_CODE_AUDIT.md`, `TOOL_AUDIT.md`, and today's git log.
 
 - **Look at the phone HUD.** The instrument bands shipped and are verified in the
   served assets, but nobody has looked at them on a real phone yet.
-- **Heartbeat triage**, ~24h after 2026-07-31 18:37 UTC: if ntfy buzzed, forward
-  it; silence means healthy.
+- ~~**Heartbeat triage**~~ ✅ DONE 2026-08-01. All four heartbeats fresh (retention,
+  proactive, mail-intake, expansion-scout). No `error` or `critical` event since
+  2026-07-24 — those were transient Supabase timeouts and Cloudflare 525s that stopped
+  on their own. The only recent `warning`s are `login lockout tripped` from
+  `ip=127.0.0.1`, which is the local test suite tripping its own gate, not an intrusion.
+  Nothing to forward.
 - **Kernel reboot** — the box prints `*** System restart required ***`. Safe to do
   now that builds aren't fragile.
 - **~9 GB of unused Docker images** could be reclaimed (`docker image prune -af`),
@@ -143,6 +147,9 @@ see `VIBE_CODE_AUDIT.md`, `TOOL_AUDIT.md`, and today's git log.
 - **Dependency pinning is done** (15 of 16 exact; `gunicorn` left unpinned because
   it isn't installed on the Mac, so no locally-verified version exists). Server
   confirmed **Python 3.12** from the build log.
-- **`under_review` orphan bug** — an interrupted council run strands a finding in
-  a status `review_findings` never retries. Hit for real on 2026-07-31 (#4057).
-  A separate session is fixing it; see the spawned task.
+- ~~**`under_review` orphan bug**~~ ✅ FIXED and LIVE 2026-08-01 (`5f47e26`). Findings
+  now stamp `review_started_at`; anything stranded in `under_review` past 10 minutes is
+  reclaimed by the next pass, and any exception in the council resets the finding to
+  `found` and surfaces the error instead of swallowing it. Regression tests negative-test
+  both halves (a stale one IS picked up; a fresh in-flight one is NOT). Verified against
+  the live findings table.
