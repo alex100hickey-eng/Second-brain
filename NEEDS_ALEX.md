@@ -46,12 +46,16 @@ The finalized plan (council-amended) is in the vault: **`Money/August Money Plan
 (FINAL).md`**. Its "FIRST 72 HOURS" section is your complete ordered checklist.
 The two items that touch this repo's infra:
 
-- **Set `FLASK_SECRET_KEY` in Coolify** (app `second-brain-chat`): any long random
-  string (e.g. `python3 -c "import secrets;print(secrets.token_hex(32))"`). The code
-  already prefers it; today sessions key off the access code. 2 minutes.
-- **Pause the `money_clips_agent` Scheduled Task in Coolify** (resource
-  `money-clips-agent`): it still burns a daily API call generating YouTube Shorts
-  concepts for the superseded strategy. 10 seconds.
+- ~~**Set `FLASK_SECRET_KEY` in Coolify**~~ ✅ DONE 2026-08-01 — Alex generated and saved
+  it on the app resource. Takes effect on the next restart/redeploy.
+- ~~**Pause the `money_clips_agent` Scheduled Task**~~ ✅ NOTHING TO DO — **the task does
+  not exist.** Verified 2026-08-01 two ways: the app's Scheduled Tasks tab in Coolify
+  lists exactly one entry, `sync-vault` (`*/10 * * * *`, last run success), and the
+  agent's own Supabase rows stop dead after **2026-07-28T13:00:13** — it had run daily
+  at 13:00 UTC from 07-19 to 07-28, then never again (nothing on 07-29, 07-30, 07-31,
+  08-01). Nothing in the repo schedules it either: no cron, no launchd, no loop in
+  `app.py`. So it is **not** burning a daily API call, and hasn't been for days. Don't
+  go hunting for this task — it isn't there.
 
 Done overnight so you don't have to: jobs.db now survives server redeploys
 (parks on the vault volume under `.appstate/`, `JOBS_DB_PATH` overridable), and
