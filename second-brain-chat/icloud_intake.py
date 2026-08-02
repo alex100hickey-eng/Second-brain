@@ -78,41 +78,13 @@ def scan_icloud(days: int = 2, cap: int = 15) -> str:
             # message was silently skipped. PEEK is also the right call regardless —
             # it's the variant defined not to set the \Seen flag, so this stays
             # genuinely read-only even if the mailbox is ever opened writable.
-            status, msg_data = conn.fetch(msg_id, "(BODY.PEEK[])")
-            if status != "OK" or not msg_data:
+            raw = _fetch_raw(conn, msg_id)
+            if not raw:
                 continue
-            # IMAP FETCH responses aren't uniformly shaped: the message body
-            # arrives as a (header, body) TUPLE, but the server also returns bare
-            # bytes items (flags, closing parens) in the same list. Indexing [0][1]
-            # blindly grabs a single int out of one of those bare items instead of
-            # the message — pick out the first real tuple payload instead.
-            raw = next((p[1] for p in msg_data
-                        if isinstance(p, tuple) and len(p) >= 2
-                        and isinstance(p[1], (bytes, bytearray))), None)
-            if raw is None:
-                continue
-            msg = email.message_from_bytes(raw)
-            ref = msg.get("Message-ID") or f"icloud-{msg_id.decode()}"
-            sender = _decode(msg.get("From", "?"))
-            subject = _decode(msg.get("Subject", "(no subject)"))
-            ts = msg.get("Date", "")
-            body = ""
-            if msg.is_multipart():
-                for part in msg.walk():
-                    if part.get_content_type() == "text/plain" and not part.get("Content-Disposition"):
-                        try:
-                            body = part.get_payload(decode=True).decode(
-                                part.get_content_charset() or "utf-8", errors="replace")
-                        except Exception:
-                            body = ""
-                        break
-            else:
-                try:
-                    body = msg.get_payload(decode=True).decode(
-                        msg.get_content_charset() or "utf-8", errors="replace")
-                except Exception:
-                    body = ""
-            res = _record_raw("icloud", ref, sender, ts, f"Subject: {subject}\n{body[:2000]}")
+            m = _parse_message(raw)
+            ref = m["ref"] or f"icloud-{msg_id.decode()}"
+            res = _record_raw("icloud", ref, m["sender"], m["ts"],
+                              f"Subject: {m['subject']}\n{m['body'][:2000]}")
             if res.get("recorded"):
                 new += 1
             elif res.get("reason") == "noise":
@@ -123,6 +95,98 @@ def scan_icloud(days: int = 2, cap: int = 15) -> str:
         return f"iCloud login/scan failed (check the app-specific password): {e}"
     except Exception as e:
         return f"iCloud scan failed: {str(e)[:200]}"
+
+
+def _parse_message(raw: bytes) -> dict:
+    """One fetched RFC822 blob → {ref, sender, to, subject, ts, body}. Shared by
+    the intake scanner above and mail_reader's raw-read tools."""
+    msg = email.message_from_bytes(raw)
+    body = ""
+    if msg.is_multipart():
+        for part in msg.walk():
+            if part.get_content_type() == "text/plain" and not part.get("Content-Disposition"):
+                try:
+                    body = part.get_payload(decode=True).decode(
+                        part.get_content_charset() or "utf-8", errors="replace")
+                except Exception:
+                    body = ""
+                break
+    else:
+        try:
+            body = msg.get_payload(decode=True).decode(
+                msg.get_content_charset() or "utf-8", errors="replace")
+        except Exception:
+            body = ""
+    return {"ref": msg.get("Message-ID") or "", "sender": _decode(msg.get("From", "?")),
+            "to": _decode(msg.get("To", "")), "subject": _decode(msg.get("Subject", "(no subject)")),
+            "ts": msg.get("Date", ""), "body": body}
+
+
+def _fetch_raw(conn, msg_id) -> bytes:
+    """BODY.PEEK[] fetch with the tuple-vs-bare-bytes response handling from
+    scan_icloud (see comment there); returns b"" when the shape is off."""
+    status, msg_data = conn.fetch(msg_id, "(BODY.PEEK[])")
+    if status != "OK" or not msg_data:
+        return b""
+    return next((p[1] for p in msg_data
+                 if isinstance(p, tuple) and len(p) >= 2
+                 and isinstance(p[1], (bytes, bytearray))), b"")
+
+
+def _open_inbox():
+    conn = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT)
+    conn.login(os.environ["ICLOUD_EMAIL"], os.environ["ICLOUD_APP_PASSWORD"])
+    conn.select("INBOX", readonly=True)
+    return conn
+
+
+def list_messages(days: int = 7, cap: int = 10) -> list:
+    """Recent inbox messages, newest last: [{ref, sender, subject, ts, seq}].
+    Read-only; raises on connection/auth problems (caller reports)."""
+    if not _configured():
+        raise RuntimeError("iCloud isn't connected (ICLOUD_EMAIL / ICLOUD_APP_PASSWORD unset).")
+    conn = _open_inbox()
+    try:
+        since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%d-%b-%Y")
+        status, data = conn.search(None, f'(SINCE "{since}")')
+        if status != "OK":
+            raise RuntimeError(f"IMAP search returned {status}")
+        out = []
+        for msg_id in data[0].split()[-cap:]:
+            raw = _fetch_raw(conn, msg_id)
+            if not raw:
+                continue
+            m = _parse_message(raw)
+            m["seq"] = msg_id.decode()
+            m.pop("body", None)   # listing stays light — read_message gets the body
+            out.append(m)
+        return out
+    finally:
+        conn.logout()
+
+
+def read_message(ref: str) -> dict:
+    """One full message by Message-ID header (or bare IMAP sequence number as a
+    fallback). Returns the _parse_message dict; raises when not found."""
+    if not _configured():
+        raise RuntimeError("iCloud isn't connected (ICLOUD_EMAIL / ICLOUD_APP_PASSWORD unset).")
+    conn = _open_inbox()
+    try:
+        msg_id = None
+        if ref.strip().isdigit():
+            msg_id = ref.strip().encode()
+        else:
+            status, data = conn.search(None, "HEADER", "Message-ID", ref.strip())
+            if status == "OK" and data and data[0].split():
+                msg_id = data[0].split()[-1]
+        if not msg_id:
+            raise RuntimeError(f"No iCloud message found for ref {ref!r}.")
+        raw = _fetch_raw(conn, msg_id)
+        if not raw:
+            raise RuntimeError(f"iCloud returned no body for ref {ref!r}.")
+        return _parse_message(raw)
+    finally:
+        conn.logout()
 
 
 TOOL_SCHEMAS = [
