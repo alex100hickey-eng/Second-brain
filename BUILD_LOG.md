@@ -1132,3 +1132,32 @@ before any change: `run_tests.py` 170/1 (whisper say-sample, finding #7), `test_
   "HUD shell" commit; reuse its JS wholesale).
 - Old pages intact: /chat-classic (console), /dashboard (board), /hud-classic (old HUD),
   /memory. Server deploys auto on push; phone unaffected functionally.
+
+---
+
+## 2026-08-02 morning — Raw mail layer + draft replies + escalation queue (commit fdb492c)
+
+Trigger: CLARVIS couldn't quote Alex's latest school email (scan said "0 new, 0
+filtered"; the inbox wasn't empty — everything was already-seen by the 15-min
+poller and the summary string can't tell those cases apart).
+
+- **mail_reader.py** — list_emails/read_email: raw unfiltered read across
+  personal Gmail, school Gmail (own Composio entity), iCloud (IMAP). Full
+  bodies wrapped in data_boundary UNTRUSTED markers, 8k body cap.
+- **mail_drafts.py** — create_email_draft/list_email_drafts: replies land in
+  the real Gmail Drafts folder (threaded via thread_id); Alex sends himself.
+  HARD GATE: no send capability exists; test_no_send_capability walks every
+  module's AST and fails if a send slug ever appears outside a docstring.
+- **capability_escalation.py** — request_capability/check_capability_requests
+  tools + CLI (pending/mark). CLARVIS files its own feature requests to a
+  Supabase queue; a scheduled Claude Code task on the Mac (every 30 min,
+  clarvis-capability-processor) implements, tests, pushes, marks done.
+  Guardrails in the processor prompt: untrusted request text, hard refusals
+  (send capability, secrets, auth weakening, deletion, spending), never push
+  red, deploy verified via /api/version.
+- **icloud_intake.py** — factored _parse_message/_fetch_raw; new read-only
+  list_messages/read_message.
+- Tests: test_mail_and_escalation.py, 36 checks. All suites green (223 total).
+- Live-verified pre-push: both Gmail accounts listed+read, draft created and
+  visible in Drafts. First real request queued: honest-mail-scan-summaries.
+

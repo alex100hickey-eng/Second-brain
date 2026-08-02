@@ -1,5 +1,26 @@
 # NEEDS_ALEX.md — everything blocked on you
 
+## 2026-08-02 morning — full mail read + draft replies + self-service escalation shipped
+
+CLARVIS can now: **read every email** (raw, all three accounts — `list_emails`/
+`read_email`), **write replies as real Gmail drafts** you send yourself
+(`create_email_draft` — sending is deliberately impossible, enforced by a test),
+and **file its own feature requests** (`request_capability`) into a queue that a
+scheduled Claude Code task on your Mac processes every 30 min — you're out of the
+middleman job. Commit `fdb492c`. Three small things on you:
+
+1. **Click "Run now" once** on the `clarvis-capability-processor` task (Claude
+   app → Scheduled section in the sidebar) — the first run asks for tool
+   permissions; approving them once means future runs never stall on prompts.
+   A real request is already queued (the misleading "0 new, 0 filtered" scan
+   summary you hit this morning), so that first run will also ship a fix.
+2. **The processor only runs while the Claude desktop app is open** on your Mac.
+   No action needed, just know that's the heartbeat.
+3. **Delete the test draft** "CLARVIS draft test — safe to delete" sitting in
+   your personal Gmail Drafts (proof the draft chain works).
+
+---
+
 **Updated 2026-07-31 evening. Suite 447/0. Everything is deployed and verified
 live on `c6a2829`.** The long-running deploy outage is over — see "Resolved
 today" below for what it actually was, because the cause was not what the
