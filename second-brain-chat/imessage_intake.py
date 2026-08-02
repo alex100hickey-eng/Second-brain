@@ -160,7 +160,8 @@ def scan_once(cap: int = BATCH_CAP) -> str:
     cursor = _load_cursor()
     msgs = _fetch_new(cursor, cap)
     new_cursor = msgs[-1]["rowid"] if msgs else cursor
-    ingested, noise, empty = 0, 0, 0
+    counts = intake.new_tally()
+    empty = 0
     history = {}   # chat key -> recent [(who, text)] within this batch
     for m in msgs:
         chat_key = m["chat"] or m["sender"]
@@ -181,13 +182,14 @@ def scan_once(cap: int = BATCH_CAP) -> str:
                                 context + f"{who}: {m['text']}",
                                 preview=f"{who}: {m['text']}")
         history.setdefault(chat_key, []).append((who, m["text"]))
-        if res.get("recorded"):
-            ingested += 1
-        elif res.get("reason") == "noise":
-            noise += 1
+        intake.tally_result(counts, res)
     _save_cursor(new_cursor)
-    return (f"iMessage scan: {len(msgs)} new message(s) → {ingested} intake event(s), "
-            f"{noise} filtered as noise, {empty} undecodable/empty.")
+    # The cursor already means "new since last poll", so len(msgs)==0 is honestly
+    # reported here; the `already` bucket still catches guids re-seen after a
+    # cursor rewind, which used to vanish into the noise count.
+    already = (f", {counts['already']} already seen before" if counts["already"] else "")
+    return (f"iMessage scan: {len(msgs)} new message(s) → {counts['new']} intake event(s), "
+            f"{counts['noise']} filtered as noise, {empty} undecodable/empty{already}.")
 
 
 def _watch_loop():

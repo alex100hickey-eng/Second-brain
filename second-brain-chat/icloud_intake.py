@@ -24,6 +24,10 @@ import os
 from datetime import datetime, timedelta, timezone
 from email.header import decode_header
 
+# Only the pure scan-tally helpers (no clients, no state) — record_raw itself
+# still arrives through init() so this module stays fake-able in tests.
+import intake
+
 IMAP_HOST = "imap.mail.me.com"
 IMAP_PORT = 993
 
@@ -71,7 +75,7 @@ def scan_icloud(days: int = 2, cap: int = 15) -> str:
             return f"iCloud scan failed: search returned {status}"
         ids = data[0].split()[-cap:]  # most recent `cap`
 
-        new, noise = 0, 0
+        counts = intake.new_tally()
         for msg_id in ids:
             # BODY.PEEK[] rather than RFC822: verified live 2026-07-26 that iCloud
             # answers RFC822 with an empty "44144 ()" and no body at all, so every
@@ -80,17 +84,15 @@ def scan_icloud(days: int = 2, cap: int = 15) -> str:
             # genuinely read-only even if the mailbox is ever opened writable.
             raw = _fetch_raw(conn, msg_id)
             if not raw:
+                intake.tally_skipped(counts)
                 continue
             m = _parse_message(raw)
             ref = m["ref"] or f"icloud-{msg_id.decode()}"
             res = _record_raw("icloud", ref, m["sender"], m["ts"],
                               f"Subject: {m['subject']}\n{m['body'][:2000]}")
-            if res.get("recorded"):
-                new += 1
-            elif res.get("reason") == "noise":
-                noise += 1
+            intake.tally_result(counts, res)
         conn.logout()
-        return f"iCloud scan: {new} new intake event(s), {noise} filtered as noise."
+        return intake.scan_summary("iCloud", counts, "message")
     except imaplib.IMAP4.error as e:
         return f"iCloud login/scan failed (check the app-specific password): {e}"
     except Exception as e:
@@ -191,7 +193,7 @@ def read_message(ref: str) -> dict:
 
 TOOL_SCHEMAS = [
     {"name": "scan_icloud_intake",
-     "description": "Check Alex's iCloud inbox for anything actionable (read-only IMAP), same as scan_email_intake but for iCloud Mail.",
+     "description": "Check Alex's iCloud inbox for anything actionable (read-only IMAP), same as scan_email_intake but for iCloud Mail. The result distinguishes mail ALREADY processed by the background poller from an actually empty inbox — never report '0 new' as 'nothing arrived'.",
      "input_schema": {"type": "object", "properties": {
          "days": {"type": "integer", "description": "How many days back to look (default 2)."}
      }}},

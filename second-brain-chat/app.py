@@ -4535,7 +4535,10 @@ TOOLS.append({
     "name": "scan_school_gmail_intake",
     "description": "Check Alex's SCHOOL Gmail inbox for anything actionable — same as "
                    "scan_email_intake but for the school account, kept separate so "
-                   "assignments/registrar mail don't mix with his personal inbox.",
+                   "assignments/registrar mail don't mix with his personal inbox. "
+                   "The result distinguishes mail that was ALREADY processed by the "
+                   "background poller from an actually empty inbox — never report "
+                   "'0 new' as 'nothing arrived'; use list_emails to read what's there.",
     "input_schema": {"type": "object", "properties": {
         "newer_than": {"type": "string", "description": "Gmail search window, e.g. '1d', '3d' (default 1d)."},
         "cap": {"type": "integer", "description": "Max messages to check (default 15)."}}},

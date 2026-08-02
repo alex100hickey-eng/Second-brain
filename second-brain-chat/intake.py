@@ -379,6 +379,59 @@ def capture_inbox(text: str, label: str = "") -> str:
 
 
 # ============================================================
+# Scan tallies — the shared, honest summary of one poll pass
+# ============================================================
+#
+# Why this exists: a scanner that only counts `new` and `noise` reports an inbox
+# with 5 already-processed emails EXACTLY like an empty one ("0 new, 0 noise").
+# The chat model then truthfully-but-wrongly told Alex his school inbox had had
+# nothing for a week, when in fact the 15-min background poller had already seen
+# everything. Every scanner funnels its per-message outcome through here so the
+# already-processed bucket is counted and SAID OUT LOUD.
+
+def new_tally() -> dict:
+    return {"looked_at": 0, "new": 0, "noise": 0, "already": 0, "unreadable": 0}
+
+
+def tally_result(counts: dict, res: dict) -> dict:
+    """Fold one record_raw() result into the tally."""
+    counts["looked_at"] += 1
+    reason = str(res.get("reason") or "")
+    if res.get("recorded"):
+        counts["new"] += 1
+    elif reason == "noise":
+        counts["noise"] += 1
+    elif reason.startswith("duplicate"):
+        counts["already"] += 1
+    else:
+        counts["unreadable"] += 1
+    return counts
+
+
+def tally_skipped(counts: dict) -> dict:
+    """A message we couldn't even hand to record_raw (no id, unparseable body)."""
+    counts["looked_at"] += 1
+    counts["unreadable"] += 1
+    return counts
+
+
+def scan_summary(label: str, counts: dict, unit: str = "message") -> str:
+    """The string the chat model reads back to Alex — it must never let 'nothing
+    was there' and 'nothing was NEW' collapse into the same sentence."""
+    if not counts["looked_at"]:
+        return (f"{label} scan: nothing to look at — 0 {unit}s in the window searched. "
+                f"That's an empty result, not a filtered one.")
+    parts = [f"{counts['new']} new intake event(s)",
+             f"{counts['noise']} filtered as noise"]
+    if counts["already"]:
+        parts.append(f"{counts['already']} already processed by an earlier poll "
+                     f"(not new, but they WERE there)")
+    if counts["unreadable"]:
+        parts.append(f"{counts['unreadable']} unreadable/skipped")
+    return f"{label} scan: looked at {counts['looked_at']} {unit}(s) — " + ", ".join(parts) + "."
+
+
+# ============================================================
 # Scanners — Gmail + Calendar (run anywhere; iMessage lives in imessage_intake.py)
 # ============================================================
 
@@ -425,23 +478,22 @@ def scan_gmail_account(composio_client, entity_user_id: str, source_tag: str,
 
 def _ingest_gmail_messages(data, source_tag: str, label: str, cap: int) -> str:
     messages = _dig_list(data, ("messages", "emails", "items", "results"))
-    new, noise = 0, 0
+    counts = new_tally()
     for m in messages[:cap]:
         if not isinstance(m, dict):
+            tally_skipped(counts)
             continue
         ref = m.get("messageId") or m.get("id") or m.get("message_id")
         if not ref:
+            tally_skipped(counts)
             continue
         sender = _first(m, ("sender", "from", "from_email")) or "?"
         subject = _first(m, ("subject", "title")) or "(no subject)"
         body = _first(m, ("snippet", "preview", "messageText", "body", "text")) or ""
         ts = _first(m, ("messageTimestamp", "date", "internalDate", "timestamp")) or ""
         res = record_raw(source_tag, ref, sender, str(ts), f"Subject: {subject}\n{body}")
-        if res.get("recorded"):
-            new += 1
-        elif res.get("reason") == "noise":
-            noise += 1
-    return f"{label} Gmail scan: {new} new intake event(s), {noise} filtered as noise."
+        tally_result(counts, res)
+    return scan_summary(f"{label} Gmail", counts, "message")
 
 
 def scan_calendar(days_ahead: int = 14, cap: int = 40) -> str:
@@ -466,12 +518,14 @@ def scan_calendar(days_ahead: int = 14, cap: int = 40) -> str:
         _remember_seen("calendar", refs)
         return (f"Calendar baselined: {len(refs)} existing upcoming event(s) noted — "
                 f"only NEW invites/changes will become intake from now on.")
-    new = 0
+    counts = new_tally()
     for ev in events[:cap]:
         if not isinstance(ev, dict):
+            tally_skipped(counts)
             continue
         ref = ev.get("id") or ev.get("eventId")
         if not ref:
+            tally_skipped(counts)
             continue
         title = _first(ev, ("summary", "title")) or "(untitled)"
         start = ev.get("start")
@@ -486,9 +540,17 @@ def scan_calendar(days_ahead: int = 14, cap: int = 40) -> str:
             items=[{"type": "event", "text": f"{title} — {start}",
                     "due": str(start or "") or None}],
         )
-        if res.get("recorded"):
-            new += 1
-    return f"Calendar scan: {new} new/changed upcoming event(s) ingested."
+        tally_result(counts, res)
+    if not counts["looked_at"]:
+        return ("Calendar scan: nothing to look at — 0 upcoming events in the window "
+                "searched. That's an empty calendar, not a filtered one.")
+    # A calendar event has explicit items, so it's never noise-filtered by the
+    # extractor — a "noise" verdict here can only mean the near-duplicate merge
+    # recognized it, which for Alex reads as "already known", same as a dup ref.
+    already = counts["already"] + counts["noise"]
+    extra = (f", {already} already known from an earlier scan" if already else "")
+    return (f"Calendar scan: looked at {counts['looked_at']} upcoming event(s) — "
+            f"{counts['new']} new/changed ingested{extra}.")
 
 
 def _dig_list(data, keys) -> list:
@@ -579,7 +641,10 @@ TOOL_SCHEMAS = [
     {
         "name": "scan_email_intake",
         "description": "Scan recent Gmail inbox mail into the intake stream (read-only; "
-                       "noise-filtered). Use when Alex asks to check mail for new obligations.",
+                       "noise-filtered). Use when Alex asks to check mail for new obligations. "
+                       "The result distinguishes mail ALREADY processed by the background "
+                       "poller from an actually empty inbox — never report '0 new' as "
+                       "'nothing arrived'; use list_emails to read what's actually there.",
         "input_schema": {"type": "object", "properties": {
             "newer_than": {"type": "string", "description": "Gmail age filter, default 1d (e.g. 2d, 12h)."}}},
     },

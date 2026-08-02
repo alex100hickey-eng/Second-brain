@@ -19,11 +19,16 @@ Covers:
      dispatcher failure → error string (never an exception)
   6. scan_calendar — deterministic items (no extraction), organizer-dict handling,
      dedupe across scans
+  6b/6c. honest scan summaries — every record_raw outcome is tallied, and an
+     inbox whose mail was ALREADY processed never reports like an empty one
+     (Gmail + iCloud paths)
   7. imessage attributedBody decode — one-byte and two-byte lengths, garbage-safe
   8. imessage safety — DB opened read-only (mode=ro), no write/send code path
 """
 
+import imaplib
 import json
+import os
 import sys
 
 import intake
@@ -323,6 +328,103 @@ def test_scan_calendar():
     check("re-scan ingests nothing new", "0 new" in out3 and len(_events(sb)) == 1)
 
 
+def test_honest_scan_summaries():
+    print("\n=== 6b. scan summaries: 'empty' never reads the same as 'already seen' ===")
+    # the tally helpers themselves
+    c = intake.new_tally()
+    intake.tally_result(c, {"recorded": True, "row_id": 1})
+    intake.tally_result(c, {"recorded": False, "reason": "noise"})
+    intake.tally_result(c, {"recorded": False, "reason": "duplicate"})
+    intake.tally_result(c, {"recorded": False,
+                            "reason": "duplicate (same email via another account)"})
+    intake.tally_skipped(c)
+    check("every record_raw outcome lands in its own bucket",
+          c == {"looked_at": 5, "new": 1, "noise": 1, "already": 2, "unreadable": 1})
+    empty = intake.scan_summary("School Gmail", intake.new_tally())
+    check("nothing-there says so explicitly", "0 messages" in empty and "empty result" in empty)
+    seen_all = intake.scan_summary("School Gmail", {"looked_at": 5, "new": 0, "noise": 0,
+                                                    "already": 5, "unreadable": 0})
+    check("all-already-processed reports the 5 that were there",
+          "looked at 5" in seen_all and "5 already processed" in seen_all
+          and "0 new intake event(s)" in seen_all)
+    check("the two cases are NOT the same sentence (the actual bug)", empty != seen_all)
+
+    # end-to-end through scan_gmail: second poll of the same inbox
+    payload = json.dumps({"data": {"messages": [
+        {"messageId": "s1", "sender": "office@school.edu", "subject": "Forms due",
+         "snippet": "Basketball forms due Friday"},
+        {"messageId": "s2", "sender": "news@school.edu", "subject": "Newsletter",
+         "snippet": "This week at school"},
+        {"not": "a dict — unreadable"},
+    ]}})
+    two_step = json.dumps([{"type": "deadline", "text": "Basketball forms due Friday",
+                            "due": "2026-08-07"}])
+
+    class OnlyForms:
+        class _M:
+            def create(self, **kw):
+                text = two_step if "Forms due" in kw["messages"][0]["content"] else "[]"
+                return type("R", (), {"content": [type("B", (), {"type": "text", "text": text})]})
+        @property
+        def messages(self): return OnlyForms._M()
+
+    sb = _reset(claude=OnlyForms(), dispatcher=lambda s, a: payload)
+    first = intake.scan_gmail()
+    check("first poll: 1 new, 1 noise, 1 unreadable, all counted",
+          "1 new intake event(s)" in first and "1 filtered as noise" in first
+          and "1 unreadable" in first and "looked at 3" in first)
+    second = intake.scan_gmail()
+    check("second poll admits the mail was there, just already processed",
+          "0 new intake event(s)" in second and "2 already processed" in second)
+    check("...and does not claim an empty inbox", "empty result" not in second)
+    _reset(claude=OnlyForms(), dispatcher=lambda s, a: json.dumps({"data": {"messages": []}}))
+    check("a genuinely empty inbox reads as empty",
+          "0 messages" in intake.scan_gmail())
+
+
+def test_icloud_scan_summary():
+    print("\n=== 6c. iCloud scanner: same honest summary ===")
+    import icloud_intake
+    raw = (b"Message-ID: <ic-1@mail.me.com>\r\nFrom: coach@team.com\r\n"
+           b"Subject: Practice moved\r\nDate: Fri, 1 Aug 2026 10:00:00 -0400\r\n"
+           b"Content-Type: text/plain\r\n\r\nPractice is 6pm Thursday now.\r\n")
+
+    class FakeIMAP:
+        def __init__(self, host, port): pass
+        def login(self, u, p): pass
+        def select(self, box, readonly=False): pass
+        def search(self, charset, q): return "OK", [b"1 2"]
+        def fetch(self, msg_id, what):
+            # msg 2 comes back bodiless — the real iCloud RFC822 quirk
+            return ("OK", [(b"1 (BODY[]", raw)]) if msg_id == b"1" else ("OK", [b"2 ()"])
+        def logout(self): pass
+
+    seen = {}
+
+    def fake_record(source, ref, sender, ts, text):
+        first = ref not in seen
+        seen[ref] = True
+        return {"recorded": first, "row_id": 1} if first else \
+               {"recorded": False, "reason": "duplicate"}
+
+    orig_ssl, orig_rec = imaplib.IMAP4_SSL, icloud_intake._record_raw
+    os.environ.setdefault("ICLOUD_EMAIL", "test@icloud.com")
+    os.environ.setdefault("ICLOUD_APP_PASSWORD", "test-pass")
+    imaplib.IMAP4_SSL = FakeIMAP
+    icloud_intake.init(fake_record)
+    try:
+        out1 = icloud_intake.scan_icloud()
+        check("iCloud first scan counts the bodiless message as unreadable, not absent",
+              "1 new intake event(s)" in out1 and "1 unreadable" in out1
+              and "looked at 2" in out1)
+        out2 = icloud_intake.scan_icloud()
+        check("iCloud rescan says already-processed, not empty",
+              "1 already processed" in out2 and "empty result" not in out2)
+    finally:
+        imaplib.IMAP4_SSL = orig_ssl
+        icloud_intake._record_raw = orig_rec
+
+
 def test_attributed_decode():
     print("\n=== 7. attributedBody decode ===")
     text = "Practice moved to 6, can you grab Leo?"
@@ -356,6 +458,8 @@ if __name__ == "__main__":
     test_capture_inbox()
     test_scan_gmail()
     test_scan_calendar()
+    test_honest_scan_summaries()
+    test_icloud_scan_summary()
     test_attributed_decode()
     test_imessage_safety()
     total, passed = len(_results), sum(_results)
