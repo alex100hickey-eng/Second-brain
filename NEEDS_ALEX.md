@@ -104,6 +104,47 @@ because it runs on the box and remote shell is your call, not Claude's.
 
 ---
 
+## 0b. ✅ 2026-08-01 LATE NIGHT — the service is NAMED and the mail infra is DONE
+
+**Splitframe Studio · splitframestudio.com · alexhickey@splitframestudio.com**
+
+Alex picked the name from CLARVIS's shortlist and bought the domain ($11.08/yr,
+Porkbun, WHOIS privacy on) and the Workspace seat (Business Starter). Everything
+else was carried out and dig-verified the same night: MX → Google (sole route),
+single SPF, **DKIM 2048 authenticating**, DMARC `p=none` with reports to the real
+mailbox, Porkbun's parking MX/SPF defaults deleted, Postmaster Tools verified,
+and a **mail-tester baseline of 10/10** ("Perfect, you can send") from a real
+Gmail send. Tracker: **4/17 done** (`name-service`, `buy-domain`, `mailbox-dns`,
+`dns-strings`), ticked in the vault. Portfolio site rendered clean under the new
+name and browser-verified at 1512px and 390px — **not yet public**, held for
+Alex's copy taste-pass.
+
+**Alex's remaining clicks, in order (each is minutes, not hours):**
+
+1. **Read the portfolio copy** (preview at `localhost:5070`, or re-render any
+   time: `python3 portfolio-site/render.py --name "Splitframe Studio" --email
+   alexhickey@splitframestudio.com`). Say "ship it" and CLARVIS deploys it to
+   splitframestudio.com via GitHub Pages + DNS with no further clicks (gh CLI
+   already authed with repo scope).
+2. **Warmup day 1** (starts the 7-day clock, target first sends 2026-08-02):
+   drafts are waiting in the splitframestudio Gmail Drafts folder + plan at
+   vault `Money/Warmup Plan.md`. Send 3–5 spaced through the day, reply to each.
+3. **Stripe** — dashboard.stripe.com/register (sole prop, personal checking OK,
+   ACH on, tax auto-transfer). CLARVIS cannot create financial accounts.
+4. **Taste-pass spec pack #1** — files sent to you in chat; also vault
+   `Money/Clients/portland-pet-food-company/`.
+5. **Rotate `VAULT_GIT_TOKEN`** (still open from the 08-01 handoff): revoke at
+   github.com/settings/tokens → new token (repo scope, `Second-brain` only) →
+   paste into Coolify app env
+   (`http://178.156.209.40:8000/project/xn159afo226l4480ogtcrznz/environment/p78muchurjjfu962yg4iredu/application/h72tei3gy97z4wlqyqpvuylg`)
+   → Redeploy.
+6. **Porkbun 2FA** — porkbun.com/account#accountSecuritySettings. The account
+   now controls the domain your whole pipeline sends from.
+7. Optional: add `alex@` alias in Google Admin → Users (nicer sending address);
+   CLARVIS will repoint DMARC reports back to it afterwards.
+
+---
+
 ## 0. NEW 2026-08-01 — August Money Plan: your morning list
 
 The finalized plan (council-amended) is in the vault: **`Money/August Money Plan
