@@ -1226,3 +1226,42 @@ the new event-driven watcher (`ee5623b`): filed 18:36, build started 18:37.
   green.
 
 Deploy verified live via `/api/version` (commit `56147a38b348`).
+
+---
+
+## 2026-08-02 (evening) — capability queue run #3: generated reports vs. the durable log
+
+**Requested** (`generated-seed-oil-reports-missing-from--08021928`, filed 19:28): CLARVIS
+synthesized two seed-oil reports, `synthesize_data` confirmed both saved to `synthesized/`,
+and when Alex asked it to delete them `list_generated_files` showed neither — only 4
+unrelated older files. It refused to delete anything it couldn't see (correctly) and asked
+for the write path and the read path to be reconciled. Watcher picked it up in 55 seconds.
+
+**Diagnosis — the listing was right, and there is no path mismatch.** `data_synthesizer_agent.SYNTH_DIR`
+and `generated_files.FOLDERS["synthesized"]` resolve to the same directory. The reports were
+genuinely gone: `synthesized/` is container-local, not a volume, and the 18:49 redeploy
+(`56147a3`, the *previous* queue run) replaced the filesystem. Confirmed three ways — the
+server's `started_at` is 22:49 UTC, both reports are logged in Agent Outputs at 16:11 and
+18:15 UTC with their full text, and the 4 files CLARVIS could see are exactly the 4 that are
+git-tracked and therefore ship inside the image. Four older reports had silently vanished the
+same way.
+
+**Shipped** (`cc9f8a2`):
+- **`known_reports` hook** in `generated_files.py`, wired by `app.py` (`_reports_in_log`) to
+  the Agent Outputs log. `list_generated_files` now names the reports a redeploy cleared and
+  points at the durable copy; `remove_generated_file` on one of them says it's already gone
+  instead of "there's no such file" next to a listing that appears to contradict it. Reports
+  still on disk are excluded, and so are ones trashed on purpose — those are restorable,
+  which is a different story. The hook is optional and a throwing hook can't break a listing.
+- **`synthesize_data` stops overpromising.** "Saved to synthesized/X" read as permanent; it
+  now says which copy is durable and that the file lasts until the next redeploy. That
+  sentence is what made a normal deploy look like a broken tool.
+- **Deliberately not rehydrating** `synthesized/` from the log on boot. An audit trail isn't
+  a store, and rehydrating would resurrect every purposely-removed report at the next deploy
+  — the exact trap `draft_store.forget` exists to avoid for `vault_inbox`.
+- Tests: `test_generated_files.py` 53 → 68 checks. All 8 suites green.
+
+Alex's underlying ask was already satisfied by the redeploy: both seed-oil reports are gone,
+and a fresh sweep is safe. CLARVIS can now say that instead of filing a bug.
+
+Deploy verified live via `/api/version` (commit `cc9f8a2dd734`).
