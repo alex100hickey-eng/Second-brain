@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.secondbrain.capabilitywatcher</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Library/Frameworks/Python.framework/Versions/3.14/bin/python3</string>
+        <string>/Users/alexhickey24/second-brain/scripts/capability_watcher.py</string>
+    </array>
+    <!-- 2 min: the poll is one Supabase SELECT, so frequency is nearly free.
+         launchd will not start a second copy of this label while a build from the
+         previous one is still running. -->
+    <key>StartInterval</key>
+    <integer>120</integer>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/Users/alexhickey24/second-brain/scripts/capability_watcher.launchd.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/alexhickey24/second-brain/scripts/capability_watcher.launchd.log</string>
+</dict>
+</plist>

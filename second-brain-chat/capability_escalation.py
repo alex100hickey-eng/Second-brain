@@ -7,10 +7,16 @@ fix. Alex is the middleman, and he's asked to stop being one.
 
 Now: CLARVIS calls request_capability() the moment it hits a wall. The request
 lands in Supabase (same "Agent Outputs" table every subsystem shares). On Alex's
-Mac, a scheduled Claude Code task polls the queue every 30 minutes, implements
-the request in the repo (tests, then push → auto-deploy), and writes an update
-row back — which CLARVIS reads via check_capability_requests to tell Alex what
-shipped.
+Mac, a launchd watcher (scripts/capability_watcher.py, every 2 min) sees the new
+row and spawns Claude Code, which implements the request in the repo (tests, then
+push → auto-deploy) and writes an update row back — which CLARVIS reads via
+check_capability_requests to tell Alex what shipped.
+
+The watcher replaced a Claude Code task that polled every 30 minutes: ~48 agent
+sessions a day to answer a question that is one SELECT, for a queue that gets a
+request maybe weekly. Polling is free; booting a reasoning agent to poll is not.
+That task still runs once a day as a backstop, and checks the watcher's heartbeat
+— a dead watcher and a quiet queue look identical otherwise.
 
 Row shapes (insert-only, like draft_store — newest row wins):
   agent_name="capability_request"        output_text=json {slug, title, problem,
@@ -114,11 +120,11 @@ def file_request(title: str, problem: str, needed: str = "") -> str:
         }).execute()
     except Exception as e:
         return f"Couldn't file the request: {str(e)[:200]}"
-    return (f"Filed capability request '{slug}'. Claude Code checks this queue "
-            f"every 30 minutes on Alex's Mac (while the Claude app is open), "
+    return (f"Filed capability request '{slug}'. A watcher on Alex's Mac picks "
+            f"this up within a couple of minutes (whenever the Mac is awake), "
             f"builds the fix, and it auto-deploys. Tell Alex it's filed and that "
-            f"you'll have the ability once the next engineering pass lands — he "
-            f"doesn't need to relay anything.")
+            f"you'll have the ability once the build lands — he doesn't need to "
+            f"relay anything.")
 
 
 def status_report() -> str:

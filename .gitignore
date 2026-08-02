@@ -56,3 +56,7 @@ second-brain-chat/imessage_cursor.json
 # Rendered portfolio site (regenerate: portfolio-site/render.py). The scaffold is the source.
 portfolio-site/dist/
 .capability_processor.lock
+.capability_watcher.lock
+.capability_watcher_heartbeat
+scripts/capability_watcher.log
+scripts/capability_watcher.launchd.log
