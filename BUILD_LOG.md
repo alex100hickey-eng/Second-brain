@@ -1161,3 +1161,34 @@ poller and the summary string can't tell those cases apart).
 - Live-verified pre-push: both Gmail accounts listed+read, draft created and
   visible in Drafts. First real request queued: honest-mail-scan-summaries.
 
+
+---
+
+## 2026-08-02 (afternoon) — capability queue run #1: honest mail-scan summaries
+
+**Requested by CLARVIS** (`honest-mail-scan-summaries-08020912`): `scan_school_gmail_intake`
+reported "0 new intake event(s), 0 filtered as noise" for an inbox that had mail —
+everything had already been ingested by the 15-min background poller — and the chat
+model relayed that to Alex as "your school inbox has had nothing in 7 days". In
+`intake._ingest_gmail_messages` the already-seen/duplicate branch incremented no
+counter, so an empty inbox and a fully-already-processed one produced byte-identical
+strings.
+
+**Shipped** (`4d5c20c`):
+- **intake.py** — one shared tally every scanner funnels through: `new_tally()`,
+  `tally_result()` (buckets all four record_raw outcomes: new / noise / already /
+  unreadable), `tally_skipped()` (malformed messages that never reach record_raw,
+  previously silent `continue`s), `scan_summary()` — which leads with how many
+  messages were actually looked at, so "nothing there" and "nothing new" can no
+  longer collapse into the same sentence:
+  - `School Gmail scan: looked at 5 message(s) — 0 new intake event(s), 0 filtered as noise, 5 already processed by an earlier poll (not new, but they WERE there).`
+  - `School Gmail scan: nothing to look at — 0 messages in the window searched. That's an empty result, not a filtered one.`
+- Applied to personal Gmail, school Gmail, **iCloud** (same gap), calendar and
+  iMessage scanners.
+- Scan tool descriptions now tell the model not to read "0 new" as "nothing
+  arrived" and to use `list_emails` to see what's actually there.
+- Tests: 10 new checks in test_intake.py — bucket coverage, empty-vs-already
+  distinctness, end-to-end second poll through `scan_gmail`, iCloud path driven
+  over a fake IMAP server. All 6 suites green (233 total).
+
+Deploy verified live via `/api/version` (commit `4d5c20ce684a`).
