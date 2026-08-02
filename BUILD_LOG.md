@@ -1192,3 +1192,37 @@ strings.
   over a fake IMAP server. All 6 suites green (233 total).
 
 Deploy verified live via `/api/version` (commit `4d5c20ce684a`).
+
+---
+
+## 2026-08-02 (evening) — capability queue run #2: removing generated files
+
+**Requested by CLARVIS** (`delete-remove-a-synthesized-report-or-va-08021836`): Alex asked
+it to delete two `synthesize_data` reports (seed-oil sweeps) to start fresh. CLARVIS could
+write to `synthesized/` and `vault_inbox/` but had no removal path at all — only write and
+append — so a two-file cleanup became an escalation. This was the first request handled by
+the new event-driven watcher (`ee5623b`): filed 18:36, build started 18:37.
+
+**Shipped** (`56147a3`):
+- **generated_files.py** (new) — `list_generated_files` / `remove_generated_file` /
+  `restore_generated_file`. Containment is structural, not conventional: the folder comes
+  from a two-key dict (`synthesized`, `vault_inbox`), the filename must be a bare basename
+  with an allowed extension, and the resolved realpath must land directly inside that
+  folder. Traversal, absolute paths, globs, hidden files, symlinks and the folder READMEs
+  are refused rather than sanitized. One exact filename per call — no wildcards, no bulk —
+  so a model that reads untrusted email is never one fuzzy match from emptying a folder.
+- **Trash, never delete.** A removal moves the file to `.generated_trash/<folder>/<stamp>__<name>`
+  (same guarantee `propose_file_cleanup` gives Downloads); restore moves it back and won't
+  clobber a newer file of the same name.
+- **Two things outlive the file, and the reply says so** rather than implying it's simply gone:
+  a `vault_inbox` note's Supabase mirror is dropped via an `on_remove` hook wired to
+  `draft_store.forget` (otherwise the next boot's `rehydrate` resurrects it — `on_restore`
+  re-mirrors); a `synthesized` report keeps its Agent Outputs row (audit trail), and if the
+  file is git-tracked the tool warns that a redeploy brings it back and that removing it for
+  good needs Alex to take it out of git.
+- Tests: `test_generated_files.py`, 53 checks — every containment case asserted to leave its
+  target on disk, trash round-trip, hook firing (including a hook that throws not costing the
+  removal), and the git-tracked warning driven against a throwaway local repo. All 8 suites
+  green.
+
+Deploy verified live via `/api/version` (commit `56147a38b348`).
