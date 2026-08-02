@@ -549,6 +549,12 @@ he pastes. Use it when he wants you to "synthesize/research/write up" something 
 into a structured report. Tell him where it was saved; you don't need to paste the whole report
 back — hit the highlights and point him to the file/dashboard.
 
+When he wants one of those gone ("delete that report", "clear those out, start fresh"), use
+list_generated_files to get the exact filename, then remove_generated_file once per file. Those
+are the only files you can remove — reports in synthesized/ and staged notes in vault_inbox/,
+both written by you. Nothing is permanently deleted (it goes to a project trash and
+restore_generated_file brings it back), and his Obsidian vault stays untouchable as always.
+
 You can build WEBSITES with create_website: give it a brief and it produces a complete static
 site (real pages, coherent design system, local preview script, README) in his sites/ folder —
 nothing deployed. Use it when he wants a site/landing page built. Pass the richest brief you can;
@@ -3854,6 +3860,8 @@ def _dispatch_tool_call(tool_name: str, tool_input: dict) -> str:
         return mail_drafts.handle_tool_call(tool_name, tool_input)
     if tool_name in ("request_capability", "check_capability_requests"):
         return capability_escalation.handle_tool_call(tool_name, tool_input)
+    if tool_name in ("list_generated_files", "remove_generated_file", "restore_generated_file"):
+        return generated_files.handle_tool_call(tool_name, tool_input)
     if tool_name in ("browse_web_sandbox",):
         return browser_sandbox.handle_tool_call(tool_name, tool_input, handle_tool_call)
     if tool_name in ("screen_control_start", "screen_control_act",
@@ -4567,6 +4575,34 @@ import capability_escalation  # noqa: E402
 capability_escalation.init(supabase)
 TOOLS.extend(capability_escalation.TOOL_SCHEMAS)
 TOOL_STATUS_LABELS.update(capability_escalation.TOOL_STATUS_LABELS)
+
+# Taking generated files back out (2026-08-02): CLARVIS could write reports and
+# staged notes but never remove one, so "delete those two reports" was a wall.
+# Trash-not-delete, one exact filename per call, and only ever inside
+# synthesized/ + vault_inbox/ — see generated_files.py's SCOPE note.
+import generated_files  # noqa: E402
+
+
+def _forget_note_mirror(folder: str, filename: str) -> str:
+    """A removed vault_inbox note must lose its Supabase mirror too, or the next
+    boot's rehydrate puts it straight back (draft_store.py)."""
+    if folder != "vault_inbox":
+        return ""
+    dropped = draft_store.forget(draft_store.KIND_NOTE, os.path.splitext(filename)[0])
+    return "Its backup copy is gone too, so it won't come back after a redeploy." if dropped else ""
+
+
+def _remirror_note(folder: str, filename: str, content: str) -> str:
+    if folder != "vault_inbox":
+        return ""
+    draft_store.save(draft_store.KIND_NOTE, os.path.splitext(filename)[0], content)
+    return ""
+
+
+generated_files.on_remove = _forget_note_mirror
+generated_files.on_restore = _remirror_note
+TOOLS.extend(generated_files.TOOL_SCHEMAS)
+TOOL_STATUS_LABELS.update(generated_files.TOOL_STATUS_LABELS)
 
 # ------------------------------------------------------------
 # Sandbox browser (Composio + Browserbase) — CLARVIS's default "do

@@ -60,3 +60,5 @@ portfolio-site/dist/
 .capability_watcher_heartbeat
 scripts/capability_watcher.log
 scripts/capability_watcher.launchd.log
+# Trash for removed generated files (generated_files.py) — recoverable, never committed
+.generated_trash/
