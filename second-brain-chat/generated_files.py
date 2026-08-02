@@ -26,6 +26,17 @@ makes two calls, each naming a file that a listing showed exists. A model acting
 on untrusted email/web content should never be one fuzzy match away from
 emptying a folder.
 
+SYNTHESIZED/ IS NOT DURABLE ON THE SERVER. It is container-local, not a volume,
+so every redeploy replaces the filesystem and every report that wasn't committed
+to the repo is simply gone. Only the "Agent Outputs" log copy survives. That made
+CLARVIS look broken: synthesize_data confirmed "saved to synthesized/X", a deploy
+landed, and the later listing showed neither X nor any sign X had existed — so it
+read as a path mismatch or a stale cache rather than the truth. The `known_reports`
+hook closes that gap: the listing and the not-found path reconcile disk against
+the log and say plainly which reports a redeploy cleared. Nothing is rehydrated
+from the log — an audit trail isn't a store, and a rehydrate would also undo every
+removal on the next boot.
+
 Two things outlive the file itself, so removal handles them honestly rather than
 claiming a completeness it doesn't have:
   * vault_inbox notes are mirrored into Supabase for redeploy survival
@@ -77,6 +88,9 @@ _STAMP_SEP = "__"
 # and Supabase-unaware, the same way note_capture.on_capture does it.
 on_remove = None     # fn(folder, filename) -> str   (extra note for the reply)
 on_restore = None    # fn(folder, filename, content) -> str
+# fn() -> [{"filename": str, "when": str}, ...], newest first — every report the
+# durable Agent Outputs log says was generated, whether or not it's still on disk.
+known_reports = None
 
 
 def _folder_error(folder: str) -> str:
@@ -173,6 +187,31 @@ def _trashed(folder: str) -> list:
     return out
 
 
+def _cleared_reports(folder: str) -> list:
+    """(filename, when) for reports the log knows about that are no longer in
+    synthesized/ — i.e. wiped by a redeploy. Newest first, deduped by filename.
+
+    Anything currently on disk is excluded (it's already listed), and so is
+    anything sitting in the trash: that one was removed on purpose this deploy and
+    is restorable, which is a different story than "the redeploy ate it"."""
+    if folder != "synthesized" or not known_reports:
+        return []
+    try:
+        rows = known_reports() or []
+    except Exception:
+        return []
+    present = {fn for fn, _t, _k, _m in _listing(folder)}
+    present |= {orig for _t, orig, _m in _trashed(folder)}
+    out, seen = [], set()
+    for r in rows:
+        name = os.path.basename((r.get("filename") or "").strip())
+        if not name or name in present or name in seen:
+            continue
+        seen.add(name)
+        out.append((name, r.get("when") or ""))
+    return out
+
+
 def _is_git_tracked(path: str) -> bool:
     """True if `path` is committed to the repo — meaning removing the file here is
     undone by the next deploy. Best-effort: any git trouble answers False, since a
@@ -216,6 +255,13 @@ def list_generated_files(folder: str = "all") -> str:
             names = ", ".join(orig for _t, orig, _m in trash[:5])
             lines.append(f"  recently removed (restorable): {names}"
                          + (f" …and {len(trash) - 5} more" if len(trash) > 5 else ""))
+        cleared = _cleared_reports(f)
+        if cleared:
+            names = ", ".join(f"{fn}{f' ({when})' if when else ''}" for fn, when in cleared[:5])
+            lines.append(f"  generated earlier but no longer on disk — a server redeploy "
+                         f"cleared these, so there's nothing left to remove: {names}"
+                         + (f" …and {len(cleared) - 5} more" if len(cleared) > 5 else ""))
+            lines.append("  (their full text is still in Alex's Agent Outputs log.)")
     return "\n".join(lines)
 
 
@@ -226,6 +272,13 @@ def remove_generated_file(folder: str, filename: str) -> str:
         return err
     name = os.path.basename(full)
     if not os.path.isfile(full):
+        # A report the log knows about but disk doesn't wasn't lost by a bug — a
+        # redeploy cleared it. Say that, or this reads as a broken listing.
+        when = next((w for fn, w in _cleared_reports(folder) if fn == name), None)
+        if when is not None:
+            return (f"`{folder}/{name}` was generated{f' {when}' if when else ''} but is no longer "
+                    f"on disk — a server redeploy clears generated reports. Nothing to remove; "
+                    f"it's already gone. Its full text is still in Alex's Agent Outputs log.")
         rows = _listing(folder)
         have = "\n".join(f"  - {fn}" for fn, _t, _k, _m in rows[:20]) or "  (folder is empty)"
         return f"There's no {name!r} in {folder}/. What's actually there:\n{have}"
@@ -305,7 +358,9 @@ TOOL_SCHEMAS = [
      "description": "List the files CLARVIS generated: research reports in synthesized/ and "
                     "captured notes staged in vault_inbox/, with their exact filenames. Use "
                     "this before remove_generated_file so you name a file that really exists. "
-                    "Also shows what was recently removed and can still be restored.",
+                    "Also shows what was recently removed and can still be restored, and which "
+                    "reports a server redeploy already cleared off disk — if a report you just "
+                    "created isn't listed, that's why, and there is nothing left to delete.",
      "input_schema": {"type": "object", "properties": {
          "folder": {"type": "string", "enum": ["all", "synthesized", "vault_inbox"],
                     "description": "Which folder to list (default all)."}}}},

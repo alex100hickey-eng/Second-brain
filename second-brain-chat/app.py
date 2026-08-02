@@ -4599,8 +4599,41 @@ def _remirror_note(folder: str, filename: str, content: str) -> str:
     return ""
 
 
+def _reports_in_log(limit: int = 40) -> list:
+    """Every report the durable Agent Outputs log says was generated, newest first.
+
+    synthesized/ on the server is container-local, so a redeploy wipes any report
+    that wasn't committed to the repo while its full text lives on in the log.
+    generated_files uses this to tell "a redeploy cleared it" apart from "that
+    filename never existed" — otherwise a just-written report vanishing from the
+    listing looks like the listing is broken (2026-08-02 escalation)."""
+    try:
+        rows = supabase.table("Agent Outputs").select("output_text,created_at") \
+            .eq("agent_name", data_synthesizer_agent.AGENT_NAME) \
+            .order("created_at", desc=True).limit(limit).execute().data or []
+    except Exception as e:
+        print(f"Warning: couldn't read the Agent Outputs report log: {e}")
+        return []
+    out = []
+    for row in rows:
+        try:
+            saved_to = (json.loads(row.get("output_text") or "{}") or {}).get("saved_to")
+        except (ValueError, TypeError):
+            continue
+        if not saved_to:
+            continue
+        when = ""
+        try:
+            when = _humanize_epoch(datetime.fromisoformat(row["created_at"]).timestamp())
+        except (ValueError, TypeError, KeyError):
+            pass
+        out.append({"filename": os.path.basename(saved_to), "when": when})
+    return out
+
+
 generated_files.on_remove = _forget_note_mirror
 generated_files.on_restore = _remirror_note
+generated_files.known_reports = _reports_in_log
 TOOLS.extend(generated_files.TOOL_SCHEMAS)
 TOOL_STATUS_LABELS.update(generated_files.TOOL_STATUS_LABELS)
 

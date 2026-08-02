@@ -16,6 +16,9 @@ Covers:
   5. The on_remove/on_restore hooks fire for vault_inbox (draft_store mirror)
   6. A missing file reports what IS there instead of failing silently
   7. app.py wires all three tools into TOOLS + handle_tool_call routing
+  8. The known_reports hook: reports a redeploy cleared off disk are named as
+     such in the listing and on a remove attempt, instead of looking like a
+     broken/stale listing (2026-08-02 escalation)
 """
 
 import ast
@@ -204,6 +207,54 @@ def main():
         else:
             print("  SKIP  no usable git binary")
 
+        # --- reports a redeploy cleared --------------------------------------
+        # The escalation that prompted this: synthesize_data confirmed two reports
+        # saved, a redeploy replaced the container filesystem, and the next listing
+        # showed no trace of them — which read as a path mismatch, not the truth.
+        print("\nknown_reports (redeploy-cleared reports):")
+        gf.known_reports = lambda: [
+            {"filename": "20260802-history-of-seed-oils.md", "when": "today at 12:11 PM"},
+            {"filename": "20260802-seed-oils-conspiracy.md", "when": "today at 2:15 PM"},
+            # also on disk — must NOT be reported as cleared
+            {"filename": "20260801-seed-oils-1.md", "when": "yesterday"},
+        ]
+        out = gf.list_generated_files("synthesized")
+        check("names a report the redeploy cleared",
+              "20260802-history-of-seed-oils.md" in out, out)
+        check("says why it's gone", "redeploy" in out, out)
+        check("says nothing is left to remove", "nothing left to remove" in out, out)
+        check("points at the durable copy", "Agent Outputs" in out, out)
+        check("doesn't call an on-disk report cleared",
+              out.count("20260801-seed-oils-1.md") == 1, out)
+
+        res = gf.remove_generated_file("synthesized", "20260802-history-of-seed-oils.md")
+        check("remove explains the redeploy instead of 'no such file'",
+              "redeploy" in res and "already gone" in res, res)
+        check("remove doesn't claim it removed anything", not res.startswith("Removed"), res)
+        check("remove says when it was generated", "12:11 PM" in res, res)
+
+        # A name nobody ever generated still gets the plain not-found answer.
+        res = gf.remove_generated_file("synthesized", "never-existed.md")
+        check("unknown name still gets the listing", "20260801-seed-oils-1.md" in res, res[:200])
+        check("unknown name isn't blamed on a redeploy", "redeploy" not in res, res[:200])
+
+        # A report removed on purpose is restorable, not "cleared by a redeploy".
+        gf.known_reports = lambda: [{"filename": "20260801-seed-oils-1.md", "when": "yesterday"}]
+        gf.remove_generated_file("synthesized", "20260801-seed-oils-1.md")
+        out = gf.list_generated_files("synthesized")
+        check("a trashed report reads as restorable, not redeploy-cleared",
+              "recently removed" in out and "redeploy cleared" not in out, out)
+        gf.restore_generated_file("synthesized", "20260801-seed-oils-1.md")
+
+        # The hook is optional and must never be able to break a listing.
+        gf.known_reports = lambda: 1 / 0
+        check("a broken hook doesn't break the listing",
+              "synthesized/" in gf.list_generated_files("synthesized"))
+        gf.known_reports = None
+        check("no hook means no cleared-report line",
+              "redeploy" not in gf.list_generated_files("synthesized"))
+        check("hook never applies to vault_inbox", gf._cleared_reports("vault_inbox") == [])
+
         # --- app.py wiring --------------------------------------------------
         print("\napp.py wiring:")
         src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "app.py")).read()
@@ -218,6 +269,8 @@ def main():
               and "TOOL_STATUS_LABELS.update(generated_files.TOOL_STATUS_LABELS)" in src)
         check("mirror hooks wired", "generated_files.on_remove" in src
               and "generated_files.on_restore" in src)
+        check("known_reports hook wired to the Agent Outputs log",
+              "generated_files.known_reports" in src and "def _reports_in_log" in src)
         check("every schema has a status label",
               all(s["name"] in gf.TOOL_STATUS_LABELS for s in gf.TOOL_SCHEMAS))
         check("handler covers every schema",

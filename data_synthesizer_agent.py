@@ -338,8 +338,13 @@ def synthesize_for_chat(topic: str, raw_material: str = None, mode: str = "auto"
     src_line = (f"Pulled from {src} web source(s). " if src else
                 ("Organized from the material you gave me. " if result["mode"] == "text"
                  else "No live sources were retrieved. "))
+    # Be precise about which copy is durable. "Saved to synthesized/X" alone read
+    # as permanent, so a redeploy clearing the file later looked like a bug in the
+    # file listing rather than the expected lifetime of a container-local folder.
     return (f"Synthesized a report on \"{topic}\". {src_line}"
-            f"Saved to synthesized/{where} and logged to your Agent Outputs.\n\n"
+            f"Saved as synthesized/{where} and logged to your Agent Outputs — the log copy "
+            f"is the durable one; the file itself lives on the server's working disk until "
+            f"the next redeploy.\n\n"
             f"---\n\n{result['markdown']}")
 
 
