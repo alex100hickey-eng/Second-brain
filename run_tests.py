@@ -3610,6 +3610,26 @@ def suite_ad_pipeline(app, live):
         check("id-less and hallucinated pass verdicts don't crash or inflate the drop",
               "Drop packaged" in out and "-1" not in out, out[:150])
 
+        # --- the client-facing drop doc itself carries no pipeline tells and
+        # always ends on an ask (2026-08-03 council taste-pass regressions) ---
+        doc = ""
+        for r in reversed(list(fake_sb.store.values())):
+            if r.get("agent_name") == "ad_pipeline" and '"kind": "delivery"' in r.get("output_text", ""):
+                doc = json.loads(r["output_text"]).get("doc", "")
+                break
+        check("drop doc exists in the delivery row", bool(doc))
+        check("drop doc has no '(s)' pluralization tell",
+              not __import__("re").search(r"\w\(s\)", doc))
+        check("drop doc never says 'the gate' or 'on-brief'",
+              "the gate" not in doc.lower() and "on-brief" not in doc.lower())
+        check("drop doc does not open with the internal QA summary",
+              "We studied your live ads" in doc)
+        check("drop doc never ends on an empty header",
+              not __import__("re").search(r"^#{1,6}\s+\S.*\n(?:\s*\n)*\Z", doc,
+                                          __import__("re").M))
+        check("drop doc ends with the reply ask (retainer bridge)",
+              "Reply to this email" in doc)
+
         # --- prompts carry the untrusted-data note ---
         calls.clear()
         acp.generate_angles("alpaca socks")
@@ -3715,15 +3735,20 @@ def suite_august(app, live):
 
         at.init(_FakeSB(), tmp, None, "local")
 
-        write("""# T
+        # Dates are computed from the real clock: hardcoded dates made this suite
+        # pass only on the day it was written (found 2026-08-03, two days later).
+        _dtmod = __import__("datetime")
+        _day = lambda off: (_dtmod.datetime.now()
+                            + _dtmod.timedelta(days=off)).strftime("%Y-%m-%d")
+        write(f"""# T
 ### Gate A
-- [ ] **Name the service** `#name-service` · owner: alex · due: 2026-08-01 · needs: —
-- [ ] **Register the .com** `#buy-domain` · owner: alex · due: 2026-08-01 · needs: name-service
-- [ ] **Mailbox + DNS** `#mailbox-dns` · owner: alex · due: 2026-08-02 · needs: buy-domain
+- [ ] **Name the service** `#name-service` · owner: alex · due: {_day(0)} · needs: —
+- [ ] **Register the .com** `#buy-domain` · owner: alex · due: {_day(0)} · needs: name-service
+- [ ] **Mailbox + DNS** `#mailbox-dns` · owner: alex · due: {_day(1)} · needs: buy-domain
 ### Gate B
-- [x] **Already finished thing** `#done-thing` · owner: alex · due: 2026-07-30 · needs: —
-- [ ] **Render the site** `#render-site` · owner: clarvis · due: 2026-08-02 · needs: name-service
-- [ ] **Long overdue thing** `#stale-thing` · owner: alex · due: 2026-07-20 · needs: —
+- [x] **Already finished thing** `#done-thing` · owner: alex · due: {_day(-4)} · needs: —
+- [ ] **Render the site** `#render-site` · owner: clarvis · due: {_day(1)} · needs: name-service
+- [ ] **Long overdue thing** `#stale-thing` · owner: alex · due: {_day(-14)} · needs: —
 - Just a normal bullet, not a step
 """)
 
@@ -3733,7 +3758,7 @@ def suite_august(app, live):
         by_id = {s["id"]: s for s in steps}
         check("ids, owners and due dates are read",
               by_id["name-service"]["owner"] == "alex"
-              and by_id["name-service"]["due"] == "2026-08-01"
+              and by_id["name-service"]["due"] == _day(0)
               and by_id["render-site"]["owner"] == "clarvis")
         check("'needs: —' means no dependency, not a dependency called '—'",
               by_id["name-service"]["needs"] == [])
@@ -4040,6 +4065,31 @@ def suite_portfolio(app, live):
             check("the lint never edits or sends anything",
                   all(tok not in open(lint, encoding="utf-8").read()
                       for tok in ("smtplib", "sendmail", '"w"', "os.remove")))
+
+            # --- 2026-08-03 council taste-pass regressions: every tell that made
+            # a real pack unsendable must now be machine-caught. ---
+            r = lint_run(write("tells.md",
+                               "# Drop\n\n3 asset(s) were held back by the gate.\n"
+                               "Everything is on-brief and within claim guardrails.\n"))
+            check("format-string '(s)' pluralization is caught",
+                  r.returncode != 0 and "asset(s)" in r.stdout)
+            check("'the gate' internal jargon is caught", "the gate" in r.stdout)
+            check("'on-brief' is caught", "on-brief" in r.stdout)
+
+            r = lint_run(write("fab.md",
+                               "# Readout\n\nNo live performance data was provided "
+                               "this period, per the brief.\nReplace with live "
+                               "platform data before distribution.\nBudget: $X/day.\n"))
+            check("fabricated-engagement framing is caught",
+                  r.returncode != 0 and "provided this period" in r.stdout)
+            check("scaffolding instruction is caught", "before distribution" in r.stdout)
+            check("unfilled $X figure is caught", "$X" in r.stdout)
+
+            r = lint_run(write("trunc.md", "# Drop\n\nGood content.\n\n## Full batch\n\n"))
+            check("a document ending on an empty header is caught",
+                  r.returncode != 0 and "empty header" in r.stdout)
+            r = lint_run(write("okhdr.md", "# Drop\n\n## Full batch\n\nSix assets follow.\n"))
+            check("a populated final section still passes", r.returncode == 0, r.stdout[:200])
         finally:
             shutil.rmtree(tmp2, ignore_errors=True)
 

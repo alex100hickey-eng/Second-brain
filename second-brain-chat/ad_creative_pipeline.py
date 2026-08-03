@@ -595,17 +595,40 @@ def package_delivery(brand: str) -> str:
     rest = [a for i, a in assets.items() if i in passing and a not in picks]
     flagged_n = len(assets) - len(passing)
 
-    angles_md = "\n".join(
-        f"- **{a.get('angle')}** — {a.get('why')}" for a in (data.get("angles") or [])[:6])
+    # The client-facing wrapper must never leak the pipeline: no QA-gate summary
+    # (internal log), no "(s)" format-string pluralization, no "the gate", and the
+    # doc may not end on an empty section (2026-08-03 council taste-pass, 8
+    # confirmed findings — 1/5 would-buy as shipped, 5/5 after these fixes).
+    all_angles = (data.get("angles") or [])[:6]
+    executed = {a.get("angle") for a in picks + rest}
+    built = [a for a in all_angles if a.get("angle") in executed]
+    later = [a for a in all_angles if a.get("angle") not in executed]
+    gaps_md = "\n".join(f"- **{a.get('angle')}** — {a.get('why')}" for a in all_angles)
+    built_md = ", ".join(f"**{a.get('angle')}**" for a in built) or "the two strongest"
+    n_concepts = len(assets)
+    n_shown = len(picks) + len(rest)
+    rigor = (f"We built {n_concepts} concepts; {flagged_n} didn't survive our claims "
+             f"review, so you're only seeing the {n_shown} we'd put money behind."
+             if flagged_n else
+             f"All {n_shown} concepts here survived our claims review — nothing "
+             "in this drop is a maybe.")
     date = datetime.now(_TZ).strftime("%Y-%m-%d")
+    bridge = (f"The other {len(later)} gaps on this list are what month one tests. "
+              "Reply to this email and the next drop lands inside 72 hours."
+              if later else
+              "This is what a single drop looks like. Reply to this email and the "
+              "next one lands inside 72 hours.")
     doc = (f"# Creative drop — {data.get('name')} — {date}\n\n"
            f"## What we made and why\n\n"
-           f"{qa.get('summary', '')}\n\nThe test angles this drop covers:\n{angles_md}\n\n"
-           f"*Every asset passed a compliance check (claims substantiation, brand voice, "
-           f"format specs). {flagged_n} asset(s) were held back by the gate and are not "
-           f"in this drop.*\n\n"
+           f"We studied your live ads in the Ad Library. Here's the gap we saw and "
+           f"what we made to test it.\n\n"
+           f"The gaps we found in your current creative:\n{gaps_md}\n\n"
+           f"Built first in this drop: {built_md}.\n\n"
+           f"*{rigor}*\n\n"
            f"## Lead assets\n\n" + "\n".join(_render_asset(a) for a in picks)
-           + "\n\n## Full batch\n\n" + "\n".join(_render_asset(a) for a in rest))
+           + ((("\n\n## Full batch\n\n" + "\n".join(_render_asset(a) for a in rest)))
+              if rest else "")
+           + f"\n\n---\n\n{bridge}")
 
     path = _write_vault_file(data["slug"], f"drop-{date}.md", doc)
     delivery = {"kind": "delivery", "slug": data["slug"], "brand": data.get("name"),
@@ -630,9 +653,16 @@ _REPORT_SYSTEM = (
     "You are the report-kit of a creative testing engine — you turn a month of creative "
     "work + the client's performance numbers into the one-page readout that is this "
     "service's signature artifact. Busy-founder skimmable: what we tested, what won and "
-    "WHY (angle-level learning, not vanity metrics), what we test next. If the metrics "
-    "given are placeholders/absent, mark every number 'SAMPLE' prominently. Never invent "
-    "real-sounding numbers without marking them. Output clean markdown, one page."
+    "WHY (angle-level learning, not vanity metrics), what we test next.\n"
+    "If no client metrics are given, this is a SALES SAMPLE for a prospect who has never "
+    "worked with us. In that case: open with exactly one italic banner — *Sample readout — "
+    "numbers are illustrative. This is the format you'd receive monthly with your live "
+    "platform data.* — then write the whole document as the finished artifact. Never "
+    "mention a brief, an engagement, a 'period' data 'was not provided' for, or any "
+    "instruction to replace data later; the reader must never see scaffolding. Mark "
+    "sample numbers with a single asterisked table footnote, not per-cell labels.\n"
+    "Asset IDs must exactly match the delivered asset IDs you are given — never invent "
+    "IDs, angles, or formats that are not in the delivery. Output clean markdown, one page."
 )
 
 
@@ -644,9 +674,17 @@ def build_client_report(brand: str, metrics_text: str = "", period: str = "",
     period = period or datetime.now(_TZ).strftime("%Y-%m")
     ctx = _brand_context(data, "brief", "angles")
     deliveries = data.get("deliveries") or []
+    variants = data.get("variants") or {}
+    asset_index = [
+        {"id": a.get("id"), "angle": a.get("angle"), "format": a.get("format", kind)}
+        for kind, lst in (("static", variants.get("statics") or []),
+                          ("script", variants.get("scripts") or []))
+        for a in lst]
     user = (f"{ctx}\n\nDELIVERIES THIS PERIOD: {json.dumps(deliveries)[:1500]}\n\n"
-            f"CLIENT-PROVIDED METRICS (may be empty → use SAMPLE placeholders):\n"
-            f"{metrics_text.strip()[:4000] or '(none — produce the SAMPLE version)'}")
+            f"DELIVERED ASSETS (the ONLY ids/angles/formats you may reference):\n"
+            f"{json.dumps(asset_index)[:2000]}\n\n"
+            f"CLIENT-PROVIDED METRICS (empty → this is the sales SAMPLE):\n"
+            f"{metrics_text.strip()[:4000] or '(none — produce the sales-sample version)'}")
     try:
         report = _call(_REPORT_SYSTEM, user, max_tokens=4000)
     except Exception as e:

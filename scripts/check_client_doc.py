@@ -32,9 +32,23 @@ BANNED = [
     (re.compile(r"\b(GPT|Claude|OpenAI|Anthropic|ChatGPT)\b", re.I), "a model/vendor name"),
     (re.compile(r"\bmachine learning\b", re.I), "'machine learning'"),
     (re.compile(r"\bCLARVIS\b", re.I), "the internal system name"),
+    # Pipeline tells — 2026-08-03 council taste-pass, all seen in a real pack:
+    (re.compile(r"\w\(s\)\b"), "format-string pluralization like 'asset(s)'"),
+    (re.compile(r"\bthe gate\b", re.I), "internal pipeline jargon 'the gate'"),
+    (re.compile(r"\bon-brief\b", re.I), "'on-brief' (there is no brief)"),
+    (re.compile(r"\bclaim guardrails\b", re.I), "internal QA jargon"),
+    (re.compile(r"was (not |n't )?provided this period", re.I),
+     "fabricated-engagement framing"),
+    (re.compile(r"identified in the brief", re.I), "fabricated-engagement framing"),
+    (re.compile(r"before (distribution|sending to the client)", re.I),
+     "template scaffolding instruction"),
+    (re.compile(r"\$X\b"), "an unfilled $X figure"),
 ]
 
 PLACEHOLDER = re.compile(r"\{\{[^}]+\}\}")
+# A header with no content before EOF reads as a truncated export — the exact
+# tell that ended the 2026-08-03 taste-pass ("## Full batch" over nothing).
+EMPTY_TRAILING_HEADER = re.compile(r"^#{1,6}\s+\S.*\n(?:\s*\n)*\Z", re.M)
 INTERNAL_MARKER = re.compile(
     r"(TEMPLATE NOTES|delete before sending|INTERNAL ONLY|DO NOT SEND)", re.I)
 
@@ -61,6 +75,12 @@ def lint(path: str) -> list:
         for m in pattern.finditer(text):
             line = text[:m.start()].count("\n") + 1
             problems.append((line, f"contains {label} — '{m.group(0)}'"))
+
+    m = EMPTY_TRAILING_HEADER.search(text)
+    if m:
+        line = text[:m.start()].count("\n") + 1
+        problems.append((line, "document ends on an empty header — reads as a "
+                               f"truncated export ({m.group(0).strip()[:40]})"))
 
     return sorted(set(problems))
 

@@ -136,20 +136,111 @@ single SPF, **DKIM 2048 authenticating**, DMARC `p=none` with reports to the rea
 mailbox, Porkbun's parking MX/SPF defaults deleted, Postmaster Tools verified,
 and a **mail-tester baseline of 10/10** ("Perfect, you can send") from a real
 Gmail send. Tracker: **4/17 done** (`name-service`, `buy-domain`, `mailbox-dns`,
-`dns-strings`), ticked in the vault. Portfolio site rendered clean under the new
-name and browser-verified at 1512px and 390px — **not yet public**, held for
-Alex's copy taste-pass.
+`dns-strings`), ticked in the vault.
+
+**Update 2026-08-03 14:30 — site is LIVE.** ~~not yet public~~ splitframestudio.com
+serves HTTP 200 over valid TLS (cert issued 2026-08-03, expires 11-01), A records
+on GitHub Pages, `www` CNAME resolving. Re-verified by dig + curl, not by UI claim.
+Mail DNS re-checked the same way and still clean: sole Google MX, single SPF, DKIM
+published, DMARC `p=none`, no parking leftovers.
 
 **Alex's remaining clicks, in order (each is minutes, not hours):**
 
-1. **Read the portfolio copy** (preview at `localhost:5070`, or re-render any
-   time: `python3 portfolio-site/render.py --name "Splitframe Studio" --email
-   alexhickey@splitframestudio.com`). Say "ship it" and CLARVIS deploys it to
-   splitframestudio.com via GitHub Pages + DNS with no further clicks (gh CLI
-   already authed with repo scope).
-2. **Warmup day 1** (starts the 7-day clock, target first sends 2026-08-02):
-   drafts are waiting in the splitframestudio Gmail Drafts folder + plan at
-   vault `Money/Warmup Plan.md`. Send 3–5 spaced through the day, reply to each.
+1. ~~**Read the portfolio copy / say "ship it"**~~ ✅ DONE — deployed and verified
+   live 2026-08-03.
+2. ⚠️ **Warmup day 1 — NOT STARTED. This is the critical path.** The 3 drafts are
+   still sitting unsent in the splitframestudio Gmail Drafts folder. Verified
+   2026-08-03: a search of alex100hickey@gmail.com for anything from
+   splitframestudio.com over the last 5 days returns **zero** messages (control
+   query on the same mailbox returned 22 threads, so the search path works — the
+   mail genuinely has not gone out). **The 7-day clock has not started, so it is
+   not day 1 of warmup yet — it is day 0.** Every downstream date slides with the
+   day you actually send: earliest Wave 1 send is first-send + 7 days, behind the
+   mail-tester re-check gate. Send from **splitframestudio Gmail → Drafts**, 3
+   spaced across the day, then reply to each from your gmail. Plan: vault
+   `Money/Warmup Plan.md`.
+2b. **Read the 40 drafts — Waves 1, 2 and 3, all ready.** Vault
+   `Money/outreach-drafts-wave1-2026-08-03.md` (22),
+   `-wave2-` (14), `-wave3-` (4). Generated 2026-08-03 against each brand's live
+   Ad Library creative; **40/40 succeeded, 0 failures**. All lint clean
+   (`check_client_doc.py` re-run independently, exit 0: no "AI", no vendor names,
+   no placeholders, no internal markers). All 40 verified inside your 5-100
+   active-ad band, no overlap between waves, and **every qualified brand in the
+   tracker is now assigned to a wave**. Nothing sends itself — these wait on the
+   warmup gate, which is item 2.
+2c. **14 brands sit in your 101-199 "flag for me" band** — decisions only you can
+   make; scraping does not resolve them. This is now the single biggest pool of
+   held-up prospects, bigger than any wave after wave 1:
+
+   | brand | active ads | domain |
+   |---|---|---|
+   | Guava Family | 190 | guavafamily.com |
+   | Divi | 190 | diviofficial.com |
+   | Native Pet | 160 | nativepet.com |
+   | Nani Swimwear | 160 | naniswimwear.com |
+   | UrbanStems | 150 | urbanstems.com |
+   | ROAD iD | 150 | roadid.com |
+   | SheFit | 130 | shefit.com |
+   | Canvas Beauty | 130 | canvasbeautybrand.com |
+   | Needed | 120 | thisisneeded.com |
+   | Momentous | 120 | livemomentous.com |
+   | Fishwife | 120 | eatfishwife.com |
+   | Apothékary | 120 | apothekary.co |
+   | The Outset | 110 | theoutset.com |
+   | Pet Honesty | 110 | pethonesty.com |
+
+   Say "in" or "out" per brand (or one blanket call — e.g. "anything under 150 is
+   in") and CLARVIS moves them into a wave and drafts them.
+2d. **3 of the 7 `identity_mismatch` rows look like matcher false positives**, not
+   real mismatches — worth ~30 seconds each:
+   - **Apothékary** — page stored as literal escape `Apothékary`, so the
+     string compare failed. Almost certainly the right page. 120 active → if you
+     confirm, it belongs in the 101-199 flag list above, not in limbo.
+   - **Bask and Lather** — page `Bask & Lather Co` (`&` vs `and`). 570 active →
+     if confirmed, it is `too_big`, not a candidate.
+   - **Big Barker** — page `Barker Dog Beds`, 24 active. If that is their trading
+     page, it qualifies cleanly inside 5-100.
+
+   The other four (OffLimits → "Kapil tony works", Doe Lashes → "Jolynn Brant",
+   Divi → no page, Create Wellness → "Trycreate") are either genuine wrong-page
+   hits or have no data. Not reclassified automatically — who receives outreach
+   is your call, not a script's.
+2e. **Root-caused why qualification was stalling — two parser bugs, both now
+   understood, and 9 brands recovered from them (no action needed from you).**
+   The 58-brand retry recovered only 3, so instead of running it again the
+   failures were diagnosed directly:
+
+   - **`page_not_found` (was 17)** — nothing to do with handles. Facebook serves
+     logged-out headless Chrome a *bare shell* for `facebook.com/<handle>`: 333KB,
+     title just "Facebook", no page id anywhere. The lookup could never work.
+     **Fix:** resolve page ids through the Ad Library's own keyword search, which
+     does render fully. That produced 8 brand-new page ids.
+   - **`no_data` (was 19)** — the page loaded fine every time. Two compounding
+     bugs: the count regex ran against **raw HTML** while the number and the word
+     "results" sit in different DOM nodes (so it could never match), and the Ad
+     Library's **"No ads match your search criteria"** empty state was read as
+     *unknown* rather than as **zero**. Separately, several of those page ids were
+     simply **wrong** — Fishwife was pointed at a page called "The Fish Wife",
+     Canvas Beauty and Crown Affair at other pages entirely.
+
+   **Recovered:** 4 new qualified (Obvi 24, Oudware 15, Halfdays 55, Emi Jay 84 —
+   now wave 3), 3 added to your flag list above (Fishwife, Canvas Beauty,
+   UrbanStems), and 2 correctly disqualified as `too_big` (Crown Affair 320,
+   Mugsy 300) that had been invisible.
+
+   **Caveat worth knowing:** name-matching against Ad Library search produces
+   false positives — it offered *Franne Golde* for Golde, *Recess Therapy* for
+   Recess, *Crane & Canopy* for Canopy, and *Humane Society of Huron Valley* for
+   Huron. Only exact and corporate-suffix matches (`EmiJay Inc.`, `Canvas Beauty
+   Brands`) were accepted; the rest were rejected rather than guessed at, which is
+   why 46 brands remain unresolved rather than being force-matched.
+2f. **Two brands need a 10-second identity call from you** — the search found a
+   plausible page but the name isn't an exact match, and guessing wrong means
+   pitching the wrong company:
+   - **GOODLES** → page "Goodles: Noodles, Gooder." — almost certainly them, but
+     it's a tagline, not a name.
+   - **Recess** → page "Recess Therapy" — probably **not** them (Recess Therapy is
+     the street-interview series; Recess is the sparkling drink). Left unmatched.
 3. **Stripe** — dashboard.stripe.com/register (sole prop, personal checking OK,
    ACH on, tax auto-transfer). CLARVIS cannot create financial accounts.
 4. **Taste-pass spec pack #1** — files sent to you in chat; also vault
