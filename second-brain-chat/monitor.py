@@ -256,15 +256,22 @@ def _notify_stale(incidents: list) -> None:
     (quiet hours, daily cap, dedupe). A recovered-then-stale-again subsystem nudges
     again on a later day via the date in the key."""
     for inc in incidents:
-        key = f"heartbeat:{inc['component']}:{datetime.now(ZoneInfo('America/New_York')).strftime('%Y-%m-%d')}"
-        if key in _NUDGED_STALE:
+        # In-memory guard stays per-day; the KEY carries no date, so proactive's
+        # per-concern cap limits a chronically-dead subsystem to 2 nudges per
+        # window instead of one every day forever.
+        guard = f"heartbeat:{inc['component']}:{datetime.now(ZoneInfo('America/New_York')).strftime('%Y-%m-%d')}"
+        if guard in _NUDGED_STALE:
             continue
-        _NUDGED_STALE.add(key)
+        _NUDGED_STALE.add(guard)
         try:
             import proactive
-            proactive.send_nudge(key, f"🫀 {inc['component']} went quiet",
-                                 inc["message"] + " Check the dashboard health panel.",
-                                 priority="high", tags="broken_heart")
+            proactive.send_nudge(
+                f"heartbeat:{inc['component']}",
+                f"🫀 CLARVIS subsystem down: {inc['component']}",
+                inc["message"] + "\nDo: nothing urgent yourself — next time you're "
+                "at the Mac, tell Claude Code to check this worker. If it's the "
+                "third day in a row, the server likely needs a restart.",
+                priority="high", tags="broken_heart")
         except Exception:
             pass
 

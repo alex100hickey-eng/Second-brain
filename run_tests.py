@@ -1631,7 +1631,9 @@ def suite_heartbeat(app, live):
         monitor._notify_stale(incs)
         monitor._notify_stale(incs)   # second scan, same day
         check("stale heartbeat nudges the phone exactly once per day",
-              len(sent) == 1 and "went quiet" in sent[0][1], str(sent))
+              len(sent) == 1 and "subsystem down" in sent[0][1], str(sent))
+        check("heartbeat key is concern-scoped (dateless) so proactive can cap it",
+              sent[0][0] == "heartbeat:expansion-scout", str(sent))
 
         # Each subsystem is judged by its OWN cadence: 90 minutes is stale for a
         # 15-minute worker and perfectly healthy for a daily one.
@@ -3787,18 +3789,24 @@ def suite_august(app, live):
         keys = " ".join(n["key"] for n in nudges)
         check("blocked steps are NEVER nudged about", "buy-domain" not in keys
               and "mailbox-dns" not in keys, keys)
-        check("a step due TODAY is nudged", "august:due:name-service" in keys, keys)
+        check("a step due TODAY is nudged", "august:step:name-service" in keys, keys)
         check("a step past its date is nudged as overdue",
-              "august:overdue:stale-thing" in keys, keys)
+              "august:step:stale-thing" in keys
+              and any("LATE" in n["title"] for n in nudges
+                      if n["key"] == "august:step:stale-thing"), keys)
         check("overdue is high priority, due-today is not",
-              [n["priority"] for n in nudges if "overdue:stale-thing" in n["key"]] == ["high"]
-              and [n["priority"] for n in nudges if "due:name-service" in n["key"]] == ["default"])
+              [n["priority"] for n in nudges if n["key"] == "august:step:stale-thing"] == ["high"]
+              and [n["priority"] for n in nudges if n["key"] == "august:step:name-service"] == ["default"])
         check("a step is never nudged twice in one pass (overdue OR due, not both)",
               len([n for n in nudges if "stale-thing" in n["key"]]) == 1)
         check("the nudge says why it matters, not just what it is",
               any("Blocks the domain" in n["body"] for n in nudges))
-        check("nudge keys are day-scoped so they don't repeat all day",
-              all(n["key"].count(":") >= 2 for n in nudges))
+        # Keys are CONCERN-scoped (dateless) on purpose: proactive.py's per-concern
+        # cap (2 per window) is what stops repeats now — a date in the key would
+        # mint a fresh concern daily and bring back the forever-nag.
+        check("nudge keys carry no date — one step is one concern across days",
+              all(n["key"] == __import__("proactive")._base_key(n["key"])
+                  for n in nudges), keys)
         check("the warmup clock gets its own nudge while it hasn't started",
               any("clock" in n["key"] for n in nudges))
 

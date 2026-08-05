@@ -37,6 +37,9 @@ BANNED = [
     (re.compile(r"\bthe gate\b", re.I), "internal pipeline jargon 'the gate'"),
     (re.compile(r"\bon-brief\b", re.I), "'on-brief' (there is no brief)"),
     (re.compile(r"\bclaim guardrails\b", re.I), "internal QA jargon"),
+    # "3 asset(s)" is how a format string talks, not how a person does — the
+    # 08-03 council pass flagged it in a real pack; write "assets" or "asset".
+    (re.compile(r"\b[a-z]+\(s\)", re.I), "format-string '(s)' pluralization"),
     (re.compile(r"was (not |n't )?provided this period", re.I),
      "fabricated-engagement framing"),
     (re.compile(r"identified in the brief", re.I), "fabricated-engagement framing"),

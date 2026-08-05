@@ -212,12 +212,25 @@ def test_awareness_pass():
     check("intake pile-up → ONE batched nudge",
           sum(1 for s in spy.sent if "triage" in s["title"]) == 1)
 
+    # Empty day → NO brief. "0 open, 0 due" is noise, not a notification.
     sb, spy = _reset(tracker=tracker)
     proactive.set_config(morning_brief=_hhmm(datetime.now()), evening_review="")
     _quiet_config_now(active=False)
     proactive.run_awareness_pass()
-    check("morning brief fires in its window",
-          any("Morning Brief" in s["title"] for s in spy.sent))
+    check("empty day → morning brief SKIPPED", spy.sent == [])
+
+    # Day with substance → brief fires, NAMES the content, and is one-shot.
+    busy = FakeTracker()
+    busy.top_by_priority = lambda limit=10: [
+        {"id": 3, "title": "Ship the taste-pass pack", "status": "in_progress"}]
+    sb, spy = _reset(tracker=busy)
+    proactive.set_config(morning_brief=_hhmm(datetime.now()), evening_review="")
+    _quiet_config_now(active=False)
+    proactive.run_awareness_pass()
+    briefs = [s for s in spy.sent if "Today:" in s["title"]]
+    check("busy day → morning brief fires", len(briefs) == 1)
+    check("brief names the actual work",
+          briefs and "taste-pass" in briefs[0]["body"])
     n = len(spy.sent)
     proactive.run_awareness_pass()
     check("brief is one-shot per day", len(spy.sent) == n)
@@ -231,6 +244,102 @@ def test_awareness_pass():
           and "suppressed" in out)
 
 
+def test_concern_caps():
+    print("\n=== 6. per-concern caps (once or twice per thing) ===")
+    sb, spy = _reset()
+    _quiet_config_now(active=False)
+    proactive.set_config(max_per_day=8, max_per_concern=2,
+                         renudge_after_hours=20, concern_window_days=7)
+
+    # Date-suffixed keys collapse to one concern across days.
+    check("date suffix stripped",
+          proactive._base_key("august:overdue:stripe:2026-08-05") == "august:overdue:stripe")
+    check("half-day suffix stripped",
+          proactive._base_key("intake:2026-08-05-AM") == "intake")
+
+    # Send #1 today, send #2 "tomorrow", then NOTHING despite more days passing.
+    out1 = proactive.send_nudge("august:step:stripe:2026-08-05", "T", "B")
+    check("concern send #1 goes out", out1.startswith("Nudge sent"))
+    st = proactive._sent_state()
+    st["concerns"]["august:step:stripe"]["last"] = (
+        datetime.now() - timedelta(hours=25)).isoformat()
+    proactive._save_sent_state(st)
+    out2 = proactive.send_nudge("august:step:stripe:2026-08-06", "T", "B")
+    check("concern send #2 (next day) goes out", out2.startswith("Nudge sent"))
+    st = proactive._sent_state()
+    st["concerns"]["august:step:stripe"]["last"] = (
+        datetime.now() - timedelta(hours=25)).isoformat()
+    proactive._save_sent_state(st)
+    out3 = proactive.send_nudge("august:step:stripe:2026-08-07", "T", "B")
+    check("concern send #3 MUTED (cap of 2)", "muted" in out3 and len(spy.sent) == 2)
+
+    # After a full quiet window the concern earns a fresh pair.
+    st = proactive._sent_state()
+    st["concerns"]["august:step:stripe"]["last"] = (
+        datetime.now() - timedelta(days=8)).isoformat()
+    proactive._save_sent_state(st)
+    out4 = proactive.send_nudge("august:step:stripe:2026-08-15", "T", "B")
+    check("quiet window resets the concern", out4.startswith("Nudge sent"))
+
+    # renudge_hours override allows a same-day escalation; cap still ends it.
+    sb, spy = _reset()
+    _quiet_config_now(active=False)
+    proactive.send_nudge("due:task:9", "T", "B", renudge_hours=6)
+    st = proactive._sent_state()
+    st["concerns"]["due:task:9"]["last"] = (
+        datetime.now() - timedelta(hours=7)).isoformat()
+    proactive._save_sent_state(st)
+    out = proactive.send_nudge("due:task:9", "T", "B", renudge_hours=6)
+    check("deadline escalation within the day", out.startswith("Nudge sent"))
+    st = proactive._sent_state()
+    st["concerns"]["due:task:9"]["last"] = (
+        datetime.now() - timedelta(hours=7)).isoformat()
+    proactive._save_sent_state(st)
+    out = proactive.send_nudge("due:task:9", "T", "B", renudge_hours=6)
+    check("but never a third", "muted" in out and len(spy.sent) == 2)
+
+    # recurring windows are exempt from the lifetime cap but keep their spacing.
+    sb, spy = _reset()
+    _quiet_config_now(active=False)
+    for day in (1, 2, 3):
+        proactive.send_nudge(f"morning_brief:2026-08-0{day}", "T", "B", recurring=True)
+        st = proactive._sent_state()
+        st["concerns"]["morning_brief"]["last"] = (
+            datetime.now() - timedelta(hours=25)).isoformat()
+        proactive._save_sent_state(st)
+    check("recurring window fires daily, no lifetime cap", len(spy.sent) == 3)
+
+
+def test_pileup_growth_gate():
+    print("\n=== 7. intake pile-up growth gate ===")
+    tracker = FakeTracker()
+    tracker.top_by_priority = lambda limit=10: []
+    sb, spy = _reset(tracker=tracker)
+    _quiet_config_now(active=False)
+    proactive.set_config(morning_brief="", evening_review="")
+    for i in range(4):
+        intake.record_raw("imessage", f"p{i}", "x", "", f"thing {i}",
+                          items=[{"type": "info", "text": f"thing {i}", "due": None}])
+    proactive.run_awareness_pass()
+    first = sum(1 for s in spy.sent if "triage" in s["title"])
+    check("pile-up fires on first sight", first == 1)
+    # Same pile a day later — no growth → silence, even with spacing elapsed.
+    st = proactive._sent_state()
+    st["concerns"]["intake-pileup"]["last"] = (
+        datetime.now() - timedelta(hours=25)).isoformat()
+    proactive._save_sent_state(st)
+    proactive.run_awareness_pass()
+    check("static pile does NOT re-nudge",
+          sum(1 for s in spy.sent if "triage" in s["title"]) == 1)
+    # Pile grows by 5 → one more nudge.
+    for i in range(4, 9):
+        intake.record_raw("imessage", f"p{i}", "x", "", f"thing {i}",
+                          items=[{"type": "info", "text": f"thing {i}", "due": None}])
+    proactive.run_awareness_pass()
+    check("grown pile re-nudges once",
+          sum(1 for s in spy.sent if "triage" in s["title"]) == 2)
+
+
 # ============================================================
 if __name__ == "__main__":
     test_config()
@@ -239,6 +348,8 @@ if __name__ == "__main__":
     test_delivery_logging()
     test_gather()
     test_awareness_pass()
+    test_concern_caps()
+    test_pileup_growth_gate()
     total, passed = len(_results), sum(_results)
     print("\n" + "=" * 48)
     print(f"{passed}/{total} checks passed")

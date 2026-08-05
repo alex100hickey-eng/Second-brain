@@ -10,8 +10,20 @@ notification and tapping it deep-links back into CLARVIS.
 A NAGGING ASSISTANT GETS DELETED. The respect rules are first-class:
   * quiet hours (default 22:00–08:00 local) — nothing sends, ever;
   * max nudges/day (default 8) — hard cap;
-  * every nudge has a KEY — the same concern never nudges twice in its window;
+  * every nudge has a KEY; keys collapse to a CONCERN (date suffixes stripped) and
+    a concern nudges at most `max_per_concern` times (default 2) per
+    `concern_window_days` — Alex's rule: once or twice per thing, then silence;
+  * a concern can't re-nudge within `renudge_after_hours` of its last send
+    (recurring windows like the morning brief are exempt from the lifetime cap
+    but still spaced by this);
   * without NTFY_TOPIC configured, nothing can send at all (nudges just log).
+
+All of this is decided from ONE compact state row ("notify:sent"), not by
+scanning the ledger — the old ledger-window approach broke silently once skip
+rows outnumbered sent rows (seen 2026-08-05: the same 6 nudges sent 3× in a day
+past an 8/day cap, because every rule read the last 80 rows of a ledger getting
+hundreds of skip rows a day). Skips are no longer logged at all; the ledger
+records only sent/failed, so it stays a meaningful audit trail.
 Config lives in a Supabase row (key "notify:config") so Alex's settings apply on
 every device and survive restarts; `set_notification_rules` edits it from chat.
 
@@ -64,7 +76,11 @@ DEFAULT_CONFIG = {
     "max_per_day": 8,
     "morning_brief": "08:15",  # "" disables
     "evening_review": "20:30",  # "" disables
+    "max_per_concern": 2,       # lifetime sends per concern within the window
+    "renudge_after_hours": 20,  # min gap between sends of the same concern
+    "concern_window_days": 7,   # after this quiet, a concern may earn 2 more
 }
+SENT_KEY = "notify:sent"       # the one state row every respect rule reads
 
 _worker_started = False
 
@@ -125,16 +141,41 @@ def _log_nudge(record: dict) -> None:
         {"agent_name": NUDGE_AGENT, "output_text": json.dumps(record)}).execute()
 
 
-def _sent_today() -> int:
+import re as _re
+
+_DATE_SUFFIX = _re.compile(r":\d{4}-\d{2}-\d{2}(-[AP]M)?$")
+
+
+def _base_key(key: str) -> str:
+    """Collapse a nudge key to its CONCERN: strip trailing date/half-day suffixes
+    so legacy callers that bake the date into the key (august:overdue:x:2026-08-05)
+    still count as ONE thing across days."""
+    prev = None
+    while prev != key:
+        prev, key = key, _DATE_SUFFIX.sub("", key)
+    return key
+
+
+def _sent_state() -> dict:
+    """The one decision record: per-concern counts + today's send counter.
+    {"concerns": {base: {"n": int, "last": iso}}, "day": "YYYY-MM-DD", "day_sent": int}"""
+    st = intake_mod._load_state(SENT_KEY)
+    st.setdefault("concerns", {})
     today = _now().strftime("%Y-%m-%d")
-    return sum(1 for n in _nudge_rows()
-               if n.get("status") == "sent" and (n.get("at") or "").startswith(today))
+    if st.get("day") != today:            # midnight rollover resets the daily cap
+        st["day"], st["day_sent"] = today, 0
+    return st
 
 
-def _already_nudged(key: str, within_hours: int = 20) -> bool:
-    cutoff = (_now() - timedelta(hours=within_hours)).isoformat()
-    return any(n.get("key") == key and n.get("status") == "sent"
-               and (n.get("at") or "") >= cutoff for n in _nudge_rows())
+def _save_sent_state(st: dict) -> None:
+    cutoff = (_now() - timedelta(days=30)).isoformat()
+    st["concerns"] = {k: v for k, v in st["concerns"].items()
+                      if (v.get("last") or "") >= cutoff}
+    intake_mod._save_state(st)
+
+
+def _sent_today() -> int:
+    return int(_sent_state().get("day_sent", 0))
 
 
 def _in_quiet_hours(cfg: dict) -> bool:
@@ -169,10 +210,23 @@ _sender = _post_ntfy   # test seam
 
 
 def send_nudge(key: str, title: str, body: str, priority: str = "default",
-               tags: str = "brain", force: bool = False) -> str:
-    """The ONLY door to Alex's phone. Applies every respect rule, then sends."""
+               tags: str = "brain", force: bool = False, recurring: bool = False,
+               renudge_hours: float = None) -> str:
+    """The ONLY door to Alex's phone. Applies every respect rule, then sends.
+
+    `recurring=True` marks a daily window (morning brief) — exempt from the
+    per-concern lifetime cap but still spaced by renudge_after_hours.
+    `renudge_hours` overrides the spacing for this call (e.g. a deadline nudge
+    that's allowed one escalation a few hours before it's due)."""
     cfg = get_config()
     topic = os.environ.get("NTFY_TOPIC", "")
+    st = _sent_state()
+    base = _base_key(key)
+    concern = st["concerns"].get(base) or {}
+    now = _now()
+    gap_h = float(renudge_hours if renudge_hours is not None
+                  else cfg.get("renudge_after_hours", 20))
+
     reason = None
     if not cfg.get("enabled"):
         reason = "notifications disabled"
@@ -180,16 +234,35 @@ def send_nudge(key: str, title: str, body: str, priority: str = "default",
         reason = "no NTFY_TOPIC configured"
     elif not force and _in_quiet_hours(cfg):
         reason = "quiet hours"
-    elif not force and _sent_today() >= int(cfg.get("max_per_day", 8)):
+    elif not force and st.get("day_sent", 0) >= int(cfg.get("max_per_day", 8)):
         reason = "daily cap reached"
-    elif _already_nudged(key):
-        reason = "already nudged about this"
+    elif concern and not force:
+        try:
+            last = datetime.fromisoformat(concern.get("last", ""))
+        except ValueError:
+            last = None
+        window = timedelta(days=float(cfg.get("concern_window_days", 7)))
+        if last and (now - last) >= window and not recurring:
+            concern = {}          # quiet a full window → the concern earns a fresh 2
+            st["concerns"].pop(base, None)
+        elif last and (now - last) < timedelta(hours=gap_h):
+            reason = "already nudged about this recently"
+        elif (not recurring
+              and concern.get("n", 0) >= int(cfg.get("max_per_concern", 2))):
+            reason = (f"already nudged {concern.get('n')}x about this — "
+                      f"muted for {cfg.get('concern_window_days', 7)} days")
     if reason:
-        _log_nudge({"key": key, "title": title, "status": "skipped", "why": reason})
+        # Deliberately NOT logged as a row: skip-row flooding is what broke the
+        # ledger-based rules. The returned string is the caller's audit.
         return f"Nudge skipped ({reason})."
     try:
         _sender(topic, title, body, priority, tags)
-        _log_nudge({"key": key, "title": title, "body": body, "status": "sent"})
+        st["concerns"][base] = {"n": int(concern.get("n", 0)) + 1,
+                                "last": now.isoformat()}
+        st["day_sent"] = int(st.get("day_sent", 0)) + 1
+        _save_sent_state(st)
+        _log_nudge({"key": key, "concern": base, "title": title, "body": body,
+                    "status": "sent"})
         return f"Nudge sent: {title}"
     except Exception as e:
         _log_nudge({"key": key, "title": title, "status": "failed", "why": str(e)})
@@ -278,35 +351,101 @@ def _august_actions() -> list:
     return out
 
 
+def _due_context(ref: str) -> str:
+    """Provenance lines for a due-soon nudge — who asked, and the original text.
+    A nudge that names its source gets acted on; 'open CLARVIS for details' gets
+    ignored. Fail-soft: no context beats no nudge."""
+    try:
+        kind, _, rid = ref.partition(":")
+        if kind == "intake":
+            ev = intake_mod._event_row(int(rid))
+            if ev:
+                src = ev.get("source", "?")
+                sender = ev.get("sender") or "?"
+                prev = (ev.get("preview") or "").strip().replace("\n", " ")[:160]
+                return f"From {sender} (via {src}): “{prev}”"
+        elif kind == "task":
+            t = task_tracker.get(int(rid))
+            if t:
+                desc = (t.get("description") or "").strip().replace("\n", " ")[:160]
+                return f"Task #{rid}. {desc}" if desc else f"Task #{rid}."
+    except Exception:
+        pass
+    return ""
+
+
+def _when_words(hours: float, due: str) -> str:
+    try:
+        dt = datetime.fromisoformat(due)
+        clock = dt.strftime("%-I:%M%p").lower()
+    except ValueError:
+        clock = due
+    if hours <= 0:
+        return f"NOW ({clock})"
+    if hours < 1:
+        return f"within the hour ({clock})"
+    if hours < 24:
+        return f"in {int(hours)}h ({clock})"
+    return f"{clock}"
+
+
 def run_awareness_pass(force: bool = False) -> str:
-    """One decision cycle. Deterministic triggers; the model only phrases text."""
+    """One decision cycle. Deterministic triggers, deterministic text — every
+    nudge must name the thing, the source, and the next physical action."""
     cfg = get_config()
     picture = _gather()
     now = picture["now"]
     actions = []
     actions.extend(_august_actions())
 
-    # 1. Deadlines approaching (one nudge per item, keyed by ref+day)
+    # 1. Deadlines approaching. Concern = the item itself (no date in the key):
+    #    lifetime max 2 = one heads-up ~a day out + one escalation close to due,
+    #    enabled by the 6h renudge override. Never a third.
     for d in picture["due_soon"]:
-        key = f"due:{d['ref']}:{now.strftime('%Y-%m-%d')}"
-        when = ("NOW" if d["hours"] <= 0 else
-                f"in {int(d['hours'])}h" if d["hours"] >= 1 else "within the hour")
+        close = d["hours"] <= 3
+        title = (f"🔴 DUE {_when_words(d['hours'], d['due'])} — {d['what'][:55]}"
+                 if close else
+                 f"⏰ Today {_when_words(d['hours'], d['due'])} — {d['what'][:55]}")
+        ctx = _due_context(d["ref"])
+        body = "\n".join(x for x in (
+            d["what"],
+            f"Due: {_when_words(d['hours'], d['due'])}",
+            ctx,
+            "Do it (or drop it), then mark it done in CLARVIS so this stays quiet.",
+        ) if x)
         actions.append(send_nudge(
-            key, f"⏰ {when}: {d['what'][:70]}",
-            f"{d['what']}\nDue {d['due']}. Open CLARVIS to see details.",
-            priority="high" if d["hours"] <= 3 else "default",
-            tags="alarm_clock", force=force))
+            f"due:{d['ref']}", title, body,
+            priority="high" if close else "default",
+            tags="alarm_clock", force=force, renudge_hours=6))
 
-    # 2. Intake pile-up (one batched nudge per day-half)
-    if picture["new_intake"] >= 3:
-        key = f"intake:{now.strftime('%Y-%m-%d-%p')}"
-        actions.append(send_nudge(
-            key, f"📥 {picture['new_intake']} things waiting for triage",
-            "New texts/emails/events with extracted obligations are waiting. "
-            "One tap each to accept into tasks or dismiss.",
-            tags="inbox_tray", force=force))
+    # 2. Intake pile-up. Only when the pile GREW meaningfully since the last
+    #    nudge about it — a static pile he chose not to triage is not news.
+    n_intake = picture["new_intake"]
+    st = _sent_state()
+    last_n = int(st.get("intake_last_n", 0))
+    if n_intake >= 3 and (n_intake >= last_n + 5 or last_n == 0):
+        tops = []
+        try:
+            for r in intake_mod.list_intake("new", limit=3):
+                ev = r["event"]
+                first = (ev.get("items") or [{}])[0].get("text") or ev.get("preview", "")
+                tops.append(f"• {ev.get('sender', '?')}: {str(first)[:70]}")
+        except Exception:
+            pass
+        body = "\n".join(
+            [f"{n_intake} extracted obligations waiting. Newest:"] + tops +
+            ["Triage takes one tap each: accept → task, or dismiss."])
+        r = send_nudge("intake-pileup",
+                       f"📥 {n_intake} waiting — triage is the bottleneck",
+                       body, tags="inbox_tray", force=force, recurring=True)
+        if r.startswith("Nudge sent"):
+            st = _sent_state()
+            st["intake_last_n"] = n_intake
+            _save_sent_state(st)
+        actions.append(r)
 
-    # 3. Morning brief / evening review windows (one-shot per day)
+    # 3. Morning brief / evening review windows (recurring; skipped entirely on
+    #    an empty day — "0 open, 0 due" is not a notification, it's noise).
     for label, cfg_key, emoji in (("morning brief", "morning_brief", "🌅"),
                                   ("evening review", "evening_review", "🌆")):
         target = cfg.get(cfg_key) or ""
@@ -319,20 +458,26 @@ def run_awareness_pass(force: bool = False) -> str:
         window_start = now.replace(hour=t_h, minute=t_m, second=0, microsecond=0)
         if not (window_start <= now < window_start + timedelta(minutes=PASS_INTERVAL // 60 + 20)):
             continue
-        key = f"{cfg_key}:{now.strftime('%Y-%m-%d')}"
         n_open = len(picture["open_tasks"])
+        if n_open == 0 and n_intake == 0 and not picture["due_soon"]:
+            continue   # nothing actionable — the respectful brief is no brief
+        head = []
+        for d in picture["due_soon"][:3]:
+            head.append(f"• {_when_words(d['hours'], d['due'])}: {d['what'][:60]}")
+        for t in picture["open_tasks"][:max(0, 3 - len(head))]:
+            head.append(f"• open: {t[:60]}")
         if cfg_key == "morning_brief":
-            body = (f"{n_open} open task(s), {picture['new_intake']} intake to triage, "
-                    f"{len(picture['due_soon'])} deadline(s) in the next day. "
-                    "Tap for the full picture.")
+            title = (f"{emoji} Today: {len(picture['due_soon'])} deadline(s), "
+                     f"{n_open} open")
+            tail = ([f"…plus {n_intake} intake to triage."] if n_intake else [])
         else:
-            if n_open == 0 and picture["new_intake"] == 0:
-                continue   # quiet evening — don't nudge about nothing
-            body = (f"Still open: {n_open} task(s), {picture['new_intake']} untriaged. "
-                    "Two minutes now saves tomorrow morning.")
-        actions.append(send_nudge(key, f"{emoji} {label.title()}", body,
-                                  tags="sunrise" if "morning" in cfg_key else "city_sunset",
-                                  force=force))
+            title = f"{emoji} Still open tonight: {n_open + n_intake} thing(s)"
+            tail = ["Two minutes now saves tomorrow morning."]
+        actions.append(send_nudge(
+            f"{cfg_key}:{now.strftime('%Y-%m-%d')}", title,
+            "\n".join(head + tail),
+            tags="sunrise" if "morning" in cfg_key else "city_sunset",
+            force=force, recurring=True))
 
     sent = sum(1 for a in actions if a.startswith("Nudge sent"))
     # Heartbeat: a pass that decides to send NOTHING is still a completed pass —
@@ -378,10 +523,13 @@ def start_worker() -> bool:
 def status_text() -> str:
     cfg = get_config()
     recent = [n for n in _nudge_rows(20)]
+    st = _sent_state()
     lines = [f"Notifications {'ON' if cfg['enabled'] else 'OFF'} — "
              f"quiet {cfg['quiet_start']}–{cfg['quiet_end']}, max {cfg['max_per_day']}/day, "
+             f"{cfg['max_per_concern']}x per concern per {cfg['concern_window_days']}d, "
              f"brief {cfg['morning_brief'] or 'off'}, review {cfg['evening_review'] or 'off'}, "
-             f"channel {'configured' if os.environ.get('NTFY_TOPIC') else 'NOT CONFIGURED'}."]
+             f"channel {'configured' if os.environ.get('NTFY_TOPIC') else 'NOT CONFIGURED'}. "
+             f"Sent today: {st.get('day_sent', 0)}; tracked concerns: {len(st.get('concerns', {}))}."]
     for n in recent[:8]:
         lines.append(f"  [{(n.get('at') or '')[:16]}] {n.get('status')}: "
                      f"{n.get('title')}{' — ' + n.get('why', '') if n.get('why') else ''}")
@@ -405,7 +553,13 @@ TOOL_SCHEMAS = [
             "quiet_end": {"type": "string", "description": "HH:MM local"},
             "max_per_day": {"type": "integer"},
             "morning_brief": {"type": "string", "description": "HH:MM or '' to disable"},
-            "evening_review": {"type": "string", "description": "HH:MM or '' to disable"}}},
+            "evening_review": {"type": "string", "description": "HH:MM or '' to disable"},
+            "max_per_concern": {"type": "integer",
+                                "description": "Lifetime nudges per concern in the window (default 2)"},
+            "renudge_after_hours": {"type": "integer",
+                                    "description": "Min hours between nudges of the same concern"},
+            "concern_window_days": {"type": "integer",
+                                    "description": "Quiet days after which a concern may re-earn nudges"}}},
     },
     {
         "name": "run_awareness_now",

@@ -381,36 +381,59 @@ def nudges_due() -> list:
     today = _today().isoformat()
     out = []
 
+    # Keys carry NO date on purpose: one step = one concern, and proactive.py's
+    # per-concern cap (2 per window) means a step nudges at most twice, then goes
+    # silent instead of nagging daily. due-today and overdue share the step's key
+    # so the pair together can't exceed the cap either.
     for s in st["overdue"]:
         if s["owner"] != "alex":
             continue
+        days_late = 0
+        try:
+            days_late = (_today() - date.fromisoformat(s["due"])).days
+        except (TypeError, ValueError):
+            pass
+        late = f"{days_late}d LATE" if days_late > 0 else "LATE"
+        body = "\n".join(x for x in (
+            f"Was due {s['due']}.",
+            f"Why it matters: {_why(s)}",
+            _do(s),
+            "Done already? Tick it in the vault tracker and this goes quiet.",
+        ) if x)
         out.append({
-            "key": f"august:overdue:{s['id']}:{today}",
-            "title": f"⚠️ Overdue: {s['title'][:60]}",
-            "body": f"Was due {s['due']}. {_why(s)}",
+            "key": f"august:step:{s['id']}",
+            "title": f"🔴 {late} — {s['title'][:55]}",
+            "body": body,
             "priority": "high",
         })
 
     for s in st["due_today"]:
         if s["owner"] != "alex" or any(o["id"] == s["id"] for o in st["overdue"]):
             continue
+        body = "\n".join(x for x in (
+            f"Why it matters: {_why(s)}",
+            _do(s),
+        ) if x)
         out.append({
-            "key": f"august:due:{s['id']}:{today}",
-            "title": f"📅 Due today: {s['title'][:60]}",
-            "body": _why(s),
+            "key": f"august:step:{s['id']}",
+            "title": f"📅 Due TODAY — {s['title'][:55]}",
+            "body": body,
             "priority": "default",
         })
 
     # The compounding cost of not starting warmup is the single most important
-    # thing to keep in front of him, so it gets its own once-daily nudge.
+    # thing to keep in front of him. Dateless key: the concern cap lets it fire
+    # twice per window, not daily forever.
     clock = st["clock"]
     if not clock["warmup_started"] and st["done"] < st["total"]:
         out.append({
-            "key": f"august:clock:{today}",
-            "title": "⏳ Warmup clock hasn't started",
-            "body": (f"Mailbox live today → first sends {clock['earliest_send']}, "
-                     f"{clock['selling_days_if_started_today']} selling days left. "
-                     f"Each day of delay costs one."),
+            "key": "august:clock",
+            "title": f"⏳ {clock['selling_days_if_started_today']} selling days left "
+                     "— warmup unstarted",
+            "body": (f"Start today → first sends {clock['earliest_send']}. "
+                     f"Each day of delay costs one selling day.\n"
+                     "Do: splitframestudio Gmail → Drafts → send 3 warmup emails, "
+                     "spaced; reply to each from your gmail. ~5 min."),
             "priority": "default",
         })
     return out
@@ -430,6 +453,25 @@ def _why(step) -> str:
         "deliverability-gate": "Hard go/no-go before the first real send.",
     }
     return reasons.get(step["id"], "On the critical path for Aug 31.")
+
+
+def _do(step) -> str:
+    """The exact next physical action, when it's known. A nudge that says WHAT to
+    click gets done in the gap between phone-unlock and doom-scroll; one that says
+    'handle Stripe' gets postponed."""
+    actions = {
+        "stripe": "Do: dashboard.stripe.com/register — sole prop, personal checking, "
+                  "ACH on, tax auto-transfer 25-30%. ~15 min.",
+        "warmup-daily": "Do: open splitframestudio Gmail → Drafts → send 3, spaced "
+                        "through the day; reply to each from your gmail. ~5 min.",
+        "postmaster-check": "Do: postmaster.google.com → splitframestudio.com → check "
+                            "data is populating. ~2 min.",
+        "deliverability-gate": "Do: mail-tester.com → send from splitframestudio Gmail "
+                               "→ needs 10/10 before Wave 1. ~5 min.",
+        "taste-pass-1": "Do: read the pack in vault Money/Clients/, mark up anything "
+                        "off-voice, say 'approved' or list changes. ~20 min.",
+    }
+    return actions.get(step["id"], "")
 
 
 # --- prospect list -----------------------------------------------------------
