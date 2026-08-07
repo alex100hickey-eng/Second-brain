@@ -2899,6 +2899,180 @@ def suite_taskman(app, live):
         tm._call = saved_call
 
 
+def suite_situational(app, live):
+    section("situational awareness (RIGHT NOW block: format / assemble / cache / fail-soft)")
+    import situational
+    from datetime import datetime
+
+    now = datetime(2026, 8, 7, 14, 30)  # Friday 2:30 PM, fixed for determinism
+
+    # ---- event annotation relative to now -----------------------------------
+    past = {"title": "Morning lift", "start": "2026-08-07T06:00:00", "end": "2026-08-07T07:00:00"}
+    current = {"title": "Study hall", "start": "2026-08-07T14:00:00", "end": "2026-08-07T15:00:00"}
+    future = {"title": "Practice", "start": "2026-08-07T18:00:00", "end": "2026-08-07T19:30:00"}
+    allday = {"title": "Spirit week", "all_day": True, "start": "2026-08-07", "end": "2026-08-08"}
+    check("past event marked as already happened",
+          "already happened" in situational.format_event_line(past, now))
+    check("ongoing event marked NOW",
+          "happening NOW" in situational.format_event_line(current, now))
+    check("future event shows its time",
+          "at 6:00 PM" in situational.format_event_line(future, now),
+          situational.format_event_line(future, now))
+    check("all-day event says all day",
+          "all day" in situational.format_event_line(allday, now))
+    lines = situational.calendar_lines([past, current, future], now)
+    check("first upcoming event flagged next up",
+          any("(next up)" in ln and "Practice" in ln for ln in lines), str(lines))
+    check("a malformed event degrades to its title, not a crash",
+          situational.format_event_line({"title": "Broken", "start": "not-a-date"}, now) == "Broken")
+
+    # ---- assembly ------------------------------------------------------------
+    text = situational.assemble(
+        [("Today's calendar:", ["Practice — at 6:00 PM"]),
+         ("Waiting on him:", []),  # empty section must vanish
+         ("Top of his plate:", ["#4 Film review (in progress)"])], now)
+    check("assemble always leads with the clock", text.startswith("It is Friday, August 7"))
+    check("assemble includes non-empty sections", "Practice" in text and "#4 Film" in text)
+    check("assemble drops empty sections entirely", "Waiting on him" not in text)
+    tiny = situational.assemble(
+        [("A:", ["x" * 200]), ("B:", ["y" * 200]), ("C:", ["z" * 200])], now, max_chars=260)
+    check("assemble respects the char budget by dropping whole sections",
+          "x" in tiny and "z" not in tiny and len(tiny) < 400)
+    bare = situational.assemble([("Today's calendar:", [])], now)
+    check("an empty world still gets the clock", bare.startswith("It is "))
+
+    # ---- TTL cache -----------------------------------------------------------
+    situational.invalidate()
+    calls = {"n": 0}
+
+    def builder():
+        calls["n"] += 1
+        return f"digest v{calls['n']}"
+
+    a = situational.get_cached(builder, ttl=3600)
+    b = situational.get_cached(builder, ttl=3600)
+    check("cache serves without rebuilding inside the TTL", a == b == "digest v1" and calls["n"] == 1)
+    c = situational.get_cached(builder, ttl=3600, force=True)
+    check("force rebuilds", c == "digest v2" and calls["n"] == 2)
+
+    # A failing builder serves the stale copy rather than raising into chat.
+    def boom():
+        raise RuntimeError("source down")
+
+    d = situational.get_cached(boom, ttl=0)  # ttl=0 forces a rebuild attempt
+    check("a failing builder serves the last good digest", d == "digest v2")
+    situational.invalidate()
+    check("with no cache at all, a failing builder yields empty string, not an error",
+          situational.get_cached(boom, ttl=0) == "")
+    situational.invalidate()
+
+    # ---- app-level assembly with stubbed sources ----------------------------
+    saved = (app.get_today_events, app.get_pending_actions, app._calendar_cache["events"])
+    try:
+        app._calendar_cache["events"] = [future]  # a fetch has succeeded
+        app.get_today_events = lambda: [future]
+        app.get_pending_actions = lambda: [1, 2]
+        snap = app._situational_snapshot()
+        check("app snapshot includes calendar", "Practice" in snap, snap[:200])
+        check("app snapshot counts approvals awaiting him",
+              "2 actions awaiting his approval" in snap, snap[:400])
+
+        # Empty-and-working vs source-down must be DIFFERENT prompts: a clear day is
+        # information ("he's free"); a dead source must leave the section absent so the
+        # model falls back to calendar tools instead of assuming free.
+        app._calendar_cache["events"] = []
+        app.get_today_events = lambda: []
+        snap_empty = app._situational_snapshot()
+        check("an empty-but-working calendar says so explicitly",
+              "nothing scheduled today" in snap_empty, snap_empty[:300])
+        app._calendar_cache["events"] = None  # no fetch has ever succeeded
+        snap_down = app._situational_snapshot()
+        check("a never-succeeded calendar source omits the section entirely",
+              "Today's calendar" not in snap_down and "nothing scheduled" not in snap_down,
+              snap_down[:300])
+
+        app.get_today_events = lambda: (_ for _ in ()).throw(RuntimeError("calendar down"))
+        snap2 = app._situational_snapshot()
+        check("a dead source costs its section, not the snapshot",
+              snap2.startswith("It is ") and "approval" in snap2)
+    finally:
+        app.get_today_events, app.get_pending_actions = saved[0], saved[1]
+        app._calendar_cache["events"] = saved[2]
+        situational.invalidate()
+
+
+def suite_protocols(app, live):
+    section("protocols (standing orders: define / run / list / archive)")
+    import protocols as P
+
+    tmp = tempfile.mkdtemp(prefix="sbtest_protocols_")
+    try:
+        # ---- define ----------------------------------------------------------
+        msg = P.save(tmp, "Game Day", [
+            "Check today's calendar for the game time.",
+            "List my open tasks and flag anything due today so I can clear the afternoon.",
+            "Draft a short focus note into the vault Schedule folder."])
+        check("saving a protocol reports success", msg.startswith("Saved protocol 'game-day'"), msg)
+        check("protocol file lands in the vault",
+              os.path.exists(os.path.join(tmp, "Protocols", "game-day.md")))
+        check("empty steps are rejected", "at least one step" in P.save(tmp, "empty", []))
+        check("a duplicate name is refused without overwrite",
+              "already exists" in P.save(tmp, "game day", ["x"]))
+        msg2 = P.save(tmp, "game day", ["Only step now."], overwrite=True)
+        check("overwrite replaces the steps", msg2.startswith("Updated protocol"), msg2)
+        check("overwrite really took", P.load(tmp, "game day")["steps"] == ["Only step now."])
+        check("step cap enforced", "cap at" in P.save(tmp, "huge", ["s"] * 25))
+
+        # ---- load / list -----------------------------------------------------
+        P.save(tmp, "Wind Down", ["Dim expectations.", "Review tomorrow's calendar."])
+        p = P.load(tmp, "wind down")
+        check("load round-trips name/title/steps",
+              p["name"] == "wind-down" and p["title"] == "Wind Down" and len(p["steps"]) == 2)
+        check("name matching is slug-based (case/spacing insensitive)",
+              P.load(tmp, "  WIND   down ") is not None)
+        rows = P.list_all(tmp)
+        check("list shows all active protocols", [r["name"] for r in rows] == ["game-day", "wind-down"], str(rows))
+
+        # ---- hand-edit in Obsidian keeps working -----------------------------
+        with open(os.path.join(tmp, "Protocols", "wind-down.md"), "a", encoding="utf-8") as f:
+            f.write("3. A step Alex typed by hand.\n- And a bulleted one.\n")
+        p2 = P.load(tmp, "wind down")
+        check("hand-added numbered and bulleted steps are picked up",
+              len(p2["steps"]) == 4 and p2["steps"][-1] == "And a bulleted one.", str(p2["steps"]))
+
+        # ---- run text --------------------------------------------------------
+        rt = P.run_text(p2)
+        check("run text frames steps as a standing order",
+              rt.startswith("STANDING ORDER") and "1. Dim expectations." in rt)
+        check("run text restates that gates still apply",
+              "gate" in rt and "drafts" in rt)
+
+        # ---- archive (retire, never delete) ----------------------------------
+        out = P.archive(tmp, "game day")
+        check("archive reports where it went", out.startswith("Archived protocol"), out)
+        check("archived protocol leaves the active list",
+              [r["name"] for r in P.list_all(tmp)] == ["wind-down"])
+        archived = os.listdir(os.path.join(tmp, "Protocols", "Archive"))
+        check("archived file is preserved on disk", len(archived) == 1 and archived[0].startswith("game-day-"))
+        check("archiving a ghost is a friendly no-op", "No protocol named" in P.archive(tmp, "ghost"))
+
+        # ---- dispatch through the app (same path chat uses) ------------------
+        saved_vault = app.VAULT_PATH
+        try:
+            app.VAULT_PATH = tmp
+            check("run_protocol dispatch returns framed steps",
+                  app.handle_tool_call("run_protocol", {"name": "wind down"}).startswith("STANDING ORDER"))
+            miss = app.handle_tool_call("run_protocol", {"name": "nope"})
+            check("run_protocol on a missing name lists what exists",
+                  "No protocol named 'nope'" in miss and "wind-down" in miss, miss)
+            check("list_protocols dispatch renders the roster",
+                  "wind-down" in app.handle_tool_call("list_protocols", {}))
+        finally:
+            app.VAULT_PATH = saved_vault
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def suite_profile(app, live):
     section("person-model profile (storage / dedup / supersede / observer / safety)")
     import person_profile as P
@@ -4331,6 +4505,8 @@ SUITES = {
     "retrieval": suite_retrieval,
     "distillation": suite_distillation,
     "profile": suite_profile,
+    "situational": suite_situational,
+    "protocols": suite_protocols,
 }
 
 

@@ -1322,3 +1322,57 @@ full in-season training plan and sleep/protein targets.
 **Still open:** bootstrap only mines chat history. Mining email/calendar/existing vault notes
 into the profile is deliberately NOT done — that's a bigger privacy call and needs Alex's
 explicit go-ahead.
+
+---
+
+## Movie-assistant gap build — 2026-08-07 (afternoon)
+
+**Brief from Alex:** research what the film assistants (JARVIS/FRIDAY/Karen — and E.V.,
+the new movie's AI, who is notably *Peter's own creation*) actually do, map the gaps
+against CLARVIS, build the biggest ones. Gap map's verdict: proactivity, records/replay,
+dossiers, and authority-limits were already built; the person-model shipped this morning.
+The real gaps were (A) ambient awareness of NOW, (B) standing orders, (C) the
+interaction doctrine.
+
+**A — `situational.py` + wiring.** The RIGHT NOW block: time/date, today's calendar
+(annotated already-happened / happening NOW / next up), top open tasks, what's waiting
+on Alex (approvals, drafted runs, intake), background jobs — assembled from existing
+sources, TTL-cached (90s, compute outside the lock), budget-capped, every source
+fail-soft, injected at the top of the dynamic system-prompt block every turn. Same
+architectural insight as the profile: don't make the model elect to fetch what should
+be ambient. Module is pure assembly+cache (offline-testable); app.py owns sources.
+  - **Design subtlety that mattered:** an empty calendar and a dead calendar API must
+    read differently. `get_today_events` swallows failures and returns `[]`, so the
+    snapshot consults `_calendar_cache["events"] is None` (no fetch has EVER succeeded)
+    to decide between "nothing scheduled today" (real information) and omitting the
+    section (model falls back to calendar tools). First demo caught this: the model
+    correctly refused to assume a clear evening when the source was down.
+
+**B — `protocols.py`.** Standing orders ("House Party Protocol"): named multi-step
+routines defined from chat (`define_protocol`), stored as editable markdown under
+`<vault>/Protocols/`, run by name (`run_protocol`) — execution model is deliberately
+the honest one: run returns framed instructions the model executes in-turn through
+normal tools, so every existing gate applies structurally (a protocol can't reach a
+send capability that doesn't exist). Steps are Alex-authored → trusted as Alex; what
+they can DO is bounded by the tool layer. Archive = move to `Protocols/Archive/`,
+never delete. Hand-edits in Obsidian round-trip (numbered or bulleted).
+
+**C — interaction doctrine** in SYSTEM_PROMPT: use ambient context silently (never
+"let me check your calendar" for today), open decisions get 2-3 options WITH trade-offs
+plus one committed recommendation, push back exactly once when a request collides with
+his goals/schedule/health then execute if he holds, one well-timed heads-up beats three.
+
+**Verified:** suites `situational` (19) + `protocols` (21) all green; full offline suite
+**759 passed, 0 failed**. Live demo (calendar stubbed, since the real connection is
+dead — see below): "do i have room to film tonight?" → knew practice was at 6pm tonight,
+knew the evening after was open, offered before/after-practice options with trade-offs.
+Zero tool calls.
+
+**Found while testing:** the Google Calendar Composio connection is GONE ("No connected
+account found for entity 'alex'"). Server-side Composio state, so the deployed instance
+is equally blind. Re-auth needs Alex's Google login → `scripts/connect_google_calendar.py`,
+filed at the top of NEEDS_ALEX.md.
+
+**Deliberately not built:** body telemetry (E.V./JARVIS vitals — needs Apple Health
+export and Alex's opt-in) and wake-word voice (hardware/UX scope). Both noted as future
+candidates, not started.

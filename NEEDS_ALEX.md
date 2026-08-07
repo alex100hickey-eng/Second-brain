@@ -1,5 +1,23 @@
 # NEEDS_ALEX.md — everything blocked on you
 
+## 2026-08-07 — ambient awareness + protocols shipped; calendar OAuth is DEAD
+
+CLARVIS now has a JARVIS-style ambient layer: every turn it already knows the
+time, today's calendar, your top tasks, what's waiting on you, and what's running
+in the background — plus **protocols** (standing orders: "when I say game day, do
+X then Y" → saved to vault `Protocols/`, run by name). Two things on you:
+
+1. **Your Google Calendar connection is gone.** Composio returns "No connected
+   account found for entity 'alex' / toolkit googlecalendar" — every calendar
+   feature (Today widget, briefing, the new ambient block, event proposals) is
+   flying blind until you re-auth. Fix: run
+   `python3 scripts/connect_google_calendar.py` from `~/second-brain` and finish
+   the Google OAuth screen it opens. ~2 minutes.
+2. **Push when ready** — today's work (person profile + situational awareness +
+   protocols + interaction doctrine) is committed on main but NOT pushed, so the
+   live server doesn't have it yet: `cd ~/second-brain && git push` (auto-deploys).
+
+
 ## 2026-08-02 morning — full mail read + draft replies + self-service escalation shipped
 
 CLARVIS can now: **read every email** (raw, all three accounts — `list_emails`/

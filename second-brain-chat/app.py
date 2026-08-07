@@ -85,6 +85,17 @@ NOTE_INDEX = vault_index.VaultIndex(OBSIDIAN_VAULT_PATH)
 # grows on its own instead of depending on it choosing to call a `remember` tool.
 import person_profile  # noqa: E402 — local module
 
+# Ambient awareness of RIGHT NOW (time, today's calendar, open tasks, what's waiting on
+# Alex, background work) — assembled fresh every ~90s and injected into every turn, so
+# answers land in the context of his actual day without any tool call. person_profile is
+# the ALWAYS; this is the NOW.
+import situational  # noqa: E402 — local module
+
+# Standing orders: named multi-step routines Alex defines in chat ("when I say game day,
+# do X then Y"), kept as editable markdown under <vault>/Protocols/ and executed on
+# request through the normal tools — every existing gate still applies.
+import protocols  # noqa: E402 — local module
+
 # Video input pipeline (ffmpeg frame sampling + local Whisper transcription +
 # Claude vision). Local module; heavy work shells out to ffmpeg/whisper-cli.
 import video_processor  # noqa: E402
@@ -547,6 +558,32 @@ INTERNAL_AGENT_NAMES = {
 SYSTEM_PROMPT = """You are Alex's personal assistant — the brain of his "second brain" system.
 You're direct, helpful, and a little sharp/witty like a good assistant should be — think
 capable and efficient, not overly formal.
+
+HOW YOU OPERATE — the difference between a search box and an aide:
+- You have AMBIENT CONTEXT: "THE SITUATION RIGHT NOW" and "WHAT YOU KNOW ABOUT ALEX" are
+  injected fresh into every turn. Use them silently, the way someone in the room would —
+  answer as a person who already knows his day and his life. Never call a tool to fetch
+  what's already in front of you, never say "let me check your calendar" for today's
+  events, and never recite his own context back at him; weave in the ONE detail that
+  changes the answer.
+- Open decisions get OPTIONS: when he asks "should I…" / "which…" and it's genuinely
+  open, lay out 2-3 real options with the trade-off each carries, then commit to one
+  recommendation and say why. A menu without a pick is abdication; a pick without the
+  trade-offs is a guess.
+- Push back ONCE when it matters: if what he's asking for collides with his stated
+  goals, schedule, constraints, or health, say so plainly and briefly — one time. If he
+  holds, it's his call: execute fully and without relitigating.
+- Timing beats completeness: one well-placed heads-up ("heads up — your 4pm overlaps
+  practice") lands; three at once become noise. Surface the single most consequential
+  thing, let the rest wait for its moment.
+
+STANDING ORDERS (protocols): Alex can define named multi-step routines — "when I say
+'game day', do X, then Y, then Z" — with define_protocol; they live as editable notes in
+his vault under Protocols/. When he invokes one by name ("run game day", "wind-down
+protocol"), call run_protocol and execute the steps it returns with your normal tools —
+every usual gate still applies. When he describes a routine he clearly repeats, OFFER to
+save it as a protocol (don't just do the steps and lose the pattern). list_protocols
+shows what exists; archive_protocol retires one he's done with.
 
 You have tools to look up what his agents have found, log quick notes to the database, and
 read/write actual notes in his Obsidian vault (folders: Schedule, Learning, Money, School,
@@ -1372,6 +1409,72 @@ TOOLS = [
         },
     },
     {
+        "name": "define_protocol",
+        "description": (
+            "Save a STANDING ORDER — a named, reusable multi-step routine Alex can invoke "
+            "any time by name (his 'House Party Protocol' feature). Use when he describes a "
+            "routine he'll want again: 'when I say game day, do X then Y then Z', 'make me a "
+            "wind-down protocol', etc. Steps are plain English, run through your normal tools "
+            "when invoked, and every usual gate still applies at run time. Stored as an "
+            "editable note in his vault under Protocols/. To change an existing protocol, "
+            "call again with overwrite=true."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string",
+                         "description": "Short invocation name, e.g. 'game day', 'wind down'."},
+                "steps": {"type": "array", "items": {"type": "string"},
+                          "description": "The steps in order, each one plain-English instruction."},
+                "title": {"type": "string",
+                          "description": "Optional display title; defaults to the name."},
+                "overwrite": {"type": "boolean",
+                              "description": "Set true to replace an existing protocol of the same name."},
+            },
+            "required": ["name", "steps"],
+        },
+    },
+    {
+        "name": "run_protocol",
+        "description": (
+            "Execute one of Alex's standing orders NOW. Use whenever he invokes a protocol "
+            "by name ('run game day', 'game day protocol', 'do my wind-down') — check "
+            "list_protocols if unsure what exists. The steps come back as instructions; "
+            "carry them out in this turn with your normal tools and report step by step."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "The protocol's name, e.g. 'game day'."}
+            },
+            "required": ["name"],
+        },
+    },
+    {
+        "name": "list_protocols",
+        "description": (
+            "List Alex's standing orders (name, title, step count). Use when he asks what "
+            "protocols exist, or before run_protocol when the name he used doesn't match "
+            "exactly."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "archive_protocol",
+        "description": (
+            "Retire a standing order Alex no longer wants. Moves its note to "
+            "Protocols/Archive/ in his vault — kept, not deleted, so it can be restored by "
+            "hand. Only do this when he clearly asks to remove/retire a protocol."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "The protocol to archive."}
+            },
+            "required": ["name"],
+        },
+    },
+    {
         "name": "propose_calendar_event",
         "description": (
             "Propose a new Google Calendar event for Alex. This does NOT create the event — it queues "
@@ -2055,6 +2158,67 @@ def build_system_prompt(recall_text: str = "") -> str:
     return prompt
 
 
+def _situational_snapshot() -> str:
+    """Build the RIGHT NOW digest from live sources. Called through situational.get_cached
+    (TTL ~90s), so per-turn cost is near zero. Every source is individually fail-soft:
+    losing one section must never cost the chat request."""
+    now = datetime.now(LOCAL_TZ)
+    sections = []
+
+    try:
+        events = get_today_events()
+        # get_today_events swallows API failures and returns [] — but "empty and working"
+        # is REAL information ("he's free tonight") while "source down" must leave the
+        # section ABSENT so the model knows to fall back to calendar tools instead of
+        # assuming a clear day. The module cache is the tell: it stays None until a fetch
+        # has ever succeeded.
+        if _calendar_cache["events"] is not None:
+            sections.append(("Today's calendar:",
+                             situational.calendar_lines(events, now) or ["nothing scheduled today"]))
+    except Exception as e:
+        print(f"situational: calendar section failed ({e})")
+
+    try:
+        open_statuses = {"idea", "evaluating", "approved", "in_progress"}
+        tasks = [t for t in task_tracker.get_tracker().top_by_priority(limit=8)
+                 if t.get("status") in open_statuses][:3]
+        sections.append(("Top of his plate:", [
+            f"#{t['id']} {t['title']} ({t['status'].replace('_', ' ')})" for t in tasks]))
+    except Exception as e:
+        print(f"situational: tasks section failed ({e})")
+
+    waiting = []
+    try:
+        n = len(get_pending_actions())
+        if n:
+            waiting.append(f"{n} action{'s' if n != 1 else ''} awaiting his approval on the dashboard")
+    except Exception as e:
+        print(f"situational: approvals check failed ({e})")
+    try:
+        n = len([d for d in run_drafter.list_drafts() if d.get("status") in ("draft", "approved")])
+        if n:
+            waiting.append(f"{n} overnight run{'s' if n != 1 else ''} drafted, not yet launched")
+    except Exception as e:
+        print(f"situational: drafts check failed ({e})")
+    try:
+        n = len(intake.list_intake(status="new"))
+        if n:
+            waiting.append(f"{n} intake item{'s' if n != 1 else ''} waiting for triage")
+    except Exception as e:
+        print(f"situational: intake check failed ({e})")
+    sections.append(("Waiting on him:", waiting))
+
+    try:
+        counts = JOB_QUEUE.counts()
+        active = counts.get("running", 0) + counts.get("queued", 0)
+        sections.append(("In the background:", [
+            f"{active} job{'s' if active != 1 else ''} running or queued"] if active else []))
+    except Exception as e:
+        print(f"situational: jobs section failed ({e})")
+
+    return situational.assemble(sections, now)
+
+
 def build_system_blocks(recall_text: str = "") -> list:
     """The system prompt as TWO blocks for Anthropic prompt caching (latency pass):
     a big STATIC block (SYSTEM_PROMPT — identical every turn, cache_control on it) and
@@ -2063,9 +2227,23 @@ def build_system_blocks(recall_text: str = "") -> list:
     the static prompt are read from cache instead of re-processed each turn, which is
     most of the send→first-token time (and of the per-turn input cost)."""
     dynamic = ""
-    # The person-model comes FIRST: it's the standing context everything else is read
-    # against. Kept in the dynamic (uncached) block because it changes as Alex's life
-    # does — a stale cached profile is worse than no profile.
+    # THE SITUATION RIGHT NOW leads: the clock and the day are the frame everything else
+    # (including the profile) is read against. TTL-cached, so this is nearly free.
+    try:
+        situ = situational.get_cached(_situational_snapshot)
+    except Exception as e:
+        situ = ""
+        print(f"situational: digest failed, continuing without it ({e})")
+    if situ:
+        dynamic += (
+            "THE SITUATION RIGHT NOW (ambient awareness, refreshed continuously — you "
+            "simply KNOW this, the way an assistant in the room does. Weave in the one "
+            "detail that matters when it matters; never recite this back, and never "
+            "call a tool to fetch what's already here):\n" + situ + "\n\n"
+        )
+    # The person-model: standing context about who Alex IS. Kept in the dynamic
+    # (uncached) block because it changes as his life does — a stale cached profile is
+    # worse than no profile.
     try:
         profile_text = person_profile.digest(VAULT_PATH)
     except Exception as e:
@@ -3732,6 +3910,28 @@ def _dispatch_tool_call(tool_name: str, tool_input: dict) -> str:
                 f"{result['merged_groups']}. The originals are kept under Superseded.")
     if tool_name == "forget_memory":
         return forget_memory(tool_input["matching_text"])
+    if tool_name == "define_protocol":
+        return protocols.save(VAULT_PATH, tool_input["name"], tool_input.get("steps", []),
+                              title=tool_input.get("title", ""),
+                              overwrite=bool(tool_input.get("overwrite", False)))
+    if tool_name == "run_protocol":
+        p = protocols.load(VAULT_PATH, tool_input["name"])
+        if p is None or not p["steps"]:
+            known = ", ".join(x["name"] for x in protocols.list_all(VAULT_PATH)) or "none defined yet"
+            return (f"No protocol named '{tool_input['name']}' found. "
+                    f"Existing protocols: {known}.")
+        return protocols.run_text(p)
+    if tool_name == "list_protocols":
+        rows = protocols.list_all(VAULT_PATH)
+        if not rows:
+            return ("No standing orders defined yet. Alex can create one any time — "
+                    "'when I say X, do Y then Z' — with define_protocol.")
+        return "\n".join(
+            f"- {r['name']} — \"{r['title']}\", {r['steps_count']} step"
+            f"{'s' if r['steps_count'] != 1 else ''} (updated {r['updated'] or 'unknown'})"
+            for r in rows)
+    if tool_name == "archive_protocol":
+        return protocols.archive(VAULT_PATH, tool_input["name"])
     if tool_name == "scan_downloads":
         return scan_downloads(
             days_old=tool_input.get("days_old", 30),
@@ -4101,6 +4301,10 @@ TOOL_STATUS_LABELS = {
     "forget_memory": "Forgetting that…",
     "profile_lookup": "Checking what I know about you…",
     "consolidate_profile": "Tidying up your profile…",
+    "define_protocol": "Saving that as a standing order…",
+    "run_protocol": "Initiating protocol…",
+    "list_protocols": "Pulling up your standing orders…",
+    "archive_protocol": "Retiring that protocol…",
     "propose_calendar_event": "Queuing that for your approval…",
     "deliberate": "Convening the council (for, against, and can-it-work)…",
     "assess_feasibility": "Pressure-testing whether it can actually work…",
