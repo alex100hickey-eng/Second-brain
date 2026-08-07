@@ -13,9 +13,22 @@ X then Y" → saved to vault `Protocols/`, run by name). Two things on you:
    flying blind until you re-auth. Fix: run
    `python3 scripts/connect_google_calendar.py` from `~/second-brain` and finish
    the Google OAuth screen it opens. ~2 minutes.
-2. **Push when ready** — today's work (person profile + situational awareness +
-   protocols + interaction doctrine) is committed on main but NOT pushed, so the
-   live server doesn't have it yet: `cd ~/second-brain && git push` (auto-deploys).
+2. **Push when ready** — today's work (person profile + ambient awareness + protocols
+   + doctrine + REMINDERS + opus escalation + weather) is committed on main but NOT
+   pushed, so the live server has none of it yet:
+   `cd ~/second-brain && git push` (auto-deploys).
+3. **Server handles ONE request at a time** — a streaming chat reply blocks the
+   dashboard and any second message. Config-only fix in Coolify → the app's
+   Start Command (2-field drill, same as before):
+   `gunicorn --chdir second-brain-chat app:app --bind 0.0.0.0:5000 --timeout 120 --worker-class gthread --threads 8`
+4. **Web search runs on keyless DuckDuckGo** (weakest fallback). Tavily free tier =
+   1,000 searches/mo: sign up at tavily.com, put `TAVILY_API_KEY` in Coolify env
+   vars + `~/.zshrc`. Instantly sharper research.
+5. **If the Hetzner box dies, nothing tells you.** UptimeRobot free plan pinging
+   `https://clarvis.178.156.209.40.sslip.io/health` = 3-minute signup, zero code.
+6. **Weather in CLARVIS's ambient awareness** (built, dormant): set `WEATHER_LATLON`
+   to your town's coordinates, e.g. `WEATHER_LATLON=41.39,-73.45` — in Coolify env
+   vars + `~/.zshrc`. Coordinates only ever go to the keyless open-meteo.com API.
 
 
 ## 2026-08-02 morning — full mail read + draft replies + self-service escalation shipped

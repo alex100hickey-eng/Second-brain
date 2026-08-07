@@ -505,7 +505,8 @@ def consolidate(claude_client, vault_path: str, category: str = "",
         )
         try:
             msg = claude_client.messages.create(
-                model=model, max_tokens=1200,
+                model=model, max_tokens=2400,
+                output_config={"effort": "low"},  # mechanical dedup, not deep reasoning
                 messages=[{"role": "user", "content": prompt}])
             text = "".join(b.text for b in msg.content if b.type == "text").strip()
             m = re.search(r"\[.*\]", text, re.S)
@@ -618,8 +619,12 @@ def extract(claude_client, transcript: str, current_profile: str = "",
     """Run the extraction pass over one transcript -> [{category, fact, replaces?}]."""
     if not transcript.strip():
         return []
+    # Low effort: extraction is mechanical, and Sonnet 5's default adaptive thinking
+    # would otherwise spend deliberation tokens this task doesn't need. max_tokens
+    # covers thinking + text together, hence the headroom.
     msg = claude_client.messages.create(
-        model=model, max_tokens=1500,
+        model=model, max_tokens=3000,
+        output_config={"effort": "low"},
         messages=[{"role": "user", "content": _extraction_prompt(transcript, current_profile)}])
     text = "".join(b.text for b in msg.content if b.type == "text").strip()
     m = re.search(r"\[.*\]", text, re.S)

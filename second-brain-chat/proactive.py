@@ -68,6 +68,12 @@ DEEP_LINK = os.environ.get("JARVIS_PUBLIC_URL",
                            "https://clarvis.178.156.209.40.sslip.io") + "/dashboard"
 PASS_INTERVAL = 15 * 60
 DUE_SOON_HOURS = 24
+# Timed reminders ("remind me AT 4pm") enter the nudge window this many hours before the
+# moment — with the 15-min pass cadence the nudge lands ~30-45 min ahead, once, at high
+# priority. Date-only deadlines ("essay due Friday") keep the roomy DUE_SOON_HOURS flow
+# (heads-up a day out + escalation close to due). Window must stay > pass interval or a
+# reminder can fall between passes and never fire.
+TIMED_REMIND_HOURS = 0.75
 
 DEFAULT_CONFIG = {
     "enabled": True,
@@ -322,6 +328,30 @@ def _gather() -> dict:
                                  "ref": f"task:{t.get('id')}"})
                     except ValueError:
                         pass
+    except Exception:
+        pass
+
+    # Real due timestamps on tasks — the reminders feature ("remind me to call coach at
+    # 4pm" -> create_task with due). Timed dues get the tight TIMED_REMIND_HOURS window
+    # (one sharp nudge shortly before the moment); date-only dues get the full day-ahead
+    # flow. Refs dedupe against the legacy title-string path above so a task can never
+    # nudge twice through two doors.
+    try:
+        from task_tracker import due_moment, is_timed
+        seen_refs = {d["ref"] for d in picture["due_soon"]}
+        for t in task_tracker.open_with_due():
+            ref = f"task:{t.get('id')}"
+            if ref in seen_refs:
+                continue
+            dt = due_moment(t.get("due", ""), tz=LOCAL_TZ)
+            if dt is None:
+                continue
+            hours = (dt - now).total_seconds() / 3600
+            window = TIMED_REMIND_HOURS if is_timed(t["due"]) else DUE_SOON_HOURS
+            if -2 <= hours <= window:
+                picture["due_soon"].append(
+                    {"what": t.get("title", ""), "due": t["due"],
+                     "hours": round(hours, 1), "ref": ref})
     except Exception:
         pass
     return picture

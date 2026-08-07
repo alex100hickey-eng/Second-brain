@@ -2899,6 +2899,213 @@ def suite_taskman(app, live):
         tm._call = saved_call
 
 
+def suite_reminders(app, live):
+    section("reminders (due dates: tracker / nudge windows / ambient / dispatch)")
+    import task_tracker as tt
+    import proactive
+
+    tmp = tempfile.mkdtemp(prefix="sbtest_rem_")
+    try:
+        tr = tt.TaskTracker(os.path.join(tmp, "t.db"))
+
+        # ---- tracker layer ---------------------------------------------------
+        a = tr.create("Call coach Dan", due="2026-08-07T16:00")
+        b = tr.create("Finish English essay", due="2026-08-08")
+        tr.create("No due task")
+        check("timed due stored", a["due"] == "2026-08-07T16:00")
+        check("date-only due stored", b["due"] == "2026-08-08")
+        check("garbage due is refused loudly",
+              "Couldn't read" in tr.create("Bad", due="4pm friday").get("error", ""))
+        check("open_with_due returns only dued tasks, soonest first",
+              [t["id"] for t in tr.open_with_due()] == [a["id"], b["id"]])
+        r = tr.set_due(a["id"], "2026-08-07T17:30")
+        check("set_due updates and logs history",
+              r["due"] == "2026-08-07T17:30" and any(h["type"] == "due" for h in r["history"]))
+        check("empty due clears the reminder", tr.set_due(a["id"], "")["due"] == "")
+        tr.set_due(a["id"], "2026-08-07T16:00")  # restore
+        done = tr.create("Done task", due="2026-08-07T15:00")
+        tr.update_status(done["id"], "done", note="finished")
+        check("done tasks leave the reminder feed",
+              done["id"] not in [t["id"] for t in tr.open_with_due()])
+
+        # ---- due semantics ---------------------------------------------------
+        check("is_timed distinguishes clock times from days",
+              tt.is_timed("2026-08-07T16:00") and not tt.is_timed("2026-08-08"))
+        check("date-only due means end of day (not overdue at 12:01 AM)",
+              tt.due_moment("2026-08-08").hour == 23)
+        check("due_moment survives garbage", tt.due_moment("nope") is None)
+
+        # ---- proactive windows: timed = tight, date-only = day-ahead ---------
+        from datetime import datetime, timedelta
+        now = datetime(2026, 8, 7, 14, 0)
+        if proactive.LOCAL_TZ:
+            now = now.replace(tzinfo=proactive.LOCAL_TZ)
+
+        def hours_until(due):
+            dt = tt.due_moment(due, tz=getattr(proactive, "LOCAL_TZ", None))
+            return (dt - now).total_seconds() / 3600
+
+        timed_far = hours_until("2026-08-07T16:00")   # 2h out
+        timed_near = hours_until("2026-08-07T14:30")  # 30m out
+        check("a timed reminder 2h out is OUTSIDE the nudge window (no early spam)",
+              timed_far > proactive.TIMED_REMIND_HOURS)
+        check("a timed reminder 30m out is INSIDE the nudge window",
+              -2 <= timed_near <= proactive.TIMED_REMIND_HOURS)
+        check("a date-only deadline due TONIGHT is inside the day-ahead window",
+              -2 <= hours_until("2026-08-07") <= proactive.DUE_SOON_HOURS)
+        check("a date-only deadline due tomorrow night stays quiet from 2pm today "
+              "(heads-up comes within 24h of end-of-day, not sooner)",
+              hours_until("2026-08-08") > proactive.DUE_SOON_HOURS)
+        check("the timed window survives the pass cadence (window > interval)",
+              proactive.TIMED_REMIND_HOURS * 3600 > proactive.PASS_INTERVAL)
+
+        # ---- proactive picture integration (stubbed tracker) -----------------
+        saved_tracker = proactive.task_tracker
+        try:
+            class FakeTracker:
+                def top_by_priority(self, limit=10):
+                    return []
+                def open_with_due(self):
+                    return [
+                        {"id": 1, "title": "Call coach Dan", "status": "idea",
+                         "due": "2026-08-07T14:30"},   # 30m out -> eligible
+                        {"id": 2, "title": "Far-off timed", "status": "idea",
+                         "due": "2026-08-07T20:00"},   # 6h out, timed -> NOT eligible
+                        {"id": 3, "title": "Essay", "status": "idea",
+                         "due": "2026-08-08"},          # tomorrow, date-only -> eligible
+                    ]
+            proactive.task_tracker = FakeTracker()
+            picture = proactive._gather()
+            # _gather uses real now; recompute eligibility with its clock instead of
+            # asserting on wall-clock-sensitive contents.
+            refs = {d["ref"] for d in picture["due_soon"]}
+            check("picture excludes a timed task hours before its moment",
+                  "task:2" not in refs, str(refs))
+        finally:
+            proactive.task_tracker = saved_tracker
+
+        # ---- ambient + dispatch ----------------------------------------------
+        saved_get = app.task_tracker.get_tracker
+        try:
+            app.task_tracker.get_tracker = lambda: tr
+            snap = app._situational_snapshot()
+            check("ambient block carries a Due & overdue section",
+                  "Due & overdue:" in snap and "Call coach Dan" in snap, snap[:400])
+            out = app.handle_tool_call("set_task_due",
+                                       {"task_id": b["id"], "due": "2026-08-09"})
+            check("set_task_due dispatch works end to end",
+                  f"Task #{b['id']}" in out and "Sunday" in out or "due" in out.lower(), out)
+        finally:
+            app.task_tracker.get_tracker = saved_get
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def suite_escalation(app, live):
+    section("model routing (effort tiers + think-hard escalation)")
+    # ---- trigger detection ---------------------------------------------------
+    m, tok, eff = app._pick_chat_model("think hard about whether i should switch events")
+    check("'think hard' escalates to Opus 5", m == "claude-opus-5", m)
+    check("escalated turns get thinking headroom", tok >= 16000)
+    check("escalated turns run at xhigh effort", eff == "xhigh")
+    m2, tok2, eff2 = app._pick_chat_model("what's the weather like")
+    check("normal turns stay on Sonnet 5 with prior settings",
+          m2 == "claude-sonnet-5" and tok2 == 4096 and eff2 is None)
+    check("trigger matching is case-insensitive",
+          app._pick_chat_model("THINK DEEPLY about this")[0] == "claude-opus-5")
+    check("'deep dive' triggers too",
+          app._pick_chat_model("do a deep dive on my training block")[0] == "claude-opus-5")
+
+    # ---- last-user-text extraction (tool_result turns must not de-escalate) --
+    msgs = [
+        {"role": "user", "content": "think hard about my season plan"},
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "x", "input": {}}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "data"}]},
+    ]
+    check("last human text skips tool_result user turns",
+          app._last_user_text(msgs) == "think hard about my season plan")
+    check("string content works", app._last_user_text([{"role": "user", "content": "hi"}]) == "hi")
+    check("empty history yields empty string", app._last_user_text([]) == "")
+
+    # ---- council runs at xhigh with room to think ----------------------------
+    captured = {}
+    saved_create = app.claude.messages.create
+    try:
+        def fake_create(**kw):
+            captured.update(kw)
+            return type("M", (), {"content": [type("B", (), {"type": "text", "text": "stub"})()]})()
+        app.claude.messages.create = fake_create
+        app._council_call("system", "user msg")
+        check("council calls run at xhigh effort",
+              captured.get("output_config", {}).get("effort") == "xhigh", str(captured.get("output_config")))
+        check("council max_tokens has thinking headroom", captured.get("max_tokens", 0) >= 8000)
+    finally:
+        app.claude.messages.create = saved_create
+
+
+def suite_weather(app, live):
+    section("weather (format / cache / config gating)")
+    import weather as W
+
+    payload = {
+        "current": {"temperature_2m": 91.4, "apparent_temperature": 99.1,
+                    "weather_code": 95, "wind_speed_10m": 17.0},
+        "daily": {"temperature_2m_max": [94.0], "temperature_2m_min": [71.0],
+                  "precipitation_probability_max": [55]},
+    }
+    line = W.format_line(payload)
+    check("format includes temp + words", line.startswith("91°F") and "thunderstorms" in line, line)
+    check("big feels-like gap is surfaced", "feels like 99°F" in line)
+    check("wind over threshold is surfaced", "windy (17 mph)" in line)
+    check("daily high/low and rain chance included",
+          "high 94°F / low 71°F" in line and "55% chance" in line)
+
+    mild = {"current": {"temperature_2m": 72.0, "apparent_temperature": 73.0,
+                        "weather_code": 1, "wind_speed_10m": 4.0},
+            "daily": {"temperature_2m_max": [75.0], "temperature_2m_min": [60.0],
+                      "precipitation_probability_max": [5]}}
+    mline = W.format_line(mild)
+    check("mild day stays terse (no feels-like/wind/rain noise)",
+          "feels like" not in mline and "windy" not in mline and "chance" not in mline, mline)
+    check("garbage payload yields empty string, not a crash", W.format_line({}) == "")
+
+    # ---- config gating + cache ----------------------------------------------
+    saved_env = os.environ.get("WEATHER_LATLON")
+    saved_fetch = W._fetch
+    try:
+        os.environ.pop("WEATHER_LATLON", None)
+        W.invalidate()
+        check("unset WEATHER_LATLON disables weather silently", W.current_line() == "")
+        os.environ["WEATHER_LATLON"] = "not-coords"
+        check("malformed coords disable weather silently", W.current_line() == "")
+
+        os.environ["WEATHER_LATLON"] = "42.36,-71.06"
+        calls = {"n": 0}
+        def fake_fetch(lat, lon):
+            calls["n"] += 1
+            return payload
+        W._fetch = fake_fetch
+        W.invalidate()
+        first = W.current_line()
+        second = W.current_line()
+        check("configured coords produce the line", first.startswith("91°F"))
+        check("cache serves the second call without refetching",
+              second == first and calls["n"] == 1)
+
+        def boom(lat, lon):
+            raise RuntimeError("api down")
+        W._fetch = boom
+        W._cache["at"] = 0.0  # force refetch attempt against dead API
+        check("a dead API serves the stale line", W.current_line() == first)
+    finally:
+        W._fetch = saved_fetch
+        if saved_env is None:
+            os.environ.pop("WEATHER_LATLON", None)
+        else:
+            os.environ["WEATHER_LATLON"] = saved_env
+        W.invalidate()
+
+
 def suite_situational(app, live):
     section("situational awareness (RIGHT NOW block: format / assemble / cache / fail-soft)")
     import situational
@@ -4507,6 +4714,9 @@ SUITES = {
     "profile": suite_profile,
     "situational": suite_situational,
     "protocols": suite_protocols,
+    "reminders": suite_reminders,
+    "escalation": suite_escalation,
+    "weather": suite_weather,
 }
 
 

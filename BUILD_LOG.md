@@ -1376,3 +1376,56 @@ filed at the top of NEEDS_ALEX.md.
 **Deliberately not built:** body telemetry (E.V./JARVIS vitals — needs Apple Health
 export and Alex's opt-in) and wake-word voice (hardware/UX scope). Both noted as future
 candidates, not started.
+
+---
+
+## Gap-fix wave: reminders + intellect + speed + weather — 2026-08-07 (late afternoon)
+
+Follow-up to the capability audit. Four builds, all local, committed unpushed.
+
+**1. Reminders (the #1 everyday gap).** Tasks gained a real `due` column (migration in
+task_tracker's existing pattern; `_row_to_dict` defaults it for pre-migration rows).
+`create_task` takes `due`; new `set_task_due` tool sets/changes/clears. Semantics:
+a datetime due ("…T16:00") is TIMED — it enters the nudge window only
+`TIMED_REMIND_HOURS` (0.75h) before the moment, producing ONE high-priority nudge
+~30-45 min ahead; a date-only due means BY END OF that day (23:59 — "essay due Friday"
+isn't overdue at 12:01 AM) and keeps the existing day-ahead + escalation flow. The
+window is deliberately > the 15-min pass cadence so a reminder can't fall between
+passes. Proactive's picture builder reads `open_with_due()` directly, deduping by ref
+against the legacy title-string hack. Ambient block gains "Due & overdue:" (overdue
+kept visible 2 days so a missed reminder doesn't vanish) and plate lines show due
+phrases. Verified end to end: real tracker + real awareness pass (sender stubbed)
+produced `[high] 🔴 DUE within the hour (2:28pm) — Call Coach Dan about blocks`.
+
+**2. Model routing (intellect).** Corrected by the claude-api reference before coding:
+`budget_tokens` is REMOVED on Sonnet 5/Opus 5 (400s), and Sonnet 5 already runs
+adaptive thinking by default — so the real levers are effort + escalation, not
+"enabling thinking". Council calls (`_council_call` → deliberate/assess_feasibility)
+now run at `output_config.effort: xhigh` with max_tokens 8000 (the cap covers
+thinking + text; a tight budget would think itself out of a verdict). Mechanical
+extraction paths dialed DOWN to effort low with raised max_tokens headroom:
+`_summarize_conversation`, `_distill_facts`, profile extract/consolidate. Chat gains
+explicit-trigger escalation: "think hard/deeply/carefully", "deep dive", "take your
+time" → that turn runs on `claude-opus-5` at xhigh, 16K max_tokens, with a
+"Thinking deeply on this one…" status. Routing decided ONCE per turn from the last
+HUMAN message (`_last_user_text` skips tool_result user turns — otherwise the tool
+loop would silently de-escalate mid-turn). Both effort + opus-5 verified against the
+live API (SDK 0.116.0 accepts `output_config` typed).
+
+**3. Legacy-memories cache (speed).** `load_memories()` did a Supabase round-trip on
+EVERY chat turn for a table holding one row. Now TTL-cached (5 min) with
+`invalidate_memories_cache()` on the forget path; fetch failures serve stale.
+
+**4. Weather (ambient).** `weather.py`: keyless Open-Meteo, 15-min cache, one
+planning-grade line ("91°F, thunderstorms, feels like 99°F — high 94°F…") in the
+situational block. Dormant until Alex sets `WEATHER_LATLON` (filed in NEEDS_ALEX);
+unset/malformed/dead-API all fail soft.
+
+**Verified:** new suites `reminders` (18) + `escalation` (11) + `weather` (11); full
+offline suite **799 passed, 0 failed**. One test fixed during the run for MY bad
+arithmetic (tomorrow-EOD from 2pm is ~34h — correctly outside the 24h window), not a
+code bug.
+
+**On Alex (NEEDS_ALEX top section):** push to deploy all of today; calendar re-auth;
+gthread Start Command (server currently serializes ALL requests behind one sync
+worker); Tavily key; UptimeRobot on /health; WEATHER_LATLON.

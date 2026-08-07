@@ -37,6 +37,44 @@ def _now_iso() -> str:
     return datetime.now(_TZ).isoformat()
 
 
+def _validate_due(due) -> str | None:
+    """Normalize a due string. '' stays '' (no due / clear it); a parseable ISO date or
+    datetime is returned as-given (trimmed); garbage returns None so callers can refuse
+    loudly instead of storing a reminder that will silently never fire."""
+    due = (due or "").strip()
+    if not due:
+        return ""
+    try:
+        datetime.fromisoformat(due)
+        return due
+    except ValueError:
+        return None
+
+
+def due_moment(due: str, tz=None) -> datetime | None:
+    """The instant a due string refers to. Date-only means BY END OF that day (23:59) —
+    'essay due Friday' shouldn't count as overdue at 12:01 AM Friday. Naive values get
+    the local timezone attached."""
+    if not due:
+        return None
+    try:
+        dt = datetime.fromisoformat(due)
+    except ValueError:
+        return None
+    if "T" not in due:
+        dt = dt.replace(hour=23, minute=59)
+    if dt.tzinfo is None and tz is not None:
+        dt = dt.replace(tzinfo=tz)
+    return dt
+
+
+def is_timed(due: str) -> bool:
+    """True when the due carries a clock time ('remind me AT 4pm') rather than just a
+    day ('due Friday'). Timed reminders nudge in a tight window near the moment; day
+    deadlines get the roomy day-ahead treatment."""
+    return "T" in (due or "")
+
+
 def _clamp(v, lo: int = 0, hi: int = 5) -> int:
     """Urgency/importance live on a 0-5 scale (0 = unset)."""
     try:
@@ -94,6 +132,13 @@ class TaskTracker:
                 self._conn.execute("ALTER TABLE tasks ADD COLUMN importance INTEGER DEFAULT 0")
             if "goal_id" not in cols:
                 self._conn.execute("ALTER TABLE tasks ADD COLUMN goal_id INTEGER")
+            # --- Reminders migration: real due timestamps on tasks. Before this, the
+            # only due dates in the system were "(due YYYY-MM-DD)" strings inside task
+            # TITLES (a hack for accepted-intake tasks), which meant "remind me at 4pm"
+            # had nowhere to live and nothing ever fired. ISO string; date-only means
+            # "by end of that day", a "T" time means "at that time".
+            if "due" not in cols:
+                self._conn.execute("ALTER TABLE tasks ADD COLUMN due TEXT DEFAULT ''")
             # --- Goals ---
             self._conn.execute(
                 """CREATE TABLE IF NOT EXISTS goals (
@@ -112,6 +157,7 @@ class TaskTracker:
     # ---- internal helpers ----
     def _row_to_dict(self, row) -> dict:
         d = dict(row)
+        d.setdefault("due", "")  # rows fetched before the migration ran
         try:
             d["history"] = json.loads(d.get("history") or "[]")
         except (json.JSONDecodeError, TypeError):
@@ -130,10 +176,14 @@ class TaskTracker:
 
     # ---- public API ----
     def create(self, title: str, description: str = "", urgency: int = 0,
-               importance: int = 0) -> dict:
+               importance: int = 0, due: str = "") -> dict:
         title = (title or "").strip()
         if not title:
             return {"error": "A task needs a title."}
+        due = _validate_due(due)
+        if due is None:
+            return {"error": "Couldn't read that due time — use ISO format, e.g. "
+                             "'2026-08-07T16:00' or just '2026-08-08'."}
         urgency = _clamp(urgency)
         importance = _clamp(importance)
         now = _now_iso()
@@ -141,13 +191,40 @@ class TaskTracker:
         with self._lock:
             cur = self._conn.execute(
                 "INSERT INTO tasks (title, description, status, created_at, updated_at, history, "
-                "urgency, importance) VALUES (?, ?, 'idea', ?, ?, ?, ?, ?)",
+                "urgency, importance, due) VALUES (?, ?, 'idea', ?, ?, ?, ?, ?, ?)",
                 (title, (description or "").strip(), now, now, json.dumps(history),
-                 urgency, importance),
+                 urgency, importance, due),
             )
             self._conn.commit()
             row = self._fetch_raw(cur.lastrowid)
         return self._row_to_dict(row)
+
+    def set_due(self, task_id, due: str) -> dict | None:
+        """Set, change, or clear ('' = clear) a task's due time. None if no such task."""
+        due = _validate_due(due)
+        if due is None:
+            return {"error": "Couldn't read that due time — use ISO format, e.g. "
+                             "'2026-08-07T16:00' or just '2026-08-08'."}
+        with self._lock:
+            row = self._fetch_raw(task_id)
+            if not row:
+                return None
+            now = _now_iso()
+            d = self._row_to_dict(row)
+            d["history"].append({"type": "due", "due": due, "at": now})
+            self._conn.execute(
+                "UPDATE tasks SET due = ?, updated_at = ?, history = ? WHERE id = ?",
+                (due, now, json.dumps(d["history"]), task_id))
+            self._conn.commit()
+            return self._row_to_dict(self._fetch_raw(task_id))
+
+    def open_with_due(self) -> list:
+        """Active tasks carrying a real due timestamp, soonest first — the reminder feed."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM tasks WHERE due != '' AND status NOT IN ('done','dropped') "
+                "ORDER BY due ASC").fetchall()
+        return [self._row_to_dict(r) for r in rows]
 
     def set_priority(self, task_id, urgency: int = None, importance: int = None) -> dict | None:
         with self._lock:
@@ -393,18 +470,47 @@ def _fmt_task_line(t: dict) -> str:
     return f"#{t['id']} [{t['status']}] {t['title']}"
 
 
+def _due_phrase(due: str) -> str:
+    """Human wording for a stored due string, for confirmations."""
+    dt = due_moment(due)
+    if dt is None:
+        return ""
+    if is_timed(due):
+        return dt.strftime("%A %b %-d at %-I:%M %p").replace(" 0", " ")
+    return f"by end of {dt.strftime('%A %b %-d')}"
+
+
 def tool_create_task(title: str, description: str = "", urgency: int = 0,
-                     importance: int = 0) -> str:
-    t = get_tracker().create(title, description, urgency=urgency, importance=importance)
+                     importance: int = 0, due: str = "") -> str:
+    t = get_tracker().create(title, description, urgency=urgency, importance=importance,
+                             due=due)
     if t.get("error"):
         return t["error"]
     pri = ""
     if t.get("urgency") or t.get("importance"):
         pri = f" · urgency {t['urgency']}/5, importance {t['importance']}/5"
+    due_bit = ""
+    if t.get("due"):
+        due_bit = (f"\nDue {_due_phrase(t['due'])} — a reminder will hit his phone "
+                   + ("shortly before." if is_timed(t["due"]) else "as it gets close."))
     return (f"Created task #{t['id']}: **{t['title']}** (status: idea{pri})."
             + (f"\n{t['description']}" if t.get("description") else "")
+            + due_bit
             + "\nUpdate it any time — say something like \"move task "
             f"#{t['id']} to in progress\".")
+
+
+def tool_set_task_due(task_id: int, due: str = "") -> str:
+    res = get_tracker().set_due(task_id, due)
+    if res is None:
+        return f"No task #{task_id} found."
+    if res.get("error"):
+        return res["error"]
+    if not res.get("due"):
+        return f"Cleared the due time on task #{res['id']} ({res['title']}) — no reminder will fire."
+    return (f"Task #{res['id']} ({res['title']}) now due {_due_phrase(res['due'])} — "
+            + ("his phone gets one nudge shortly before." if is_timed(res["due"])
+               else "he'll get a heads-up as it approaches."))
 
 
 def tool_set_task_priority(task_id: int, urgency: int = None, importance: int = None) -> str:

@@ -96,6 +96,10 @@ import situational  # noqa: E402 — local module
 # request through the normal tools — every existing gate still applies.
 import protocols  # noqa: E402 — local module
 
+# Weather for the ambient block (outdoor athlete). Keyless Open-Meteo, 15-min cache,
+# enabled only when WEATHER_LATLON is set — absent otherwise, like any dead source.
+import weather  # noqa: E402 — local module
+
 # Video input pipeline (ffmpeg frame sampling + local Whisper transcription +
 # Claude vision). Local module; heavy work shells out to ffmpeg/whisper-cli.
 import video_processor  # noqa: E402
@@ -403,9 +407,12 @@ def _summarize_conversation(msgs: list) -> tuple:
         "follow-ups or preferences worth remembering. Be specific and factual.>\n\n"
         f"Conversation:\n{transcript}"
     )
+    # Mechanical extraction — low effort keeps Sonnet 5's default adaptive thinking from
+    # over-deliberating a summarization task (faster + cheaper, no quality need).
     msg = claude.messages.create(
         model="claude-sonnet-5",
-        max_tokens=400,
+        max_tokens=1400,
+        output_config={"effort": "low"},
         messages=[{"role": "user", "content": prompt}],
     )
     text = "".join(b.text for b in msg.content if b.type == "text").strip()
@@ -436,7 +443,8 @@ def _distill_facts(digest: str) -> list:
         '"evidence":"<short quote from the digest>"}]. Empty array [] if nothing durable.\n\n'
         f"Digest:\n{digest[:8000]}"
     )
-    msg = claude.messages.create(model="claude-sonnet-5", max_tokens=1200,
+    msg = claude.messages.create(model="claude-sonnet-5", max_tokens=2200,
+                                 output_config={"effort": "low"},  # mechanical extraction
                                  messages=[{"role": "user", "content": prompt}])
     text = "".join(b.text for b in msg.content if b.type == "text").strip()
     m = re.search(r"\[.*\]", text, re.S)
@@ -584,6 +592,13 @@ protocol"), call run_protocol and execute the steps it returns with your normal 
 every usual gate still applies. When he describes a routine he clearly repeats, OFFER to
 save it as a protocol (don't just do the steps and lose the pattern). list_protocols
 shows what exists; archive_protocol retires one he's done with.
+
+REMINDERS: "remind me to X at 4" / "don't let me forget X Friday" = create_task with a
+`due` (or set_task_due on an existing task). A datetime due sends ONE phone nudge shortly
+before the moment; a date-only due sends a heads-up as the day approaches. Work the ISO
+value out from the clock in THE SITUATION RIGHT NOW, and confirm back in words ("got it —
+I'll ping you about the coach call around 3:30"). Due items appear under "Due & overdue"
+in your ambient context — when he finishes one, mark it done so it goes quiet.
 
 You have tools to look up what his agents have found, log quick notes to the database, and
 read/write actual notes in his Obsidian vault (folders: Schedule, Learning, Money, School,
@@ -1659,6 +1674,7 @@ TOOLS = [
                 "description": {"type": "string", "description": "Optional detail: what it involves, why, any specifics."},
                 "urgency": {"type": "integer", "description": "Optional 0-5 how time-sensitive it is (0 = unset, 5 = drop-everything). Set when Alex signals a deadline or pressure."},
                 "importance": {"type": "integer", "description": "Optional 0-5 how much it matters (0 = unset, 5 = mission-critical). Set when Alex signals stakes."},
+                "due": {"type": "string", "description": "Optional ISO due time. A datetime ('2026-08-07T16:00') means AT that moment — his phone gets one nudge shortly before; a bare date ('2026-08-08') means by end of that day — he gets a heads-up as it approaches. Use for ANY 'remind me…' request: work out the ISO value from the current time in THE SITUATION RIGHT NOW and confirm it back in words."},
             },
             "required": ["title"],
         },
@@ -1672,6 +1688,25 @@ TOOLS = [
                 "task_id": {"type": "integer", "description": "The task's id."},
                 "urgency": {"type": "integer", "description": "0-5 time-sensitivity."},
                 "importance": {"type": "integer", "description": "0-5 how much it matters."},
+            },
+            "required": ["task_id"],
+        },
+    },
+    {
+        "name": "set_task_due",
+        "description": (
+            "Set, change, or clear WHEN a task is due — this is also how reminders work. "
+            "A datetime due ('2026-08-07T16:00') sends one phone nudge shortly before the "
+            "moment; a date-only due ('2026-08-08') sends a heads-up as the day approaches. "
+            "Use when Alex gives a task a deadline, asks to be reminded about an existing "
+            "task, or wants a reminder moved/cancelled (empty due clears it). Compute the "
+            "ISO value from the current time in THE SITUATION RIGHT NOW."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "integer", "description": "The task's id."},
+                "due": {"type": "string", "description": "ISO date or datetime; empty string clears the due/reminder."},
             },
             "required": ["task_id"],
         },
@@ -2098,8 +2133,8 @@ def remember(fact: str, category: str = "identity", replaces: str = "") -> str:
     return f"Saved to your profile under {where}: {fact}"
 
 
-def load_memories() -> list:
-    """All saved memories, oldest first, for injection into the system prompt."""
+def _fetch_memories() -> list:
+    """The raw Supabase read for legacy jarvis_memory rows (network)."""
     result = (
         supabase.table("Agent Outputs")
         .select("output_text")
@@ -2108,6 +2143,33 @@ def load_memories() -> list:
         .execute()
     )
     return [row["output_text"] for row in (result.data or [])]
+
+
+# Legacy-memories cache: this table is nearly frozen (the profile replaced it as the
+# live person-model) yet load_memories used to do a Supabase round-trip on EVERY chat
+# turn — a network call on the latency-critical path to fetch what is currently one row.
+_memories_cache = {"at": 0.0, "rows": None}
+_MEMORIES_TTL = 300
+
+
+def invalidate_memories_cache() -> None:
+    _memories_cache["at"] = 0.0
+    _memories_cache["rows"] = None
+
+
+def load_memories() -> list:
+    """All saved memories, oldest first, for the system prompt. Cached (TTL 5 min);
+    remember/forget invalidate, so edits still show up on the very next turn."""
+    if _memories_cache["rows"] is not None and time.time() - _memories_cache["at"] < _MEMORIES_TTL:
+        return _memories_cache["rows"]
+    try:
+        rows = _fetch_memories()
+    except Exception as e:
+        print(f"load_memories: fetch failed, serving stale ({e})")
+        return _memories_cache["rows"] or []
+    _memories_cache["at"] = time.time()
+    _memories_cache["rows"] = rows
+    return rows
 
 
 def forget_memory(matching_text: str) -> str:
@@ -2137,6 +2199,7 @@ def forget_memory(matching_text: str) -> str:
     supabase.table("Agent Outputs").update({"agent_name": "jarvis_memory_forgotten"}).eq(
         "id", matches[0]["id"]
     ).execute()
+    invalidate_memories_cache()  # the forget must be visible on the very next turn
     return f"Forgotten: {matches[0]['output_text']}"
 
 
@@ -2183,9 +2246,31 @@ def _situational_snapshot() -> str:
         tasks = [t for t in task_tracker.get_tracker().top_by_priority(limit=8)
                  if t.get("status") in open_statuses][:3]
         sections.append(("Top of his plate:", [
-            f"#{t['id']} {t['title']} ({t['status'].replace('_', ' ')})" for t in tasks]))
+            f"#{t['id']} {t['title']} ({t['status'].replace('_', ' ')})"
+            + (f" · due {task_tracker._due_phrase(t['due'])}" if t.get("due") else "")
+            for t in tasks]))
     except Exception as e:
         print(f"situational: tasks section failed ({e})")
+
+    try:
+        # Due & overdue — the reminder horizon: anything overdue (up to 2 days back, so
+        # a missed reminder stays visible instead of vanishing) plus the next 24h.
+        due_lines = []
+        for t in task_tracker.get_tracker().open_with_due():
+            dt = task_tracker.due_moment(t["due"], tz=LOCAL_TZ)
+            if dt is None:
+                continue
+            hours = (dt - now).total_seconds() / 3600
+            if hours < -48 or hours > 24:
+                continue
+            if hours < 0:
+                due_lines.append(f"#{t['id']} {t['title']} — OVERDUE "
+                                 f"(was due {task_tracker._due_phrase(t['due'])})")
+            else:
+                due_lines.append(f"#{t['id']} {t['title']} — due {task_tracker._due_phrase(t['due'])}")
+        sections.append(("Due & overdue:", due_lines[:4]))
+    except Exception as e:
+        print(f"situational: due section failed ({e})")
 
     waiting = []
     try:
@@ -2215,6 +2300,12 @@ def _situational_snapshot() -> str:
             f"{active} job{'s' if active != 1 else ''} running or queued"] if active else []))
     except Exception as e:
         print(f"situational: jobs section failed ({e})")
+
+    try:
+        wline = weather.current_line()
+        sections.append(("Weather:", [wline] if wline else []))
+    except Exception as e:
+        print(f"situational: weather section failed ({e})")
 
     return situational.assemble(sections, now)
 
@@ -3056,9 +3147,14 @@ def create_new_tool(name: str, purpose: str) -> str:
 # ============================================================
 
 def _council_call(system: str, user: str) -> str:
+    # The council IS the judgment product, so it runs at xhigh effort — deeper adaptive
+    # thinking on exactly the calls where reasoning quality is the point. max_tokens is
+    # raised alongside because on Sonnet 5 the cap covers thinking + text together; at
+    # xhigh a tight budget would spend itself on thinking and truncate the verdict.
     msg = claude.messages.create(
         model="claude-sonnet-5",
-        max_tokens=1200,
+        max_tokens=8000,
+        output_config={"effort": "xhigh"},
         system=system,
         messages=[{"role": "user", "content": user}],
     )
@@ -4057,7 +4153,11 @@ def _dispatch_tool_call(tool_name: str, tool_input: dict) -> str:
     if tool_name == "create_task":
         return task_tracker.tool_create_task(
             title=tool_input["title"], description=tool_input.get("description", ""),
-            urgency=tool_input.get("urgency", 0), importance=tool_input.get("importance", 0))
+            urgency=tool_input.get("urgency", 0), importance=tool_input.get("importance", 0),
+            due=tool_input.get("due", ""))
+    if tool_name == "set_task_due":
+        return task_tracker.tool_set_task_due(
+            task_id=tool_input["task_id"], due=tool_input.get("due", ""))
     if tool_name == "set_task_priority":
         return task_tracker.tool_set_task_priority(
             task_id=tool_input["task_id"], urgency=tool_input.get("urgency"),
@@ -4301,6 +4401,7 @@ TOOL_STATUS_LABELS = {
     "forget_memory": "Forgetting that…",
     "profile_lookup": "Checking what I know about you…",
     "consolidate_profile": "Tidying up your profile…",
+    "set_task_due": "Setting your reminder…",
     "define_protocol": "Saving that as a standing order…",
     "run_protocol": "Initiating protocol…",
     "list_protocols": "Pulling up your standing orders…",
@@ -4390,6 +4491,43 @@ def _is_transient_api_error(e: Exception) -> bool:
 _CHAT_RETRY_DELAYS = (2, 5, 10, 20)
 
 
+_DEEP_THINKING_TRIGGERS = (
+    "think hard", "think harder", "think deeply", "think carefully",
+    "think this through", "deep dive", "take your time",
+)
+
+
+def _last_user_text(messages: list) -> str:
+    """The text of the most recent human turn (skips tool_result user turns)."""
+    for m in reversed(messages or []):
+        if m.get("role") != "user":
+            continue
+        c = m.get("content")
+        if isinstance(c, str):
+            return c
+        if isinstance(c, list):
+            text = " ".join(b.get("text", "") for b in c
+                            if isinstance(b, dict) and b.get("type") == "text")
+            if text.strip():
+                return text
+    return ""
+
+
+def _pick_chat_model(user_message: str) -> tuple:
+    """(model, max_tokens, effort) for this chat turn.
+
+    Normal turns stay on Sonnet 5 exactly as before (default adaptive thinking, default
+    effort). When Alex explicitly asks for depth — "think hard", "deep dive", etc. — the
+    turn escalates to Opus 5 at xhigh effort, with max_tokens raised because the cap
+    covers thinking + text together. Explicit-trigger-only by design: escalation costs
+    ~5x per token, so the model never decides on its own to spend Alex's budget.
+    """
+    lowered = (user_message or "").lower()
+    if any(t in lowered for t in _DEEP_THINKING_TRIGGERS):
+        return ("claude-opus-5", 16000, "xhigh")
+    return ("claude-sonnet-5", 4096, None)
+
+
 def stream_chat(messages: list, recall_text: str = ""):
     """Runs the Claude tool-use loop, yielding events as they happen:
     {"type": "text", "delta": ...}    — a chunk of the reply as it's written
@@ -4406,13 +4544,21 @@ def stream_chat(messages: list, recall_text: str = ""):
     system_blocks = build_system_blocks(recall_text)  # static block cached; memories fresh
     tools_cached = _cached_tools()
     observability.set_trigger("user")  # this loop serves Alex's live chat
+    # Model routing is decided ONCE per turn from the human message (not re-derived per
+    # tool-loop iteration, where the last "user" turn is a tool_result and would silently
+    # de-escalate a think-hard turn mid-flight).
+    chat_model, chat_max_tokens, chat_effort = _pick_chat_model(_last_user_text(messages))
+    model_kwargs = {"model": chat_model, "max_tokens": chat_max_tokens}
+    if chat_effort:
+        model_kwargs["output_config"] = {"effort": chat_effort}
+    if chat_model != "claude-sonnet-5":
+        yield {"type": "status", "label": "Thinking deeply on this one…"}
     turns_text = []  # authoritative text per turn, joined for the final/replace events
     while True:
         with observability.feature("chat"):
             try:
                 with claude.messages.stream(
-                    model="claude-sonnet-5",
-                    max_tokens=4096,
+                    **model_kwargs,
                     system=system_blocks,
                     tools=tools_cached,
                     messages=messages,
@@ -4434,8 +4580,7 @@ def stream_chat(messages: list, recall_text: str = ""):
                 for attempt, delay in enumerate(_CHAT_RETRY_DELAYS + (None,)):
                     try:
                         response = claude.messages.create(
-                            model="claude-sonnet-5",
-                            max_tokens=4096,
+                            **model_kwargs,
                             system=system_blocks,
                             tools=tools_cached,
                             messages=messages,
