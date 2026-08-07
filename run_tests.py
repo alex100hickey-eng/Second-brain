@@ -2899,6 +2899,188 @@ def suite_taskman(app, live):
         tm._call = saved_call
 
 
+def suite_profile(app, live):
+    section("person-model profile (storage / dedup / supersede / observer / safety)")
+    import person_profile as P
+    import conversation_memory as cm
+
+    tmp = tempfile.mkdtemp(prefix="sbtest_profile_")
+    vault = os.path.join(tmp, "vault")
+    try:
+        # ---- storage round-trip -------------------------------------------------
+        r = P.record(vault, [
+            {"category": "identity", "fact": "Alex is a high school senior who runs sprints."},
+            {"category": "people", "fact": "Coach Dan runs his Tuesday and Thursday practice."},
+            {"category": "goals", "fact": "Alex wants the YouTube channel at 10,000 subscribers by December 2026."},
+        ], source="test")
+        check("records new facts", r["added"] == 3, str(r))
+        check("facts land in the vault as markdown",
+              os.path.exists(os.path.join(vault, "Profile", "People.md")))
+        check("stats count them", P.stats(vault)["facts"] == 3, str(P.stats(vault)))
+
+        # ---- dedup: trivially-reworded restatement confirms, doesn't duplicate ---
+        r2 = P.record(vault, [
+            {"category": "people", "fact": "Coach Dan runs his Tuesday/Thursday practices."}])
+        check("near-identical restatement is confirmed, not duplicated",
+              r2["confirmed"] == 1 and r2["added"] == 0, str(r2))
+        check("fact count unchanged after a confirm", P.stats(vault)["facts"] == 3)
+
+        # ---- dedup must NOT merge lookalikes that differ in a decisive token -----
+        # These score ~0.5-0.67 on word overlap but are genuinely different facts.
+        r3 = P.record(vault, [
+            {"category": "goals", "fact": "Alex wants the newsletter at 10,000 subscribers by December 2026."}])
+        check("a lookalike with a different subject stays a separate fact",
+              r3["added"] == 1, str(r3))
+
+        # ---- supersede: corrections retire the old fact, never destroy it --------
+        r4 = P.record(vault, [{
+            "category": "goals",
+            "fact": "Alex raised the YouTube target to 25,000 subscribers by December 2026.",
+            "replaces": "10,000 subscribers by December 2026"}])
+        check("a correction supersedes the outdated fact",
+              r4["superseded"] == 1 and r4["added"] == 1, str(r4))
+        goals = open(os.path.join(vault, "Profile", "Goals.md"), encoding="utf-8").read()
+        check("superseded fact is kept, struck through, under Superseded",
+              "## Superseded" in goals and "~~" in goals and "10,000" in goals)
+        live_facts = P.load_all(vault).get("goals", [])
+        check("superseded fact no longer counts as live",
+              not any("10,000 subscribers by December 2026" in f["text"] and "YouTube" in f["text"]
+                      for f in live_facts), str([f["text"][:40] for f in live_facts]))
+
+        # ---- secrets never get written ------------------------------------------
+        for bad in ["His api_key = sk-ant-abc123def456ghi789jkl012mno",
+                    "Alex's password: hunter2correcthorsebattery",
+                    "token = ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"]:
+            rb = P.record(vault, [{"category": "identity", "fact": bad}])
+            check(f"refuses to store a credential ({bad[:22]}…)",
+                  rb["skipped"] == 1 and rb["added"] == 0, str(rb))
+
+        # ---- hand edits in Obsidian survive and are adopted ----------------------
+        idpath = os.path.join(vault, "Profile", "00 - Alex.md")
+        with open(idpath, "a", encoding="utf-8") as fh:
+            fh.write("- He lives in Massachusetts and drives a blue Civic.\n")
+        adopted, _ = P._parse_file(idpath)
+        check("a hand-written bullet is adopted as a real fact", len(adopted) == 2,
+              str([f["text"][:30] for f in adopted]))
+        P.record(vault, [{"category": "identity",
+                          "fact": "Alex lives in Massachusetts and drives a blue Civic."}])
+        after, _ = P._parse_file(idpath)
+        check("re-observing a hand-written fact doesn't duplicate it", len(after) == 2,
+              str([f["text"][:30] for f in after]))
+
+        # ---- digest / lookup -----------------------------------------------------
+        d = P.digest(vault)
+        check("digest includes facts grouped by category",
+              "Who Alex Is" in d and "Coach Dan" in d, d[:120])
+        check("digest respects its char budget", len(P.digest(vault, max_chars=80)) < 400)
+        check("lookup finds a fact by keyword", "Coach Dan" in P.lookup(vault, "coach"))
+        check("lookup reports honestly when nothing matches",
+              "matches" in P.lookup(vault, "zzzquux").lower())
+
+        # ---- forget: retires, doesn't delete; refuses when ambiguous -------------
+        out = P.forget(vault, "blue Civic")
+        check("forget retires a single clear match", out.startswith("Retired from"), out)
+        check("forget refuses a fact that doesn't exist",
+              P.forget(vault, "zzzquux").startswith("No profile fact"))
+
+        # ---- observer: a closed conversation writes facts with NO tool call ------
+        class FakeClaude:
+            """Stands in for the model so the suite stays offline and deterministic."""
+            class messages:
+                @staticmethod
+                def create(**kw):
+                    prompt = kw["messages"][0]["content"]
+                    # The extractor must be shown the transcript wrapped as untrusted data.
+                    assert "UNTRUSTED" in prompt, "transcript not wrapped in the data boundary"
+                    payload = ('[{"category":"routines","fact":"Alex has track practice at '
+                               '6am on Tuesdays and Thursdays."}]')
+                    return type("M", (), {"content": [type("B", (), {"type": "text", "text": payload})()]})()
+
+        mem = cm.ConversationMemory(
+            os.path.join(tmp, "mem.db"),
+            summarizer=lambda msgs: ("Practice", "Alex talked about practice timing."),
+            observer=lambda sid, msgs: P.observe_messages(FakeClaude(), vault, msgs, source="chat"))
+        mem.log("user", "cant make the 6am practice tomorrow, tuesdays and thursdays are rough")
+        mem.log("assistant", "Noted.")
+        sid = mem._open_session_row()["id"]
+        mem.summarize_session(sid, force=True)
+
+        before = P.stats(vault)["facts"]
+        check("observer runs on a closed session", mem.observe_session(sid) is True)
+        check("observer wrote a fact with no tool call involved",
+              P.stats(vault)["facts"] == before + 1, f"{before} -> {P.stats(vault)['facts']}")
+        check("observation is idempotent (won't re-pay for the same session)",
+              mem.observe_session(sid) is False)
+        check("observed sessions leave the catch-up queue empty",
+              mem.unobserved_sessions() == [])
+
+        # A conversation with no user turns teaches nothing.
+        r5 = P.observe_messages(FakeClaude(), vault, [{"role": "assistant", "content": "hi"}])
+        check("a conversation with no user turns is skipped", r5.get("added", 0) == 0, str(r5))
+
+        # ---- observer failure must never break memory ----------------------------
+        class Boom:
+            class messages:
+                @staticmethod
+                def create(**kw):
+                    raise RuntimeError("model down")
+
+        mem2 = cm.ConversationMemory(
+            os.path.join(tmp, "mem2.db"),
+            summarizer=lambda msgs: ("T", "S"),
+            observer=lambda sid, msgs: P.observe_messages(Boom(), vault, msgs))
+        mem2.log("user", "something about my week")
+        sid2 = mem2._open_session_row()["id"]
+        mem2.summarize_session(sid2, force=True)
+        ok = True
+        try:
+            mem2.observe_session(sid2)
+        except Exception:
+            ok = False
+        check("a failing observer doesn't raise into the memory layer", ok)
+        check("a failing observer still marks the session observed (no retry loop)",
+              mem2.unobserved_sessions() == [])
+
+        # ---- consolidate: merges paraphrases, keeps the originals ---------------
+        cvault = os.path.join(tmp, "cvault")
+        P.record(cvault, [
+            {"category": "goals", "fact": "Coach Dan wants Alex focused on the 200m this season."},
+            {"category": "goals", "fact": "Alex's season focus is the 200m, per Coach Dan."},
+            {"category": "goals", "fact": "Alex is aiming for $3,000 per month in revenue."},
+        ])
+
+        class FakeMerger:
+            class messages:
+                @staticmethod
+                def create(**kw):
+                    payload = ('[{"merged":"Coach Dan has Alex focused on the 200m this '
+                               'season.","duplicates":[0,1]}]')
+                    return type("M", (), {"content": [type("B", (), {"type": "text", "text": payload})()]})()
+
+        cr = P.consolidate(FakeMerger(), cvault, category="goals")
+        check("consolidate merges a duplicate group",
+              cr["merged_groups"] == 1 and cr["facts_absorbed"] == 2, str(cr))
+        check("consolidate leaves unrelated facts alone",
+              P.stats(cvault)["facts"] == 2, str(P.stats(cvault)))
+        cgoals = open(os.path.join(cvault, "Profile", "Goals.md"), encoding="utf-8").read()
+        check("absorbed facts are retired, not deleted", cgoals.count("~~") >= 4)
+        check("the merged fact is live", "Coach Dan has Alex focused" in cgoals)
+
+        # A malformed/greedy model response must not destroy facts.
+        class BadMerger:
+            class messages:
+                @staticmethod
+                def create(**kw):
+                    return type("M", (), {"content": [type("B", (), {"type": "text", "text": "not json at all"})()]})()
+
+        before_bad = P.stats(cvault)["facts"]
+        P.consolidate(BadMerger(), cvault, category="goals")
+        check("a malformed consolidation response changes nothing",
+              P.stats(cvault)["facts"] == before_bad)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def suite_distillation(app, live):
     """Memory distillation (Priority 3): compress old conversations into durable facts with
     provenance; keep originals; never fabricate; recall prefers distilled facts."""
@@ -4148,6 +4330,7 @@ SUITES = {
     "august": suite_august,
     "retrieval": suite_retrieval,
     "distillation": suite_distillation,
+    "profile": suite_profile,
 }
 
 

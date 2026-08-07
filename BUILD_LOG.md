@@ -1265,3 +1265,60 @@ Alex's underlying ask was already satisfied by the redeploy: both seed-oil repor
 and a fresh sweep is safe. CLARVIS can now say that instead of filing a bug.
 
 Deploy verified live via `/api/version` (commit `cc9f8a2dd734`).
+
+---
+
+## Person-model profile — 2026-08-07
+
+**Problem:** every memory path CLARVIS had was one it must *choose* to invoke. After three
+weeks of daily use that produced **1** saved memory (`jarvis_memory`), **0** distilled facts,
+and **0** notes about Alex anywhere in the vault — while every conversation was logged and
+summarized, then never mined. The gap vs. the Karen/FRIDAY bar was never storage; it was that
+nothing populated it.
+
+**Built:** `second-brain-chat/person_profile.py` — a person-model kept as markdown under
+`<vault>/Profile/`, one note per category (identity, people, preferences, routines, goals,
+projects, health, constraints, timeline).
+
+- **Written automatically.** `conversation_memory` gained an `observer` hook, called once per
+  session right after it's summarized (same background thread — never delays a reply). An
+  extraction pass pulls durable facts about Alex and files them. No tool call involved.
+  Guarded by a new `observed` column so a restart never re-pays for the same session; the
+  flag is set even when the observer *fails*, so a broken observer can't cause a retry loop.
+- **Read every turn.** `digest()` is injected at the top of the dynamic system-prompt block
+  (uncached on purpose — a stale cached profile is worse than none).
+- **One store, not a new silo.** `remember` now writes to the profile (categorized, with a
+  `replaces` argument for corrections) instead of appending to Supabase; legacy
+  `jarvis_memory` rows are still loaded so nothing already saved is lost. `forget_memory`
+  checks the profile first, then falls back.
+- New tools: `profile_lookup`, `consolidate_profile`.
+
+**Key decision — dedup does NOT pretend to be semantic.** Measured on real pairs, genuine
+paraphrases score 0.38–0.75 on word overlap while genuinely-distinct facts score 0.50–0.67:
+the ranges overlap, so no threshold separates them (the decisive token is usually the
+smallest — "200m" vs "400m", "YouTube" vs "newsletter"). Embeddings are worse here for the
+same reason. So the write path uses a deliberately high threshold (0.72 + plural folding)
+that only catches the-same-sentence-reworded, and real merging lives in `consolidate()`,
+which has a model's judgment. Erring toward a harmless duplicate beats silently destroying
+a fact about someone's life.
+
+**Safety:** transcripts go to the extractor wrapped in the shared data boundary, so quoted
+email/web content is data and can't write itself into the person-model (verified against a
+live injection attempt — it recorded *that an injection was attempted*, not the payload).
+Credential-shaped facts are dropped. Nothing is ever deleted: supersede/forget/consolidate
+all retire to a `## Superseded` section. Notes are hand-editable and hand edits round-trip.
+
+**Verified:** new `profile` suite, 32 checks (storage, cross-category dedup, supersede,
+credential refusal, hand-edit round-trip, digest budget, observer runs/idempotency/
+fail-soft, consolidation incl. malformed-response safety). Full offline suite **719 passed,
+0 failed** — it caught a real gap (missing `TOOL_STATUS_LABELS` entries) before commit.
+Bootstrap over existing history recovered 10 facts from one real conversation, including his
+full in-season training plan and sleep/protein targets.
+
+**Bug found and fixed in the process:** the bootstrap CLI read `session["id"]`, but
+`list_sessions`/`get_session` key it as `session_id` — the first run silently reported
+"0 facts" from 5 sessions rather than erroring.
+
+**Still open:** bootstrap only mines chat history. Mining email/calendar/existing vault notes
+into the profile is deliberately NOT done — that's a bigger privacy call and needs Alex's
+explicit go-ahead.

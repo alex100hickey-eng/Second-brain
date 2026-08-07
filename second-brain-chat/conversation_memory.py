@@ -109,10 +109,14 @@ def _semantic_rerank(query: str, results: list) -> list:
 
 
 class ConversationMemory:
-    def __init__(self, db_path: str = DEFAULT_DB, summarizer=None):
+    def __init__(self, db_path: str = DEFAULT_DB, summarizer=None, observer=None):
         self.db_path = db_path
         self._lock = threading.RLock()
         self._summarizer = summarizer  # callable(list_of_msg_dicts) -> (title, summary)
+        # callable(session_id, list_of_msg_dicts) -> None. Runs once per session, right
+        # after it's summarized, so anything that wants to learn from a finished
+        # conversation (see profile.py) doesn't need a tool call to be triggered.
+        self._observer = observer
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._fts = False
@@ -159,6 +163,12 @@ class ConversationMemory:
             # the distilled version over the raw transcript. Added via migration for old DBs.
             try:
                 c.execute("ALTER TABLE sessions ADD COLUMN distilled INTEGER NOT NULL DEFAULT 0")
+            except sqlite3.OperationalError:
+                pass  # column already exists
+            # Mark which sessions the observer has already learned from, so a restart or
+            # a re-summarize doesn't pay for the same extraction twice.
+            try:
+                c.execute("ALTER TABLE sessions ADD COLUMN observed INTEGER NOT NULL DEFAULT 0")
             except sqlite3.OperationalError:
                 pass  # column already exists
             # Try to stand up an FTS5 mirror for fast search; fall back to LIKE if the
@@ -277,6 +287,44 @@ class ConversationMemory:
             self._conn.commit()
             srow = self._conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
         return dict(srow)
+
+    def observe_session(self, session_id: int, force: bool = False) -> bool:
+        """Hand a finished conversation to the observer exactly once. Returns whether it ran.
+
+        Idempotent by design: the `observed` flag is set even when the observer raises, so
+        a persistently-failing observer can't put the system in a loop that re-pays for the
+        same extraction on every restart.
+        """
+        if self._observer is None:
+            return False
+        with self._lock:
+            srow = self._conn.execute(
+                "SELECT observed FROM sessions WHERE id = ?", (session_id,)).fetchone()
+            if not srow or (srow["observed"] and not force):
+                return False
+            msgs = self._conn.execute(
+                "SELECT role, content, ts FROM messages WHERE session_id = ? ORDER BY id",
+                (session_id,)).fetchall()
+        msg_dicts = [{"role": m["role"], "content": m["content"], "ts": m["ts"]} for m in msgs]
+        try:
+            if msg_dicts:
+                self._observer(session_id, msg_dicts)
+        except Exception as e:  # never let the observer break memory
+            print(f"conversation_memory: observer failed for #{session_id}: {e}")
+        finally:
+            with self._lock:
+                self._conn.execute(
+                    "UPDATE sessions SET observed = 1 WHERE id = ?", (session_id,))
+                self._conn.commit()
+        return True
+
+    def unobserved_sessions(self, limit: int = 50) -> list:
+        """Closed, summarized sessions the observer hasn't seen — for a catch-up sweep."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id FROM sessions WHERE closed = 1 AND observed = 0 "
+                "ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+        return [r["id"] for r in rows]
 
     def _make_summary(self, msgs: list) -> tuple:
         """Return (title, summary). Uses the injected model summarizer if present, else
@@ -629,13 +677,16 @@ _MEM = None
 _MEM_LOCK = threading.Lock()
 
 
-def get_memory(db_path: str = DEFAULT_DB, summarizer=None) -> ConversationMemory:
+def get_memory(db_path: str = DEFAULT_DB, summarizer=None, observer=None) -> ConversationMemory:
     global _MEM
     with _MEM_LOCK:
         if _MEM is None:
-            _MEM = ConversationMemory(db_path, summarizer=summarizer)
-        elif summarizer is not None and _MEM._summarizer is None:
-            _MEM._summarizer = summarizer
+            _MEM = ConversationMemory(db_path, summarizer=summarizer, observer=observer)
+        else:
+            if summarizer is not None and _MEM._summarizer is None:
+                _MEM._summarizer = summarizer
+            if observer is not None and _MEM._observer is None:
+                _MEM._observer = observer
     return _MEM
 
 
@@ -646,6 +697,12 @@ def _queue_summary(mem: "ConversationMemory", session_id: int) -> None:
             mem.summarize_session(session_id)
         except Exception as e:
             print(f"conversation_memory: background summary failed for #{session_id}: {e}")
+        # Learn from the finished conversation once it has a summary. Same background
+        # thread on purpose — it costs a model call and must never delay a chat reply.
+        try:
+            mem.observe_session(session_id)
+        except Exception as e:
+            print(f"conversation_memory: observation failed for #{session_id}: {e}")
     threading.Thread(target=_run, daemon=True).start()
 
 
