@@ -1012,18 +1012,25 @@ def _claim(row_id: int, original_text: str, task: dict) -> bool:
 
 
 def _managed_worker(post_to_chat) -> None:
+    cycle = 0
     while True:
         try:
-            rows = (
+            q = (
                 supabase.table("Agent Outputs")
-                .select("*")
+                .select("id,output_text")
                 .eq("agent_name", "jarvis_managed_task")
                 .order("id", desc=False)
                 .limit(20)
-                .execute()
-                .data
-                or []
             )
+            # Idle polls dominated Supabase egress (~1.3 GB/day re-downloading
+            # every task's full step history each cycle). Most cycles ask the
+            # server for queued rows only — json.dumps always emits this exact
+            # '"status": "queued"' byte sequence — and the status re-check
+            # below stays the authority. Every 20th cycle polls unfiltered so
+            # an oddly-encoded row can't be starved forever.
+            if cycle % 20:
+                q = q.ilike("output_text", '%"status": "queued"%')
+            rows = q.execute().data or []
             for row in rows:
                 try:
                     task = json.loads(row["output_text"])
@@ -1052,7 +1059,8 @@ def _managed_worker(post_to_chat) -> None:
                 monitor.report_event("jarvis-managed-worker", "error", "worker cycle failed", str(e))
             except Exception:
                 pass
-        time.sleep(8)
+        cycle += 1
+        time.sleep(30)
 
 
 def start_managed_worker(post_to_chat) -> None:

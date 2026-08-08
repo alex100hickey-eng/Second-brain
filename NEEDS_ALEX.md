@@ -1,5 +1,37 @@
 # NEEDS_ALEX.md — everything blocked on you
 
+## 2026-08-08 — 🔴 SUPABASE DECIDES TOMORROW: upgrade by Aug 9 or CLARVIS's DB starts 402ing
+
+The org (alex2hoop@icloud.com, ID `jbyfwshwyrzcuwmgalbm`) blew through the free
+tier's **5.5 GB egress: 12.87 GB used**. Supabase cut the grace period — after
+**Aug 9** every API call returns 402 until the plan is upgraded. That's chat
+history, tasks, intake, HUD, the relay queue — everything.
+
+**Root cause found and fixed 2026-08-08:** ~95% of the egress was CLARVIS's own
+polling (two 8-second workers re-downloading every task row ≈1.3 GB/day, the
+screen-result poll re-downloading MB-scale screenshots every second, `_load_state`
+downloading 83 KB to read one key, the chat badge paying the full ~330 KB
+dashboard price every 60s). All fixed, suite-green, deployed. New run-rate
+≈ **3 GB/month — comfortably inside the free tier going forward.**
+
+**Your call (2 minutes, before tomorrow):**
+- **Recommended: upgrade to Pro ($25/mo)** at
+  https://supabase.com/dashboard/org/jbyfwshwyrzcuwmgalbm/billing — restrictions
+  lift immediately, and with the fixes you can downgrade back to Free next cycle
+  once the usage graph proves out. Turn ON the spend cap when upgrading.
+- **Or ride it out free:** usage is now under control, but the 402 restriction
+  still lands Aug 9 and typically holds until the next billing cycle — days of
+  CLARVIS being brain-dead. Not recommended.
+
+While you're in that dashboard anyway (~3 more min, kills the recurring
+"security vulnerabilities" emails): Project Settings → API → copy the
+`service_role` key → replace `SUPABASE_KEY`'s value in Coolify env, `~/.zshrc`,
+and `~/second-brain/.env` → verify the app still answers → SQL editor:
+`alter table public."Agent Outputs" enable row level security;` (no policies —
+service_role bypasses RLS; the app needs zero code changes). Audited 2026-08-08:
+the anon key is server-side only, so this is hygiene, not an emergency — but it's
+one screen away from the billing page.
+
 ## 2026-08-07 — ambient awareness + protocols shipped; calendar OAuth is DEAD
 
 CLARVIS now has a JARVIS-style ambient layer: every turn it already knows the

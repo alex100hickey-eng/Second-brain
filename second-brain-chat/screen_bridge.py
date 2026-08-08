@@ -132,11 +132,23 @@ def send_command(supabase, action: str, payload: dict = None,
         return f"Couldn't reach the screen relay queue: {str(e)[:160]}"
 
     deadline = _now() + timeout
+    poll = 0
     while _now() < deadline:
         try:
-            rows = (supabase.table("Agent Outputs").select("id,output_text")
-                    .eq("agent_name", RESULT_AGENT)
-                    .order("id", desc=True).limit(25).execute().data or [])
+            q = (supabase.table("Agent Outputs").select("id,output_text")
+                 .eq("agent_name", RESULT_AGENT)
+                 .order("id", desc=True))
+            # Result rows can carry ~MB base64 screenshots; re-downloading all
+            # recent ones every second while waiting burned hundreds of MB per
+            # screen session. Ask the server for this command's token instead
+            # (_answer writes json.dumps, so the byte sequence is stable) and
+            # download the payload once. Every 30th poll scans unfiltered as a
+            # safety net against an oddly-encoded result row.
+            if poll % 30 == 29:
+                q = q.limit(25)
+            else:
+                q = q.ilike("output_text", f'%"token": "{token}"%').limit(3)
+            rows = q.execute().data or []
             for r in rows:
                 try:
                     res = json.loads(r["output_text"])
@@ -146,6 +158,7 @@ def send_command(supabase, action: str, payload: dict = None,
                     return str(res.get("result", ""))
         except Exception:
             pass          # transient read error — keep waiting, don't abort
+        poll += 1
         time.sleep(1.0)
 
     return ("No response from the Mac relay (timed out). Screen control needs the "

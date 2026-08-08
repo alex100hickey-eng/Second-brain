@@ -644,9 +644,9 @@
   // Pending-approvals badge on the Dashboard nav link
   async function refreshBadge() {
     try {
-      const res = await fetch('/api/dashboard');
+      const res = await fetch('/api/pending-count');
       const data = await res.json();
-      const n = (data.pending_actions || []).length;
+      const n = data.count || 0;
       const badge = document.getElementById('pending-badge');
       badge.textContent = n;
       badge.style.display = n ? 'inline-block' : 'none';

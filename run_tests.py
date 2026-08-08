@@ -1600,6 +1600,7 @@ def suite_heartbeat(app, live):
         def table(self, _): return self
         def select(self, _): return self
         def eq(self, *_): return self
+        def ilike(self, *_): return self   # egress filter is pass-through here; the key check stays in Python
         def order(self, *_, **__): return self
         def limit(self, _): return self
         def execute(self):
@@ -4665,6 +4666,96 @@ def suite_portfolio(app, live):
             shutil.rmtree(tmp2, ignore_errors=True)
 
 
+def suite_egress(app, live):
+    section("Supabase egress guards (the 12.87GB/5.5GB quota incident, 2026-08-08)")
+    import inspect
+    import time as _time
+    import types
+    import json as _json
+    import task_manager
+    import screen_bridge
+    import monitor as _monitor
+    import intake as _intake
+
+    # --- the two 8s->30s workers only download queued rows on idle cycles ---
+    for label, fn in (("managed worker", task_manager._managed_worker),
+                      ("background-task worker", app._task_worker)):
+        src = inspect.getsource(fn)
+        check(f"{label} narrows idle polls to queued rows server-side",
+              '\'%"status": "queued"%\'' in src and 'select("id,output_text")' in src)
+        check(f"{label} keeps a periodic unfiltered safety-net poll",
+              "cycle % 20" in src)
+        check(f"{label} polls every 30s, not 8s",
+              "time.sleep(30)" in src and "time.sleep(8)" not in src)
+
+    # --- screen result wait-poll fetches by token, not every screenshot ---
+    src = inspect.getsource(screen_bridge.send_command)
+    check("screen result poll filters by command token (screenshots download once)",
+          '"token": "{token}"' in src and "poll % 30" in src)
+
+    # --- heartbeat scan narrows to heartbeat:* rows, with an empty-read fallback ---
+    src = inspect.getsource(_monitor.check_heartbeats)
+    check("heartbeat scan narrows to heartbeat:* state rows",
+          '\'%"key": "heartbeat:%\'' in src)
+    check("heartbeat scan falls back to a full read when the filter finds nothing",
+          src.count(".limit(100)") >= 2)
+
+    # --- _load_state point-reads its key (functional, fake client) ---
+    class _Query:
+        def __init__(self, log, data_by_mode):
+            self._log, self._data, self._f = log, data_by_mode, {}
+        def select(self, cols): self._f["select"] = cols; return self
+        def eq(self, col, val): return self
+        def ilike(self, col, pat): self._f["ilike"] = pat; return self
+        def order(self, col, desc=False): return self
+        def limit(self, n): self._f["limit"] = n; return self
+        def execute(self):
+            self._log.append(dict(self._f))
+            mode = "filtered" if "ilike" in self._f else "full"
+            return types.SimpleNamespace(data=self._data.get(mode, []))
+    class _Client:
+        def __init__(self, data_by_mode):
+            self.log, self._data = [], data_by_mode
+        def table(self, name): return _Query(self.log, self._data)
+
+    row = {"id": 7, "output_text": _json.dumps({"key": "cursor:test", "v": 1})}
+    real = _intake.supabase
+    try:
+        # hot path: the filtered read finds the key in one narrow query
+        fake = _Client({"filtered": [row]})
+        _intake.supabase = fake
+        got = _intake._load_state("cursor:test")
+        check("_load_state finds its key via one filtered read",
+              got.get("v") == 1 and got.get("_row_id") == 7 and len(fake.log) == 1)
+        check("_load_state's filter pins the closing quote (seen:x can't match seen:xmail)",
+              fake.log[0].get("ilike") == '%"key": "cursor:test"%')
+        # safety net: an empty filtered read falls back to the old full read
+        fake = _Client({"filtered": [], "full": [row]})
+        _intake.supabase = fake
+        got = _intake._load_state("cursor:test")
+        check("_load_state falls back to the full read when the filter finds nothing",
+              got.get("v") == 1 and len(fake.log) == 2 and "ilike" not in fake.log[1])
+    finally:
+        _intake.supabase = real
+
+    # --- dashboard: shared TTL snapshot + a count-only badge endpoint ---
+    saved = dict(app._dashboard_cache)
+    try:
+        app._dashboard_cache["data"] = {"sentinel": True}
+        app._dashboard_cache["at"] = _time.monotonic()
+        check("get_dashboard_data serves the cached snapshot inside the TTL",
+              app.get_dashboard_data() == {"sentinel": True})
+    finally:
+        app._dashboard_cache.update(saved)
+    check("deciding a pending action busts the dashboard cache",
+          '_dashboard_cache["data"] = None' in inspect.getsource(app.api_approve))
+    rules = {r.rule for r in app.app.url_map.iter_rules()}
+    check("/api/pending-count route exists for the chat badge", "/api/pending-count" in rules)
+    tmpl = open(os.path.join(os.path.dirname(_intake.__file__), "templates", "index.html")).read()
+    check("chat badge polls the count endpoint, not the full dashboard",
+          "/api/pending-count" in tmpl and "fetch('/api/dashboard')" not in tmpl)
+
+
 SUITES = {
     "vault": suite_vault,
     "gate": suite_gate,
@@ -4717,6 +4808,7 @@ SUITES = {
     "reminders": suite_reminders,
     "escalation": suite_escalation,
     "weather": suite_weather,
+    "egress": suite_egress,
 }
 
 

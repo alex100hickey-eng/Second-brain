@@ -119,12 +119,26 @@ def _event_row(row_id: int):
 
 
 def _load_state(key: str) -> dict:
-    """One state dict per key (e.g. 'seen:imessage', 'cursor:gmail'). Newest row wins."""
+    """One state dict per key (e.g. 'seen:imessage', 'cursor:gmail'). Newest row wins.
+
+    The ilike filter narrows the download to rows carrying this key — _save_state
+    writes json.dumps, so the '"key": "<key>"' byte sequence (closing quote
+    included, so 'seen:x' can't match 'seen:xmail') is stable. The Python ==
+    check below stays the authority. An empty filtered read falls back to the
+    old full read so an oddly-encoded row can't make its key invisible."""
     rows = (
         supabase.table("Agent Outputs").select("*")
-        .eq("agent_name", STATE_AGENT).order("id", desc=True)
-        .limit(50).execute().data or []
+        .eq("agent_name", STATE_AGENT)
+        .ilike("output_text", f'%"key": "{key}"%')
+        .order("id", desc=True)
+        .limit(5).execute().data or []
     )
+    if not rows:
+        rows = (
+            supabase.table("Agent Outputs").select("*")
+            .eq("agent_name", STATE_AGENT).order("id", desc=True)
+            .limit(50).execute().data or []
+        )
     for row in rows:
         try:
             data = json.loads(row["output_text"])

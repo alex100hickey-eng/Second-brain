@@ -3923,18 +3923,23 @@ def _claim_task(row_id: int, original_text: str, task: dict) -> bool:
 
 
 def _task_worker() -> None:
+    cycle = 0
     while True:
         try:
-            rows = (
+            q = (
                 supabase.table("Agent Outputs")
-                .select("*")
+                .select("id,output_text")
                 .eq("agent_name", "jarvis_task")
                 .order("id", desc=False)
                 .limit(20)
-                .execute()
-                .data
-                or []
             )
+            # Same egress guard as task_manager._managed_worker: most cycles
+            # fetch queued rows only (json.dumps emits this exact byte
+            # sequence); the status re-check below stays the authority, and
+            # every 20th cycle polls unfiltered as a safety net.
+            if cycle % 20:
+                q = q.ilike("output_text", '%"status": "queued"%')
+            rows = q.execute().data or []
             for row in rows:
                 try:
                     task = json.loads(row["output_text"])
@@ -3952,7 +3957,8 @@ def _task_worker() -> None:
                 monitor.report_event("jarvis-task-worker", "error", "worker cycle failed", str(e))
             except Exception:
                 pass
-        time.sleep(8)
+        cycle += 1
+        time.sleep(30)
 
 
 def start_task_worker() -> None:
@@ -4681,7 +4687,18 @@ def _list_py_files(dir_path: str) -> list:
     return sorted(f for f in os.listdir(dir_path) if f.endswith(".py"))
 
 
+# /api/dashboard is polled by the HUD page (30s) and was polled by the chat
+# badge (60s); each uncached build costs ~330KB of Supabase reads. One shared
+# snapshot serves every open tab; deciding a pending action busts the cache so
+# the UI never shows a just-decided action as pending.
+_dashboard_cache = {"at": 0.0, "data": None}
+_DASHBOARD_TTL_S = 30
+
+
 def get_dashboard_data() -> dict:
+    cached = _dashboard_cache["data"]
+    if cached is not None and time.monotonic() - _dashboard_cache["at"] < _DASHBOARD_TTL_S:
+        return cached
     outputs = (
         supabase.table("Agent Outputs")
         .select("*")
@@ -4701,7 +4718,7 @@ def get_dashboard_data() -> dict:
                     all_notes.append(os.path.relpath(os.path.join(root, f), VAULT_PATH))
     all_notes.sort()
 
-    return {
+    data = {
         "recent_outputs": outputs,
         "vault_notes": all_notes,
         "pending_agents": _list_py_files(AGENTS_DIR),
@@ -4717,6 +4734,9 @@ def get_dashboard_data() -> dict:
         "intake": intake.get_intake(),
         "monitor": monitor.get_monitor_dashboard_data(),
     }
+    _dashboard_cache["data"] = data
+    _dashboard_cache["at"] = time.monotonic()
+    return data
 
 
 # ============================================================
@@ -5612,6 +5632,17 @@ def hud_demo():
     return render_template("hud-demo.html")
 
 
+@app.route("/api/pending-count")
+def api_pending_count():
+    # The chat page badge only needs a number — don't make it pay the full
+    # dashboard price every 60s.
+    try:
+        return jsonify({"count": len(get_pending_actions())})
+    except Exception as e:
+        print(f"Warning: /api/pending-count transient error: {e}")
+        return jsonify({"count": 0})
+
+
 @app.route("/api/dashboard")
 def api_dashboard():
     # A transient upstream read error (Supabase/Composio) shouldn't blow up as an HTML
@@ -6239,6 +6270,8 @@ def api_approve():
     if decision not in ("approve", "deny") or not isinstance(row_id, int):
         return jsonify({"ok": False, "error": "Bad request."}), 400
     result = resolve_pending_action(row_id, decision)
+    if result.get("ok"):
+        _dashboard_cache["data"] = None   # decided action must not linger as pending
     return jsonify(result), (200 if result.get("ok") else 422)
 
 

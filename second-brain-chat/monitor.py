@@ -214,8 +214,18 @@ def check_heartbeats() -> list:
     try:
         import intake
         rows = (supabase.table("Agent Outputs").select("output_text")
-                .eq("agent_name", intake.STATE_AGENT).order("id", desc=True)
+                .eq("agent_name", intake.STATE_AGENT)
+                .ilike("output_text", '%"key": "heartbeat:%')
+                .order("id", desc=True)
                 .limit(100).execute().data or [])
+        if not rows:
+            # Once anything has ever beat, heartbeat rows exist — an empty
+            # filtered read is more likely a pattern mismatch than a truly
+            # empty store. Fall back to the old full read rather than raise
+            # false stale-heartbeat incidents.
+            rows = (supabase.table("Agent Outputs").select("output_text")
+                    .eq("agent_name", intake.STATE_AGENT).order("id", desc=True)
+                    .limit(100).execute().data or [])
     except Exception:
         return []
     incidents, seen = [], set()
