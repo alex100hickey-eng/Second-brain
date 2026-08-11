@@ -2909,22 +2909,31 @@ def suite_reminders(app, live):
     try:
         tr = tt.TaskTracker(os.path.join(tmp, "t.db"))
 
+        # Dues are RELATIVE to the real clock — the ambient section below filters on
+        # hours-from-now, so hardcoded dates rot (the first version of this suite
+        # failed 4 days after it was written).
+        from datetime import datetime as _dt, timedelta as _td
+        real_now = _dt.now()
+        due_timed = (real_now + _td(hours=2)).strftime("%Y-%m-%dT%H:%M")
+        due_day = (real_now + _td(days=1)).strftime("%Y-%m-%d")
+
         # ---- tracker layer ---------------------------------------------------
-        a = tr.create("Call coach Dan", due="2026-08-07T16:00")
-        b = tr.create("Finish English essay", due="2026-08-08")
+        a = tr.create("Call coach Dan", due=due_timed)
+        b = tr.create("Finish English essay", due=due_day)
         tr.create("No due task")
-        check("timed due stored", a["due"] == "2026-08-07T16:00")
-        check("date-only due stored", b["due"] == "2026-08-08")
+        check("timed due stored", a["due"] == due_timed)
+        check("date-only due stored", b["due"] == due_day)
         check("garbage due is refused loudly",
               "Couldn't read" in tr.create("Bad", due="4pm friday").get("error", ""))
         check("open_with_due returns only dued tasks, soonest first",
               [t["id"] for t in tr.open_with_due()] == [a["id"], b["id"]])
-        r = tr.set_due(a["id"], "2026-08-07T17:30")
+        due_moved = (real_now + _td(hours=3, minutes=30)).strftime("%Y-%m-%dT%H:%M")
+        r = tr.set_due(a["id"], due_moved)
         check("set_due updates and logs history",
-              r["due"] == "2026-08-07T17:30" and any(h["type"] == "due" for h in r["history"]))
+              r["due"] == due_moved and any(h["type"] == "due" for h in r["history"]))
         check("empty due clears the reminder", tr.set_due(a["id"], "")["due"] == "")
-        tr.set_due(a["id"], "2026-08-07T16:00")  # restore
-        done = tr.create("Done task", due="2026-08-07T15:00")
+        tr.set_due(a["id"], due_timed)  # restore
+        done = tr.create("Done task", due=(real_now + _td(hours=1)).strftime("%Y-%m-%dT%H:%M"))
         tr.update_status(done["id"], "done", note="finished")
         check("done tasks leave the reminder feed",
               done["id"] not in [t["id"] for t in tr.open_with_due()])
@@ -2993,9 +3002,10 @@ def suite_reminders(app, live):
             check("ambient block carries a Due & overdue section",
                   "Due & overdue:" in snap and "Call coach Dan" in snap, snap[:400])
             out = app.handle_tool_call("set_task_due",
-                                       {"task_id": b["id"], "due": "2026-08-09"})
+                                       {"task_id": b["id"],
+                                        "due": (real_now + _td(days=2)).strftime("%Y-%m-%d")})
             check("set_task_due dispatch works end to end",
-                  f"Task #{b['id']}" in out and "Sunday" in out or "due" in out.lower(), out)
+                  f"Task #{b['id']}" in out and "due" in out.lower(), out)
         finally:
             app.task_tracker.get_tracker = saved_get
     finally:
@@ -4173,8 +4183,12 @@ def suite_ad_pipeline(app, live):
         brand["qa"]["verdicts"].append({"id": "GHOST9", "verdict": "pass"})  # nonexistent
         acp._update_row(rid, brand)
         out = acp.package_delivery("alpaca socks")
+        # Negative-count regex, not a bare "-1" substring: the output embeds a
+        # date-stamped path, and any date containing "-1" (Aug 10-19, every
+        # October-December…) made the bare check fail on the calendar, not the code.
         check("id-less and hallucinated pass verdicts don't crash or inflate the drop",
-              "Drop packaged" in out and "-1" not in out, out[:150])
+              "Drop packaged" in out and not re.search(r"-\d+ (lead|batch)", out),
+              out[:150])
 
         # --- the client-facing drop doc itself carries no pipeline tells and
         # always ends on an ask (2026-08-03 council taste-pass regressions) ---

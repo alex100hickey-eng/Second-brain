@@ -4672,7 +4672,15 @@ def get_today_events() -> list:
         return events
     except Exception as e:
         print(f"Warning: couldn't fetch today's calendar events: {e}")
-        return _calendar_cache["events"] or []
+        # Cache the failure too: with the calendar deliberately disconnected (Alex's
+        # call — its contents aren't real), an uncached failure meant re-hitting the
+        # dead Composio connection on every 30s dashboard poll instead of once per TTL.
+        # The freshness check needs events non-None, so an empty day is recorded when
+        # there's no stale list to serve.
+        if _calendar_cache["events"] is None:
+            _calendar_cache["events"] = []
+        _calendar_cache["fetched_at"] = time.time()
+        return _calendar_cache["events"]
 
 
 # ============================================================
