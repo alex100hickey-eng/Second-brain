@@ -39,12 +39,13 @@ time, today's calendar, your top tasks, what's waiting on you, and what's runnin
 in the background — plus **protocols** (standing orders: "when I say game day, do
 X then Y" → saved to vault `Protocols/`, run by name). Two things on you:
 
-1. **Your Google Calendar connection is gone.** Composio returns "No connected
-   account found for entity 'alex' / toolkit googlecalendar" — every calendar
-   feature (Today widget, briefing, the new ambient block, event proposals) is
-   flying blind until you re-auth. Fix: run
-   `python3 scripts/connect_google_calendar.py` from `~/second-brain` and finish
-   the Google OAuth screen it opens. ~2 minutes.
+1. ~~Google Calendar re-auth~~ — **RESOLVED 2026-08-11: deliberately staying
+   disconnected.** Alex says the calendar's contents are placeholder/junk, not his
+   real schedule, so reconnecting would feed CLARVIS bad data. Everything degrades
+   gracefully without it (ambient block, briefing, and widgets simply skip the
+   section). Recorded in the vault profile so CLARVIS knows not to trust it. Only
+   revisit if Alex starts keeping a real calendar — then
+   `python3 scripts/connect_google_calendar.py`.
 2. **Push when ready** — today's work (person profile + ambient awareness + protocols
    + doctrine + REMINDERS + opus escalation + weather) is committed on main but NOT
    pushed, so the live server has none of it yet:
