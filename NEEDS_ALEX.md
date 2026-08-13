@@ -1,5 +1,16 @@
 # NEEDS_ALEX.md — everything blocked on you
 
+## 2026-08-13 — 🔴 Capability watcher can't build anything: Claude CLI needs `/login` (1 min)
+
+The 2-minute watcher itself is alive and polling fine, but every build it spawns
+dies instantly with **"OAuth session expired and could not be refreshed"** — and
+has since **Aug 9**. Two real requests already failed this way (Aug 9 + Aug 10;
+the daily backstop caught them, but that's a once-a-day net instead of 2 minutes).
+Until you fix this, CLARVIS's `request_capability` → auto-build loop is dead.
+
+**Fix:** open Terminal → run `claude` → type `/login` → sign in. That's it.
+The watcher will pick everything up on its own afterward — no restart needed.
+
 ## 2026-08-08 — 🔴 SUPABASE DECIDES TOMORROW: upgrade by Aug 9 or CLARVIS's DB starts 402ing
 
 The org (alex2hoop@icloud.com, ID `jbyfwshwyrzcuwmgalbm`) blew through the free
