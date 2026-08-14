@@ -63,7 +63,8 @@ longer compounding" straight through those eleven silent days. Suite 815 → 829
    `Desktop/splitframe-sample-pack.pdf`. Pick one person whose taste you trust,
    attach, send. This is the cheapest real signal you can get before pitching
    anyone, and it costs one email.
-2. **The 14-brand call** — see the table below. One blanket answer covers it.
+2. ~~**The 14-brand call**~~ ✅ DECIDED 2026-08-14 — you delegated it ("up to you"),
+   so the under-150 rule was applied. See the table below for the record.
 3. **Stripe** — dashboard.stripe.com/register, sole prop, personal checking, ACH on,
    tax auto-transfer 25–30%. 15 minutes. Not urgent until someone says yes, but it's
    the only thing between a "yes" and money landing. Do it while warmup runs.
@@ -78,52 +79,32 @@ longer compounding" straight through those eleven silent days. Suite 815 → 829
    so sending it now would be a duplicate. And "CLARVIS draft test — safe to
    delete" from 08-02.
 
-### The 14 brands in the 101–199 band
+### The 14-brand call — decided 2026-08-14 (you delegated it)
 
-These are held up on a judgment call, not on scraping. All 14 are real brands with
-real ad spend; they sit above the 5–100 active-ad band you set.
+**Rule applied: under 150 active ads is in.** That's where the pitch changes —
+under ~150 you're usually still reaching a founder or a two-person team who reads
+their own email; at 150–190 an agency likely already holds the account.
 
-| brand | active ads | category | domain |
-|---|---|---|---|
-| Guava Family | 190 | Baby gear | guavafamily.com |
-| Divi | 190 | Scalp & hair care | diviofficial.com |
-| Native Pet | 160 | Pet supplements | nativepet.com |
-| Nani Swimwear | 160 | Swimwear | naniswimwear.com |
-| UrbanStems | 150 | Flowers & gifting | urbanstems.com |
-| ROAD iD | 150 | Safety wearables | roadid.com |
-| SheFit | 130 | Activewear | shefit.com |
-| Canvas Beauty | 130 | Haircare | canvasbeautybrand.com |
-| Needed | 120 | Prenatal supplements | thisisneeded.com |
-| Momentous | 120 | Performance supplements | livemomentous.com |
-| Fishwife | 120 | Tinned seafood | eatfishwife.com |
-| Apothékary | 120 | Herbal wellness | apothekary.co |
-| The Outset | 110 | Skincare | theoutset.com |
-| Pet Honesty | 110 | Dog supplements | pethonesty.com |
+**IN → qualified, wave 4 (8):** The Outset (110), Pet Honesty (110), Needed (120),
+Momentous (120), Fishwife (120), Apothékary (120), SheFit (130), Canvas Beauty (130).
+Fishwife is a freebie — its spec pack is already built and taste-passed.
 
-**My recommendation: "anything under 150 is in" — that's 8 brands**, and it draws
-the line where the pitch actually changes. Under ~150 you're usually still reaching
-a founder or a two-person marketing team who reads their own email. At 150–190
-you're emailing someone who already has an agency, and the reply rate reflects it.
+**OUT (6):** Guava Family (190), Divi (190), Native Pet (160), Nani Swimwear (160),
+UrbanStems (150), ROAD iD (150). They stay in the tracker marked out, revisit only
+if capacity opens.
 
-One of the 8 is a freebie: **Fishwife already has a finished, taste-passed spec pack
-built** — it was one of your three sample drops. Pitching them costs no new work.
+**Identity calls, all closed:** Apothékary confirmed (HTML-escape artifact) → in.
+Bask and Lather confirmed (`&` vs "and") → `too_big` at 570. Big Barker confirmed
+("Barker Dog Beds" is their trading page; they sell dog beds) → qualified at 26
+active, wave 4. GOODLES accepted ("Noodles, Gooder." is their own tagline) but its
+ad count still needs a recount before banding. Recess **rejected** — "Recess
+Therapy" is the street-interview series, not the drink; pitching the wrong company
+is worse than skipping one.
 
-Worth knowing before you answer: you have 40 qualified prospects and roughly 30–50
-sends of capacity before Aug 31, so these 14 are Wave 4 at the earliest. Saying "all
-out" costs you nothing this month.
-
-### Five identity calls (~10 seconds each)
-
-- **Apothékary** — stored as the literal escape `Apoth&eacute;kary`, so the string
-  compare failed. Almost certainly the right page. Confirm → it joins the table above.
-- **Bask and Lather** — page is `Bask & Lather Co` (`&` vs "and"), 570 active.
-  Confirm → it's `too_big`, not a candidate.
-- **Big Barker** — page is `Barker Dog Beds`, 24 active. If that's their trading
-  page it qualifies cleanly inside 5–100.
-- **GOODLES** → page "Goodles: Noodles, Gooder." — almost certainly them, but it's a
-  tagline rather than a name, so it wasn't auto-accepted.
-- **Recess** → page "Recess Therapy" — probably **not** them (Recess Therapy is the
-  street-interview series; Recess is the sparkling drink). Left unmatched on purpose.
+Tracker now stands at **49 qualified** (was 40). Wave-4 drafts get generated fresh
+against live ads when wave 3 finishes — drafts written now would be stale by send
+day. Overrule any of this by telling CLARVIS; the pre-decision snapshot is
+`prospect-tracker.csv.snapshot-pre-wave4-2026-08-14`.
 
 ---
 
@@ -156,12 +137,12 @@ App resource →
 
 Org `jbyfwshwyrzcuwmgalbm` (alex2hoop@icloud.com).
 
-5. **Tell me what you decided on the plan.** The Aug 9 restriction deadline passed
-   and **the database is answering normally today** — I ran a live query against
-   `Agent Outputs` and got HTTP 200, not a 402. So either you upgraded, or the
-   restriction never landed. Worth confirming which, because the 08-08 egress fixes
-   took the run-rate from ~53 GB/month to ~3 GB — comfortably inside the free tier —
-   so if you *did* upgrade to Pro you can likely downgrade next cycle and keep the $25.
+5. **Plan status: resolved per you, 2026-08-14** ("my money issues are resolved").
+   Verified the same day: the DB answers HTTP 200, no 402. One residual worth $25/mo:
+   if what you did was upgrade to Pro, the 08-08 egress fixes (~53 GB/mo → ~3 GB/mo)
+   mean you can likely **downgrade back to Free next cycle** — check the usage graph
+   at https://supabase.com/dashboard/org/jbyfwshwyrzcuwmgalbm/billing in early
+   September and keep the $25 if it held.
 6. **Rotate to the `service_role` key** and enable RLS — kills the recurring
    "security vulnerabilities" emails. Project Settings → API → copy `service_role` →
    replace `SUPABASE_KEY` in Coolify env, `~/.zshrc` and `~/second-brain/.env` →
@@ -171,14 +152,15 @@ Org `jbyfwshwyrzcuwmgalbm` (alex2hoop@icloud.com).
    changes.) Audited 08-08: the anon key is server-side only, so this is hygiene,
    not an emergency.
 
-### On the Hetzner box (needs your say-so — remote shell is your call, not mine)
+### On the Hetzner box
 
-7. **Kernel reboot** — the box has been printing `*** System restart required ***`
-   for two weeks. Safe now that builds aren't fragile. 15 seconds: `reboot`.
-8. **~9 GB of unused Docker images** could be reclaimed, but `docker image prune -af`
-   deletes rollback targets, so it stays a deliberate choice. Disk is at **66%** with
-   12.7 GB free today, and the hourly keep-3 guard is holding steady — so this is
-   genuinely optional right now, not pending.
+7. ~~**Kernel reboot**~~ ✅ DONE 2026-08-14 — you said "you handle it," so it was
+   rebooted at 12:48 ET and verified back in **36 seconds**: all containers healthy,
+   the reboot-required flag cleared, app serving the latest commit. First reboot
+   since the box was set up (13.5 days uptime).
+8. ~~**Docker image cleanup**~~ ✅ NOTHING TO DO — verified after the reboot: the
+   hourly keep-3 guard is doing its job on its own (its 16:17 run pruned 82% → 65%).
+   Rollback targets intact. This item is closed, not pending.
 
 ### Elsewhere, small
 
