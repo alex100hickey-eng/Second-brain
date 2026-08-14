@@ -70,9 +70,11 @@ longer compounding" straight through those eleven silent days. Suite 815 → 829
    the only thing between a "yes" and money landing. Do it while warmup runs.
 4. **The call card's open question** — vault [[call-card]]: keep or strike the
    teardown refund guarantee. Decide it now, not on a live call.
-5. **Postmaster Tools** — postmaster.google.com → splitframestudio.com → confirm
-   data is populating. 2 min. If it's still empty by 08-17, something's wrong with
-   the domain setup and you want to know before the 08-21 gate, not after.
+5. ~~**Postmaster Tools**~~ ✅ CHECKED 2026-08-14 — domain **Verified** since Aug 1.
+   The charts say "No data to display" and always will: Postmaster only renders above
+   a few hundred messages/day to Gmail, and your whole plan tops out at 5/day. An
+   empty chart here is **not** a deliverability signal — don't read it as one.
+   mail-tester on 08-21 is the real gate, and it works on a single email.
 6. **Confirm the move-in date** and make the Week 3/4 swap call.
 7. **Two stale drafts to bin** (deletions are never automated, so they're yours):
    "Re: this week" — written 08-06 for a thread you already replied to on 08-11,

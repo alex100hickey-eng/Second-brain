@@ -3108,6 +3108,47 @@ def suite_weather(app, live):
         W._fetch = boom
         W._cache["at"] = 0.0  # force refetch attempt against dead API
         check("a dead API serves the stale line", W.current_line() == first)
+
+        # ---- several places at once (home + the campuses that matter) --------
+        # Each extra place costs a line in a block rebuilt every turn, so multi-place
+        # output is deliberately terser than single-place output.
+        os.environ["WEATHER_LATLON"] = ("Ridgefield:41.28,-73.50; "
+                                        "CWRU:41.50,-81.61; BC:42.34,-71.17")
+        seen = []
+        def multi_fetch(lat, lon):
+            seen.append((lat, lon))
+            return payload
+        W._fetch = multi_fetch
+        W.invalidate()
+        multi = W.current_line()
+        check("every configured place is fetched", len(seen) == 3, str(seen))
+        check("each place gets its own labeled line",
+              multi.count("\n") == 2 and multi.startswith("Ridgefield: ")
+              and "CWRU: " in multi and "BC: " in multi, multi)
+        check("multi-place lines are compact (no feels-like/wind/high-low)",
+              "feels like" not in multi and "windy" not in multi
+              and "high 94" not in multi, multi)
+        check("...but a real precipitation risk still survives the trim",
+              "55% precip" in multi, multi)
+
+        # One campus's API failing must not hide the others.
+        def flaky(lat, lon):
+            if abs(lat - 41.50) < 0.01:
+                raise RuntimeError("cleveland down")
+            return payload
+        W._fetch = flaky
+        W.invalidate()
+        partial = W.current_line()
+        check("one place failing does not suppress the rest",
+              "Ridgefield: " in partial and "BC: " in partial
+              and "CWRU" not in partial, partial)
+
+        # Backwards compatibility: the original single-pair config must still work.
+        os.environ["WEATHER_LATLON"] = "42.36,-71.06"
+        W._fetch = fake_fetch
+        W.invalidate()
+        check("a bare 'lat,lon' still yields one unlabeled, full-detail line",
+              W.current_line() == first, W.current_line())
     finally:
         W._fetch = saved_fetch
         if saved_env is None:
