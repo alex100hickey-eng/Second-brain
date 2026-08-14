@@ -1429,3 +1429,53 @@ code bug.
 **On Alex (NEEDS_ALEX top section):** push to deploy all of today; calendar re-auth;
 gthread Start Command (server currently serializes ALL requests behind one sync
 worker); Tavily key; UptimeRobot on /health; WEATHER_LATLON.
+
+---
+
+## 2026-08-14 — Daily backstop: escalation queue can no longer hide (or invent) work
+
+**Requested:** nothing — the capability queue was empty. This came out of the daily
+backstop's own watcher-health check.
+
+**Watcher verdict: alive.** Heartbeat looked 112 min stale, but that was the Mac
+asleep (launchd `StartInterval` does not fire during sleep); it beat within seconds
+of waking, `runs` 2416 → 2417, exit 0. Worth knowing the SKILL's "30 min = dead"
+rule cries wolf on a laptop — rule out sleep before diagnosing.
+
+**Shipped (`e75fa81`):** `capability_escalation._rows()` wrapped its Supabase select
+in a bare `except Exception: return []`, making "table is empty" and "couldn't reach
+the table" the same value. Two silent failures, both real:
+
+- request rows fail → `pending` prints `[]` → real work invisible.
+- update rows fail → `_latest_update()` returns `{}` → every resolved request falls
+  back to `"pending"` → the watcher rebuilds work that already shipped.
+
+That second one explains the phantom "1 pending request(s)" builds on Aug 9/10/13
+against a queue where all three requests were `done`. Reproduced Aug 14: one slow
+`pending` call returned a done request as pending while fast calls either side of it
+showed it correctly done. Row-window exhaustion ruled out (3 request + 6 update rows
+vs a limit-100 fetch).
+
+`_rows()` now raises `QueueReadError`. `pending_requests()` propagates it (the
+watcher already logs "queue check failed" and retries in 2 min); `status_report()`
+tells CLARVIS it is a connection problem and explicitly not an empty queue;
+`file_request()` refuses rather than risk a double-file it cannot dedupe; the CLI
+writes `QUEUE READ FAILED` to stderr and exits 1, so the backstop can never read a
+failed check as "nothing to do".
+
+**Also fixed:** `test_intake.py` and `test_proactive.py` had been dead at import
+(rc=1, zero coverage) — `intake._load_state` calls `.ilike()`, which the shared
+`FakeQuery` never implemented. Implemented with real ILIKE semantics rather than a
+pass-through stub, so the `'"key": "<key>"'` pattern is genuinely exercised.
+
+**Verified:** all 8 suites green, 339 checks — 2 of which were not running at all
+before this. New `test_queue_read_failure` covers all four surfaces plus the phantom
+regression, and asserts a genuinely empty queue still reads as empty. Confirmed the
+tests are not vacuous by re-running the scenario against the old swallowing `_rows`:
+the done request came back as `pending`, exactly as in production.
+
+**Still on Alex — the actual blocker:** the Claude CLI OAuth session is still expired
+(day 5). `~/.local/bin/claude -p` returns "OAuth session expired and could not be
+refreshed", so every build the watcher spawns dies in ~2s. Fix is `claude` in a
+terminal, then `/login`. Note the CLI exits **rc=0** on this failure, so the watcher
+logs it as a normal finish — nothing goes red. Already top of NEEDS_ALEX (`ba83c7a`).
