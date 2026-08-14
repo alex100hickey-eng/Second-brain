@@ -1,15 +1,25 @@
 # NEEDS_ALEX.md — everything blocked on you
 
-## 2026-08-13 — 🔴 Capability watcher can't build anything: Claude CLI needs `/login` (1 min)
+## ✅ 2026-08-14 — RESOLVED: capability watcher CLI login (was 🔴 since Aug 9)
 
-The 2-minute watcher itself is alive and polling fine, but every build it spawns
-dies instantly with **"OAuth session expired and could not be refreshed"** — and
-has since **Aug 9**. Two real requests already failed this way (Aug 9 + Aug 10;
-the daily backstop caught them, but that's a once-a-day net instead of 2 minutes).
-Until you fix this, CLARVIS's `request_capability` → auto-build loop is dead.
+Alex logged the CLI in on **2026-08-14**. Verified end-to-end that same day:
+`claude auth status` → `loggedIn: true` (claude.ai, max), a headless `claude -p`
+returns normally, and — the test that actually matters — a throwaway launchd job
+spawning the same binary the watcher uses returned cleanly with exit 0. The
+`request_capability` → auto-build loop is live again.
 
-**Fix:** open Terminal → run `claude` → type `/login` → sign in. That's it.
-The watcher will pick everything up on its own afterward — no restart needed.
+Why it looked confusing: the **desktop app and the standalone CLI are separate
+logins**. The app was signed in the whole time (it refreshed its keychain item
+daily), so everything looked healthy while `~/.local/bin/claude` — the binary
+launchd actually spawns — was signed out. Check the CLI specifically with
+`claude auth status`, not the app.
+
+**Still worth doing (not blocking):** the CLI exits **rc=0** on an auth failure,
+so the watcher logged five days of dead builds as normal finishes. Nothing went
+red anywhere. Either run `claude setup-token` for a long-lived token that won't
+expire out from under a background job, or have the watcher treat the auth-failure
+signature as a hard error. Otherwise this recurs silently the next time a session
+lapses.
 
 ## 2026-08-08 — 🔴 SUPABASE DECIDES TOMORROW: upgrade by Aug 9 or CLARVIS's DB starts 402ing
 
