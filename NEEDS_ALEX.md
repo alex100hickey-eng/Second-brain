@@ -119,18 +119,15 @@ Grouped by where you'd be when you do them, so each group is one sitting.
 App resource →
 `http://178.156.209.40:8000/project/xn159afo226l4480ogtcrznz/environment/p78muchurjjfu962yg4iredu/application/h72tei3gy97z4wlqyqpvuylg`
 
-1. **Start Command — the server still handles ONE request at a time.** A streaming
-   chat reply blocks the dashboard and any second message. Two-field drill:
-   ```
-   gunicorn --chdir second-brain-chat app:app --bind 0.0.0.0:5000 --timeout 120 --worker-class gthread --threads 8
-   ```
-2. **`WEATHER_LATLON`** — built and dormant since 08-11. Set it to your town, e.g.
-   `WEATHER_LATLON=41.39,-73.45`, and CLARVIS's ambient block gains weather.
-   Coordinates only ever go to the keyless open-meteo.com API. (Also worth adding to
-   `~/.zshrc` so the Mac node has it.)
-3. **`TAVILY_API_KEY`** — confirmed still unset on the Mac node's startup check
-   today, so web search is running on keyless DuckDuckGo, the weakest fallback.
-   Free tier is 1,000 searches/month at tavily.com. Instantly sharper research.
+1. ~~**Start Command — one request at a time**~~ ✅ DONE 2026-08-14. Now runs
+   `--worker-class gthread --threads 8`. Verified at the container, not the UI:
+   5 concurrent requests finished in **0.26s wall clock** instead of serializing.
+2. ~~**`WEATHER_LATLON`**~~ ✅ DONE 2026-08-14 — set to Ridgefield + CWRU + BC. The
+   code only accepted one coordinate pair, so it was extended to labeled multi-place
+   (`16dae29`); several places render compact, one place is unchanged.
+3. ~~**`TAVILY_API_KEY`**~~ ✅ DONE 2026-08-14 — free Researcher tier (1,000/mo, no
+   card). Web search is off keyless DuckDuckGo. Still worth adding to `~/.zshrc` so
+   the **Mac node** gets it too; only the server has it right now.
 4. **`VAULT_GIT_TOKEN` rotation** — still open from the 08-01 handoff. Revoke at
    github.com/settings/tokens → new token, repo scope, `Second-brain` only → paste
    into the env here → Redeploy.

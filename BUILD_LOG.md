@@ -1479,3 +1479,39 @@ the done request came back as `pending`, exactly as in production.
 refreshed", so every build the watcher spawns dies in ~2s. Fix is `claude` in a
 terminal, then `/login`. Note the CLI exits **rc=0** on this failure, so the watcher
 logs it as a normal finish — nothing goes red. Already top of NEEDS_ALEX (`ba83c7a`).
+
+## 2026-08-14 — Coolify + Nixpacks: a changed Start Command needs a NO-CACHE deploy
+
+Cost three deploys to work out, so it is written down.
+
+Changing the Start Command in Coolify's General tab and clicking Save **does** persist
+— confirmed straight from the control-plane database:
+
+```bash
+ssh root@178.156.209.40 'docker exec coolify-db psql -U coolify -d coolify -t -A \
+  -c "select start_command from applications where uuid='"'"'h72tei3gy97z4wlqyqpvuylg'"'"';"'
+```
+
+But with the **Nixpacks** build pack the start command is baked into the image as its
+`CMD` at BUILD time. A plain **Redeploy** reuses cached layers, so the container comes
+up with the OLD command while the UI shows the new one and clears its "configuration
+has not been applied" banner. Two consecutive redeploys both silently ran the old
+command. **Actions → Force deploy (without cache)** is what actually applies it.
+
+**The trustworthy check is the container, never the UI:**
+
+```bash
+ssh root@178.156.209.40 'c=$(docker ps --format "{{.Names}}" | grep h72tei); \
+  docker inspect "$c" --format "{{json .Config.Cmd}}"'
+```
+
+This is the same class of failure as the deploy outage in NEEDS_ALEX §1: Coolify's own
+status reporting has now produced false failures, false successes, AND a false "applied".
+Verify at the layer below it every time.
+
+Also learned, driving Coolify through a browser tool: `cmd+a`, `End` and `Delete` key
+events do not reach its inputs — only literal typing does. A `cmd+a` that silently
+no-ops turns "replace this field" into "insert mid-string", which is exactly how the
+start command got corrupted to 187 chars on the first attempt. Set the selection with
+`setSelectionRange(0, value.length)` via JS, then type over it; typing fires the events
+Livewire needs, while a JS-set `.value` alone does not.
