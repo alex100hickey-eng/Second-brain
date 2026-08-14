@@ -370,7 +370,9 @@ def _august_actions() -> list:
         for n in august_tracker.nudges_due():
             out.append(send_nudge(n["key"], n["title"], n["body"],
                                   priority=n.get("priority", "default"),
-                                  tags="calendar"))
+                                  tags="calendar",
+                                  # Streaks clear the twice-then-silence cap.
+                                  recurring=n.get("recurring", False)))
     except Exception as e:
         if report_event:
             try:

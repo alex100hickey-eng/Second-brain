@@ -4353,6 +4353,95 @@ def suite_august(app, live):
         check("transitive blocking works (mailbox is behind domain behind name)",
               by_id["mailbox-dns"]["blocked"])
 
+        # --- prose after `needs:` must not silence a step (the 2026-08-14 bug) ---
+        # `needs:` is the last field on the line, so a status note appended to a step
+        # landed INSIDE it: every word became a phantom dependency, the step went
+        # blocked, and blocked steps are deliberately never nudged. Writing a progress
+        # note under a step switched off its reminders. It cost 8 days on warmup-daily,
+        # outside-read and sales-rehearsal — silently, because silence was the symptom.
+        prose_tmp = tempfile.mkdtemp(prefix="sbtest_august_prose_")
+        try:
+            os.makedirs(os.path.join(prose_tmp, "Money"), exist_ok=True)
+            with open(os.path.join(prose_tmp, "Money", "August Execution Tracker.md"),
+                      "w", encoding="utf-8") as f:
+                f.write(f"""# T
+### Gate A
+- [x] **Mailbox + DNS** `#mailbox-dns` · owner: alex · due: {_day(-9)} · needs: —
+- [ ] **Warmup** `#warmup` · owner: alex · due: {_day(-4)} · needs: mailbox-dns — ⚠️ {_day(-8)}: day 1 was 08-03; no sends visible, streak broke. Bank in [[warmup-drafts]]; drafts waiting.
+- [ ] **Rehearse** `#rehearse` · owner: alex · due: {_day(-12)} · needs: — — ⏳ {_day(-8)}: one-page [[call-card]] distilled; open decision flagged on it.
+- [ ] **Typo dep** `#typo-dep` · owner: alex · due: {_day(-1)} · needs: no-such-step
+""")
+            at.init(_FakeSB(), prose_tmp, None, "local")
+            pby = {s["id"]: s for s in at.load_steps()}
+            check("a status note after `needs:` is prose, not a dependency list",
+                  pby["warmup"]["needs"] == ["mailbox-dns"], str(pby["warmup"]["needs"]))
+            check("...so the step stays actionable and keeps nudging",
+                  not pby["warmup"]["blocked"])
+            check("`needs: —` followed by a note still means no dependency",
+                  pby["rehearse"]["needs"] == [] and not pby["rehearse"]["blocked"],
+                  str(pby["rehearse"]["needs"]))
+            # A dependency naming a step that doesn't exist can only be a typo. Enforcing
+            # it would block the step forever with nothing to unblock it — silence again.
+            check("a `needs:` id that matches no step does not block",
+                  not pby["typo-dep"]["blocked"])
+            check("...but the unknown id is surfaced rather than swallowed",
+                  pby["typo-dep"]["unknown_needs"] == ["no-such-step"],
+                  str(pby["typo-dep"]["unknown_needs"]))
+            pkeys = " ".join(n["key"] for n in at.nudges_due())
+            check("all three overdue steps nudge again once prose stops blocking them",
+                  "august:step:warmup" in pkeys and "august:step:rehearse" in pkeys
+                  and "august:step:typo-dep" in pkeys, pkeys)
+        finally:
+            shutil.rmtree(prose_tmp, ignore_errors=True)
+            at.init(_FakeSB(), tmp, None, "local")
+
+        # --- streak steps nudge DAILY, and the warmup clock measures SENDING ---
+        # A one-shot step nudging twice then going quiet is correct. A daily habit
+        # doing the same just stops happening — which is exactly how the first warmup
+        # run died. And the clock must never call warmup "running" off the back of the
+        # mailbox existing: that reported "delay is no longer compounding" through
+        # eleven days in which the domain sent nothing.
+        streak_tmp = tempfile.mkdtemp(prefix="sbtest_august_streak_")
+        try:
+            os.makedirs(os.path.join(streak_tmp, "Money"), exist_ok=True)
+            spath = os.path.join(streak_tmp, "Money", "August Execution Tracker.md")
+
+            def swrite(warmup_line):
+                with open(spath, "w", encoding="utf-8") as f:
+                    f.write("# T\n### Gate A\n"
+                            f"- [x] **Mailbox** `#mailbox-dns` · owner: alex · due: {_day(-9)} · needs: —\n"
+                            + warmup_line + "\n")
+
+            swrite(f"- [ ] **Warmup** `#warmup-daily` · owner: alex · due: {_day(6)} · daily: yes · needs: mailbox-dns")
+            at.init(_FakeSB(), streak_tmp, None, "local")
+            snudges = at.nudges_due()
+            streak = [n for n in snudges if n["key"] == "august:streak:warmup-daily"]
+            check("a `daily: yes` step nudges before its due date, not just after",
+                  len(streak) == 1, str([n["key"] for n in snudges]))
+            check("...and is marked recurring, which clears the twice-then-silence cap",
+                  streak and streak[0].get("recurring") is True)
+            check("a streak step is not ALSO nudged through the one-shot branch",
+                  not any(n["key"] == "august:step:warmup-daily" for n in snudges))
+
+            clock = at.warmup_clock()
+            check("a live mailbox alone does NOT mean warmup is running",
+                  clock["warmup_started"] is False, str(clock))
+            check("...so the clock still counts the cost of not starting",
+                  clock["earliest_send"] == _day(7), str(clock))
+
+            # Declaring the start date is what starts the clock — because that is the
+            # day sending actually began.
+            swrite(f"- [ ] **Warmup** `#warmup-daily` · owner: alex · due: {_day(6)} · daily: yes · started: {_day(-2)} · needs: mailbox-dns")
+            clock2 = at.warmup_clock()
+            check("declaring `started:` starts the clock from the first SEND",
+                  clock2["warmup_started"] is True
+                  and clock2["started"] == _day(-2), str(clock2))
+            check("...and sends open 7 days after that, not 7 days after the mailbox",
+                  clock2["earliest_send"] == _day(5), str(clock2))
+        finally:
+            shutil.rmtree(streak_tmp, ignore_errors=True)
+            at.init(_FakeSB(), tmp, None, "local")
+
         ready = at.actionable("alex")
         check("only unblocked, undone, alex-owned steps are actionable, due order first",
               [s["id"] for s in ready] == ["stale-thing", "name-service"],

@@ -54,6 +54,23 @@ _TITLE_RE = re.compile(r"\*\*(.+?)\*\*")
 _OWNER_RE = re.compile(r"owner:\s*([A-Za-z]+)")
 _DUE_RE = re.compile(r"due:\s*(\d{4}-\d{2}-\d{2})")
 _NEEDS_RE = re.compile(r"needs:\s*([^·\n]*)")
+# `daily: yes` marks a STREAK step — a habit that must happen every day until it's
+# ticked, not a one-shot task. One-shot steps nudge twice and go quiet (correct);
+# a streak that goes quiet on day 3 just stops happening, which is what killed the
+# first warmup run.
+_DAILY_RE = re.compile(r"daily:\s*(yes|true)\b", re.I)
+# `started: YYYY-MM-DD` on a streak step — the day the run actually began. The warmup
+# clock used to key off the MAILBOX being configured, which is not the same thing: the
+# mailbox was live 08-01 while the domain had sent on exactly one day, so the clock
+# read "running, delay no longer compounding" through eleven silent days. A warmup
+# clock must measure sending, and only the streak step knows when sending began.
+_STARTED_RE = re.compile(r"started:\s*(\d{4}-\d{2}-\d{2})")
+# `needs:` is the last field on the line, so appended status prose lands inside it.
+# Everything from the first spaced dash on is commentary, not dependencies.
+_NEEDS_PROSE_RE = re.compile(r"\s[—–-]{1,2}\s")
+# What a step id can look like (same shape as _ID_RE's capture). Anything else in a
+# `needs:` list is prose that survived the cut, not a dependency.
+_ID_TOKEN_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 
 
 def init(supabase_client, vault_dir, local_tz=None, node_runtime="local"):
@@ -127,10 +144,15 @@ def _parse_line(raw: str) -> dict | None:
     needs_raw = _NEEDS_RE.search(rest)
     needs = []
     if needs_raw:
-        for token in re.split(r"[,\s]+", needs_raw.group(1).strip()):
-            token = token.strip().strip("`#")
+        # Cut appended status prose first ("needs: mailbox-dns — ⚠️ day 1 was 08-03…").
+        # Without this every word of that note became a phantom dependency, which
+        # marked the step blocked, and blocked steps are deliberately never nudged —
+        # so writing a status note under a step silently switched off its reminders.
+        value = _NEEDS_PROSE_RE.split(needs_raw.group(1).strip(), maxsplit=1)[0]
+        for token in re.split(r"[,\s]+", value):
+            token = token.strip().strip("`#").rstrip(".,;:")
             # "—" is the written form of "nothing"; keep it out of the graph.
-            if token and token not in ("—", "-", "none"):
+            if token and token not in ("—", "-", "none") and _ID_TOKEN_RE.match(token):
                 needs.append(token)
     return {
         "id": id_m.group(1),
@@ -138,6 +160,8 @@ def _parse_line(raw: str) -> dict | None:
         "owner": (owner_m.group(1) if owner_m else "alex").lower(),
         "due": due_m.group(1) if due_m else None,
         "needs": needs,
+        "daily": bool(_DAILY_RE.search(rest)),
+        "started": (m2.group(1) if (m2 := _STARTED_RE.search(rest)) else None),
         "checked": checked,
     }
 
@@ -168,7 +192,12 @@ def load_steps() -> list:
         by_id[s["id"]] = s
 
     for s in steps:
-        unmet = [n for n in s["needs"] if not by_id.get(n, {}).get("done", False)]
+        # A `needs:` naming a step that isn't in the document is a typo or a scrap of
+        # prose, not a real dependency. Enforcing it would block the step forever, and
+        # a silently-blocked step is the exact failure this tracker exists to prevent.
+        # So unknown ids are recorded and surfaced, never used to block.
+        s["unknown_needs"] = [n for n in s["needs"] if n not in by_id]
+        unmet = [n for n in s["needs"] if n in by_id and not by_id[n]["done"]]
         s["blocked_by"] = unmet
         s["blocked"] = bool(unmet)
     return steps
@@ -226,18 +255,30 @@ def warmup_clock() -> dict:
     "this costs me a selling day"."""
     steps = {s["id"]: s for s in load_steps()}
     mailbox = steps.get("mailbox-dns")
+    warmup = steps.get("warmup-daily") or {}
     deadline = date(2026, 8, 31)
     today = _today()
-    if not mailbox or not mailbox.get("done"):
+    # The run is anchored to the day SENDING began, declared on the streak step. A live
+    # mailbox is a prerequisite for warmup, never evidence of it — conflating the two is
+    # how this reported "delay is no longer compounding" through eleven days of silence.
+    started_str = warmup.get("started")
+    started = None
+    if started_str:
+        try:
+            started = date.fromisoformat(started_str)
+        except ValueError:
+            started = None
+    if not mailbox or not mailbox.get("done") or (started is None
+                                                  and not warmup.get("done")):
         earliest_send = today + timedelta(days=7)
         return {
             "warmup_started": False,
             "earliest_send": earliest_send.isoformat(),
             "selling_days_if_started_today": max(0, (deadline - earliest_send).days),
-            "note": ("Warmup has not started. Every day the mailbox slips costs one "
+            "note": ("Warmup sending has not started. Every day it slips costs one "
                      "selling day before Aug 31."),
         }
-    started = _completed_on("mailbox-dns") or today
+    started = started or _completed_on("mailbox-dns") or today
     send_date = started + timedelta(days=7)
     return {
         "warmup_started": True,
@@ -381,12 +422,34 @@ def nudges_due() -> list:
     today = _today().isoformat()
     out = []
 
+    # A streak step is a habit, not a task: it needs a nudge every day until it's
+    # ticked. It gets its own branch (its due date is the END of the run, so the
+    # overdue branch would stay silent through every day that actually matters) and
+    # is marked recurring, which exempts it from the twice-then-silence cap while
+    # proactive.py's 20-hour spacing still holds it to one a day.
+    streaks = {s["id"] for s in st["ready"]
+               if s.get("daily") and s["owner"] == "alex"}
+    for s in st["ready"]:
+        if s["id"] not in streaks:
+            continue
+        out.append({
+            "key": f"august:streak:{s['id']}",
+            "title": f"📨 Today's {s['title'][:45]}",
+            "body": "\n".join(x for x in (
+                f"Why it matters: {_why(s)}",
+                _do(s),
+                "Miss a day and the run restarts. Tick it in the vault when done.",
+            ) if x),
+            "priority": "high",
+            "recurring": True,
+        })
+
     # Keys carry NO date on purpose: one step = one concern, and proactive.py's
     # per-concern cap (2 per window) means a step nudges at most twice, then goes
     # silent instead of nagging daily. due-today and overdue share the step's key
     # so the pair together can't exceed the cap either.
     for s in st["overdue"]:
-        if s["owner"] != "alex":
+        if s["owner"] != "alex" or s["id"] in streaks:
             continue
         days_late = 0
         try:
@@ -408,7 +471,8 @@ def nudges_due() -> list:
         })
 
     for s in st["due_today"]:
-        if s["owner"] != "alex" or any(o["id"] == s["id"] for o in st["overdue"]):
+        if (s["owner"] != "alex" or s["id"] in streaks
+                or any(o["id"] == s["id"] for o in st["overdue"])):
             continue
         body = "\n".join(x for x in (
             f"Why it matters: {_why(s)}",
