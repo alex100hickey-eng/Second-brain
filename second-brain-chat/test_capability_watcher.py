@@ -137,12 +137,71 @@ def test_single_source_of_truth():
           "pending_requests()" in src and "capability_request" not in src)
 
 
+def test_auth_failure_is_loud():
+    """The CLI exits 0 when it can't authenticate, so rc proves nothing.
+
+    Regression for Aug 9-14 2026: five days of dead builds logged as
+    'build finished rc=0' while the queue silently went undrained.
+    """
+    print("\n=== 6. auth failure cannot hide behind rc=0 ===")
+    _sandbox()
+
+    class P:
+        def __init__(self, out="", err="", rc=0):
+            self.stdout, self.stderr, self.returncode = out, err, rc
+
+    check("the exact rc=0 failure that hid for 5 days is caught",
+          w.check_auth_failure(
+              P("Failed to authenticate: OAuth session expired and could not "
+                "be refreshed", rc=0)) is True)
+    check("logged-out variant caught", w.check_auth_failure(P("Not logged in · Please run /login")) is True)
+    check("failure on stderr caught too", w.check_auth_failure(P("", "Invalid API key")) is True)
+    check("a normal build is NOT flagged",
+          w.check_auth_failure(P("Shipped the fix; all suites green.")) is False)
+
+    logged = open(w.LOG).read()
+    check("log names it AUTH FAILURE and says the queue isn't draining",
+          "AUTH FAILURE" in logged and "NOT being drained" in logged)
+    check("log tells the reader how to fix it", "claude auth" in logged)
+
+
+def test_token_reaches_the_child():
+    """launchd gives the watcher a bare env, so the token must be passed in."""
+    print("\n=== 7. credentials reach the spawned CLI ===")
+    d = _sandbox()
+    orig_root, orig_chat = w.ROOT, w.CHAT
+    try:
+        w.ROOT = w.CHAT = d
+        with open(os.path.join(d, ".env"), "w") as fh:
+            fh.write("SUPABASE_URL=https://example.test\n"
+                     "CLAUDE_CODE_OAUTH_TOKEN=sk-test-not-a-real-token\n")
+        env = w.build_env()
+        check("token from .env is handed to the child process",
+              env.get("CLAUDE_CODE_OAUTH_TOKEN") == "sk-test-not-a-real-token")
+        check("rest of the environment is preserved", "PATH" in env)
+
+        # no token configured → inherit untouched, so an interactive login still works
+        with open(os.path.join(d, ".env"), "w") as fh:
+            fh.write("SUPABASE_URL=https://example.test\n")
+        os.environ.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
+        check("absent token leaves the environment alone (CLI uses its own login)",
+              "CLAUDE_CODE_OAUTH_TOKEN" not in w.build_env())
+    finally:
+        w.ROOT, w.CHAT = orig_root, orig_chat
+
+    src = open(w.__file__).read()
+    check("the spawn actually uses build_env(), not a bare inherit",
+          "env=build_env()" in src)
+
+
 if __name__ == "__main__":
     test_fire_rules()
     test_heartbeat_always()
     test_lock()
     test_queue_failure()
     test_single_source_of_truth()
+    test_auth_failure_is_loud()
+    test_token_reaches_the_child()
     total, passed = len(_results), sum(_results)
     print("\n" + "=" * 48)
     print(f"{passed}/{total} checks passed")

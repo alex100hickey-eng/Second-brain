@@ -45,6 +45,18 @@ LOG = os.path.join(ROOT, "scripts", "capability_watcher.log")
 BUILD_TIMEOUT_S = 45 * 60      # a stuck build must not wedge the watcher forever
 LOCK_STALE_S = 2 * 60 * 60     # matches the processor's own lock policy
 
+# The CLI exits 0 when it can't authenticate, so rc is useless for detecting it.
+# Between Aug 9-14 2026 that turned five days of dead builds into five days of
+# log lines reading "build finished rc=0" — nothing anywhere went red. If any of
+# these show up in a build's output, the build did not happen.
+AUTH_FAILURE_MARKERS = (
+    "OAuth session expired",
+    "Failed to authenticate",
+    "Not logged in",
+    "Please run /login",
+    "Invalid API key",
+)
+
 
 def log(msg: str) -> None:
     """Only meaningful events land here — a no-op poll writes nothing but the
@@ -115,6 +127,46 @@ def pending() -> list:
     return esc.pending_requests()
 
 
+def build_env() -> dict:
+    """Environment for the spawned CLI, with credentials passed in explicitly.
+
+    launchd hands this process a bare environment — PATH, SSH_AUTH_SOCK, and not
+    much else. A token exported in ~/.zshrc or typed in a terminal never reaches
+    it, which is exactly how an interactive `claude` that works by hand sits next
+    to a watcher that can't authenticate at all. So read the token from .env (the
+    repo's one secret store, gitignored) and hand it to the child directly.
+
+    Absent token = no change: the CLI falls back to its own stored login.
+    """
+    env = os.environ.copy()
+    try:
+        from dotenv import dotenv_values
+    except ImportError:
+        return env
+    for env_path in (os.path.join(ROOT, ".env"), os.path.join(CHAT, ".env")):
+        try:
+            token = (dotenv_values(env_path) or {}).get("CLAUDE_CODE_OAUTH_TOKEN")
+        except OSError:
+            continue
+        if token:
+            env["CLAUDE_CODE_OAUTH_TOKEN"] = token
+            break
+    return env
+
+
+def check_auth_failure(proc) -> bool:
+    """True when the build died on auth. Logs it loudly, because rc won't."""
+    blob = f"{proc.stdout or ''}\n{proc.stderr or ''}"
+    hit = next((m for m in AUTH_FAILURE_MARKERS if m in blob), None)
+    if not hit:
+        return False
+    log(f"!! AUTH FAILURE (rc={proc.returncode}, which is why this looked fine): "
+        f"{hit!r}. The queue is NOT being drained. Fix: run `claude auth status` "
+        f"— if it says loggedIn false, run `claude auth login`, or put a "
+        f"CLAUDE_CODE_OAUTH_TOKEN in {os.path.join(ROOT, '.env')}.")
+    return True
+
+
 def spawn_build(count: int) -> None:
     """Hand off to Claude Code, pointed at the scheduled task's own SKILL.md so the
     guardrails (untrusted request text, hard refusals, never push red) have exactly
@@ -133,11 +185,12 @@ def spawn_build(count: int) -> None:
         proc = subprocess.run(
             [CLAUDE_BIN, "-p", prompt, "--permission-mode", "auto"],
             cwd=ROOT, timeout=BUILD_TIMEOUT_S,
-            capture_output=True, text=True,
+            capture_output=True, text=True, env=build_env(),
         )
         tail = (proc.stdout or "").strip().splitlines()
         log(f"build finished rc={proc.returncode}; last line: "
             f"{tail[-1][:300] if tail else '(no output)'}")
+        check_auth_failure(proc)
         if proc.returncode != 0 and proc.stderr:
             log(f"stderr: {proc.stderr.strip()[:500]}")
     except subprocess.TimeoutExpired:
