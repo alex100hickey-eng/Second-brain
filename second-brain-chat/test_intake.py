@@ -29,6 +29,7 @@ Covers:
 import imaplib
 import json
 import os
+import re
 import sys
 
 import intake
@@ -40,6 +41,7 @@ class FakeQuery:
     def __init__(self, store, table):
         self.store, self.table_name = store, table
         self._filters, self._op, self._payload = [], None, None
+        self._ilike = []
 
     def insert(self, row): self._op, self._payload = "insert", row; return self
     def update(self, row): self._op, self._payload = "update", row; return self
@@ -47,6 +49,17 @@ class FakeQuery:
     def eq(self, k, v): self._filters.append((k, v)); return self
     def order(self, *a, **k): return self
     def limit(self, n): return self
+
+    def ilike(self, k, pattern):
+        """Real SQL ILIKE semantics, not a pass-through.
+
+        _load_state narrows its read with `'%"key": "<key>"%'`; a no-op stub here
+        would let a pattern that matches nothing in Postgres still pass the tests,
+        because the fallback full read would quietly cover for it.
+        """
+        rx = re.escape(pattern).replace(r"\%", ".*").replace(r"\_", ".")
+        self._ilike.append((k, re.compile(f"^{rx}$", re.S | re.I)))
+        return self
 
     def execute(self):
         if self._op == "insert":
@@ -64,6 +77,8 @@ class FakeQuery:
                     rec.update(self._payload)
             return type("R", (), {"data": [1]})
         data = [r for r in self.store["_all"] if all(r.get(k) == v for k, v in self._filters)]
+        data = [r for r in data
+                if all(rx.match(str(r.get(k) or "")) for k, rx in self._ilike)]
         data.sort(key=lambda r: r["id"], reverse=True)
         return type("R", (), {"data": data})
 

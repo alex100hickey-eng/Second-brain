@@ -33,6 +33,10 @@ capability, never weaken data_boundary or auth, tests must pass before push.
 CLI (used by the scheduled processor on the Mac; reads .env / env vars):
   python3 capability_escalation.py pending          → JSON list of open requests
   python3 capability_escalation.py mark SLUG STATUS "note" [commit]
+
+`pending` prints [] ONLY when the queue is genuinely empty. If the read fails it
+writes "QUEUE READ FAILED: ..." to stderr and exits 1 — so an empty stdout list
+always means "nothing to build" and never "I couldn't check". See QueueReadError.
 """
 
 import json
@@ -50,6 +54,37 @@ FIELD_CAP = 2000          # per-field sanity ceiling on request text
 supabase = None
 
 
+class QueueReadError(RuntimeError):
+    """A queue read did not complete — the answer is UNKNOWN, not 'nothing'.
+
+    This exists because the old code returned [] on any read failure, which made
+    'the table is empty' and 'I could not reach the table' identical. Both of the
+    resulting silent failures actually happened in production:
+
+      * request rows fail to load  → `pending` prints [] → real work is invisible.
+      * update rows fail to load   → _latest_update() returns {} → every resolved
+        request defaults back to status "pending" → the watcher spawns a build for
+        work that shipped days ago (observed 2026-08-09/10/13, reproduced 08-14).
+
+    So a read error must never be swallowed into an empty list. Callers either let
+    it propagate (the watcher logs 'queue check failed' and retries in 2 min) or
+    catch it and say plainly that the queue could not be read.
+    """
+
+
+def _unreadable(e: "QueueReadError") -> str:
+    """What CLARVIS says when it can't see the queue. Spells out that this is not
+    an empty queue, because reporting 'nothing pending' is the exact wrong call."""
+    return (f"Couldn't read the escalation queue ({e}) — so I can't tell you "
+            f"what's open. This is a connection problem, NOT an empty queue; "
+            f"don't report it as 'nothing pending'.")
+
+
+def _unfilable(e: "QueueReadError") -> str:
+    return (f"Couldn't reach the escalation queue to check for duplicates "
+            f"({e}). Nothing was filed — try again in a minute.")
+
+
 def init(supabase_client):
     global supabase
     supabase = supabase_client
@@ -61,13 +96,13 @@ def _now_iso() -> str:
 
 def _rows(kind: str, limit: int = 100) -> list:
     if supabase is None:
-        return []
+        raise QueueReadError("no Supabase client — call init() first")
     try:
         return (supabase.table("Agent Outputs").select("id,output_text")
                 .eq("agent_name", kind).order("id", desc=True)
                 .limit(limit).execute().data or [])
-    except Exception:
-        return []
+    except Exception as e:
+        raise QueueReadError(f"{kind} read failed: {str(e)[:200]}") from e
 
 
 def _parsed(kind: str, limit: int = 100) -> list:
@@ -100,9 +135,18 @@ def file_request(title: str, problem: str, needed: str = "") -> str:
     if not title or not (problem or "").strip():
         return "A request needs at least a title and the problem you hit."
     # One open request per problem: if an un-resolved request already has a very
-    # similar title, point at it instead of double-filing.
-    for r in _parsed(REQUEST_KIND):
-        st = _latest_update(r.get("slug", "")).get("status")
+    # similar title, point at it instead of double-filing. If the queue can't be
+    # read we can't tell whether this is a duplicate — refuse rather than risk a
+    # double-file, since a phantom duplicate spawns a redundant build.
+    try:
+        existing = _parsed(REQUEST_KIND)
+    except QueueReadError as e:
+        return _unfilable(e)
+    for r in existing:
+        try:
+            st = _latest_update(r.get("slug", "")).get("status")
+        except QueueReadError as e:
+            return _unfilable(e)
         if st in ("done", "declined"):
             continue
         if r.get("title", "").lower()[:60] == title.lower()[:60]:
@@ -129,12 +173,18 @@ def file_request(title: str, problem: str, needed: str = "") -> str:
 
 def status_report() -> str:
     """CLARVIS-facing: open + recently resolved requests, human-readable."""
-    reqs = _parsed(REQUEST_KIND, limit=50)
+    try:
+        reqs = _parsed(REQUEST_KIND, limit=50)
+    except QueueReadError as e:
+        return _unreadable(e)
     if not reqs:
         return "No capability requests on file — the escalation queue is empty."
     open_lines, closed_lines = [], []
     for r in reqs:
-        u = _latest_update(r.get("slug", ""))
+        try:
+            u = _latest_update(r.get("slug", ""))
+        except QueueReadError as e:
+            return _unreadable(e)
         st = u.get("status")
         line = f"- {r.get('slug')}: {r.get('title')}"
         if st == "done":
@@ -159,7 +209,11 @@ def status_report() -> str:
 # ------------------------------------------------------------
 
 def pending_requests() -> list:
-    """Open requests, oldest first, each with its latest status attached."""
+    """Open requests, oldest first, each with its latest status attached.
+
+    Raises QueueReadError if the queue could not be read. Deliberately NOT caught
+    here: an empty return means 'nothing to build', and the watcher acts on that.
+    """
     out = []
     for r in _parsed(REQUEST_KIND, limit=50):
         u = _latest_update(r.get("slug", ""))
@@ -184,7 +238,7 @@ def mark(slug: str, status: str, note: str = "", commit: str = "") -> str:
     return f"Marked {slug} → {status}."
 
 
-def _cli():
+def _cli() -> int:
     from dotenv import load_dotenv
     from supabase import create_client
     for env_path in (os.path.join(os.path.dirname(__file__), "..", ".env"),
@@ -193,17 +247,25 @@ def _cli():
     init(create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_KEY"]))
     cmd = sys.argv[1] if len(sys.argv) > 1 else "pending"
     if cmd == "pending":
-        print(json.dumps(pending_requests(), indent=2))
+        # Exit non-zero on a failed read so a caller can never mistake "couldn't
+        # reach the queue" for "[] — nothing to do". The backstop reads stdout.
+        try:
+            reqs = pending_requests()
+        except QueueReadError as e:
+            print(f"QUEUE READ FAILED: {e}", file=sys.stderr)
+            return 1
+        print(json.dumps(reqs, indent=2))
     elif cmd == "mark" and len(sys.argv) >= 4:
         print(mark(sys.argv[2], sys.argv[3],
                    sys.argv[4] if len(sys.argv) > 4 else "",
                    sys.argv[5] if len(sys.argv) > 5 else ""))
     else:
         print(__doc__.split("CLI", 1)[1])
+    return 0
 
 
 if __name__ == "__main__":
-    _cli()
+    sys.exit(_cli())
 
 
 TOOL_SCHEMAS = [

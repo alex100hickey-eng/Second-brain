@@ -264,12 +264,106 @@ def test_escalation():
 
 
 # ============================================================
+class FailingSB(FakeSB):
+    """Reads of the named kinds blow up; everything else behaves normally.
+
+    Models the real-world case: Supabase reachable for one select and not the
+    next, which is how a resolved request came back looking 'pending'.
+    """
+    def __init__(self, fail_kinds):
+        super().__init__()
+        self.fail_kinds = set(fail_kinds)
+        outer = self
+
+        class _Q(FakeQuery):
+            def execute(self):
+                if self._op == "select":
+                    for k, v in self._filters:
+                        if k == "agent_name" and v in outer.fail_kinds:
+                            raise RuntimeError("simulated supabase outage")
+                return super().execute()
+        self._Q = _Q
+
+    def table(self, name):
+        return self._Q(self.store, name)
+
+
+def test_queue_read_failure():
+    """A failed read must never masquerade as an empty queue.
+
+    Regression test for the phantom-build bug: update-row reads failing made
+    every shipped request look 'pending' again, and the watcher rebuilt work
+    that had already landed (2026-08-09/10/13).
+    """
+    print("\n=== 6. queue read failure is never 'empty' ===")
+    REQ, UPD = capability_escalation.REQUEST_KIND, capability_escalation.UPDATE_KIND
+
+    # no client at all → raises, does not return []
+    capability_escalation.init(None)
+    try:
+        capability_escalation.pending_requests()
+        check("uninitialised client raises instead of returning []", False)
+    except capability_escalation.QueueReadError:
+        check("uninitialised client raises instead of returning []", True)
+
+    # seed a realistic queue: one request, marked done
+    sb = FakeSB()
+    capability_escalation.init(sb)
+    capability_escalation.file_request("Delete a synthesized report", "no delete tool")
+    slug = json.loads([r for r in sb.store["_all"]
+                       if r["agent_name"] == REQ][0]["output_text"])["slug"]
+    capability_escalation.mark(slug, "done", "shipped it", "abc1234")
+    check("baseline: resolved queue really is empty",
+          capability_escalation.pending_requests() == [])
+
+    # THE BUG: request rows readable, update rows not.
+    failing = FailingSB({UPD})
+    failing.store = sb.store
+    capability_escalation.init(failing)
+    try:
+        got = capability_escalation.pending_requests()
+        check("done request does NOT resurface as pending on update-read failure",
+              False)
+        print(f"     (returned {[r.get('status') for r in got]})")
+    except capability_escalation.QueueReadError:
+        check("done request does NOT resurface as pending on update-read failure",
+              True)
+
+    # request-side read failure → also raises, never a silent []
+    failing_req = FailingSB({REQ})
+    failing_req.store = sb.store
+    capability_escalation.init(failing_req)
+    try:
+        capability_escalation.pending_requests()
+        check("request-read failure raises instead of hiding work", False)
+    except capability_escalation.QueueReadError:
+        check("request-read failure raises instead of hiding work", True)
+
+    # CLARVIS-facing surfaces stay honest and never raise at the user
+    rep = capability_escalation.status_report()
+    check("status_report says 'couldn't read', not 'queue is empty'",
+          "Couldn't read" in rep and "empty" not in rep.split("NOT an empty")[0])
+    out = capability_escalation.file_request("Brand new thing", "some wall")
+    check("file_request refuses rather than risking a double-file",
+          "Couldn't reach" in out and "Nothing was filed" in out)
+    check("nothing was actually inserted during the outage",
+          len([r for r in failing_req.store["_all"] if r["agent_name"] == REQ]) == 1)
+
+    # and a genuinely empty queue is still reported as empty (no false alarm)
+    capability_escalation.init(FakeSB())
+    check("truly empty queue still reads as empty",
+          capability_escalation.pending_requests() == []
+          and "queue is empty" in capability_escalation.status_report())
+
+
+# ============================================================
 if __name__ == "__main__":
     test_list_emails()
     test_read_email()
     test_create_draft()
     test_no_send_capability()
     test_escalation()
+    test_queue_read_failure()
     total, passed = len(_results), sum(_results)
     print("\n" + "=" * 48)
     print(f"{passed}/{total} checks passed")
