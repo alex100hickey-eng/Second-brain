@@ -65,6 +65,22 @@ if ! git rev-parse --git-dir >/dev/null 2>&1; then
     exit 1
 fi
 
+# Pull BEFORE committing. This box used to be the only writer, so pushing blind was
+# safe. It isn't any more: CLARVIS also writes notes on the SERVER (managed research
+# tasks land in its /data/vault), and the server's sync only ever ran `git pull`, so
+# those files had nowhere to go. On 2026-08-14 four of them — 42 KB of council-reviewed
+# money research — were found stranded on the server, invisible to Obsidian and to
+# GitHub, with no idea how long they'd been there.
+#
+# --rebase keeps history linear; --autostash protects any in-flight local edit. A pull
+# failure is NOT fatal: pushing local work still beats skipping the run, and the
+# server's own push (if it lands first) will simply make the next push a no-fast-forward
+# that this script reports rather than hides.
+if ! git pull --rebase --autostash 2>&1; then
+    echo "[$(ts)] WARN — git pull failed; continuing with local commit/push."
+    report warning "vault pull failed (continuing)" "$VAULT"
+fi
+
 if ! git add -A 2>&1; then
     echo "[$(ts)] ERROR — git add failed."
     report error "git add failed" "$VAULT"
