@@ -2,6 +2,8 @@ __pycache__/
 *.pyc
 .env
 scripts/*.log
+# local dev server output
+second-brain-chat/local-app.log
 
 # Round-2: large / temporary / generated media (keep out of git)
 # (git .gitignore has no inline comments — patterns must stand alone)
