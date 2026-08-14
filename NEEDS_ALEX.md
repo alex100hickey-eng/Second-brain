@@ -128,9 +128,15 @@ App resource →
 3. ~~**`TAVILY_API_KEY`**~~ ✅ DONE 2026-08-14 — free Researcher tier (1,000/mo, no
    card). Web search is off keyless DuckDuckGo. Still worth adding to `~/.zshrc` so
    the **Mac node** gets it too; only the server has it right now.
-4. **`VAULT_GIT_TOKEN` rotation** — still open from the 08-01 handoff. Revoke at
-   github.com/settings/tokens → new token, repo scope, `Second-brain` only → paste
-   into the env here → Redeploy.
+4. ~~**`VAULT_GIT_TOKEN` rotation**~~ ✅ DONE 2026-08-14, and the old note had the wrong
+   repo — the vault lives in `second-brain-vault`, not `Second-brain`. Replaced with a
+   **fine-grained** token: one repo, Contents read/write only, expires Nov 12. The old
+   one had full `repo` scope across *every* repository you own. Two dead classic tokens
+   (`Clarvis`, `Second brain push`) were revoked; `CLARVIS!` was kept and verified by
+   scope to be `GITHUB_TOKEN`, not the vault token. Rotation was done in the order that
+   matters — new token proven with a real `git pull` **before** revoking the old — because
+   the old token was baked into the server clone's remote URL, and revoking first would
+   have broken vault sync silently every 10 minutes.
 
 ### In the Supabase dashboard (~5 min)
 
@@ -204,6 +210,41 @@ repository name* so the main app's rollback targets were untouched — deliberat
 declining Coolify's "Run Docker Cleanup" checkbox, which would have taken them.
 **Disk 71% → 60%, free 11 GB → 15 GB, and every future push now costs half as much
 disk and RAM.** Generated concepts remain in Supabase.
+
+---
+
+## ✅ 2026-08-14 — CLARVIS's server-side notes were being silently thrown away
+
+Found while rotating the vault token. **Vault sync only ever ran `git pull` on the
+server.** But CLARVIS also *writes* there — managed research tasks save notes into the
+server's `/data/vault` — and those files had nowhere to go. They simply accumulated,
+invisible to Obsidian, to GitHub, and to you.
+
+**Four files were stranded, 42 KB of finished work:**
+
+| file | size | what it is |
+|---|---|---|
+| `Money/apify-tender-feed-validation.md` | 20 KB | council-reviewed validation of a procurement/tender feed idea |
+| `Money/apify-target-research.md` | 13 KB | ranked shortlist of Apify Store scraper opportunities |
+| `Money/clip-for-pay-vetted-candidates.md` | 8.6 KB | vetted clip-for-pay programs, council-reviewed |
+| `Learning/seed-oils-collection.md` | 0.3 KB | research collection stub |
+
+All four are now **rescued into your vault and pushed** — they'll appear in Obsidian on
+the next iCloud sync. Nobody knows how long they sat there, or whether earlier notes
+were lost the same way before anyone looked.
+
+**Fixed so it can't recur:** the server is now a full sync peer, not a read-only
+consumer — `scripts/server_vault_sync.sh` pulls, then commits and pushes whatever
+CLARVIS wrote, and `scripts/vault_sync.sh` on the Mac now pulls before committing so
+the two can't clobber each other. Proven end-to-end by writing a file on the server and
+watching Coolify's own scheduled task push it to GitHub.
+
+**One more trap closed:** the sync command used to live only in Coolify's task field,
+where `$(git status --porcelain)` was expanded by the *host* shell before the container
+ever saw it — so the commit branch never ran while Coolify cheerfully reported "Success"
+in 0 seconds. The identical command worked first try by hand. It now lives in a script
+in this repo, which is also the third time today that server-only code turned out to be
+invisible code.
 
 ---
 
