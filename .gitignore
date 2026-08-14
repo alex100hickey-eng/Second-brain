@@ -1,6 +1,14 @@
 __pycache__/
 *.pyc
 .env
+# Every .env VARIANT, not just .env itself. On 2026-08-14 a `.env.bak-<date>` written
+# before editing secrets was swept up by `git add -A` and only GitHub's push protection
+# stopped a live Anthropic key and GitHub PAT from reaching the remote. `.env` alone
+# does not match `.env.bak-…`, `.env.local`, `.env.save`, or an editor's `.env~`.
+.env.*
+!.env.example
+*.env
+.env~
 scripts/*.log
 # local dev server output
 second-brain-chat/local-app.log
