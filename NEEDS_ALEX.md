@@ -142,20 +142,24 @@ App resource →
 
 Org `jbyfwshwyrzcuwmgalbm` (alex2hoop@icloud.com).
 
-5. **Plan status: resolved per you, 2026-08-14** ("my money issues are resolved").
-   Verified the same day: the DB answers HTTP 200, no 402. One residual worth $25/mo:
-   if what you did was upgrade to Pro, the 08-08 egress fixes (~53 GB/mo → ~3 GB/mo)
-   mean you can likely **downgrade back to Free next cycle** — check the usage graph
-   at https://supabase.com/dashboard/org/jbyfwshwyrzcuwmgalbm/billing in early
-   September and keep the $25 if it held.
-6. **Rotate to the `service_role` key** and enable RLS — kills the recurring
-   "security vulnerabilities" emails. Project Settings → API → copy `service_role` →
-   replace `SUPABASE_KEY` in Coolify env, `~/.zshrc` and `~/second-brain/.env` →
-   verify the app still answers → SQL editor:
-   `alter table public."Agent Outputs" enable row level security;`
-   (No policies needed — service_role bypasses RLS, and the app needs zero code
-   changes.) Audited 08-08: the anon key is server-side only, so this is hygiene,
-   not an emergency.
+5. ~~**Plan status**~~ ✅ SETTLED 2026-08-14 — **you are on the Free Plan and should
+   stay there. Do not pay $25/mo.** You never upgraded; the cycle reset 08-13 with a
+   $0.00 invoice. Current cycle (14 Aug – 14 Sep) reads **egress 0.085 GB of 5 GB —
+   2%**, against **12.87 GB** last cycle. The 08-08 polling fix landed better than
+   predicted: the run-rate is ~2.5 GB/month, half the free allowance. The orange
+   "grace period" banner is a stale leftover from the previous cycle, not a live
+   warning. Nothing to buy here.
+6. ~~**Rotate the key + enable RLS**~~ ✅ DONE 2026-08-14. Supabase has moved to new
+   key formats, so this used the modern **`sb_secret_`** key rather than the legacy
+   `service_role` JWT (verified safe first: nothing in the codebase parses the key,
+   it goes straight to `create_client`). Replaced in all three places — Coolify,
+   `~/second-brain/.env`, `~/.zshrc` — and RLS enabled on `Agent Outputs`.
+   **Proven both directions:** the app reads and writes normally with the secret key,
+   and the old anon key now returns HTTP 200 with **zero rows**. That's RLS working —
+   the leaked-key scenario is now worthless to an attacker.
+   `~/.zshrc` had been holding the old anon key, which would have failed *silently*
+   (empty results, no error) for anything sourcing your shell profile instead of
+   `.env`. Fixed at the same time.
 
 ### On the Hetzner box
 
