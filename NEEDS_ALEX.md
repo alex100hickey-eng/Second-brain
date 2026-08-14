@@ -1,533 +1,219 @@
 # NEEDS_ALEX.md — everything blocked on you
 
-## ✅ 2026-08-14 — RESOLVED: capability watcher CLI login (was 🔴 since Aug 9)
+**Rewritten 2026-08-14 from verified state, not from the previous version of this
+file.** Everything below was checked today against the live systems: the server and
+Mac nodes' `/api/version`, a real Supabase query, the actual contents of the
+splitframestudio mailbox, and the suite (829/0). Items the old file listed as open
+that turned out to be *already done* have been deleted rather than reworded — a
+blocked-on-you list that's mostly noise is a list you stop reading.
 
-Alex logged the CLI in on **2026-08-14**. Verified end-to-end that same day:
-`claude auth status` → `loggedIn: true` (claude.ai, max), a headless `claude -p`
-returns normally, and — the test that actually matters — a throwaway launchd job
-spawning the same binary the watcher uses returned cleanly with exit 0. The
-`request_capability` → auto-build loop is live again.
-
-Why it looked confusing: the **desktop app and the standalone CLI are separate
-logins**. The app was signed in the whole time (it refreshed its keychain item
-daily), so everything looked healthy while `~/.local/bin/claude` — the binary
-launchd actually spawns — was signed out. Check the CLI specifically with
-`claude auth status`, not the app.
-
-**Still worth doing (not blocking):** the CLI exits **rc=0** on an auth failure,
-so the watcher logged five days of dead builds as normal finishes. Nothing went
-red anywhere. Either run `claude setup-token` for a long-lived token that won't
-expire out from under a background job, or have the watcher treat the auth-failure
-signature as a hard error. Otherwise this recurs silently the next time a session
-lapses.
-
-## 2026-08-08 — 🔴 SUPABASE DECIDES TOMORROW: upgrade by Aug 9 or CLARVIS's DB starts 402ing
-
-The org (alex2hoop@icloud.com, ID `jbyfwshwyrzcuwmgalbm`) blew through the free
-tier's **5.5 GB egress: 12.87 GB used**. Supabase cut the grace period — after
-**Aug 9** every API call returns 402 until the plan is upgraded. That's chat
-history, tasks, intake, HUD, the relay queue — everything.
-
-**Root cause found and fixed 2026-08-08:** ~95% of the egress was CLARVIS's own
-polling (two 8-second workers re-downloading every task row ≈1.3 GB/day, the
-screen-result poll re-downloading MB-scale screenshots every second, `_load_state`
-downloading 83 KB to read one key, the chat badge paying the full ~330 KB
-dashboard price every 60s). All fixed, suite-green, deployed. New run-rate
-≈ **3 GB/month — comfortably inside the free tier going forward.**
-
-**Your call (2 minutes, before tomorrow):**
-- **Recommended: upgrade to Pro ($25/mo)** at
-  https://supabase.com/dashboard/org/jbyfwshwyrzcuwmgalbm/billing — restrictions
-  lift immediately, and with the fixes you can downgrade back to Free next cycle
-  once the usage graph proves out. Turn ON the spend cap when upgrading.
-- **Or ride it out free:** usage is now under control, but the 402 restriction
-  still lands Aug 9 and typically holds until the next billing cycle — days of
-  CLARVIS being brain-dead. Not recommended.
-
-While you're in that dashboard anyway (~3 more min, kills the recurring
-"security vulnerabilities" emails): Project Settings → API → copy the
-`service_role` key → replace `SUPABASE_KEY`'s value in Coolify env, `~/.zshrc`,
-and `~/second-brain/.env` → verify the app still answers → SQL editor:
-`alter table public."Agent Outputs" enable row level security;` (no policies —
-service_role bypasses RLS; the app needs zero code changes). Audited 2026-08-08:
-the anon key is server-side only, so this is hygiene, not an emergency — but it's
-one screen away from the billing page.
-
-## 2026-08-07 — ambient awareness + protocols shipped; calendar OAuth is DEAD
-
-CLARVIS now has a JARVIS-style ambient layer: every turn it already knows the
-time, today's calendar, your top tasks, what's waiting on you, and what's running
-in the background — plus **protocols** (standing orders: "when I say game day, do
-X then Y" → saved to vault `Protocols/`, run by name). Two things on you:
-
-1. ~~Google Calendar re-auth~~ — **RESOLVED 2026-08-11: deliberately staying
-   disconnected.** Alex says the calendar's contents are placeholder/junk, not his
-   real schedule, so reconnecting would feed CLARVIS bad data. Everything degrades
-   gracefully without it (ambient block, briefing, and widgets simply skip the
-   section). Recorded in the vault profile so CLARVIS knows not to trust it. Only
-   revisit if Alex starts keeping a real calendar — then
-   `python3 scripts/connect_google_calendar.py`.
-2. **Push when ready** — today's work (person profile + ambient awareness + protocols
-   + doctrine + REMINDERS + opus escalation + weather) is committed on main but NOT
-   pushed, so the live server has none of it yet:
-   `cd ~/second-brain && git push` (auto-deploys).
-3. **Server handles ONE request at a time** — a streaming chat reply blocks the
-   dashboard and any second message. Config-only fix in Coolify → the app's
-   Start Command (2-field drill, same as before):
-   `gunicorn --chdir second-brain-chat app:app --bind 0.0.0.0:5000 --timeout 120 --worker-class gthread --threads 8`
-4. **Web search runs on keyless DuckDuckGo** (weakest fallback). Tavily free tier =
-   1,000 searches/mo: sign up at tavily.com, put `TAVILY_API_KEY` in Coolify env
-   vars + `~/.zshrc`. Instantly sharper research.
-5. **If the Hetzner box dies, nothing tells you.** UptimeRobot free plan pinging
-   `https://clarvis.178.156.209.40.sslip.io/health` = 3-minute signup, zero code.
-6. **Weather in CLARVIS's ambient awareness** (built, dormant): set `WEATHER_LATLON`
-   to your town's coordinates, e.g. `WEATHER_LATLON=41.39,-73.45` — in Coolify env
-   vars + `~/.zshrc`. Coordinates only ever go to the keyless open-meteo.com API.
-
-
-## 2026-08-02 morning — full mail read + draft replies + self-service escalation shipped
-
-CLARVIS can now: **read every email** (raw, all three accounts — `list_emails`/
-`read_email`), **write replies as real Gmail drafts** you send yourself
-(`create_email_draft` — sending is deliberately impossible, enforced by a test),
-and **file its own feature requests** (`request_capability`) into a queue that a
-scheduled Claude Code task on your Mac processes every 30 min — you're out of the
-middleman job. Commit `fdb492c`. Three small things on you:
-
-1. **Click "Run now" once** on the `clarvis-capability-processor` task (Claude
-   app → Scheduled section in the sidebar) — the first run asks for tool
-   permissions; approving them once means future runs never stall on prompts.
-   A real request is already queued (the misleading "0 new, 0 filtered" scan
-   summary you hit this morning), so that first run will also ship a fix.
-2. **The processor only runs while the Claude desktop app is open** on your Mac.
-   No action needed, just know that's the heartbeat.
-3. **Delete the test draft** "CLARVIS draft test — safe to delete" sitting in
-   your personal Gmail Drafts (proof the draft chain works).
+History for resolved items lives in git and `BUILD_LOG.md`. This file is only what
+is still yours to do.
 
 ---
 
-**Updated 2026-07-31 evening. Suite 447/0. Everything is deployed and verified
-live on `c6a2829`.** The long-running deploy outage is over — see "Resolved
-today" below for what it actually was, because the cause was not what the
-earlier version of this file guessed.
+## 🔴 THE ONE THAT MATTERS — warmup restarts today
 
-Ordered so the first item unblocks the value of everything else.
+Everything on the money side is behind this single gate, and it has now slipped
+eleven days.
+
+**Verified this morning, by searching your gmail rather than trusting the tracker:**
+the studio domain has sent mail on **exactly one day ever — Mon 08-03** (three
+threads, one reply). Nothing 08-04 → 08-13. The replies on 08-10 and 08-11 went
+*from* your gmail *to* the studio: good for the mailbox, but they build no sending
+reputation, which is the entire point of warmup. **Today is day 1 of 7. Again.**
+
+Nothing is damaged — DKIM authenticates, SPF is single and clean, DMARC is
+published, last mail-tester was 10/10. A quiet domain is not a burned domain. You
+lost time, not the asset.
+
+- **Do today (~10 min, from your phone):** open
+  [[warmup-drafts-2026-08-14]] in the vault, send the 3 day-1 emails from
+  `alexhickey@splitframestudio.com`, spaced through the day.
+- **The floor is two emails a day.** Not four. A streak dies at zero, never at two.
+- **Day 7 is Thu 08-20 → mail-tester gate Fri 08-21 → Wave 1 opens the same day**,
+  leaving 10 selling days before Aug 31.
+
+### Why it broke — it was a bug, not your memory
+
+Worth 30 seconds because it means the fix isn't "try harder."
+
+A status note written under the warmup step on 08-06 was parsed as that step's
+**dependency list**. `needs:` is the last field on the line, so its regex ran to
+end-of-line and swallowed all 40 words of the note. None name a real step → the
+step was permanently blocked → and blocked steps are *deliberately* never nudged,
+because nagging about work you can't start is how a proactive assistant gets muted.
+
+**So documenting a step's status silently switched off its reminders.** It hit
+`warmup-daily`, `outside-read` and `sales-rehearsal` — three of the most important
+things on the board — on the same day, and the symptom was silence, which is
+exactly what you'd expect if there were simply nothing to do.
+
+Fixed today (`86fa58f`), two independent ways, plus: warmup now nudges **daily**
+instead of twice-then-silence, and the warmup clock now measures *sending* rather
+than the mailbox existing — it had been reporting "warmup running, delay is no
+longer compounding" straight through those eleven silent days. Suite 815 → 829.
 
 ---
 
-## 0a. ✅ RESOLVED 2026-08-01 evening — disk freed, deploy landed, recurrence fixed
+## 🟠 Money — the rest, in the order I'd do them
 
-Alex delegated terminal execution ("I can't run anything, I'm remote control — if
-you want to run anything in terminal do it"), so this was carried out rather than
-handed over. What happened, in order:
+1. **Send the outside-reader email.** Draft has been sitting in your personal gmail
+   Drafts since 08-06 ("quick favor — 5 min read"); PDF at
+   `Desktop/splitframe-sample-pack.pdf`. Pick one person whose taste you trust,
+   attach, send. This is the cheapest real signal you can get before pitching
+   anyone, and it costs one email.
+2. **The 14-brand call** — see the table below. One blanket answer covers it.
+3. **Stripe** — dashboard.stripe.com/register, sole prop, personal checking, ACH on,
+   tax auto-transfer 25–30%. 15 minutes. Not urgent until someone says yes, but it's
+   the only thing between a "yes" and money landing. Do it while warmup runs.
+4. **The call card's open question** — vault [[call-card]]: keep or strike the
+   teardown refund guarantee. Decide it now, not on a live call.
+5. **Postmaster Tools** — postmaster.google.com → splitframestudio.com → confirm
+   data is populating. 2 min. If it's still empty by 08-17, something's wrong with
+   the domain setup and you want to know before the 08-21 gate, not after.
+6. **Confirm the move-in date** and make the Week 3/4 swap call.
+7. **Two stale drafts to bin** (deletions are never automated, so they're yours):
+   "Re: this week" — written 08-06 for a thread you already replied to on 08-11,
+   so sending it now would be a duplicate. And "CLARVIS draft test — safe to
+   delete" from 08-02.
 
-- **Disk was 100% full, 271 MB free.** `docker builder prune -af` freed 9.8 GB
-  (100% → 80%). Rollback images deliberately untouched at that stage.
-- **The push still didn't deploy.** Root cause was NOT the disk: deployment #251
-  had been stuck `in_progress` since 13:29 with four orphaned `coolify-helper`
-  containers, so every later deploy queued behind a corpse. Cleared the zombies,
-  retired the stale queue rows.
-- **It still didn't deploy** — the queue *worker* was dead too: when the disk
-  filled, Redis lost the job payloads, leaving DB rows with no job behind them.
-  Restarting `coolify-redis` + `coolify` (control plane only; the app container
-  served throughout) fixed it. A fresh push then built normally.
-- **Live on `d161281`**, verified by `/api/version`, which now carries the `disk`
-  block on both nodes. `FLASK_SECRET_KEY` is active as of that restart.
-- **The real recurrence cause, found and fixed:** every deploy leaves a ~1.94 GB
-  image and nothing removed the old one — **25 had piled up in 26 hours (~20 GB)**.
-  The guard now keeps the **newest 3 generations per app** (Alex's call, chosen
-  over keep-5 / leave-alone / `prune -af`). It never deletes an image backing a
-  running container. First run removed 19 images, skipped 0: **89% → 48%,
-  4.1 GB → 19 GB free**, with `d161281` + two rollback targets preserved.
-- **Installed** at `/usr/local/bin/server-disk-guard.sh`, hourly root cron at :17,
-  logging to `/var/log/disk-guard.log`.
+### The 14 brands in the 101–199 band
 
-Residual worth knowing: the box is 38 GB total and each build needs ~2 GB. Keep-3
-holds steady state near 48%, so there's real headroom now. `scripts/check_disk.py`
-warns long before it matters.
+These are held up on a judgment call, not on scraping. All 14 are real brands with
+real ad spend; they sit above the 5–100 active-ad band you set.
 
-<details>
-<summary>Original entry (kept for the record)</summary>
+| brand | active ads | category | domain |
+|---|---|---|---|
+| Guava Family | 190 | Baby gear | guavafamily.com |
+| Divi | 190 | Scalp & hair care | diviofficial.com |
+| Native Pet | 160 | Pet supplements | nativepet.com |
+| Nani Swimwear | 160 | Swimwear | naniswimwear.com |
+| UrbanStems | 150 | Flowers & gifting | urbanstems.com |
+| ROAD iD | 150 | Safety wearables | roadid.com |
+| SheFit | 130 | Activewear | shefit.com |
+| Canvas Beauty | 130 | Haircare | canvasbeautybrand.com |
+| Needed | 120 | Prenatal supplements | thisisneeded.com |
+| Momentous | 120 | Performance supplements | livemomentous.com |
+| Fishwife | 120 | Tinned seafood | eatfishwife.com |
+| Apothékary | 120 | Herbal wellness | apothekary.co |
+| The Outset | 110 | Skincare | theoutset.com |
+| Pet Honesty | 110 | Dog supplements | pethonesty.com |
 
-## 0a. 🔴 URGENT 2026-08-01 morning — the Hetzner box's DISK IS FULL again
+**My recommendation: "anything under 150 is in" — that's 8 brands**, and it draws
+the line where the pitch actually changes. Under ~150 you're usually still reaching
+a founder or a two-person marketing team who reads their own email. At 150–190
+you're emailing someone who already has an agency, and the reply rate reflects it.
 
-Found while deploying the overnight work. Evidence: the `54dbf8d` build died at
-04:32 UTC with `mkdir: No space left on device` at the nix step (Coolify showed
-it "In Progress" for 8.5h — cancelled it, which unwedged the queue), and the
-Coolify UI itself now 500s with "Redis … unable to persist to disk". The RUNNING
-app is fine (serving `abb5d74`, which includes the jobs.db fix), but **no new
-build can land and Coolify's own state can't persist** until disk is freed.
-Note: vault pulls and jobs.db writes share that disk — don't sit on this.
+One of the 8 is a freebie: **Fishwife already has a finished, taste-passed spec pack
+built** — it was one of your three sample drops. Pitching them costs no new work.
 
-Fix (you run it; from your Mac):
-```bash
-ssh root@178.156.209.40 "df -h / && docker builder prune -af && docker image prune -af && df -h /"
-```
-(`image prune -af` deletes rollback images — you okayed weighing this before;
-`builder prune` alone freed ~9 GB last time and may be enough. While you're
-there, the pending kernel reboot from §7 is 15 seconds: `reboot`.)
+Worth knowing before you answer: you have 40 qualified prospects and roughly 30–50
+sends of capacity before Aug 31, so these 14 are Wave 4 at the earliest. Saying "all
+out" costs you nothing this month.
 
-Then deploy the tip — push anything, or:
-```bash
-cd ~/second-brain && git commit --allow-empty -m "redeploy" && git push
-```
-Verify: `curl -s https://clarvis.178.156.209.40.sslip.io/api/version` → `38f27e8`
-(or later). Two suite-green commits are waiting: `30f1b91` (the ad pipeline) +
-`38f27e8` (review fixes). **Your Mac node already runs them** — restarted on
-`38f27e8` at 09:04 ET, so CLARVIS has the full pipeline locally regardless.
+### Five identity calls (~10 seconds each)
 
-**Nothing has been pushed.** The tip commits are sitting local on purpose: a push
-auto-triggers a build, that build dies on the full disk, and last time a dead
-build wedged the queue for 8.5 hours. Free the disk first, then push once.
+- **Apothékary** — stored as the literal escape `Apoth&eacute;kary`, so the string
+  compare failed. Almost certainly the right page. Confirm → it joins the table above.
+- **Bask and Lather** — page is `Bask & Lather Co` (`&` vs "and"), 570 active.
+  Confirm → it's `too_big`, not a candidate.
+- **Big Barker** — page is `Barker Dog Beds`, 24 active. If that's their trading
+  page it qualifies cleanly inside 5–100.
+- **GOODLES** → page "Goodles: Noodles, Gooder." — almost certainly them, but it's a
+  tagline rather than a name, so it wasn't auto-accepted.
+- **Recess** → page "Recess Therapy" — probably **not** them (Recess Therapy is the
+  street-interview series; Recess is the sparkling drink). Left unmatched on purpose.
 
-### The durable fix is now built and waiting for you (2026-08-01 midday)
+---
 
-The recurrence risk in this section is closed in code — it just needs installing,
-because it runs on the box and remote shell is your call, not Claude's.
+## 🟡 CLARVIS / infra — what's genuinely still open
 
-1. **The box now announces its own disk before it fills.** `/api/version` carries a
-   `disk` block (percent used, GB free), so the endpoint you already curl to verify
-   a deploy also answers "is it about to wedge?". Both nodes degrade gracefully:
-   the field is simply absent on older code.
-2. **`scripts/check_disk.py`** polls both nodes and escalates by band — quiet under
-   75%, prints at 75%, and files a `system_event` (so it lands in the incident log
-   and the HUD) at 85% / 92%. Run it hourly or by hand: `python3 scripts/check_disk.py`.
-3. **`scripts/server-disk-guard.sh`** is the hourly root cron for the box. It prunes
-   the *build cache under a 10 GB keep-storage cap* — not `-af`, so ordinary rebuilds
-   stay warm — and only under real pressure (>70%). It deliberately **never** runs
-   `docker image prune -af`; deleting rollback targets stays your deliberate call,
-   and the test suite pins that. Install (two lines, both yours to run):
-   ```bash
-   scp ~/second-brain/scripts/server-disk-guard.sh root@178.156.209.40:/usr/local/bin/
-   ssh root@178.156.209.40 'chmod +x /usr/local/bin/server-disk-guard.sh && \
-     (crontab -l 2>/dev/null | grep -v server-disk-guard; \
-      echo "17 * * * * /usr/local/bin/server-disk-guard.sh >> /var/log/disk-guard.log 2>&1") | crontab -'
+Grouped by where you'd be when you do them, so each group is one sitting.
+
+### In the Coolify dashboard (one visit, ~5 min)
+
+App resource →
+`http://178.156.209.40:8000/project/xn159afo226l4480ogtcrznz/environment/p78muchurjjfu962yg4iredu/application/h72tei3gy97z4wlqyqpvuylg`
+
+1. **Start Command — the server still handles ONE request at a time.** A streaming
+   chat reply blocks the dashboard and any second message. Two-field drill:
    ```
-   Do this *after* the manual prune above — the guard prevents the next fill, it
-   won't dig you out of this one.
+   gunicorn --chdir second-brain-chat app:app --bind 0.0.0.0:5000 --timeout 120 --worker-class gthread --threads 8
+   ```
+2. **`WEATHER_LATLON`** — built and dormant since 08-11. Set it to your town, e.g.
+   `WEATHER_LATLON=41.39,-73.45`, and CLARVIS's ambient block gains weather.
+   Coordinates only ever go to the keyless open-meteo.com API. (Also worth adding to
+   `~/.zshrc` so the Mac node has it.)
+3. **`TAVILY_API_KEY`** — confirmed still unset on the Mac node's startup check
+   today, so web search is running on keyless DuckDuckGo, the weakest fallback.
+   Free tier is 1,000 searches/month at tavily.com. Instantly sharper research.
+4. **`VAULT_GIT_TOKEN` rotation** — still open from the 08-01 handoff. Revoke at
+   github.com/settings/tokens → new token, repo scope, `Second-brain` only → paste
+   into the env here → Redeploy.
 
-</details>
+### In the Supabase dashboard (~5 min)
 
----
+Org `jbyfwshwyrzcuwmgalbm` (alex2hoop@icloud.com).
 
-## 0b. ✅ 2026-08-01 LATE NIGHT — the service is NAMED and the mail infra is DONE
+5. **Tell me what you decided on the plan.** The Aug 9 restriction deadline passed
+   and **the database is answering normally today** — I ran a live query against
+   `Agent Outputs` and got HTTP 200, not a 402. So either you upgraded, or the
+   restriction never landed. Worth confirming which, because the 08-08 egress fixes
+   took the run-rate from ~53 GB/month to ~3 GB — comfortably inside the free tier —
+   so if you *did* upgrade to Pro you can likely downgrade next cycle and keep the $25.
+6. **Rotate to the `service_role` key** and enable RLS — kills the recurring
+   "security vulnerabilities" emails. Project Settings → API → copy `service_role` →
+   replace `SUPABASE_KEY` in Coolify env, `~/.zshrc` and `~/second-brain/.env` →
+   verify the app still answers → SQL editor:
+   `alter table public."Agent Outputs" enable row level security;`
+   (No policies needed — service_role bypasses RLS, and the app needs zero code
+   changes.) Audited 08-08: the anon key is server-side only, so this is hygiene,
+   not an emergency.
 
-**Splitframe Studio · splitframestudio.com · alexhickey@splitframestudio.com**
+### On the Hetzner box (needs your say-so — remote shell is your call, not mine)
 
-Alex picked the name from CLARVIS's shortlist and bought the domain ($11.08/yr,
-Porkbun, WHOIS privacy on) and the Workspace seat (Business Starter). Everything
-else was carried out and dig-verified the same night: MX → Google (sole route),
-single SPF, **DKIM 2048 authenticating**, DMARC `p=none` with reports to the real
-mailbox, Porkbun's parking MX/SPF defaults deleted, Postmaster Tools verified,
-and a **mail-tester baseline of 10/10** ("Perfect, you can send") from a real
-Gmail send. Tracker: **4/17 done** (`name-service`, `buy-domain`, `mailbox-dns`,
-`dns-strings`), ticked in the vault.
+7. **Kernel reboot** — the box has been printing `*** System restart required ***`
+   for two weeks. Safe now that builds aren't fragile. 15 seconds: `reboot`.
+8. **~9 GB of unused Docker images** could be reclaimed, but `docker image prune -af`
+   deletes rollback targets, so it stays a deliberate choice. Disk is at **66%** with
+   12.7 GB free today, and the hourly keep-3 guard is holding steady — so this is
+   genuinely optional right now, not pending.
 
-**Update 2026-08-03 14:30 — site is LIVE.** ~~not yet public~~ splitframestudio.com
-serves HTTP 200 over valid TLS (cert issued 2026-08-03, expires 11-01), A records
-on GitHub Pages, `www` CNAME resolving. Re-verified by dig + curl, not by UI claim.
-Mail DNS re-checked the same way and still clean: sole Google MX, single SPF, DKIM
-published, DMARC `p=none`, no parking leftovers.
+### Elsewhere, small
 
-**Alex's remaining clicks, in order (each is minutes, not hours):**
-
-1. ~~**Read the portfolio copy / say "ship it"**~~ ✅ DONE — deployed and verified
-   live 2026-08-03.
-2. ⚠️ **Warmup day 1 — NOT STARTED. This is the critical path.** The 3 drafts are
-   still sitting unsent in the splitframestudio Gmail Drafts folder. Verified
-   2026-08-03: a search of alex100hickey@gmail.com for anything from
-   splitframestudio.com over the last 5 days returns **zero** messages (control
-   query on the same mailbox returned 22 threads, so the search path works — the
-   mail genuinely has not gone out). **The 7-day clock has not started, so it is
-   not day 1 of warmup yet — it is day 0.** Every downstream date slides with the
-   day you actually send: earliest Wave 1 send is first-send + 7 days, behind the
-   mail-tester re-check gate. Send from **splitframestudio Gmail → Drafts**, 3
-   spaced across the day, then reply to each from your gmail. Plan: vault
-   `Money/Warmup Plan.md`.
-2b. **Read the 40 drafts — Waves 1, 2 and 3, all ready.** Vault
-   `Money/outreach-drafts-wave1-2026-08-03.md` (22),
-   `-wave2-` (14), `-wave3-` (4). Generated 2026-08-03 against each brand's live
-   Ad Library creative; **40/40 succeeded, 0 failures**. All lint clean
-   (`check_client_doc.py` re-run independently, exit 0: no "AI", no vendor names,
-   no placeholders, no internal markers). All 40 verified inside your 5-100
-   active-ad band, no overlap between waves, and **every qualified brand in the
-   tracker is now assigned to a wave**. Nothing sends itself — these wait on the
-   warmup gate, which is item 2.
-2c. **14 brands sit in your 101-199 "flag for me" band** — decisions only you can
-   make; scraping does not resolve them. This is now the single biggest pool of
-   held-up prospects, bigger than any wave after wave 1:
-
-   | brand | active ads | domain |
-   |---|---|---|
-   | Guava Family | 190 | guavafamily.com |
-   | Divi | 190 | diviofficial.com |
-   | Native Pet | 160 | nativepet.com |
-   | Nani Swimwear | 160 | naniswimwear.com |
-   | UrbanStems | 150 | urbanstems.com |
-   | ROAD iD | 150 | roadid.com |
-   | SheFit | 130 | shefit.com |
-   | Canvas Beauty | 130 | canvasbeautybrand.com |
-   | Needed | 120 | thisisneeded.com |
-   | Momentous | 120 | livemomentous.com |
-   | Fishwife | 120 | eatfishwife.com |
-   | Apothékary | 120 | apothekary.co |
-   | The Outset | 110 | theoutset.com |
-   | Pet Honesty | 110 | pethonesty.com |
-
-   Say "in" or "out" per brand (or one blanket call — e.g. "anything under 150 is
-   in") and CLARVIS moves them into a wave and drafts them.
-2d. **3 of the 7 `identity_mismatch` rows look like matcher false positives**, not
-   real mismatches — worth ~30 seconds each:
-   - **Apothékary** — page stored as literal escape `Apothékary`, so the
-     string compare failed. Almost certainly the right page. 120 active → if you
-     confirm, it belongs in the 101-199 flag list above, not in limbo.
-   - **Bask and Lather** — page `Bask & Lather Co` (`&` vs `and`). 570 active →
-     if confirmed, it is `too_big`, not a candidate.
-   - **Big Barker** — page `Barker Dog Beds`, 24 active. If that is their trading
-     page, it qualifies cleanly inside 5-100.
-
-   The other four (OffLimits → "Kapil tony works", Doe Lashes → "Jolynn Brant",
-   Divi → no page, Create Wellness → "Trycreate") are either genuine wrong-page
-   hits or have no data. Not reclassified automatically — who receives outreach
-   is your call, not a script's.
-2e. **Root-caused why qualification was stalling — two parser bugs, both now
-   understood, and 9 brands recovered from them (no action needed from you).**
-   The 58-brand retry recovered only 3, so instead of running it again the
-   failures were diagnosed directly:
-
-   - **`page_not_found` (was 17)** — nothing to do with handles. Facebook serves
-     logged-out headless Chrome a *bare shell* for `facebook.com/<handle>`: 333KB,
-     title just "Facebook", no page id anywhere. The lookup could never work.
-     **Fix:** resolve page ids through the Ad Library's own keyword search, which
-     does render fully. That produced 8 brand-new page ids.
-   - **`no_data` (was 19)** — the page loaded fine every time. Two compounding
-     bugs: the count regex ran against **raw HTML** while the number and the word
-     "results" sit in different DOM nodes (so it could never match), and the Ad
-     Library's **"No ads match your search criteria"** empty state was read as
-     *unknown* rather than as **zero**. Separately, several of those page ids were
-     simply **wrong** — Fishwife was pointed at a page called "The Fish Wife",
-     Canvas Beauty and Crown Affair at other pages entirely.
-
-   **Recovered:** 4 new qualified (Obvi 24, Oudware 15, Halfdays 55, Emi Jay 84 —
-   now wave 3), 3 added to your flag list above (Fishwife, Canvas Beauty,
-   UrbanStems), and 2 correctly disqualified as `too_big` (Crown Affair 320,
-   Mugsy 300) that had been invisible.
-
-   **Caveat worth knowing:** name-matching against Ad Library search produces
-   false positives — it offered *Franne Golde* for Golde, *Recess Therapy* for
-   Recess, *Crane & Canopy* for Canopy, and *Humane Society of Huron Valley* for
-   Huron. Only exact and corporate-suffix matches (`EmiJay Inc.`, `Canvas Beauty
-   Brands`) were accepted; the rest were rejected rather than guessed at, which is
-   why 46 brands remain unresolved rather than being force-matched.
-2f. **Two brands need a 10-second identity call from you** — the search found a
-   plausible page but the name isn't an exact match, and guessing wrong means
-   pitching the wrong company:
-   - **GOODLES** → page "Goodles: Noodles, Gooder." — almost certainly them, but
-     it's a tagline, not a name.
-   - **Recess** → page "Recess Therapy" — probably **not** them (Recess Therapy is
-     the street-interview series; Recess is the sparkling drink). Left unmatched.
-3. **Stripe** — dashboard.stripe.com/register (sole prop, personal checking OK,
-   ACH on, tax auto-transfer). CLARVIS cannot create financial accounts.
-4. **Taste-pass spec pack #1** — files sent to you in chat; also vault
-   `Money/Clients/portland-pet-food-company/`.
-5. **Rotate `VAULT_GIT_TOKEN`** (still open from the 08-01 handoff): revoke at
-   github.com/settings/tokens → new token (repo scope, `Second-brain` only) →
-   paste into Coolify app env
-   (`http://178.156.209.40:8000/project/xn159afo226l4480ogtcrznz/environment/p78muchurjjfu962yg4iredu/application/h72tei3gy97z4wlqyqpvuylg`)
-   → Redeploy.
-6. **Porkbun 2FA** — porkbun.com/account#accountSecuritySettings. The account
-   now controls the domain your whole pipeline sends from.
-7. Optional: add `alex@` alias in Google Admin → Users (nicer sending address);
-   CLARVIS will repoint DMARC reports back to it afterwards.
+9. **Porkbun 2FA** — porkbun.com/account#accountSecuritySettings. That account
+   controls the domain your whole pipeline sends from.
+10. **UptimeRobot** — if the Hetzner box dies, nothing tells you. Free plan pinging
+    `https://clarvis.178.156.209.40.sslip.io/health` is a 3-minute signup, zero code.
+11. **Look at the phone HUD.** The instrument bands shipped and are verified in the
+    served assets, but nobody has looked at them on a real phone yet.
+12. **Optional: `claude setup-token`** → put `CLAUDE_CODE_OAUTH_TOKEN` in
+    `~/second-brain/.env`. The capability watcher now *detects* auth failure loudly
+    (fixed `aaaaf73`, after it logged five days of dead builds as clean rc=0
+    finishes), but a long-lived token stops the lapse happening at all.
 
 ---
 
-## 0. NEW 2026-08-01 — August Money Plan: your morning list
+## 🆕 Found today, not previously on any list
 
-The finalized plan (council-amended) is in the vault: **`Money/August Money Plan
-(FINAL).md`**. Its "FIRST 72 HOURS" section is your complete ordered checklist.
-The two items that touch this repo's infra:
-
-- ~~**Set `FLASK_SECRET_KEY` in Coolify**~~ ✅ DONE 2026-08-01 — Alex generated and saved
-  it on the app resource. Takes effect on the next restart/redeploy.
-- ~~**Pause the `money_clips_agent` Scheduled Task**~~ ✅ NOTHING TO DO — **the task does
-  not exist.** Verified 2026-08-01 two ways: the app's Scheduled Tasks tab in Coolify
-  lists exactly one entry, `sync-vault` (`*/10 * * * *`, last run success), and the
-  agent's own Supabase rows stop dead after **2026-07-28T13:00:13** — it had run daily
-  at 13:00 UTC from 07-19 to 07-28, then never again (nothing on 07-29, 07-30, 07-31,
-  08-01). Nothing in the repo schedules it either: no cron, no launchd, no loop in
-  `app.py`. So it is **not** burning a daily API call, and hasn't been for days. Don't
-  go hunting for this task — it isn't there.
-
-Done overnight so you don't have to: jobs.db now survives server redeploys
-(parks on the vault volume under `.appstate/`, `JOBS_DB_PATH` overridable), and
-the duplicate Mac morning-brief launchd job is retired (plist archived at
-`scripts/archive/com.secondbrain.morningbrief.plist.disabled` — the in-app
-brief + 08:15 phone nudge remain the single brief path).
-
-**Naming the service is still item #1, and it is now a one-command decision.**
-The portfolio site no longer needs an editing pass — `portfolio-site/render.py`
-applies the name everywhere at once:
-
-```bash
-python3 portfolio-site/render.py --name "Northrun" --email hello@northrun.com
-# → portfolio-site/dist/ ; preview: python3 -m http.server -d portfolio-site/dist 8080
-```
-
-It refuses to emit a page that breaks a plan rule: any surviving `{{placeholder}}`,
-or the word "AI" anywhere (word-boundary, so "email" and "available" are fine).
-**One change you should know about, because it's a judgment call I made for you:**
-the three spec-pack tiles under the "work" heading now render as *category* labels
-("pet food brand", "wellness brand", "food & beverage brand") rather than
-Portland Pet Food / Golde / Fishwife. Those packs were built unsolicited from
-public ads and none of those brands has been contacted — naming them under a
-heading called "work" on a public page implies a client relationship that does not
-exist. If you want the real names there, it takes an explicit
-`--brands ... --brands-approved`, and it should follow an actual conversation
-with them, not precede one.
-
-**Related, and worth 10 seconds before your first send:** `scripts/check_client_doc.py`
-lints anything a client will read. `Templates/proposal-template.md` carries a
-"delete before sending" notes block whose own text says *never describe the work as
-AI-generated* — fill the placeholders, forget the block, and the prospect reads that
-sentence. Memory was the only thing preventing it.
-
-```bash
-python3 scripts/check_client_doc.py path/to/your-filled-proposal.md
-```
-
-ALSO done overnight (`30f1b91`): the full fulfillment machine
-(`ad_creative_pipeline.py`, 8 tools, suite 547/0), smoke-tested end-to-end on
-THREE real brands — draft spec packs, sample readouts, and outreach drafts are
-in the vault under `Money/` awaiting your taste pass. The council's smoke-test
-gate is already satisfied; your morning list starts at "name the service."
-Accepted residuals (documented, low risk): `client_approved_proof` is an
-honor-gated tool arg (anonymized output, your own DB); `_all_rows` caps at 300
-rows (fine at August scale); the SSRF guard's DNS-rebinding TOCTOU is inherited
-app-wide, not new here.
+- **Your Mac's disk is at 90%** — 21.8 GB free of 228 GB. Not urgent, but the
+  server's disk problems in this project have all started looking exactly like this.
+  Worth a look before it's a Sunday-night emergency.
+- **The Mac node had been running 7 commits behind since 08-08** — it was still on
+  `2e55fd0` while the server ran `aaaaf73`, so locally CLARVIS was missing ambient
+  awareness, protocols, reminders, weather and both escalation fixes. Restarted onto
+  current code today and verified; no action needed from you. Worth knowing the
+  failure mode exists, since the Mac node is started by hand and nothing watches it.
 
 ---
 
-## 1. ✅ RESOLVED — the deploy outage (root cause found)
+## ⏳ Waiting on time, not you
 
-The server had been stuck on `0efd2a7` (2026-07-25) for six days. The earlier
-guess in this file — a dead webhook / bad `pyautogui` requirement — was **wrong**.
-
-**Actual cause:** the Hetzner box is **2 GB RAM with zero swap**. With the app,
-Coolify and Docker resident, only ~170 MB was free. Every build froze at nixpacks
-step `#8 RUN nix-env -if ... && nix-collect-garbage -d` — the memory peak — and
-Coolify reports a starved build as "In Progress" **forever** rather than failing.
-One such zombie sat for 10 hours and wedged the whole queue behind it, which is
-what made it look like deploys "weren't triggering". The webhook was fine all
-along; every push did queue a deployment.
-
-**Fix applied 2026-07-31:** 2 GB swap file added (`/swapfile`, in `/etc/fstab`,
-survives reboot) and `docker builder prune -af` run (~9 GB reclaimed). The very
-next build shipped in **~5 minutes**, versus 43-48 minutes when starved.
-
-**Diagnosis, if it ever recurs:** a build with no new log output for >10 minutes
-at step #8 is starved, not slow. Check `free -m` first. `/api/version` and the
-static-file byte-fingerprint are the only trustworthy deploy signals — the
-Coolify deployments list has reported both false failures and false successes.
-
-**Also learned:** Coolify's **Redeploy** button rebuilds the previously pinned
-commit, NOT the branch tip. To deploy new code, push (the webhook builds HEAD).
-
----
-
-## 2. ✅ DONE (verified 2026-07-31) — macOS permissions granted
-
-Alex granted both. Verified live from a shell:
-`AXIsProcessTrusted()` → **True**, `CGPreflightScreenCaptureAccess()` → **True**.
-(If the app is ever launched by a *different* parent app than the one granted,
-re-check with the same two calls.)
-
----
-
-## 3. ✅ DONE — voice conversation mode
-
-Alex tested it 2026-07-31: "the mic works great now." No threshold tuning was
-needed; `SILENCE_MS` / `MIN_SPEECH_MS` in the VAD block of `templates/index.html`
-stay as shipped.
-
----
-
-## 4. ✅ DONE — `screen_agent.py` wired in (Alex approved 2026-07-31)
-
-Registered inside the Mac-only branch of `app.py` (after `import screen_control`),
-dispatched in `handle_tool_call`, status label "Driving your screen…". On the
-server the tool refuses with a message rather than relaying — the see->act loop
-must run where the mouse is. The pinning test in `run_tests.py` was flipped from
-"must NOT be wired" to guarding the wiring, with both halves negative-tested.
-
-⚠️ **It only loads when the Mac-side app is running.** ✅ Started 2026-08-01 and
-verified: `screen_control` + `screen_agent` import cleanly, `RUNTIME=local`, so the
-screen tools register. The Mac node serves on **http://127.0.0.1:5001** (not 5000).
-
-To start it yourself after a reboot:
-
-```bash
-cd ~/second-brain/second-brain-chat && python3 app.py
-```
-
-There is no LaunchAgent for the main app — it's deliberate and manual. (The
-`screenrelay`, `morningbrief`, and `vaultsync` agents ARE installed and load on their
-own.) A healthy boot prints `Startup self-check: DEGRADED` — that is expected and only
-means the optional Tavily/Serper/Brave search keys aren't set, so search falls back to
-keyless DuckDuckGo. Every REQUIRED check passes.
-
----
-
-## 5. ✅ DONE — the quick wins
-
-- **`GITHUB_TOKEN`** — added to `~/second-brain/.env` and verified live (5000/hr
-  core, 30/min search, up from 10/min unauthenticated). Also added to Coolify.
-- **SSH key** — `~/.ssh/id_ed25519` generated and installed on the box with
-  `ssh-copy-id`; `ssh root@178.156.209.40` is now passwordless.
-- **Stale expansion findings** — the review queue is fully drained: 9 rejected,
-  5 deferred, 0 pending. The job-scraper items scored 2/5 usefulness and were
-  rejected by the council.
-
----
-
-## 6. ⏳ Waiting on time, not you
-
-- **Tool prune** — 93 registered, 12 used on the Mac. The cross-node audit mirror shipped
-  07-30; give it ~a week of real two-node data, then we prune with evidence. See `TOOL_AUDIT.md`.
-- **`app.py` is ~5,600 lines** — real structural debt, not urgent. Best done *with* the prune.
-- ~~**Dependency pinning**~~ ✅ DONE 2026-07-31 — 15 of 16 pinned in
-  `second-brain-chat/requirements.txt`. `gunicorn` stays unpinned on purpose: it's
-  server-only, so there's no locally-verified version to pin it to.
-
----
-
-## What I did NOT need you for
-
-15 commits, 435 passing checks, and one real security hole (SSRF) found and closed —
-see `VIBE_CODE_AUDIT.md`, `TOOL_AUDIT.md`, and today's git log.
-
----
-
-## 7. 🟡 Genuinely still open (small)
-
-- **Look at the phone HUD.** The instrument bands shipped and are verified in the
-  served assets, but nobody has looked at them on a real phone yet.
-- ~~**Heartbeat triage**~~ ✅ DONE 2026-08-01. All four heartbeats fresh (retention,
-  proactive, mail-intake, expansion-scout). No `error` or `critical` event since
-  2026-07-24 — those were transient Supabase timeouts and Cloudflare 525s that stopped
-  on their own. The only recent `warning`s are `login lockout tripped` from
-  `ip=127.0.0.1`, which is the local test suite tripping its own gate, not an intrusion.
-  Nothing to forward.
-- **Kernel reboot** — the box prints `*** System restart required ***`. Safe to do
-  now that builds aren't fragile.
-- **~9 GB of unused Docker images** could be reclaimed (`docker image prune -af`),
-  but that deletes rollback targets, so it's a deliberate choice, not routine.
-- **Dependency pinning is done** (15 of 16 exact; `gunicorn` left unpinned because
-  it isn't installed on the Mac, so no locally-verified version exists). Server
-  confirmed **Python 3.12** from the build log.
-- ~~**`under_review` orphan bug**~~ ✅ FIXED and LIVE 2026-08-01 (`5f47e26`). Findings
-  now stamp `review_started_at`; anything stranded in `under_review` past 10 minutes is
-  reclaimed by the next pass, and any exception in the council resets the finding to
-  `found` and surfaces the error instead of swallowing it. Regression tests negative-test
-  both halves (a stale one IS picked up; a fresh in-flight one is NOT). Verified against
-  the live findings table.
+- **Tool prune** — 93 registered, 12 used on the Mac. Cross-node audit mirror shipped
+  07-30; it wants ~a week of two-node data, then prune with evidence. See `TOOL_AUDIT.md`.
+- **`app.py` is ~5,600 lines** — real structural debt, not urgent. Best done *with*
+  the prune.
+- **Google Calendar stays disconnected on purpose** (your call, 08-11 — the calendar's
+  contents are junk, so connecting it would feed CLARVIS bad data). Everything degrades
+  gracefully without it. Not a bug, don't let anything flag it as one.
