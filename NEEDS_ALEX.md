@@ -176,6 +176,37 @@ Org `jbyfwshwyrzcuwmgalbm` (alex2hoop@icloud.com).
 
 ---
 
+## ✅ 2026-08-14 — the second app nobody knew was there (biggest infra win of the day)
+
+`money-clips-agent` was not a stray scheduled task. It was **an entire second Coolify
+application**, deployed from this same repo on branch `main`, and it explains the
+recurring disk emergencies far better than anything in the old notes did.
+
+- Its container ran **`sleep infinity`, 24/7**, doing nothing — it existed only so a
+  daily cron had somewhere to `exec`.
+- Because it tracked the same repo, it **rebuilt a full 1.94 GB image on every push to
+  main**. Four of them were sitting there tagged with today's commits alone. That is
+  why every push showed "2 deployments" and why disk climbed ~4 GB per push instead of
+  ~2 GB. The 08-01 and 08-08 disk-full incidents, the 20 GB in 26 hours, the keep-3
+  guard — half of all of it was this.
+- The daily Sonnet call was the least of it, and its output was never consumed:
+  the docstring says the concepts are "for review before you feed it into Viewmax,"
+  and that feeding never once happened.
+
+**Why the 2026-08-01 note said it didn't exist:** that check opened the *second-brain*
+app's Scheduled Tasks tab, correctly saw only `sync-vault`, and concluded the task was
+gone everywhere. It was never on that resource. Nobody thought to look at a second
+application. It kept running for another two weeks.
+
+**Done:** script archived to `scripts/archive/money_clips_agent.py` (it had existed
+only on the server, never in git), app deleted, its 4 orphaned images removed *by
+repository name* so the main app's rollback targets were untouched — deliberately
+declining Coolify's "Run Docker Cleanup" checkbox, which would have taken them.
+**Disk 71% → 60%, free 11 GB → 15 GB, and every future push now costs half as much
+disk and RAM.** Generated concepts remain in Supabase.
+
+---
+
 ## 🆕 Found today, not previously on any list
 
 - **Your Mac's disk is at 90%** — 21.8 GB free of 228 GB. Not urgent, but the
