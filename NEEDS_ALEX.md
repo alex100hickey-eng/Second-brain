@@ -173,8 +173,13 @@ Org `jbyfwshwyrzcuwmgalbm` (alex2hoop@icloud.com).
 
 ### Elsewhere, small
 
-9. **Porkbun 2FA** — porkbun.com/account#accountSecuritySettings. That account
-   controls the domain your whole pipeline sends from.
+9. ~~**Porkbun 2FA**~~ ✅ DONE 2026-08-14 — app-based TOTP enabled and verified
+   server-side (state survived a full reload). Code lives in iCloud Passwords on the
+   phone, so it's backed up. Recovery details were checked (masked): name correct,
+   backup email = the verified gmail, phone = a real 845 number. Debugging note for the
+   future: the 2FA switch does nothing in an automated browser because it opens a
+   native `confirm()` dialog that gets auto-cancelled — the warning text was
+   acknowledged explicitly before proceeding.
 10. **UptimeRobot** — if the Hetzner box dies, nothing tells you. Free plan pinging
     `https://clarvis.178.156.209.40.sslip.io/health` is a 3-minute signup, zero code.
 11. **Look at the phone HUD.** The instrument bands shipped and are verified in the
