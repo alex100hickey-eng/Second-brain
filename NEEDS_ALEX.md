@@ -194,6 +194,46 @@ Org `jbyfwshwyrzcuwmgalbm` (alex2hoop@icloud.com).
 
 ---
 
+## ✅ 2026-08-14 LATE NIGHT — full functionality audit, everything fixed same night
+
+A 6-agent audit swept server runtime, Mac node, the 838-test suite, sync+money
+plumbing, and mail/queue watchers, then a critic pass hunted for what the sweep
+missed. Every defect found was fixed and verified before 1 AM:
+
+- **Reminder-feed ordering bug** (found because the suite ran at 23:17): date-only
+  dues sorted *before* same-day timed dues, backwards from the system's own
+  end-of-day semantics. Fixed + pinned by a deterministic test (`e1f83f2`).
+- **Task-manager web lane** was still scraping DuckDuckGo HTML; now rides the shared
+  Tavily-first stack with the scrape as fallback (`8a7fe33`).
+- **Self-check scored three interchangeable search keys individually**, so a healthy
+  node read DEGRADED forever. Now one group check — the Mac node's first-ever
+  🟢 HEALTHY startup (`e9f2337`).
+- **Screen relay had been silently dead since RLS went live** — a Jul 29 process
+  still holding the revoked anon key, polling empty results every 1.5s. Restarted
+  onto the new key (Alex's kickstart).
+- **Legacy Supabase JWT keys disabled** (Alex's click) and *proven* dead: old key now
+  gets 401 "Legacy API keys are disabled." Every pre-rotation credential in the
+  system is now revoked.
+- **Mac node moved under launchd** (`com.secondbrain.chatapp`, KeepAlive) — survives
+  reboot/crash and re-reads `.env` on every restart, closing both the
+  "7-commits-stale for a week" and the "stale key in a long-lived process" modes.
+- Both nodes verified on the same final commit; UptimeRobot green throughout.
+
+## ☀️ Tomorrow morning (Aug 15) — the short list
+
+1. **Stripe** (top slot, ~15 min, due before 08-20 — Wave 1 opens 08-21 and a reply
+   that converts with no way to pay burns the lead).
+2. **Confirm the warmup nudge actually hit your phone** (~10:30). Today was streak
+   day 1; the daily `august:streak:warmup-daily` push has never fired before. If no
+   push arrived, tell Claude Code — that's a bug to chase, not your memory failing.
+3. **Warmup day 2**: two more sends from the studio account, spaced.
+4. **Outside-reader email + bin the two stale drafts** (one gmail visit).
+5. **Glance at the phone HUD** (10 seconds, still unverified on real glass).
+6. Mac disk is at 91% — ~8.9 GB of it is `~/Library/Caches`. Worth a cleanup pass
+   soon; deletions are yours, not CLARVIS's.
+
+---
+
 ## ✅ 2026-08-14 — the second app nobody knew was there (biggest infra win of the day)
 
 `money-clips-agent` was not a stray scheduled task. It was **an entire second Coolify

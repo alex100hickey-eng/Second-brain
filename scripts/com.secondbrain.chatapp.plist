@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Runs the local CLARVIS node (app.py on :5001) under launchd instead of a bare
+  `nohup python3 app.py`.
+
+  Why this exists (2026-08-14 audit): the chat node was the ONLY second-brain daemon
+  started by hand. A reboot, crash, or macOS update killed it until someone remembered
+  to restart it — and nothing alerted, because UptimeRobot watches the Hetzner box, not
+  this Mac. That is exactly how it ran 7 commits stale for a week in August. The other
+  three daemons (screenrelay, vaultsync, capabilitywatcher) already survive via
+  launchd; this brings the node itself up to the same standard.
+
+  KeepAlive also means every future restart re-reads ~/second-brain/.env at launch,
+  killing the stale-env-in-a-long-lived-process failure mode (see: the screen relay
+  polling with a revoked Supabase key for hours on 08-14).
+
+  Install:
+    cp scripts/com.secondbrain.chatapp.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.secondbrain.chatapp.plist
+  Restart (e.g. after a git pull):
+    launchctl kickstart -k gui/501/com.secondbrain.chatapp
+  Stop for good:
+    launchctl unload ~/Library/LaunchAgents/com.secondbrain.chatapp.plist
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.secondbrain.chatapp</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>source ~/.zshrc; cd ~/second-brain/second-brain-chat &amp;&amp; /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 app.py</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/alexhickey24/second-brain/second-brain-chat/local-app.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/alexhickey24/second-brain/second-brain-chat/local-app.log</string>
+</dict>
+</plist>
