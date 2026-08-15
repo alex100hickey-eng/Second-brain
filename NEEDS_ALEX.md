@@ -180,8 +180,11 @@ Org `jbyfwshwyrzcuwmgalbm` (alex2hoop@icloud.com).
    future: the 2FA switch does nothing in an automated browser because it opens a
    native `confirm()` dialog that gets auto-cancelled — the warning text was
    acknowledged explicitly before proceeding.
-10. **UptimeRobot** — if the Hetzner box dies, nothing tells you. Free plan pinging
-    `https://clarvis.178.156.209.40.sslip.io/health` is a 3-minute signup, zero code.
+10. ~~**UptimeRobot**~~ ✅ DONE 2026-08-14 — free account on the personal gmail,
+    monitoring `/api/version` every 5 min (NOT `/health`, which 302s to login and
+    would have false-alarmed). Test notification fired and both DOWN/UP emails
+    verified arriving at alex100hickey@gmail.com within seconds. If the box dies,
+    Alex knows inside ~6 minutes.
 11. **Look at the phone HUD.** The instrument bands shipped and are verified in the
     served assets, but nobody has looked at them on a real phone yet.
 12. **Optional: `claude setup-token`** → put `CLAUDE_CODE_OAUTH_TOKEN` in
