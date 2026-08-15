@@ -68,7 +68,7 @@ def search_web(query: str, max_results: int = DEFAULT_NUM_SOURCES) -> list:
     """Return [{title, url, snippet}]. Prefers a paid search API if a key is present
     (better recall), else falls back to keyless DuckDuckGo. Drop a key in `.env` to
     upgrade with zero code changes elsewhere."""
-    # --- Preferred: paid APIs (stubbed — wire when a key exists) ---
+    # --- Preferred: keyed APIs, first configured key wins ---
     if os.environ.get("TAVILY_API_KEY"):
         return _search_tavily(query, max_results)
     if os.environ.get("SERPER_API_KEY"):
@@ -97,7 +97,7 @@ def search_web(query: str, max_results: int = DEFAULT_NUM_SOURCES) -> list:
 
 
 def _search_tavily(query, max_results):
-    """TODO: wire when TAVILY_API_KEY is set. Shape kept for a clean drop-in."""
+    """Tavily search API — live since 2026-08-14 (free tier, 1000 credits/mo)."""
     import requests
     resp = requests.post(
         "https://api.tavily.com/search",
@@ -111,7 +111,7 @@ def _search_tavily(query, max_results):
 
 
 def _search_serper(query, max_results):
-    """TODO: wire when SERPER_API_KEY is set (google.serper.dev)."""
+    """google.serper.dev — implemented; activates when SERPER_API_KEY is set."""
     import requests
     resp = requests.post(
         "https://google.serper.dev/search",
@@ -124,7 +124,7 @@ def _search_serper(query, max_results):
 
 
 def _search_brave(query, max_results):
-    """TODO: wire when BRAVE_API_KEY is set (api.search.brave.com)."""
+    """api.search.brave.com — implemented; activates when BRAVE_API_KEY is set."""
     import requests
     resp = requests.get(
         "https://api.search.brave.com/res/v1/web/search",
