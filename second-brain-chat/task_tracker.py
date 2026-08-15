@@ -222,9 +222,13 @@ class TaskTracker:
         """Active tasks carrying a real due timestamp, soonest first — the reminder feed."""
         with self._lock:
             rows = self._conn.execute(
-                "SELECT * FROM tasks WHERE due != '' AND status NOT IN ('done','dropped') "
-                "ORDER BY due ASC").fetchall()
-        return [self._row_to_dict(r) for r in rows]
+                "SELECT * FROM tasks WHERE due != '' AND status NOT IN ('done','dropped')"
+            ).fetchall()
+        # Sort by the moment the due actually refers to, not the raw string: date-only
+        # means end of that day (due_moment's rule), so '2026-08-15' must sort AFTER
+        # '2026-08-15T01:17', which plain lexicographic ORDER BY got backwards.
+        return sorted((self._row_to_dict(r) for r in rows),
+                      key=lambda t: t["due"] if "T" in t["due"] else t["due"] + "T23:59")
 
     def set_priority(self, task_id, urgency: int = None, importance: int = None) -> dict | None:
         with self._lock:

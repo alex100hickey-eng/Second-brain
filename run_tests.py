@@ -2927,6 +2927,17 @@ def suite_reminders(app, live):
               "Couldn't read" in tr.create("Bad", due="4pm friday").get("error", ""))
         check("open_with_due returns only dued tasks, soonest first",
               [t["id"] for t in tr.open_with_due()] == [a["id"], b["id"]])
+
+        # Same-day collision: a task due BY tomorrow (date-only = end of day) vs one
+        # due AT 00:05 tomorrow. Lexicographic ORDER BY put the date-only string
+        # first; due_moment's end-of-day rule says the timed one is soonest. The
+        # original test above only tripped this when run between 22:00 and midnight
+        # (its +2h due crossing into the +1d date) — this pins it at every clock time.
+        early = tr.create("Early timed", due=due_day + "T00:05")
+        feed = [t["id"] for t in tr.open_with_due()]
+        check("date-only due sorts as end-of-day, after same-day timed dues",
+              feed.index(early["id"]) < feed.index(b["id"]))
+        tr.update_status(early["id"], "dropped", note="test scaffolding")
         due_moved = (real_now + _td(hours=3, minutes=30)).strftime("%Y-%m-%dT%H:%M")
         r = tr.set_due(a["id"], due_moved)
         check("set_due updates and logs history",
