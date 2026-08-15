@@ -180,10 +180,13 @@ OPTIONAL_ENV = {
     "ACCESS_CODE": "chat gate OPEN — anyone reaching the port can use the brain (set one!)",
     "FLASK_SECRET_KEY": "sessions won't survive a restart (a random key is used)",
     "GITHUB_TOKEN": "expansion scout uses unauthenticated GitHub (lower rate limit)",
-    "TAVILY_API_KEY": "web search falls back to keyless DuckDuckGo",
-    "SERPER_API_KEY": "web search falls back to keyless DuckDuckGo",
-    "BRAVE_API_KEY": "web search falls back to keyless DuckDuckGo",
 }
+
+# Web-search providers are ONE capability with three interchangeable keys — search_web()
+# uses the first one set. Listing them individually in OPTIONAL_ENV meant a node with a
+# working Tavily key still reported DEGRADED forever over the two providers it doesn't
+# need, and a permanently-yellow self-check teaches everyone to ignore yellow.
+SEARCH_ENV_GROUP = ["TAVILY_API_KEY", "SERPER_API_KEY", "BRAVE_API_KEY"]
 
 _LAST_STARTUP_REPORT = None
 
@@ -202,6 +205,14 @@ def _check_env() -> list:
         checks.append({"name": f"env: {var}", "ok": ok,
                        "status": "set" if present else "not set",
                        "detail": "" if present else consequence})
+    keyed = [v for v in SEARCH_ENV_GROUP if os.environ.get(v)]
+    if keyed:
+        checks.append({"name": "env: web search", "ok": True,
+                       "status": f"keyed ({keyed[0].split('_')[0].lower()})", "detail": ""})
+    else:
+        checks.append({"name": "env: web search", "ok": None, "status": "no key set",
+                       "detail": "falls back to keyless DuckDuckGo (set TAVILY_API_KEY "
+                                 "or SERPER_API_KEY or BRAVE_API_KEY)"})
     return checks
 
 

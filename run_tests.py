@@ -2556,6 +2556,30 @@ def suite_observability(app, live):
     finally:
         if saved_opt is not None:
             os.environ["TAVILY_API_KEY"] = saved_opt
+
+    # Web-search keys are ONE capability (search_web takes the first key set), so the
+    # self-check must score the group, not each provider: a node with only Tavily keyed
+    # used to read DEGRADED forever over Serper/Brave it will never use.
+    saved_keys = {v: os.environ.pop(v, None) for v in health.SEARCH_ENV_GROUP}
+    try:
+        os.environ["TAVILY_API_KEY"] = "tvly-test-not-real"
+        one = health.run_startup_check(supabase_client=None)
+        srch = [c for c in one["checks"] if c["name"] == "env: web search"]
+        check("one search key set → web search check is ✓ (not a degraded notice)",
+              len(srch) == 1 and srch[0]["ok"] is True and "tavily" in srch[0]["status"],
+              str(srch))
+        check("individual search providers no longer appear as separate env checks",
+              not any("SERPER" in c["name"] or "BRAVE" in c["name"] for c in one["checks"]))
+        os.environ.pop("TAVILY_API_KEY", None)
+        none = health.run_startup_check(supabase_client=None)
+        srch = [c for c in none["checks"] if c["name"] == "env: web search"]
+        check("zero search keys → web search is a notice naming the fallback",
+              len(srch) == 1 and srch[0]["ok"] is None and "DuckDuckGo" in srch[0]["detail"],
+              str(srch))
+    finally:
+        for var, val in saved_keys.items():
+            if val is not None:
+                os.environ[var] = val
     health.run_startup_check(supabase_client=None)  # restore a clean cached report for other suites
 
 
