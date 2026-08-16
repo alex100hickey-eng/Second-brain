@@ -1515,3 +1515,67 @@ no-ops turns "replace this field" into "insert mid-string", which is exactly how
 start command got corrupted to 187 chars on the first attempt. Set the selection with
 `setSelectionRange(0, value.length)` via JS, then type over it; typing fires the events
 Livewire needs, while a JS-set `.value` alone does not.
+
+## 2026-08-16 — Watcher: DNS blips retried, outages can no longer hide behind a fresh heartbeat
+
+Not a queue request — proactive hardening, Alex-approved ("add whatever you think we
+should") after the daily backstop noticed 21 `[Errno 8] nodename nor servname` queue-read
+failures in one day (~4% of polls, all transient home-network DNS).
+
+What shipped in `scripts/capability_watcher.py`:
+
+1. **Retry with backoff on the queue read** (`_read_with_retry`: 3 attempts, 2s/4s).
+   A blip that clears in seconds now never reaches the log — only failures that
+   survive all attempts surface. Should erase ~all of the daily noise.
+2. **Failure-streak file** `.capability_watcher_failstreak` (line 1 = consecutive
+   failed polls, line 2 = UTC start; deleted on the first successful read). The gap
+   it closes: the heartbeat stays FRESH during a network outage — the process is
+   running, it just can't see the queue — so before this, "Supabase unreachable for
+   a week" and "quiet queue" were indistinguishable to the backstop. At streak 10
+   (~20 min blind) the log gets a loud `!!` UNREACHABLE line (re-sounded every ~15
+   polls, not every poll), and recovery is logged.
+3. Backstop SKILL.md Step 0 now reads the failstreak file next to the heartbeat.
+
+Tests: extended `test_capability_watcher.py` (sections 8–9: retry absorbs blips
+silently / raises after exhaustion; streak persists across runs, clears on success,
+sirens exactly once at threshold, corrupt file self-heals) — 40/40, all 8 suites in
+second-brain-chat green. Live `--dry-run` against real Supabase: clean, no streak file.
+No launchd reload needed — the plist re-execs the script fresh every 120s.
+
+---
+
+## Training-app schedule integration — 2026-08-16
+
+**What:** Alex's training app (the Weekly Schedule PWA at
+luminous-madeleine-bf89fa.netlify.app — 30-min schedule grid + workouts +
+routines + warmup + library) is now CLARVIS's schedule source, replacing Google
+Calendar entirely. CLARVIS itself is the app's sync backend: the app's built-in
+Sync feature (Firebase-REST wire shape) points at
+`/training-sync/<token>/trainingDashboard.json`, so the app needed zero changes.
+
+**New:** `training_schedule.py` (pure snapshot parser — slot/column math incl.
+past-midnight spill), `training_sync.py` (Supabase-backed snapshot store,
+update-in-place in "Agent Outputs" under `training_dashboard`; capability-URL
+token = TRAINING_SYNC_TOKEN or HMAC(ACCESS_CODE); tools get_training_schedule /
+get_workout_info / get_workout_library / get_training_sync_url), the ungated
+CORS-pinned endpoint in app.py, and `training-app/` (recovered backup of the
+PWA source, which previously existed only as the Netlify deploy).
+
+**Rewired:** get_today_events() computes from the grid keeping the exact
+{title,start,end,all_day} + None-vs-[] sentinel contract, so the RIGHT NOW
+digest, /api/dashboard, and the Today panel worked unchanged. New-data pushes
+bust the calendar/situational/dashboard caches, so edits are visible in-turn.
+
+**Removed:** all four GOOGLECALENDAR_* Composio tools, propose_calendar_event
+(+ its approval execution path — stale pending rows now fail with a clear
+message), intake scan_calendar (stub explains the retirement), and every
+calendar mention in the system prompt/UI text. morning_brief_agent.py repointed
+to the snapshot.
+
+**Tests:** new `training` suite (43 checks: parser, storage w/ fake Supabase,
+endpoint incl. auth-gate/CORS/oversize, wiring, tools). Full suite 895/0;
+test_intake.py 48/48. The suite caught one real bug pre-ship (naive saved_at
+crash in the staleness note).
+
+**On Alex:** paste the sync URL (ask CLARVIS for it) into the app on each
+device — see NEEDS_ALEX.

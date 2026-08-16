@@ -15,6 +15,11 @@ Covers:
   3. lock — a live PID blocks a second build; a stale/dead one self-heals
   4. queue-failure — an exception from Supabase is logged and exits non-zero
      rather than raising out of launchd
+  8. read retry — a transient DNS blip is absorbed silently (retry with backoff);
+     only failures that survive all attempts surface
+  9. failure streak — consecutive failed polls persist a count; a success clears
+     it; hitting the alert threshold logs a LOUD line, because the heartbeat
+     stays fresh through a network outage and would otherwise hide it
 """
 
 import os
@@ -38,6 +43,7 @@ def _sandbox():
     d = tempfile.mkdtemp()
     w.HEARTBEAT = os.path.join(d, "hb")
     w.WATCHER_LOCK = os.path.join(d, "lock")
+    w.FAILSTREAK = os.path.join(d, "failstreak")
     w.LOG = os.path.join(d, "log")
     return d
 
@@ -134,7 +140,7 @@ def test_single_source_of_truth():
     check("spawn prompt points at the task SKILL.md rather than restating rules",
           "SKILL" in src and "follow it exactly" in src)
     check("open-request logic reuses capability_escalation, not a reimplementation",
-          "pending_requests()" in src and "capability_request" not in src)
+          "esc.pending_requests" in src and "capability_request" not in src)
 
 
 def test_auth_failure_is_loud():
@@ -194,6 +200,94 @@ def test_token_reaches_the_child():
           "env=build_env()" in src)
 
 
+def test_read_retry():
+    """[Errno 8] DNS blips clear in seconds — one poll should absorb them."""
+    print("\n=== 8. transient read failures are retried ===")
+    _sandbox()
+    naps = []
+    orig_sleep = w.time.sleep
+    w.time.sleep = naps.append
+    try:
+        calls = {"n": 0}
+
+        def flaky():
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise OSError(8, "nodename nor servname provided, or not known")
+            return [{"slug": "a", "status": "pending"}]
+
+        got = w._read_with_retry(flaky)
+        check("two blips then success → result returned, nothing raised",
+              got == [{"slug": "a", "status": "pending"}] and calls["n"] == 3)
+        check("backoff grows between attempts", naps == [w.READ_BACKOFF_S,
+                                                         w.READ_BACKOFF_S * 2])
+        check("a blip that clears is NOT logged (log stays readable)",
+              not os.path.exists(w.LOG))
+
+        naps.clear()
+        dead_calls = {"n": 0}
+
+        def dead():
+            dead_calls["n"] += 1
+            raise OSError(8, "nodename nor servname provided, or not known")
+
+        try:
+            w._read_with_retry(dead)
+            raised = False
+        except OSError:
+            raised = True
+        check("a real outage still raises after all attempts",
+              raised and dead_calls["n"] == w.READ_ATTEMPTS)
+        check("no sleep after the final attempt (fail fast once decided)",
+              len(naps) == w.READ_ATTEMPTS - 1)
+    finally:
+        w.time.sleep = orig_sleep
+
+
+def test_fail_streak():
+    """The heartbeat stays fresh through a network outage, so the streak file is
+    the ONLY signal separating 'queue quiet' from 'queue unreachable'."""
+    print("\n=== 9. failure streak: blips stay quiet, outages get loud ===")
+    _sandbox()
+    boom = lambda: (_ for _ in ()).throw(OSError(8, "nodename nor servname"))
+
+    _run(boom)
+    _run(boom)
+    check("consecutive failures persist a growing count across runs",
+          w._read_fail_streak() == 2)
+    check("streak file records when the outage started",
+          len(open(w.FAILSTREAK).read().splitlines()) == 2)
+    logged = open(w.LOG).read()
+    check("below the threshold: logged, but no siren", "!!" not in logged
+          and "streak 2" in logged)
+
+    _run([])
+    check("one successful poll clears the streak",
+          not os.path.exists(w.FAILSTREAK) and w._read_fail_streak() == 0)
+
+    _sandbox()
+    for _ in range(w.FAIL_STREAK_ALERT):
+        _run(boom)
+    logged = open(w.LOG).read()
+    check("threshold crossed → loud UNREACHABLE line",
+          "!!" in logged and "UNREACHABLE" in logged)
+    check("the loud line explains why nothing else caught it",
+          "heartbeat stays fresh" in logged)
+    check("siren fires once at the threshold, not every poll after",
+          logged.count("!!") == 1)
+
+    _run([])
+    check("recovery after an alert-level outage is logged",
+          "recovered after" in open(w.LOG).read())
+
+    _sandbox()
+    with open(w.FAILSTREAK, "w") as fh:
+        fh.write("garbage\n")
+    _run(boom)
+    check("corrupt streak file self-heals instead of crashing the watcher",
+          w._read_fail_streak() == 1)
+
+
 if __name__ == "__main__":
     test_fire_rules()
     test_heartbeat_always()
@@ -202,6 +296,8 @@ if __name__ == "__main__":
     test_single_source_of_truth()
     test_auth_failure_is_loud()
     test_token_reaches_the_child()
+    test_read_retry()
+    test_fail_streak()
     total, passed = len(_results), sum(_results)
     print("\n" + "=" * 48)
     print(f"{passed}/{total} checks passed")

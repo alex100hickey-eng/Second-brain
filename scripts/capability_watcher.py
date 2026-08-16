@@ -22,6 +22,16 @@ HEARTBEAT
     a quiet queue — same class of bug as the mail-scan summaries this queue's first
     request was about. The daily backstop reads that file and reports a stale one.
 
+NETWORK BLIPS vs OUTAGES
+    Home-network DNS drops a Supabase read a few times a day (Errno 8). Each poll
+    therefore retries the read a couple of times with backoff — a blip that clears
+    in seconds never even makes the log. Failures that survive the retries bump
+    .capability_watcher_failstreak (count + when it started); a poll that succeeds
+    deletes it. The distinction matters because the heartbeat stays FRESH through a
+    network outage — the process is running fine, it just can't see the queue — so
+    the streak file is the only signal that separates "queue quiet" from "queue
+    unreachable". The daily backstop checks it alongside the heartbeat.
+
 Install (launchd, every 2 min):  scripts/install_capability_watcher.sh
 Manual run:                      python3 scripts/capability_watcher.py [--dry-run]
 """
@@ -29,6 +39,7 @@ Manual run:                      python3 scripts/capability_watcher.py [--dry-ru
 import os
 import subprocess
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 
 HOME = os.path.expanduser("~")
@@ -40,10 +51,14 @@ CLAUDE_BIN = os.path.join(HOME, ".local", "bin", "claude")
 
 HEARTBEAT = os.path.join(ROOT, ".capability_watcher_heartbeat")
 WATCHER_LOCK = os.path.join(ROOT, ".capability_watcher.lock")   # holds spawned PID
+FAILSTREAK = os.path.join(ROOT, ".capability_watcher_failstreak")
 LOG = os.path.join(ROOT, "scripts", "capability_watcher.log")
 
 BUILD_TIMEOUT_S = 45 * 60      # a stuck build must not wedge the watcher forever
 LOCK_STALE_S = 2 * 60 * 60     # matches the processor's own lock policy
+READ_ATTEMPTS = 3              # queue reads per poll; home-DNS blips clear in seconds
+READ_BACKOFF_S = 2             # sleep 2s then 4s between attempts
+FAIL_STREAK_ALERT = 10         # 10 failed polls ≈ 20 min blind = outage, not blips
 
 # The CLI exits 0 when it can't authenticate, so rc is useless for detecting it.
 # Between Aug 9-14 2026 that turned five days of dead builds into five days of
@@ -110,6 +125,65 @@ def another_run_active() -> bool:
     return False
 
 
+def _read_with_retry(read):
+    """Call read() up to READ_ATTEMPTS times with growing backoff.
+
+    Home-network DNS drops a handful of reads a day ([Errno 8]); those clear in
+    seconds, so one poll absorbing them beats a log line per blip. A config error
+    (bad key, missing table) fails all attempts identically and still surfaces —
+    the retries only cost ~6s once per poll, and only on the failure path."""
+    for attempt in range(1, READ_ATTEMPTS + 1):
+        try:
+            return read()
+        except Exception:
+            if attempt == READ_ATTEMPTS:
+                raise
+            time.sleep(READ_BACKOFF_S * attempt)
+
+
+def _read_fail_streak() -> int:
+    try:
+        with open(FAILSTREAK) as fh:
+            return int(fh.readline().strip() or 0)
+    except (OSError, ValueError):
+        return 0
+
+
+def _bump_fail_streak() -> int:
+    """Consecutive polls whose queue read failed even after retries, persisted
+    across runs (line 1 = count, line 2 = UTC start). The heartbeat stays fresh
+    through a network outage — the process IS running — so without this file a
+    week of DNS failure would look exactly like a quiet queue to the backstop."""
+    since = None
+    try:
+        with open(FAILSTREAK) as fh:
+            lines = fh.read().splitlines()
+        streak = int((lines[0] if lines else "0").strip() or 0)
+        since = lines[1].strip() if len(lines) > 1 else None
+    except (OSError, ValueError):
+        streak = 0
+    streak += 1
+    since = since or datetime.now(timezone.utc).isoformat()
+    try:
+        with open(FAILSTREAK, "w") as fh:
+            fh.write(f"{streak}\n{since}\n")
+    except OSError:
+        pass
+    return streak
+
+
+def _clear_fail_streak() -> None:
+    streak = _read_fail_streak()
+    if not streak:
+        return
+    if streak >= FAIL_STREAK_ALERT:
+        log(f"queue reads recovered after {streak} consecutive failed polls")
+    try:
+        os.remove(FAILSTREAK)
+    except OSError:
+        pass
+
+
 def pending() -> list:
     """Open requests via the SAME code path the processor uses — no second
     implementation of 'what counts as open' to drift out of sync."""
@@ -124,7 +198,7 @@ def pending() -> list:
     if not (url and key):
         raise RuntimeError("SUPABASE_URL / SUPABASE_KEY not found in .env")
     esc.init(create_client(url, key))
-    return esc.pending_requests()
+    return _read_with_retry(esc.pending_requests)
 
 
 def build_env() -> dict:
@@ -211,8 +285,20 @@ def main() -> int:
     try:
         reqs = pending()
     except Exception as e:
-        log(f"queue check failed: {str(e)[:300]}")
+        streak = _bump_fail_streak()
+        # Loud line at the threshold, then a reminder every ~30 min — an outage
+        # deserves a siren, not 30 identical lines an hour.
+        if streak == FAIL_STREAK_ALERT or (streak > FAIL_STREAK_ALERT
+                                           and streak % 15 == 0):
+            log(f"!! {streak} consecutive failed queue checks (~{streak * 2} min "
+                f"blind, each retried {READ_ATTEMPTS}x) — the queue is UNREACHABLE, "
+                f"not quiet. The heartbeat stays fresh through this, so nothing "
+                f"else will flag it. Latest: {str(e)[:200]}")
+        else:
+            log(f"queue check failed after {READ_ATTEMPTS} attempts "
+                f"(streak {streak}): {str(e)[:300]}")
         return 1
+    _clear_fail_streak()
     # Fire only on genuinely NEW requests. Something left in_progress means a build
     # died mid-flight; re-spawning every 2 minutes would just restart it forever, so
     # the daily backstop owns that case instead.
