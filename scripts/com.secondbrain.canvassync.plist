@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Pulls Canvas deadlines into School/assignments.csv every 30 minutes via the
+  personal ICS feed (see canvas_sync.py for why ICS and not the API: CWRU disables
+  student API tokens). New/updated rows then reach GitHub and the server through the
+  existing 10-minute vault sync, and the school brief + due-date nudges pick them up
+  with no further wiring.
+
+  Install:
+    cp scripts/com.secondbrain.canvassync.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.secondbrain.canvassync.plist
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.secondbrain.canvassync</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>cd ~/second-brain &amp;&amp; set -a &amp;&amp; source ./.env &amp;&amp; set +a &amp;&amp; cd second-brain-chat &amp;&amp; /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 canvas_sync.py --sync</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StartInterval</key>
+    <integer>1800</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/alexhickey24/second-brain/scripts/canvas_sync.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/alexhickey24/second-brain/scripts/canvas_sync.log</string>
+</dict>
+</plist>

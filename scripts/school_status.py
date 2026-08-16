@@ -53,10 +53,13 @@ def load(name):
 
 
 def date(s):
-    """Parse the date formats a human actually types."""
+    """Parse the date formats a human actually types — plus the timed ISO form
+    canvas_sync writes ('2026-08-27T23:30'), which counts as its calendar day."""
     s = (s or "").strip()
     if not s:
         return None
+    if "T" in s:
+        s = s.split("T", 1)[0]
     for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y", "%b %d, %Y", "%B %d, %Y",
                 "%b %d %Y", "%m-%d-%Y", "%d %b %Y"):
         try:

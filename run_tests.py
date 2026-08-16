@@ -3089,6 +3089,112 @@ def suite_escalation(app, live):
         app.claude.messages.create = saved_create
 
 
+def suite_canvas(app, live):
+    section("canvas sync (ICS feed → School/assignments.csv)")
+    import canvas_sync as C
+    from zoneinfo import ZoneInfo
+    ET = ZoneInfo("America/New_York")
+
+    # Fixture mirrors what canvas.case.edu actually emits: UTC datetimes, date-only
+    # events, folded long lines, the "[ECON 103]" course suffix, escaped commas, and
+    # one personal (course-less) event.
+    ICS = "\r\n".join([
+        "BEGIN:VCALENDAR",
+        "BEGIN:VEVENT",
+        "UID:event-quiz-1",
+        "DTSTART:20260828T033000Z",       # 11:30 PM Aug 27 Eastern
+        "SUMMARY:✅ Syllabus Quiz  [ECON 103]",
+        "URL:https://canvas.case.edu/courses/13024/assignments/1",
+        "END:VEVENT",
+        "BEGIN:VEVENT",
+        "UID:event-reading-1",
+        "DTSTART;VALUE=DATE:20260914",
+        "SUMMARY:Reading 1: National Income\\, GDP",
+        "  and friends [ECON 103]",        # folded continuation: fold-space + real space
+        "END:VEVENT",
+        "BEGIN:VEVENT",
+        "UID:event-personal",
+        "DTSTART;VALUE=DATE:20260901",
+        "SUMMARY:Dorm meeting",            # no [COURSE] -> personal, never synced
+        "END:VEVENT",
+        "END:VCALENDAR",
+    ])
+
+    evs = C.parse_events(ICS, tz=ET)
+    check("all events with dates parse", len(evs) == 3, str(len(evs)))
+    quiz = next(e for e in evs if e["uid"] == "event-quiz-1")
+    check("UTC deadline lands on the correct Eastern day (03:30Z -> 11:30 PM prior)",
+          quiz["due"] == "2026-08-27T23:30", quiz["due"])
+    check("course code extracted and de-spaced", quiz["course"] == "ECON103")
+    check("course suffix stripped from title", quiz["title"] == "✅ Syllabus Quiz")
+    reading = next(e for e in evs if e["uid"] == "event-reading-1")
+    check("folded lines unfold and escaped commas unescape",
+          reading["title"] == "Reading 1: National Income, GDP and friends",
+          reading["title"])
+    check("date-only events stay date-only", reading["due"] == "2026-09-14"
+          and reading["all_day"])
+    check("type guesses: quiz/reading",
+          C._guess_type(quiz["title"]) == "quiz"
+          and C._guess_type(reading["title"]) == "reading")
+
+    # ---- sync mechanics against a scratch vault --------------------------------
+    import csv as _csv
+    import tempfile
+    vault = tempfile.mkdtemp(prefix="sbtest_canvas_")
+    os.makedirs(os.path.join(vault, "School"))
+    apath = os.path.join(vault, "School", "assignments.csv")
+    fields = ("course,title,type,due_date,weight_pct,est_hours,actual_hours,"
+              "status,topic,source,submitted_date,grade,notes").split(",")
+    with open(apath, "w", newline="") as f:
+        w = _csv.DictWriter(f, fieldnames=fields)
+        w.writeheader()
+        w.writerow({**{k: "" for k in fields}, "course": "MATH120",
+                    "title": "Hand-entered pset", "due_date": "2026-09-01",
+                    "status": "open", "source": "syllabus"})
+
+    r1 = C.sync(vault_dir=vault, ics_text=ICS, tz=ET)
+    check("first sync adds only course events (personal skipped)",
+          r1["added"] == 2 and r1["skipped_no_course"] == 1, str(r1))
+    r2 = C.sync(vault_dir=vault, ics_text=ICS, tz=ET)
+    check("second sync is a no-op (idempotent by UID)",
+          r2["added"] == 0 and r2["unchanged"] == 2, str(r2))
+
+    moved = ICS.replace("20260828T033000Z", "20260904T033000Z")
+    r3 = C.sync(vault_dir=vault, ics_text=moved, tz=ET)
+    with open(apath, newline="") as f:
+        rows = list(_csv.DictReader(f))
+    quiz_row = next(r for r in rows if r["source"] == "canvas:event-quiz-1")
+    human_row = next(r for r in rows if r["source"] == "syllabus")
+    check("a rescheduled deadline updates the canvas row",
+          r3["updated"] == 1 and quiz_row["due_date"] == "2026-09-03T23:30",
+          quiz_row["due_date"])
+    check("human-entered rows are never touched",
+          human_row["title"] == "Hand-entered pset"
+          and human_row["due_date"] == "2026-09-01")
+
+    saved_url = os.environ.pop("CANVAS_ICS_URL", None)
+    try:
+        r4 = C.sync(vault_dir=vault)
+        check("unset CANVAS_ICS_URL fails soft with a named error",
+              r4["error"] and r4["added"] == 0, str(r4))
+    finally:
+        if saved_url is not None:
+            os.environ["CANVAS_ICS_URL"] = saved_url
+
+    # The school brief must treat canvas's timed dues as their calendar day —
+    # that integration broke silently on first contact (timed rows were invisible).
+    import importlib.util as _ilu
+    spec = _ilu.spec_from_file_location(
+        "school_status",
+        os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                     "scripts", "school_status.py"))
+    ss = _ilu.module_from_spec(spec)
+    spec.loader.exec_module(ss)
+    check("school brief parses canvas's timed due format as its calendar day",
+          str(ss.date("2026-08-27T23:30")) == "2026-08-27")
+    check("school brief still parses human formats", str(ss.date("9/1/2026")) == "2026-09-01")
+
+
 def suite_weather(app, live):
     section("weather (format / cache / config gating)")
     import weather as W
@@ -4988,6 +5094,7 @@ SUITES = {
     "escalation": suite_escalation,
     "weather": suite_weather,
     "egress": suite_egress,
+    "canvas": suite_canvas,
 }
 
 
