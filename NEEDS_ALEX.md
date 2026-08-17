@@ -114,6 +114,20 @@ day. Overrule any of this by telling CLARVIS; the pre-decision snapshot is
 
 Grouped by where you'd be when you do them, so each group is one sitting.
 
+### 🆕 2026-08-17 — put CLARVIS on your home screen (~5 min, phone only)
+
+Two widgets are ready: a schedule widget (what you're doing now + what's next,
+straight from your training grid) and a TALK button that opens the mic.
+
+1. Install the free **Scriptable** app from the App Store.
+2. In the CLARVIS **web chat**, ask: **"give me my widget setup"** — it replies
+   with two scripts and the exact steps. Paste each into Scriptable, add a
+   LARGE widget (schedule) and a MEDIUM one (talk) to your home screen, point
+   each at its script. The optional "Hey Siri, talk to CLARVIS" shortcut is in
+   the same reply.
+
+Same node rule as the sync URL: ask in the web chat, not the Mac.
+
 ### 🆕 2026-08-16 — connect your training app to CLARVIS (~1 min per device)
 
 CLARVIS is now the sync backend for your training app (the Weekly Schedule PWA)
