@@ -114,6 +114,24 @@ day. Overrule any of this by telling CLARVIS; the pre-decision snapshot is
 
 Grouped by where you'd be when you do them, so each group is one sitting.
 
+### 🆕 2026-08-16 — connect your training app to CLARVIS (~1 min per device)
+
+CLARVIS is now the sync backend for your training app (the Weekly Schedule PWA)
+— your real 30-minute schedule replaces the dead Google Calendar everywhere
+(RIGHT NOW block, Today panel, schedule questions, workouts). One step, on each
+device that uses the app:
+
+1. Ask CLARVIS in chat: **"give me my training sync URL"** and copy it.
+2. Open the training app → tap **Sync** → paste the URL into the Database URL
+   field → **Connect**. That device's data pushes up immediately; every edit
+   after that syncs within ~1 second.
+
+Notes: if you ever rotate the access code, the URL changes — ask CLARVIS for it
+again and re-paste. Optional hardening: set a `TRAINING_SYNC_TOKEN` env var in
+Coolify to pin the URL so access-code rotations don't move it. If you had a
+Firebase database connected in the app, the CLARVIS URL simply replaces it
+(your data migrates on first connect; the Firebase copy can be deleted).
+
 ### In the Coolify dashboard (one visit, ~5 min)
 
 App resource →

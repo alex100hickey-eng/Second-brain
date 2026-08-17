@@ -48,7 +48,7 @@ from data_boundary import wrap_untrusted
 # Injected by init()
 claude = None
 supabase = None
-dispatch_tool = None   # app.handle_tool_call — used for GMAIL_*/GOOGLECALENDAR_* slugs
+dispatch_tool = None   # app.handle_tool_call — used for GMAIL_* slugs
 task_tracker = None    # the TaskTracker instance
 EXTRACT_MODEL = "claude-sonnet-5"
 
@@ -511,60 +511,13 @@ def _ingest_gmail_messages(data, source_tag: str, label: str, cap: int) -> str:
 
 
 def scan_calendar(days_ahead: int = 14, cap: int = 40) -> str:
-    """New calendar events/invites since the last scan become intake events.
-    Deterministic (no extraction) — a calendar entry is already structured."""
-    try:
-        raw = dispatch_tool("GOOGLECALENDAR_EVENTS_LIST", {
-            "calendarId": "primary", "maxResults": cap,
-            "timeMin": datetime.now(timezone.utc).isoformat(),
-            "singleEvents": True, "orderBy": "startTime",
-        })
-        data = json.loads(raw) if isinstance(raw, str) else raw
-    except Exception as e:
-        return f"Calendar scan failed: {e}"
-    events = _dig_list(data, ("items", "events", "results"))
-    # FIRST run = silent baseline: everything already on the calendar is something
-    # Alex already knows about — remember the ids, create no events. Only invites/
-    # changes that appear AFTER the baseline become intake.
-    if not _seen("calendar"):
-        refs = [str(ev.get("id") or ev.get("eventId")) for ev in events[:cap]
-                if isinstance(ev, dict) and (ev.get("id") or ev.get("eventId"))]
-        _remember_seen("calendar", refs)
-        return (f"Calendar baselined: {len(refs)} existing upcoming event(s) noted — "
-                f"only NEW invites/changes will become intake from now on.")
-    counts = new_tally()
-    for ev in events[:cap]:
-        if not isinstance(ev, dict):
-            tally_skipped(counts)
-            continue
-        ref = ev.get("id") or ev.get("eventId")
-        if not ref:
-            tally_skipped(counts)
-            continue
-        title = _first(ev, ("summary", "title")) or "(untitled)"
-        start = ev.get("start")
-        if isinstance(start, dict):
-            start = start.get("dateTime") or start.get("date") or ""
-        organizer = ev.get("organizer")
-        if isinstance(organizer, dict):
-            organizer = organizer.get("email") or organizer.get("displayName") or ""
-        res = record_raw(
-            "calendar", ref, str(organizer or "calendar"), str(start or ""),
-            f"{title} @ {start}",
-            items=[{"type": "event", "text": f"{title} — {start}",
-                    "due": str(start or "") or None}],
-        )
-        tally_result(counts, res)
-    if not counts["looked_at"]:
-        return ("Calendar scan: nothing to look at — 0 upcoming events in the window "
-                "searched. That's an empty calendar, not a filtered one.")
-    # A calendar event has explicit items, so it's never noise-filtered by the
-    # extractor — a "noise" verdict here can only mean the near-duplicate merge
-    # recognized it, which for Alex reads as "already known", same as a dup ref.
-    already = counts["already"] + counts["noise"]
-    extra = (f", {already} already known from an earlier scan" if already else "")
-    return (f"Calendar scan: looked at {counts['looked_at']} upcoming event(s) — "
-            f"{counts['new']} new/changed ingested{extra}.")
+    """RETIRED 2026-08-16: Google Calendar is gone — Alex's real schedule syncs
+    in from his training app (training_sync.py), which he alone edits, so there
+    are no external invites/changes to detect. Kept as a stub because old
+    protocol text or pending actions may still reference the scan by name."""
+    return ("Calendar intake was retired: Alex's schedule now comes from his "
+            "training app (see get_training_schedule) and only he edits it, so "
+            "there is nothing external to scan.")
 
 
 def _dig_list(data, keys) -> list:
@@ -621,7 +574,7 @@ TOOL_SCHEMAS = [
     {
         "name": "check_intake",
         "description": "Show the intake triage list — things that arrived in Alex's life "
-                       "(texts, email, calendar, pasted items) with extracted obligations, "
+                       "(texts, email, pasted items) with extracted obligations, "
                        "waiting to be accepted into tasks or dismissed. Use when Alex asks "
                        "'what came in', 'what did I miss', or wants to triage.",
         "input_schema": {"type": "object", "properties": {
@@ -662,13 +615,6 @@ TOOL_SCHEMAS = [
         "input_schema": {"type": "object", "properties": {
             "newer_than": {"type": "string", "description": "Gmail age filter, default 1d (e.g. 2d, 12h)."}}},
     },
-    {
-        "name": "scan_calendar_intake",
-        "description": "Ingest new/changed upcoming Google Calendar events into the intake "
-                       "stream (read-only, deterministic).",
-        "input_schema": {"type": "object", "properties": {
-            "days_ahead": {"type": "integer", "description": "Horizon, default 14."}}},
-    },
 ]
 
 TOOL_STATUS_LABELS = {
@@ -677,5 +623,4 @@ TOOL_STATUS_LABELS = {
     "dismiss_intake": "Clearing that from intake…",
     "capture_intake": "Filing that into intake…",
     "scan_email_intake": "Sweeping your inbox for obligations…",
-    "scan_calendar_intake": "Checking the calendar for new events…",
 }

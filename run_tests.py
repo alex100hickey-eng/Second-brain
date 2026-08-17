@@ -5041,6 +5041,304 @@ def suite_egress(app, live):
           "/api/pending-count" in tmpl and "fetch('/api/dashboard')" not in tmpl)
 
 
+def suite_training(app, live):
+    section("training (app-sync endpoint + grid parsing + today's-schedule wiring)")
+    import json as _json
+    import training_schedule as ts
+    import training_sync as tsync
+    from datetime import datetime as _dt, date as _date, timedelta as _td
+
+    # ---- pure parser: fixed dates are fine here (functions take explicit dates) ----
+    grid = {"8|1": "Class", "9|1": "Class", "10|1": "Lift",
+            "44|0": "Sleep", "45|0": "Sleep", "0|2": "Wake"}
+    snap = {"rev": "r1", "keys": {
+        "weeklySchedule_v1": _json.dumps(grid),
+        "weeklyWorkouts_v1": _json.dumps({"1": "Lower body"}),
+        "dailyRoutines_v1": _json.dumps({"morning": "Sunlight", "night": "Stretch"}),
+        "warmupRoutine_v1": _json.dumps("Mikans x10"),
+        "workoutLibrary_v2": _json.dumps({"0": {"sel": 0, "pages": [
+            {"title": "Day 1", "body": "Squats"},
+            {"title": "Log", "type": "table", "columns": ["Date", "Threes"],
+             "rows": [["8/1", "40"]]}]}}),
+    }}
+    p = ts.parse_snapshot(snap)
+    mon = _date(2026, 8, 17)  # a Monday; explicit-date functions can't rot
+    evs = ts.events_for_date(p, mon)
+    check("contiguous identical cells merge into one block",
+          any(e["title"] == "Class" and e["end"] - e["start"] == _td(hours=1) for e in evs),
+          str(evs))
+    check("distinct neighbors stay separate blocks",
+          any(e["title"] == "Lift" and e["end"] - e["start"] == _td(minutes=30) for e in evs))
+    check("midnight spill: Sunday-column slots 44-45 land on Monday 1-2am",
+          any(e["title"] == "Sleep" and e["start"].hour == 1 and e["end"].hour == 2
+              and e["start"].date() == mon for e in evs))
+    check("events sorted by start", [e["start"] for e in evs] == sorted(e["start"] for e in evs))
+    check("3am slot 0 belongs to its own column's date",
+          any(e["title"] == "Wake" and e["start"].hour == 3
+              for e in ts.events_for_date(p, mon + _td(days=1))))
+    check("workout day mapping is Sunday=0", ts.workout_for_date(p, mon) == "Lower body")
+    check("library table page flattens to tab-joined text",
+          "Date\tThrees" in p["library"]["Lifts"][1]["body"])
+    check("malformed schedule JSON fails soft to empty grid",
+          ts.parse_snapshot({"rev": "x", "keys": {"weeklySchedule_v1": "{bad"}})["grid"] == {})
+    check("week summary renders days in Sun..Sat order",
+          ts.schedule_summary(p).find("Sunday:") < ts.schedule_summary(p).find("Monday:"))
+
+    # night blocks belong to two calendar days; the lines must say which night
+    night = {f"{s}|{c}": "Sleep" for c in range(7) for s in range(40, 48)}
+    pn = ts.parse_snapshot({"rev": "n", "keys": {"weeklySchedule_v1": _json.dumps(night)}})
+    lines = [ts.format_block(e, mon) for e in ts.events_for_date(pn, mon)]
+    check("a straddling night block renders two distinguishable lines, not a dup",
+          len(lines) == 2 and len(set(lines)) == 2
+          and "from Sun night" in lines[0] and "into Tue" in lines[1], str(lines))
+    check("a block inside the day carries no qualifier",
+          ts.format_block(ts.events_for_date(p, mon)[1], mon) == "7:00am–8:00am  Class",
+          ts.format_block(ts.events_for_date(p, mon)[1], mon))
+
+    # ---- sync module storage against a fake Supabase (never the real one) ----
+    class _FakeSB:
+        def __init__(self):
+            self.rows, self.next_id, self.fail_next, self.calls = {}, 100, False, []
+        def table(self, name):
+            fake = self
+            class _Q:
+                def __init__(self): self._op = None; self._payload = None; self._id = None
+                def select(self, cols): self._op = "select"; return self
+                def eq(self, col, val): self._id = val if col == "id" else self._id; return self
+                def order(self, *a, **k): return self
+                def limit(self, n): return self
+                def insert(self, payload): self._op = "insert"; self._payload = payload; return self
+                def update(self, payload): self._op = "update"; self._payload = payload; return self
+                def execute(self):
+                    import types as _types
+                    fake.calls.append(self._op)
+                    if fake.fail_next:
+                        fake.fail_next = False
+                        raise RuntimeError("supabase down (simulated)")
+                    if self._op == "insert":
+                        rid = fake.next_id; fake.next_id += 1
+                        fake.rows[rid] = self._payload["output_text"]
+                        return _types.SimpleNamespace(data=[{"id": rid}])
+                    if self._op == "update":
+                        fake.rows[self._id] = self._payload["output_text"]
+                        return _types.SimpleNamespace(data=[])
+                    data = [{"id": rid, "output_text": txt}
+                            for rid, txt in sorted(fake.rows.items(), reverse=True)][:1]
+                    return _types.SimpleNamespace(data=data)
+            return _Q()
+
+    saved_sb = tsync._supabase
+    saved_state = dict(tsync._state)
+    saved_cb = tsync._on_update
+    saved_env = os.environ.get("TRAINING_SYNC_TOKEN")
+    saved_cal = dict(app._calendar_cache)
+    saved_gte = app.get_today_events
+    try:
+        # get_today_events is the ONLY path from app's background workers into
+        # training_sync (situational rebuilds, dashboard snapshots). Those threads
+        # would otherwise poll the fake store mid-test and consume the retry
+        # windows these checks assert on — the 2026-08-01 leak, again. Arguments
+        # are inverted deliberately: this thread runs the real function, every
+        # other thread gets an inert stub.
+        app.get_today_events = my_thread_only(real=lambda: [], fake=saved_gte)
+        fake = _FakeSB()
+        tsync._supabase = fake
+        tsync._state.update({"loaded": False, "row_id": None, "snapshot": None,
+                             "saved_at": None, "dirty": False,
+                             "next_hydrate_at": 0.0, "next_persist_at": 0.0})
+        os.environ["TRAINING_SYNC_TOKEN"] = "testtok-training-suite"
+
+        check("empty store reads as None (app has never synced)", tsync.get_snapshot() is None)
+        check("validate rejects a non-object", tsync.validate_snapshot([1]) != "")
+        check("validate rejects missing rev", tsync.validate_snapshot({"keys": {}}) != "")
+        check("validate rejects non-string key values",
+              tsync.validate_snapshot({"rev": "r", "keys": {"a": 7}}) != "")
+        check("validate accepts the real shape",
+              tsync.validate_snapshot(snap) == "")
+
+        err = tsync.store_snapshot(snap)
+        check("first store inserts and remembers the row id",
+              err == "" and tsync._state["row_id"] == 100 and "insert" in fake.calls)
+        err2 = tsync.store_snapshot(dict(snap, rev="r2"))
+        check("second store updates in place (table never grows)",
+              err2 == "" and len(fake.rows) == 1 and fake.calls.count("insert") == 1)
+        check("get_snapshot returns the latest push", tsync.get_snapshot()["rev"] == "r2")
+
+        fake.fail_next = True
+        err3 = tsync.store_snapshot(dict(snap, rev="r3"))
+        check("persist failure keeps data in memory and reports the error",
+              err3 != "" and tsync._state["dirty"] and tsync.get_snapshot()["rev"] == "r3")
+        check("failed persist backs off instead of retrying every 8s poll",
+              tsync._state["dirty"] and tsync._state["next_persist_at"] > 0)
+        # A hydrate attempt must not push the persist retry out: force a hydrate
+        # to be due at the same moment and check durability still lands.
+        tsync._state.update({"next_persist_at": 0.0, "next_hydrate_at": 0.0,
+                             "loaded": False})
+        check("dirty flag retries once the cooldown passes, then clears",
+              tsync.get_snapshot()["rev"] == "r3"
+              and not tsync._state["dirty"] and '"r3"' in fake.rows[100],
+              f"dirty={tsync._state['dirty']} row={fake.rows.get(100)}")
+
+        # a late hydrate must never roll back a newer in-memory push
+        tsync._state.update({"loaded": False, "next_hydrate_at": 0.0})
+        fake.rows[100] = _json.dumps({"snapshot": dict(snap, rev="ancient"),
+                                      "saved_at": "2026-01-01T00:00:00-05:00"})
+        tsync._state["snapshot"] = dict(snap, rev="r4-in-memory")
+        check("hydrate never overwrites a snapshot already held in memory",
+              tsync.get_snapshot()["rev"] == "r4-in-memory")
+        # a failed hydrate must be retried, not permanently give up
+        tsync._state.update({"loaded": False, "snapshot": None, "next_hydrate_at": 0.0})
+        fake.fail_next = True
+        check("failed hydrate leaves the store unloaded for a later retry",
+              tsync.get_snapshot() is None and not tsync._state["loaded"])
+        tsync._state["next_hydrate_at"] = 0.0
+        check("the retry then recovers the stored snapshot",
+              tsync.get_snapshot()["rev"] == "ancient" and tsync._state["loaded"])
+        tsync._state.update({"snapshot": None, "loaded": True})
+
+        # ---- token + endpoint ----
+        check("explicit TRAINING_SYNC_TOKEN wins", tsync.sync_token() == "testtok-training-suite")
+        check("token compare is exact", tsync.token_matches("testtok-training-suite")
+              and not tsync.token_matches("testtok-training-suit"))
+        check("sync URL embeds the token and base",
+              tsync.sync_url().endswith("/training-sync/testtok-training-suite"))
+
+        app.app.config["TESTING"] = True
+        c = app.app.test_client()
+        base = "/training-sync/testtok-training-suite/trainingDashboard.json"
+        r = c.options(base)
+        check("OPTIONS preflight answers 204 with pinned CORS origin",
+              r.status_code == 204
+              and r.headers.get("Access-Control-Allow-Origin") == tsync.APP_ORIGIN)
+        check("wrong token 404s", c.get(
+            "/training-sync/WRONG/trainingDashboard.json").status_code == 404)
+        tsync._state.update({"snapshot": None, "saved_at": None, "row_id": None})
+        fake.rows.clear()
+        check("GET of an empty store returns the literal null (Firebase shape)",
+              c.get(base).get_data(as_text=True).strip() == "null")
+        r = c.put(base, data=_json.dumps(snap))
+        check("PUT stores a valid snapshot", r.status_code == 200 and r.get_json().get("ok"))
+        check("GET echoes it back", c.get(base).get_json()["rev"] == "r1")
+        check("PUT rejects broken JSON", c.put(base, data="{nope").status_code == 400)
+        check("PUT rejects wrong shape", c.put(base, data='{"x":1}').status_code == 400)
+        big = _json.dumps({"rev": "big", "keys": {"weeklySchedule_v1": "x" * 300000}})
+        check("PUT rejects oversize snapshots", c.put(base, data=big).status_code == 413)
+        # wsgi.input_terminated + no CONTENT_LENGTH is exactly how a server
+        # presents a chunked body: get_data() would buffer all of it.
+        check("chunked PUT (no Content-Length) is still capped",
+              c.put(base, data=big, environ_overrides={
+                  "CONTENT_LENGTH": "", "wsgi.input_terminated": True,
+              }).status_code == 413)
+        check("HEAD rides with GET instead of falling into the store branch",
+              c.head(base).status_code == 200)
+        check("non-ASCII token 404s instead of raising (bytes compare)",
+              c.get("/training-sync/%C3%A9/trainingDashboard.json").status_code == 404)
+        wrong = c.get("/training-sync/WRONG/trainingDashboard.json")
+        check("wrong token gives a bare 404 that doesn't advertise the app origin",
+              "Access-Control-Allow-Origin" not in wrong.headers
+              and tsync.APP_ORIGIN not in wrong.get_data(as_text=True))
+        fake.fail_next = True
+        r = c.put(base, data=_json.dumps(dict(snap, rev="r-undurable")))
+        check("PUT whose persist fails reports 503, never a green 'synced'",
+              r.status_code == 503 and not r.get_json().get("ok"))
+        check("...and the data is still served from memory meanwhile",
+              tsync.get_snapshot()["rev"] == "r-undurable")
+
+        # the endpoint must stay reachable when the login gate is armed
+        saved_code = app.ACCESS_CODE
+        try:
+            app.ACCESS_CODE = "gate-armed-for-test"
+            check("gate on: endpoint still reachable (404 for wrong token, not a redirect)",
+                  c.get("/training-sync/WRONG/trainingDashboard.json").status_code == 404)
+            check("gate on: valid GET flows through ungated",
+                  c.get(base).status_code == 200)
+        finally:
+            app.ACCESS_CODE = saved_code
+
+        # ---- get_today_events wiring: build a block around the real clock ----
+        # Use the APP's timezone, not the host's: on the UTC server the local
+        # date is a day ahead of New York all evening, which would plant the
+        # block in tomorrow's column and fail a test with no defect behind it.
+        now = _dt.now(app.LOCAL_TZ)
+        today_col = ts.day_index(now.date())
+        slot = 20  # 1:00-1:30 PM in the column's frame; the exact hour is irrelevant
+        wired = {"rev": "wired", "keys": {
+            "weeklySchedule_v1": _json.dumps({f"{slot}|{today_col}": "Focus block"})}}
+        tsync._state.update({"snapshot": wired, "saved_at": _dt.now().isoformat(),
+                             "loaded": True})
+        app._calendar_cache["events"] = None
+        app._calendar_cache["fetched_at"] = 0.0
+        evs = app.get_today_events()
+        check("today's events come from the grid with the calendar contract",
+              len(evs) == 1 and evs[0]["title"] == "Focus block"
+              and evs[0]["all_day"] is False
+              and _dt.fromisoformat(evs[0]["start"]).hour == 13, str(evs))
+        check("cache sentinel is non-None after a successful compute",
+              app._calendar_cache["events"] is not None)
+        if evs:
+            line = app.situational.format_event_line(evs[0], _dt.now())
+            check("situational renders a grid event with a clock time",
+                  "Focus block" in line and ("1:00" in line or "1:30" in line), line)
+        else:
+            check("situational renders a grid event with a clock time", False,
+                  "no events computed — see the previous failure")
+
+        # a push landing mid-compute must not be overwritten by the stale result
+        app._calendar_cache["events"] = None
+        app._calendar_cache["fetched_at"] = 0.0
+        gen_before = app._calendar_cache["gen"]
+        real_events_for_date = ts.events_for_date
+
+        def _racing_events_for_date(parsed, d):
+            app._training_data_changed()  # a PUT lands while we're computing
+            return real_events_for_date(parsed, d)
+        try:
+            ts.events_for_date = my_thread_only(real=real_events_for_date,
+                                                fake=_racing_events_for_date)
+            app.get_today_events()
+        finally:
+            ts.events_for_date = real_events_for_date
+        check("an edit landing mid-compute isn't overwritten by the stale read",
+              app._calendar_cache["gen"] > gen_before
+              and app._calendar_cache["events"] is None)
+
+        tsync._state.update({"snapshot": None, "loaded": True})
+        app._calendar_cache["events"] = None
+        app._calendar_cache["fetched_at"] = 0.0
+        check("never-synced keeps the None sentinel (section stays absent)",
+              app.get_today_events() == [] and app._calendar_cache["events"] is None)
+
+        # ---- tools ----
+        tsync._state.update({"snapshot": snap, "saved_at": _dt.now().isoformat(),
+                             "loaded": True})
+        week = tsync.get_training_schedule("week")
+        check("schedule tool renders the week", "Monday:" in week and "Class" in week)
+        check("schedule tool rejects junk day input",
+              "Unknown day" in tsync.get_training_schedule("someday"))
+        winfo = tsync.get_workout_info("monday")
+        check("workout tool bundles card + warmup + routines",
+              "Lower body" in winfo and "Mikans" in winfo and "Sunlight" in winfo)
+        lib = tsync.get_workout_library("lifts", "Day 1")
+        check("library tool fetches a page case-insensitively", "Squats" in lib)
+        check("sync-url tool hands over the paste-able URL",
+              "/training-sync/testtok-training-suite" in tsync.get_training_sync_url())
+        check("app dispatch routes training tools",
+              "Monday:" in app._dispatch_tool_call("get_training_schedule", {"day": "week"}))
+        check("never-synced tools point at the connect flow",
+              (tsync._state.update({"snapshot": None}) or True)
+              and "sync" in tsync.get_training_schedule("week").lower())
+    finally:
+        app.get_today_events = saved_gte
+        tsync._supabase = saved_sb
+        tsync._state.clear(); tsync._state.update(saved_state)
+        tsync._on_update = saved_cb
+        if saved_env is None:
+            os.environ.pop("TRAINING_SYNC_TOKEN", None)
+        else:
+            os.environ["TRAINING_SYNC_TOKEN"] = saved_env
+        app._calendar_cache.clear(); app._calendar_cache.update(saved_cal)
+
+
 SUITES = {
     "vault": suite_vault,
     "gate": suite_gate,
@@ -5095,6 +5393,7 @@ SUITES = {
     "weather": suite_weather,
     "egress": suite_egress,
     "canvas": suite_canvas,
+    "training": suite_training,
 }
 
 

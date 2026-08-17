@@ -6,7 +6,7 @@ WHY THIS EXISTS
 The movie-assistant behavior Alex is chasing (JARVIS's "Sir, Ms. Potts is on the line",
 E.V. continuously watching Peter's vitals) is never the result of the assistant *fetching*
 context — it's the result of the context already being there when it speaks. CLARVIS had
-all the sources (calendar, tasks, jobs, approvals, intake) but only as tools the model had
+all the sources (schedule, tasks, jobs, approvals, intake) but only as tools the model had
 to elect to call, which means most turns were answered blind to the day they landed in.
 
 Same architectural insight as person_profile.py, applied to NOW instead of ALWAYS:
@@ -20,7 +20,7 @@ DESIGN
 - This module is PURE assembly + caching: formatting helpers and a TTL cache, no imports
   from the app, no network. app.py owns the actual sources (it knows their shapes) and
   passes a builder; everything here is testable offline with fixed clocks.
-- Every source is fail-soft AT THE CALLER: a dead calendar API or unreachable Supabase
+- Every source is fail-soft AT THE CALLER: a dead schedule source or unreachable Supabase
   costs that one section, never the chat request.
 - The digest is budget-capped. Ambient context earns its place by being small; the moment
   it crowds the window it becomes noise. Sections are ordered by how likely they are to

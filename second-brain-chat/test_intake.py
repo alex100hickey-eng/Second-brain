@@ -17,8 +17,7 @@ Covers:
   4. capture_inbox — pasted text becomes a first-class event; noise case messaged
   5. scan_gmail — Composio-ish nested payloads parsed, dedupe across scans,
      dispatcher failure → error string (never an exception)
-  6. scan_calendar — deterministic items (no extraction), organizer-dict handling,
-     dedupe across scans
+  6. scan_calendar — retired stub (schedule lives in the training app now)
   6b/6c. honest scan summaries — every record_raw outcome is tallied, and an
      inbox whose mail was ALREADY processed never reports like an empty one
      (Gmail + iCloud paths)
@@ -312,35 +311,11 @@ def test_scan_gmail():
 
 
 def test_scan_calendar():
-    print("\n=== 6. scan_calendar: first-run baseline, then new-only ===")
-    base = [
-        {"id": "ev1", "summary": "Dentist",
-         "start": {"dateTime": "2026-07-24T15:00:00-04:00"},
-         "organizer": {"email": "mom@family.com"}},
-        {"id": "ev2", "summary": "Regatta", "start": {"date": "2026-08-02"}},
-    ]
-    state = {"events": list(base)}
-
-    def dispatcher(slug, args):
-        return json.dumps({"data": {"items": state["events"]}})
-
-    sb = _reset(dispatcher=dispatcher)
+    print("\n=== 6. scan_calendar: retired stub (schedule moved to the training app) ===")
+    sb = _reset()
     out = intake.scan_calendar()
-    check("FIRST run baselines silently — no events created",
-          "baselined: 2" in out and _events(sb) == [])
-    state["events"].append({"id": "ev3", "summary": "Band at Milestone",
-                            "start": {"dateTime": "2026-07-26T16:00:00-04:00"},
-                            "organizer": {"email": "mom@family.com"}})
-    out2 = intake.scan_calendar()
-    evs = _events(sb)
-    check("only the NEW invite becomes intake", len(evs) == 1 and "1 new" in out2
-          and "Milestone" in evs[0]["event"]["items"][0]["text"])
-    check("item is type=event with start as due",
-          evs[0]["event"]["items"][0]["type"] == "event"
-          and "2026-07-26" in (evs[0]["event"]["items"][0]["due"] or ""))
-    check("organizer dict flattened", evs[0]["event"]["sender"] == "mom@family.com")
-    out3 = intake.scan_calendar()
-    check("re-scan ingests nothing new", "0 new" in out3 and len(_events(sb)) == 1)
+    check("retired scan explains itself and creates nothing",
+          "retired" in out and "training app" in out and _events(sb) == [])
 
 
 def test_honest_scan_summaries():

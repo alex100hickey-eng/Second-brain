@@ -2,7 +2,7 @@
 Morning Brief Agent — writes a daily briefing note into the Obsidian vault.
 
 Each run gathers, read-only:
-  - Today's Google Calendar events (via Composio)
+  - Today's schedule blocks from the training-app snapshot (Supabase)
   - Recent agent outputs and anything pending approval (Supabase)
 and writes/overwrites `Schedule/brief-YYYY-MM-DD.md` in the vault. That's its
 only side effect — a single markdown note on Alex's own machine.
@@ -46,31 +46,27 @@ INTERNAL_AGENT_NAMES = {"jarvis_memory", "jarvis_memory_forgotten", "jarvis_pend
                         "jarvis_chat", "jarvis_chat_clear"}
 
 
-def get_today_events(composio_client):
-    now = datetime.now(LOCAL_TZ)
-    start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    end = start + timedelta(days=1)
-    resp = composio_client.tools.execute(
-        slug="GOOGLECALENDAR_EVENTS_LIST",
-        arguments={
-            "calendarId": "primary",
-            "timeMin": start.isoformat(),
-            "timeMax": end.isoformat(),
-            "singleEvents": True,
-            "orderBy": "startTime",
-        },
-        user_id="alex",
-        dangerously_skip_version_check=True,
+def get_today_events(supabase_client):
+    """2026-08-16: today's blocks come from the training app's synced snapshot
+    (see second-brain-chat/training_sync.py), not Google Calendar."""
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "second-brain-chat"))
+    import training_schedule
+    rows = (
+        supabase_client.table("Agent Outputs")
+        .select("output_text")
+        .eq("agent_name", "training_dashboard")
+        .order("id", desc=True)
+        .limit(1)
+        .execute()
+        .data
+        or []
     )
-    events = []
-    for ev in (resp.get("data") or {}).get("items") or []:
-        s = ev.get("start") or {}
-        if "dateTime" in s:
-            t = datetime.fromisoformat(s["dateTime"]).astimezone(LOCAL_TZ).strftime("%-I:%M %p")
-        else:
-            t = "All day"
-        events.append(f"{t} — {ev.get('summary', '(untitled)')}")
-    return events
+    if not rows:
+        return []
+    parsed = training_schedule.parse_snapshot(json.loads(rows[0]["output_text"]).get("snapshot") or {})
+    today = datetime.now(LOCAL_TZ).date()
+    return [training_schedule.format_block(ev, today)
+            for ev in training_schedule.events_for_date(parsed, today)]
 
 
 def main():
@@ -78,7 +74,7 @@ def main():
     supabase_client = create_client(SUPABASE_URL, SUPABASE_KEY)
     composio_client = Composio(api_key=COMPOSIO_API_KEY)
 
-    events = get_today_events(composio_client)
+    events = get_today_events(supabase_client)
 
     rows = (
         supabase_client.table("Agent Outputs")

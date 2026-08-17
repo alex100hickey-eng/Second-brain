@@ -2,7 +2,7 @@
 proactive.py — the proactive engine: CLARVIS comes to Alex, not the other way around.
 
 A recurring AWARENESS PASS (server-side, always-on) reviews what the system knows —
-tasks, intake events with due dates, today's calendar — and decides whether anything
+tasks, intake events with due dates — and decides whether anything
 warrants reaching out to Alex's phone. Delivery is ntfy.sh (Alex's chosen channel):
 one HTTPS POST to a private, long-random topic; the ntfy app on his phone shows the
 notification and tapping it deep-links back into CLARVIS.

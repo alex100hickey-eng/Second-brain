@@ -1102,7 +1102,7 @@
     { label: 'Coolify', glyph: '⛭', href: 'http://178.156.209.40:8000' },
     { label: 'Composio', glyph: '⧉', href: 'https://app.composio.dev' },
     { label: 'Gmail', glyph: '✉', href: 'https://mail.google.com' },
-    { label: 'Calendar', glyph: '▤', href: 'https://calendar.google.com' },
+    { label: 'Training', glyph: '▤', href: 'https://luminous-madeleine-bf89fa.netlify.app' },
     { label: 'YT Studio', glyph: '▶', href: 'https://studio.youtube.com' },
   ];
 
@@ -1640,7 +1640,7 @@
             <div class="item-title">${esc(ev.title)}</div>
             <div class="item-meta">${ev.all_day ? 'ALL DAY' : fmtTime(ev.start) + ' – ' + fmtTime(ev.end)}</div>
           </div>`).join('')
-      : '<div class="empty">Nothing on the calendar today.</div>',
+      : '<div class="empty">Nothing blocked in the schedule today.</div>',
       { zone: 'SYS·01', count: new Date().toLocaleDateString([], { month: 'short', day: 'numeric' }).toUpperCase() }));
 
     left.push(panel('Approvals', (actions.length

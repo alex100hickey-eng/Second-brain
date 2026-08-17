@@ -176,7 +176,7 @@ def health_text() -> str:
 REQUIRED_ENV = ["CLAUDE_API_KEY", "SUPABASE_URL", "SUPABASE_KEY"]
 # Vars that gate specific features or hardening — missing = degraded, not dead.
 OPTIONAL_ENV = {
-    "COMPOSIO_API_KEY": "Google Calendar + Gmail tools disabled",
+    "COMPOSIO_API_KEY": "Gmail tools disabled",
     "ACCESS_CODE": "chat gate OPEN — anyone reaching the port can use the brain (set one!)",
     "FLASK_SECRET_KEY": "sessions won't survive a restart (a random key is used)",
     "GITHUB_TOKEN": "expansion scout uses unauthenticated GitHub (lower rate limit)",

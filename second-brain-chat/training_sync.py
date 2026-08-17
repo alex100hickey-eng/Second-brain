@@ -64,8 +64,12 @@ _lock = threading.Lock()
 # _state["loaded"] flips True after the first Supabase read attempt (even a
 # failed one must not be retried per-request — polls arrive every 8s).
 _state = {"loaded": False, "row_id": None, "snapshot": None, "saved_at": None,
-          "dirty": False,        # in-memory is newer than Supabase (persist failed)
-          "next_try_at": 0.0}    # monotonic floor for the next Supabase attempt
+          "dirty": False,           # in-memory is newer than Supabase (persist failed)
+          # Separate cooldowns on purpose: one shared floor would let a hydrate
+          # attempt push the persist retry another minute out every time, so an
+          # un-saved edit could stay un-saved indefinitely while Supabase is flaky.
+          "next_hydrate_at": 0.0,
+          "next_persist_at": 0.0}
 _on_update = None  # app-provided callback: bust downstream caches on new data
 
 
@@ -115,9 +119,9 @@ def _hydrate_locked():
     if _supabase is None or _state["loaded"]:
         return
     now = time.monotonic()
-    if now < _state["next_try_at"]:
+    if now < _state["next_hydrate_at"]:
         return
-    _state["next_try_at"] = now + RETRY_COOLDOWN_S
+    _state["next_hydrate_at"] = now + RETRY_COOLDOWN_S
     try:
         rows = (
             _supabase.table("Agent Outputs")
@@ -143,7 +147,7 @@ def get_snapshot():
     """The latest raw snapshot dict, or None if the app has never synced."""
     with _lock:
         _hydrate_locked()
-        if _state["dirty"] and time.monotonic() >= _state["next_try_at"]:
+        if _state["dirty"] and time.monotonic() >= _state["next_persist_at"]:
             # A previous persist failed; the app's 8s poll gives us retry ticks,
             # but only one attempt per cooldown — each is blocking network I/O.
             _persist_locked()
@@ -193,7 +197,7 @@ def _persist_locked() -> str:
         return ""
     except Exception as e:
         _state["dirty"] = True
-        _state["next_try_at"] = time.monotonic() + RETRY_COOLDOWN_S
+        _state["next_persist_at"] = time.monotonic() + RETRY_COOLDOWN_S
         print(f"[training_sync] Supabase persist failed (kept in memory): {e}")
         return str(e)
 
