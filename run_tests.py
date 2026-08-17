@@ -5560,6 +5560,29 @@ def suite_browser(app, live):
         finally:
             app.ACCESS_CODE = saved_code
 
+        # ---- click targeting: a phrase must never be sent to page.click() as a
+        # selector, which waits out the full actionability timeout for something
+        # that was never going to match ----
+        cases = [("Learn more", False), ("Sign in", False), ("More information", False),
+                 ("input[name=q]", True), (".btn", True), ("#main", True),
+                 ("div > a", True), ("a.link", True)]
+        wrong = [t for t, want in cases if bs.looks_like_selector(t) != want]
+        check("selectors and visible phrases are told apart", not wrong, str(wrong))
+
+        # ---- one page, one actor ----
+        saved_wait = bs.ACT_LOCK_WAIT_S
+        bs.ACT_LOCK_WAIT_S = 0.2
+        bs._act_lock.acquire()
+        try:
+            busy = bs.handle_tool_call("browse_act", {"action": "read"})
+            check("a second action while one is running is refused, not interleaved",
+                  "busy with another step" in busy, busy[:90])
+        finally:
+            bs._act_lock.release()
+            bs.ACT_LOCK_WAIT_S = saved_wait
+        check("the action lock is released again for the next caller",
+              not bs._act_lock.locked())
+
         # ---- wiring ----
         check("every browse tool is registered with the model",
               set(bs.TOOL_NAMES) <= {t["name"] for t in app.TOOLS})

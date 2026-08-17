@@ -51,6 +51,12 @@ ACT_TIMEOUT_MS = 10000
 TEXT_CHARS = 3000
 
 _lock = threading.Lock()
+# Page actions get their OWN lock, held for the whole interaction. _lock stays
+# for fast state reads — the pane polls every 4s, and making those queue behind
+# a 20s page load would stall the view and tie up request threads. Rule that
+# keeps it deadlock-free: never take _act_lock while holding _lock.
+_act_lock = threading.Lock()
+ACT_LOCK_WAIT_S = 30
 _project_id = None
 # One session at a time: the pane shows one browser, and concurrent sessions on
 # the account are a resource Alex pays for, not a feature we need here.
@@ -166,8 +172,20 @@ def close_session() -> str:
 
 def _act(actions, want_shot: bool):
     """Re-attach to the live session, run `actions(page)`, report what's there.
-    Caller holds no lock while the page work happens — only session bookkeeping
-    is serialized, since a page interaction can take seconds."""
+
+    Serialized: there is ONE page, so two turns acting at once would interleave
+    clicks on it and each would report a result the other had already changed.
+    A waiter that can't get in within ACT_LOCK_WAIT_S gives up rather than
+    piling threads up behind a stuck page."""
+    if not _act_lock.acquire(timeout=ACT_LOCK_WAIT_S):
+        raise RuntimeError("the browser is busy with another step — try again in a moment")
+    try:
+        return _act_locked(actions, want_shot)
+    finally:
+        _act_lock.release()
+
+
+def _act_locked(actions, want_shot: bool):
     with _lock:
         connect_url, session_id, is_new = _ensure_session_locked()
     from playwright.sync_api import sync_playwright
@@ -203,6 +221,63 @@ def _act(actions, want_shot: bool):
         live = _session["live_url"]
     return {"note": note, "title": title, "url": url, "text": text,
             "shot": shot, "is_new": is_new, "live_url": live}
+
+
+def looks_like_selector(target: str) -> bool:
+    """Is this a CSS selector or a phrase the user can see on the page?
+
+    Worth getting right: feeding a phrase to page.click() makes Playwright wait
+    the full actionability timeout for an element that was never going to match,
+    so a slightly-wrong guess used to cost 10 seconds before failing."""
+    t = (target or "").strip()
+    if not t:
+        return False
+    if t[0] in "#.[":
+        return True
+    # Combinators and attribute brackets before the space rule — "div > a" is a
+    # selector that happens to contain spaces.
+    if any(h in t for h in ("[", ">", "::")):
+        return True
+    if " " in t:            # visible text nearly always has spaces; a
+        return False        # space-free selector is handled below
+    return "#" in t or "." in t
+
+
+def _click(page, target: str) -> str:
+    """Click by whichever handle fits, cheaply. Each attempt gets a SHORT
+    timeout: the point is to find the right handle fast, not to wait out the
+    wrong one. Missing entirely is reported as a miss with a way forward,
+    because a click that silently did nothing is worse than an error."""
+    short = 3000
+    if looks_like_selector(target):
+        candidates = [("selector", lambda: page.locator(target))]
+    else:
+        candidates = [
+            # Roles first: a link or button is what "click X" nearly always means,
+            # and it skips stray prose that happens to contain the same words.
+            ("link", lambda: page.get_by_role("link", name=target)),
+            ("button", lambda: page.get_by_role("button", name=target)),
+            ("text", lambda: page.get_by_text(target, exact=False)),
+        ]
+    errors = []
+    for how, build in candidates:
+        try:
+            loc = build()
+            # count() resolves immediately instead of waiting out the timeout,
+            # so a target that matches nothing costs milliseconds per handle
+            # rather than the full actionability wait.
+            if loc.count() == 0:
+                errors.append(how)
+                continue
+            loc.first.click(timeout=short)
+            return f"Clicked {target!r} (as {how})."
+        except Exception:
+            errors.append(how)
+    raise RuntimeError(
+        f"nothing clickable matched {target!r} (tried: {', '.join(errors)}). "
+        "Use browse_screenshot to see the page, then click the exact visible "
+        "text or pass a CSS selector"
+    )
 
 
 def _report(r) -> str:
@@ -301,13 +376,7 @@ def handle_tool_call(name: str, tool_input: dict, dispatch_tool=None):
             if action == "click":
                 if not target:
                     raise ValueError("click needs a target")
-                # Visible text is what the model can actually see in the page
-                # dump; fall back to treating it as a selector.
-                try:
-                    page.get_by_text(target, exact=False).first.click(timeout=ACT_TIMEOUT_MS)
-                except Exception:
-                    page.click(target, timeout=ACT_TIMEOUT_MS)
-                return f"Clicked {target!r}."
+                return _click(page, target)
             if action == "type":
                 if not target:
                     raise ValueError("type needs a target selector")
