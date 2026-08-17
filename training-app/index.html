@@ -1,0 +1,894 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Weekly Schedule</title>
+<meta name="theme-color" content="#4f6ef7">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Training">
+<link rel="apple-touch-icon" href="data:image/png;base64,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">
+<link rel="icon" type="image/png" href="data:image/png;base64,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">
+<link rel="manifest" href="data:application/manifest+json;base64,eyJuYW1lIjogIlRyYWluaW5nIERhc2hib2FyZCIsICJzaG9ydF9uYW1lIjogIlRyYWluaW5nIiwgInN0YXJ0X3VybCI6ICIuIiwgInNjb3BlIjogIi4iLCAiZGlzcGxheSI6ICJzdGFuZGFsb25lIiwgImJhY2tncm91bmRfY29sb3IiOiAiI2Y3ZjhmYSIsICJ0aGVtZV9jb2xvciI6ICIjNGY2ZWY3IiwgIm9yaWVudGF0aW9uIjogImFueSIsICJpY29ucyI6IFt7InNyYyI6ICJkYXRhOmltYWdlL3BuZztiYXNlNjQsaVZCT1J3MEtHZ29BQUFBTlNVaEVVZ0FBQUxRQUFBQzBDQVlBQUFBOXpRWXlBQUFHS0VsRVFWUjRuTzNkWFZZYk9SQ0c0VEluRjJGMXpFcVl0WVNWaE5VeGQ4d0ZSNG5kdE51U1dqOVZuOTduYWs3Q2dHeTlMdVEySmhkejRPWDE0M1AyR25EZSs5dnpaZllhcGl5QWdOY3dJL0JoWDVDSTF6WXE3cTVmaElpeHAyZmNYVDR4SVNOSGo3Q2ZXbjlDWWthdUhxMDBlNFFRTXM1b05hMmJUR2hpeGxtdEdqcjFxQ0JrOUhCbVdsZFBhR0pHTDJmYXFncWFtTkZiYldQRlFSTXpScWxwclNob1lzWm9wYzFsQjAzTW1LV2t2YXlnaVJtejVUYjRNR2hpaGhjNUxUWi82UnVZNlRCb3BqTzhlZFRrM2FDSkdWNGR0Y21SQTFKMmcyWTZ3N3Q3alg0TG1wZ1J4VjZySERrZzVTWm9wak9pMlRiTGhJWVVnb2FVUDBGejNFQlUxKzB5b1NHRm9DSGx5WXpqQnVKTERUT2hJWVdnSVlXZ0llWEMrUmxLbU5DUVF0Q1FRdENRUXRDUVF0Q1E4bVAyQXBUOC92Vno5OC8vK2ZlL29vOUJQWUt1ZEMvTWxwK1B5TXNSZEtiV0FkZDhUUUovaktBUHpJajR5UFY2aUhzZlFlL3dGdktldEViQ3ZrWFFWeUtFdkVYWXR3amFZb2E4UmRoZmxnNWFJZVN0MWNOZU1takZrTGRXRFh1NVZ3cFhpSGxseXdXOTBzUmE2YlltU3dTOTRnc1UyOXY0KzlmUEpiNDd5UWVkTm5HbHFQZGkzdnR2UmRKQmJ6ZHZoYWlQWWo3Nk14V3lRZC9iTk9Xb2MyTE8rYnZJSklOK3RGbUtVWmZFWFBJeDBjZ0ZuYnRKU2xIWHhGenpzUkZJQlYyNk9RcFJuNG41elAvamxVelF0WnVpdEpsbmJvdksvU0FSOU5uTmlQcHp4amx2N1NxaEVIWDRvSHRzUW9Tb2U2MHhldFNoZzI1NTUwYytUNDk0ZjJNVW9ZTnVMY3BHdGo1cUtBa2I5SWlOOURpbFI2MHA2Z01sWk5BOTcreElHOWw3clpIdWl5UmMwQ1B1Wks5WFBXWWNOYUpGSFM1bzRFaW9vRWRPQzI5VGV1WVR3VWhUT2xUUXdDTmhncDc5cTdobVRta1BsK21pVE9rd1FRTTVRZ1E5Y3pyTW50SWV6dTlKaENrZEltaDhpUkRVYk82RFpoTjk4YjRmN29QMllOYXh3OE9Ud1doY0I4MG0rdVI1WDF3SERaUWk2RXlqangwY04rcTREWnBOOU0zci9yZ05HcWhCMEpCQzBBVkduYU01UDlkekdUU2JHSVBIZlhJWk5GQ0xvQ0dGb0NHRm9DSEZYZEFlbjJoYzYzMmxJOW9WRG05cmRCYzBjQVpCUXdwQlF3cEJRd3BCUThybDVmWGpjL1lpZ0ZhWTBKQkMwSkR5WS9ZQ3RyeGRxTjlUK3VKSHljZEhlMkhGek5jdncyRkNRd3BCUXdwQlF3cEJRd3BCUTRxN29EMDlZOTdUK3lyRTdGL2ZXOHJiR3QwRkRaeEIwSkJDMEpCQzBKRGlNbWh2VHpTd3orTSt1UXphcTFFL1p4SHRTb2NuQkEwcEJBMHBib1BtVzYxdlh2ZkhiZERlalA0NVpjN1JkUWdhVWx3SHpXVHl5Zk8rdUE3YWkxbHZpK0xZVWM1OTBHeWtMOTczdzMzUStNdDdUQjZFQ0hybVJzNStGN2FuZDM1SGVFQ0ZDQnJJRlNib0dkTmg5blRlKzlxenBtU0U2V3dXS0dnZ1I2aWdSMDRKTDlONWJ3MmpwMldVNld3V0xHamdrWEJCajVnVzNxWnpNbU5LUjVyT1pnR0ROaHYzNzJ4NzEzdXRrZTZMSkdUUVptUHViRS9UT1JtMXBvZ3htd1VPdW9jb20ramhNcDVYb1lOdXVabmJ6K1Z4T3QvVE91cklENUxRUVp2MXVmTWp4TnhyalpGak5oTUkydXo4Sm5pOXF2Rkk2Nk5IOUpqTlJJSTJxOThNaFUxTXp0d1dsZnRCSm1pejhrMkpmRzVPdG11dUNWTWxaak94b00zeU4wY2g1dVJNMUVveG13a0diZlo0azVSaVRtcWlWb3ZaVERSb3MvdWJwUmh6VWhLMVlzeG13a0diZmQ4MDVaaVRuS2hWWXpZVEQ5cnM3K2F0RUhOeUZMVnl6R1lMQkcyMlZzekpYdFRxTVpzdEV2UzFGV0pPVnJxdHlYSkJyekNsVnVidUg2OGZJVVd0UE1GV2ZlQXVHWFNpR1BhcUlTZExCNTBvaEwxNnlBbEJYNGtZTmlIZkl1Z2RFY0ltNUgwRWZjRGJ6MGtUOFdNRW5Xbkdpek1FWE81aVp2YnkrdkU1ZXlFSzdrV2VNK21KOTd6M3QrY0xRVVBHKzl2elpibFhDcUdOb0NIbHlleHJWTTllQ0hCR2FwZ0pEU2tFRFNsL2d1YllnYWl1MjJWQ1F3cEJROHBOMEJ3N0VNMjJXU1kwcEh3TG1pbU5LUFphM1ozUVJBM3Y3alhLa1FOUzdnYk5sSVpYUjIwZVRtaWloamVQbXVUSUFTa1BnMlpLdzR1Y0ZyTW1ORkZqdHR3R3M0OGNSSTFaU3Rvck9rTVROVVlyYmE3NFNTRlJZNVNhMXFxdWNoQTFlcXR0clBxeUhWR2psek50TlltUzMrdUJGbG9NeVNZdnJEQ3RjVmFyaHBxSHlMUkdpZGJEc1BsTDMweHI1T3JSU3RmNG1OYlkwM1BvRFp1bXhMMjJVZCs1cHh3UGlIc05NNDZmTHM2N0JLN0J3L09uL3dHcXNaSkhaeHNPSXdBQUFBQkpSVTVFcmtKZ2dnPT0iLCAic2l6ZXMiOiAiMTgweDE4MCIsICJ0eXBlIjogImltYWdlL3BuZyJ9LCB7InNyYyI6ICJkYXRhOmltYWdlL3BuZztiYXNlNjQsaVZCT1J3MEtHZ29BQUFBTlNVaEVVZ0FBQWdBQUFBSUFDQVlBQUFEMGVOVDZBQUFVYlVsRVFWUjRuTzNkUzVyY3hCSUdVSm1QQWF6T3JNU3NCVmJDWFoyWitRNU1RYmxiWFNXcDhoR1JjYzdvUHFBdHBkVHgvMHBWdHo5dGhQVDV5OWR2czQ4Qm9JWC8vZm5ycDluSHdIc3V5aVFDSHVBN0JXRU9pejZBc0FjNFJ5bm96d0ozSVBBQjJsSUkyck9nRFFoOGdMRVVndGRad0l1RVBrQU15c0ExRnUwRW9ROFFtekp3bklWNlF1Z0Q1S1FNUEdaeFBpRDRBZGFnQ095ektIZUVQc0RhbElIL1dJaE44QU5Vb3dnVUx3Q0NINkMyeWtXZzVJa0xmZ0R1VlN3Q3BVNVk4QVB3U0tVaVVPSkVCVDhBWjFRb0FqL05Qb0RlaEQ4QVoxWElqbVViVG9XTEIwQi9xKzRHTEhkU2doK0FIbFlyQWt1OUFoRCtBUFN5V3NZczBXWld1eWdBeExiQ2JrRDZIUURoRDhCb0syUlA2Z0t3d2dVQUlLZnNHWlJ5Q3lQN29nT3dsb3l2Qk5MdEFBaC9BS0xKbUUycENrREdCUWFnaG13WmxXTExJdHVpQWxCYmhsY0M0WGNBaEQ4QTJXVElydEFGSU1NQ0FzQ2U2QmtXdGdCRVh6Z0FlQ1p5bG9Vc0FKRVhEQURPaUpwcDRRcEExSVVDZ0tzaVpsdW9BaEJ4Z1FDZ2hXZ1pGNllBUkZzWUFHZ3RVdGFGS0FDUkZnUUFlb3FTZWRNTFFKU0ZBSUJSSW1UZjFBSVFZUUVBWUliWkdUaXRBTXcrY1FDWWJXWVdUaWtBd2g4QXZwdVZpY01MZ1BBSGdCL055TWFoQlVENEE4QyswUms1ckFBSWZ3QjRiR1JXRGlrQXdoOEFqaG1WbWROL0R3QUFNRjczQXVEcEh3RE9HWkdkWFF1QThBZUFhM3BuYUxjQ0lQd0I0RFU5czlSbkFBQ2dvQzRGd05NL0FMVFJLMU9iRndEaER3QnQ5Y2pXcGdWQStBTkFINjB6MW1jQUFLQ2daZ1hBMHo4QTlOVXlhNXNVQU9FUEFHTzB5bHl2QUFDZ29KY0xnS2QvQUJpclJmYmFBUUNBZ2w0cUFKNytBV0NPVnpQNGNnRVEvZ0F3MXl0WjdCVUFBQlIwcVFCNCtnZUFHSzVtc2gwQUFDam9kQUh3OUE4QXNWekpaanNBQUZEUXFRTGc2UjhBWWpxYjBYWUFBS0Nnd3dYQTB6OEF4SFltcSswQUFFQkJod3FBcDM4QXlPRm9adHNCQUlDQ0ZBQUFLT2hwQWJEOUR3QzVITWx1T3dBQVVORERBdURwSHdCeWVwYmhkZ0FBb0NBRkFBQUsrckFBMlA0SGdOd2VaYmtkQUFBb1NBRUFnSUoyQzREdGZ3Qll3MGVaYmdjQUFBcFNBQUNnb0hjRndQWS9BS3hsTDl2dEFBQkFRUW9BQUJTa0FBQkFRVDhVQU8vL0FXQk5ielBlRGdBQUZLUUFBRUJCQ2dBQUZQUnZBZkQrSHdEV2RwLzFkZ0FBb0NBRkFBQUtVZ0FBb0NBRkFBQUsrbW5iZkFBUUFLcTRaYjRkQUFBb1NBRUFnSUlVQUFBb1NBRUFnSUlVQUFBb1NBRUFnSUlVQUFBbzZKUGZBUUFBOWRnQkFJQ0NGQUFBS0VnQkFJQ0NGQUFBS0VnQkFJQ0NGQUFBS0VnQkFJQ0NGQUFBS0VnQkFJQ0NmcDU5QUVBN2YvM3h5OFAvLzdmZi8zN3BheHo1OTRFY0ZBQkk0bG00UnprR0pRRnlVQUFna0FnaC95bzdDSkNEQWdDVHJCRDJaKzJkczFJQWN5Z0FNRWpGd0QvaTdib29CRENHQWdDZENQeHJGQUlZUXdHQWhvUitlL2RycWd4QU93b0F2RWpvajZNTVFEc0tBRndnOU9kVEJ1QTFDZ0FjSlBUalVnYmdQQVVBSGhENitTZ0RjSXdDQURzRS94cHUxMUVSZ1BjVUFQaUgwRitYWFFGNFR3R2dQTUZmaTEwQitFNEJvQ3pCWDVzaVFIVUtBT1VJZnU0cEFsU2xBRkNHNE9jUlJZQnFGQUNXSi9nNVF4R2dDZ1dBWlFsK1hxRUlzRG9GZ09VSWZscFNCRmlWQXNBeUJEODlLUUtzNXFmWkJ3QXRDSDlHY2EreENqc0FwR1lZTTRQZEFGYWdBSkNTNENjQ1JZRE12QUlnSGVGUE5PNUpNcklEUUJxR0xKSFpEU0FiT3dDa0lQekp3cjFLRmdvQUFCU2tBSkNDYlZXeWNLK1NoUUpBR2dZcjBibEh5VVFCSUJVRGxxamNtMlNqQUpDT1FVczA3a2t5VWdCSXljQWxDdmNpV2ZrOUFFeDEveU5UWndmcDdaLzNZMWZNY2lYOFg3bm5vU1U3QUV6ek5yaXZCcmtoeWd5dmh2L2VmNGVSRkFDbStHancvZlhITDVlR29oTEFTQzNDLzluL0RyMHBBQXgzWk9BcEFVUjE5ajQ3VW1xVkFHWlFBQmptN05POUVrQTBWOEwvekQrckNEQ1NBc0FRVndlYkVrQVVQY08veGI4SFp5a0FkUGZxUUZNQ21HMVUrTGY2OStFSUJZQ3VXZzB5SllCWlJvZC82NjhESDFFQTZLYjFBRE1RR1cxVytQZjZlbkJQQWFDTFhvUHI3TmUxQzhCVnM4Ty85OWNGQllEbWVnOHNKWURlb29UL3FLOVBUUW9BVFkwYVZFb0F2VVFMLzlGL0RuVW9BRFF6ZWtBcEFiUVdOZnhuL1htc1RRR2dpVm1EU1FtZ2xlamhQL3ZQWlQwS0FDK2JQWkNVQUViTGRzL0RIZ1dBbDBRWlJGR09nNXpPbE1JbzkxcVU0eUF2QllETG9nMmdNOGRqRjRDYmpPRi9FKzE0eUVVQjRKS29nMGNKNEl6TTRYOFQ5YmlJVHdIZ3RPZ0RSd25naUpXdWZmVHZTV0pTQURobHhVR3pVaERRUjRiN1BzTXhFb3NDd0dHWkJreW1ZMlc4RmJiKzkyUTZWdVpUQUZpV1Z3SHNXVFg4NFN3RmdFT3lEa0lsZ0hzVndqL3JjVE9lQXNCVDJRZEs5dU9Iczl6ekhLRUE4RkMxUVdJWFlGMFZudjd2clhBTzlLVUE4S0dWQm9oWEFiVlZDLytibGM2RjloUUF5akFNZWNZOVFpVUtBTHVxRDBLN0FPdW9maTJyZnkvek1RV0FkMVllR0Y0RjFGSjE2Lyt0bGMrTjZ4UUFmbEJoVUZRNFI4NnBjRTlVT0VmT1VRQW82ZWd3dEF1UWwyc0hqeWtBL01zVHdqNUJrbyt0LzMyVnpwWG5GQUMyYmFzNUdDcWVNeitxZUE5VVBHZjJLUUFZQ0FmWUJjakR0WHJPOXp6YnBnQlFuRUZZbDJ0UGRRcEFjWWFnRHdTdTVPZzFjdDliQXhTQTBneUE4NVFBVm1JRzFLWUF3R1lRcnNEVFA1eWpBQlJsQ0Y1bkZ5QWUxK1E2czZBdUJhQWczL0Q3ck12NlhPTjkxcVVtQlFEdStFQmdQcmIrNFJvRm9CaERFTmhqTnRTakFNQWJkZ0h5OFBRUDF5a0FoUmlDd0NObVJDMEtRQkcrc2MreEN4Q2ZwLzgrckZjZENnQUFGS1FBRktEUlgyTVhJQzVQLzMxWnR4b1VBQUFvU0FGWW5DYi9HcnNBOFhqNkg4UDZyVThCQUlDQ0ZJQ0ZhZkJ0V01kOFhMTTJyT1BhRkFCb3hHdUEvcXd4dEtNQUxFcHpiOHQ2NXVGYXRXVTkxNlVBUUVPZVVQdXh0dENXQXJBZ2piMFA2MHBWN3YwMUtRRFFtQ2ZWOXZ6b0g3U25BQ3pHQUFSNk1Gdldvd0RBQ1laZ1hLNE5uS01BTE1RQWpNTnJnSGFzWlJ4bXpGb1VBRGpKRUl6SE5ZSHpGSUJGR0lEQUNHYk5PaFFBNk1UVzlldXNJZlNqQU1BRm5vTGljQzNnR2dWZ0FRWmdYSjVnV1pHWnN3WUZBQWhKZVlLK0ZJRGtOUEY1clAxOHJzRTgxajQvQlFBNjh5UUxSS1FBQU9Fb1RkQ2ZBcENZTGJqNVhJTjVyUDE4cmtGdUNnQUFGS1FBd0FDMnRJK3pWakNHQXBDVXJiYzRYSXZ4ckhrY3JrVmVDZ0FBRktRQXdDQzJ0cCt6UmpDT0FwQ1FMYmQ0WEpOeHJIVThya2xPQ2dBQUZLUUFBRUJCQ2tBeXR0cHk4NDc3WTlZbU43TXBId1VBR2pFQSs3UEcwSTRDQUFBRktRQ0plUG9CSWpPamNsRUFZRER2dXQrekpqQ2VBZ0FOZVFMcXg5cENXd29BQUJTa0FDVGg2UWZJd0t6S1F3RUFnSUlVQUdqc3lCT1FENzM5NThoYWVLcUU5aFFBQUNoSUFVakEwdytRaVptVmd3SUFBQVVwQUFCUWtBSUFrL2dnb0RXQW1SUUE2TUE3MEhhc0pmU2hBQVJuK0FFWm1WM3hLUUFBVUpBQ0FBQUZLUUFBVUpBQ0FBQUZLUURRaWI4VDRERi9Cd0RNcFFBQVFFRUtRR0NlZm9ETXpMRFlGQUFBS0VnQkFJQ0NGQUFBS0VnQkFJQ0NGQUFBS0VnQkFJQ0NGQUFBS0VnQmdJNzhOc0I5ZmdzZ3pLY0FCR1g0QVNzd3krSlNBQUNnSUFVQUFBcFNBQUNnSUFVQUFBcFNBQUNnSUFVQUFBcFNBQUNnb0UrZnYzejlOdnNnQUlDeDdBQUFRRUVLQUFBVXBBQUFRRUVLQUFBVXBBQUFRRUVLQUFBVXBBQUFRRUVLQUFBVTlQUHNBMkRmWDMvOE12c1FhT1MzMy85KytzK011dDVSamlYS2NUREdrZXZOZUhZQUFLQWdCUUFBQ2xJQUFLQWdCUUFBQ2xJQUFLQWdCUUFBQ2xJQWd2SmpNOEFLekxLNEZBRG95TSs3N3p0eXpvSUQrbElBQUtBZ0JRQUFDbElBQUtBZ0JRQUFDbElBQUtBZ0JRQUFDbElBQUtBZ0JTQXdQd2NOWkdhR3hhWUFBRUJCQ2dCMDRyY0FQdWEzQWNKY0NnQUFGS1FBQUVCQkNnQUFGS1FBQUVCQkNrQndQZ1FGWkdSMnhhY0FRQWVHWHp2V0V2cFFBR0NTeWo4Q2VHTU5ZQjRGQUFBS1VnQUFvQ0FGSUFIdlFJRk16S3djRkFBQUtFZ0JnTWI4SFFEbitEc0JZQTRGQUFBS1VnQ1M4QVFFWkdCVzVhRUFBRUJCQ2dBMDVPbW5IMnNMYlNrQU1KZ1BBTDVuVFdBOEJTQVJUMEJBWkdaVUxnb0FBQlNrQUVBam5uNzZzOGJRamdLUWpBR1ltM2ZkSDdNMnVabE4rU2dBQUZDUUFnQUFCU2tBQ2RscWk4YzFHY2RheCtPYTVLUUF3Q0RlY1Q5bmpXQWNCUUFBQ2xJQWtyTGxGb2RyTVo0MWo4TzF5RXNCZ0FGc2JSOW5yV0FNQlFBQUNsSUFFclAxTnA5ck1JKzFuODgxeUUwQkFNTHhHZ0Q2VXdDZ00yRUdSS1FBSkdjTGJoNXJQNTlyTUkrMXowOEJBRUt5Y3dKOUtRQUwwTVRqRW1Lc3lNeFpnd0lBRnhpQWNiZ1djSTBDQUoxNCtuK2ROWVIrRklCRmVBb0NSakJyMXFFQXdFa0dZRHl1Q1p5bkFDekVFSXpEMW5VNzFqSU9NMll0Q2dDY1lBREc1ZHJBT1FyQVlneEJvQWV6WlQwS0FEUm15N3E5bzJzcXBPQTRCV0JCaG1BZjFwV3EzUHRyVWdDZ0lVLy8vVmhiYUVzQldKVEczcGIxek1PMWFzdDZya3NCZ0VZOG9mWm5qYUVkQldCaG1uc2IxakVmMTZ3TjY3ZzJCUUFBQ2xJQUZxZkJ2K2JvK3RtYUhzZVBCSTVoL2RhbkFBQkFRUXBBQVpyOE5aNys0N0lMMEpkMXEwRUJBSUNDRklBaU5QcHpQUDNIWnhlZ0QrdFZod0pRaUc5czRCRXpvaFlGQU43dzlKK0hYUUM0VGdFb3hpQUU5cGdOOVNnQWNNZlRmejUyQWVBYUJhQWdnM0NmZFZtZmE3elB1dFNrQUJUbEcvNDZULy94dUNiWG1RVjFLUUN3R1lJcjhDb0F6bEVBQ2pNSXovT2t5VXJNZ05vVWdPSU1BQi84VzRsZGdPT3NBUW9BcFJtQ2RibjJWS2NBWUJBZTRPay9EOWZxT2QvemJKc0N3RDhxRG9TSzU4eVBLdDRERmMrWmZRb0EveklZOW5taXpPZk1OYXQwMzFjNlY1NVRBQ2pKQi8vVzU5ckJZd29BUDZqd2hGRGhIRG1ud2oxUjRSdzVSd0hnblpVSHhabHo4d1NabjFjQjM2MThibHluQUxDcitzQVEvdXVvZmkycmZ5L3pNUVdBTWd4Q25uR1BVSWtDd0lkV0dvYTIvbXVyK2lwZ3BYT2hQUVdBaDZvTkVPRy9ybW9sWUlWem9DOEZnS2V5RDVMc3h3OW51ZWM1UWdIZ2tLd0R4ZFkvOXlyc0FtUTlic1pUQUZpVzhHZFBoUklBUnlnQUhKWnBHR1k2VnNaYnRRUmtPbGJtVXdBNFpjVUI0K21mWnpMYzl4bU9rVmdVQUU2TFBtaHMvWFBFU3RjKyt2Y2tNU2tBWEJKMTRBaC96bGpoVlVEVTR5SStCWURMb2cwZTRjOFZtVXRBdE9NaEZ3V0FsMFFaUUZHT2c1d3lsb0FveDBGZUNnQXZtejJJenY3NW52NTVWYlo3SHZZb0FEUXhheUFKZjFvNWUyOWt1ZWZoSXdvQXpZd2VUTUtmMXFLWEFPRlBTd29BVFkwYVVNS2ZYcUtXQU9GUGF3b0F6ZlVlVk1LZjNxS1ZBT0ZQRHdvQVhmUWFXTUtmVWFLVUFPRlBMd29BM2JRZVhBWWhvODB1QWU1NWVsSUE2S3JWQUx2eWRUejkwOEtzRWlEODZVMEJvTHRYQjVud1o3YlJKVUQ0TTRJQ3dCQlhCNXJ3SjRwUkpVRDRNNG9Dd0RDLy9mNzNxZUVtL0ltbVp3azQrLzBCcjFJQUdPN0lrQlArUkhXbEJEeTdud1UvTXlnQVRQSFJ3THY2RkNUOEdlbksvZmJvbm9jWkZBQ21lVHY0cmc1QzRjOE1MVXFBOEdlbVQ1Ky9mUDAyK3lEZ0NzRi8zcEhBc2E3bkNIR3lzZ05BU2tLS0tOeUxaS1VBa0k2QlN6VHVTVEpTQUVqRm9DVXE5eWJaS0FDa1ljQVNuWHVVVEJRQVVqQll5Y0s5U2hZS0FBQVVwQUNRZ2grMUlndjNLbG44UFBzQTRLamJZTFhGU2tTQ24yenNBSkNPUVVzMDdra3lzZ05BU25ZRGlFRHdrNWtDUUdxS0FETUlmbGJnRlFCTE1KQVp4YjNHS3V3QXNBeTdBZlFrK0ZtTkFzQnlGQUZhRXZ5c1NnRmdXWW9BcnhEOHJFNEJZSG1LQUdjSWZxcFFBQ2hERWVBUndVODFDZ0RsS0FMY0UveFVwUUJRbGlKUW0rQ25PZ1dBOGhTQldnUS9mS2NBd0QvdWcwRVpXSXZRaC9jVUFOaGhWMkFOZ2g4KzltbmJ0dTN6bDYvZlpoOElSTGRDR1RnU2lOblBVK2pEYy8vNzg5ZFBkZ0RnSUs4STRoTDZjSjRDQUJjb0EvTUpmWGlOQWdBdlVnYkdFZnJRamdJQURTa0Q3UWw5NkVNQmdFN2VCcGRDY0l6QWh6RVVBQmhFSWRnbjhHRU9CUUFtMlF1KzFVdUJzSWM0UHQzK2c5OEZBTEcxS0FjamZnK0FrSWZZL3ZmbnI1KzJ6UTRBcEJIaGwvZ0lkMWlISFFBQUtPUzJBL0RUN0FNQkFNWlRBQUNnb0g4THdHMUxBQUJZMDMzVzJ3RUFnSUlVQUFBb1NBRUFnSUorS0FBK0J3QUFhM3FiOFhZQUFLQWdCUUFBQ2xJQUFLQ2dkd1hBNXdBQVlDMTcyVzRIQUFBS1VnQUFvS0RkQXVBMUFBQ3M0YU5NdHdNQUFBVXBBQUJRMEljRndHc0FBTWp0VVpiYkFRQ0FnaFFBQUNqb1lRSHdHZ0FBY25xVzRYWUFBS0NncHdYQUxnQUE1SElrdSswQUFFQkJDZ0FBRkhTb0FIZ05BQUE1SE0xc093QUFVTkRoQW1BWEFBQmlPNVBWZGdBQW9LQlRCY0F1QUFERWREYWo3UUFBUUVHbkM0QmRBQUNJNVVvMjJ3RUFnSUl1RlFDN0FBQVF3OVZNdGdNQUFBVmRMZ0IyQVFCZ3JsZXkrS1VkQUNVQUFPWjROWU85QWdDQWdsNHVBSFlCQUdDc0Z0bHJCd0FBQ21wU0FPd0NBTUFZclRLMzJRNkFFZ0FBZmJYTVdxOEFBS0NncGdYQUxnQUE5TkU2WTV2dkFDZ0JBTkJXajJ6dDhncEFDUUNBTm5wbHFzOEFBRUJCM1FxQVhRQUFlRTNQTE8yNkE2QUVBTUExdlRPMCt5c0FKUUFBemhtUm5UNERBQUFGRFNrQWRnRUE0SmhSbVRsc0IwQUpBSURIUm1ibDBGY0FTZ0FBN0J1ZGtjTS9BNkFFQU1DUFptVGpsQThCS2dFQThOMnNUSnoyVXdCS0FBRFZ6Y3pDcVQ4R3FBUUFVTlhzREp6K2V3Qm1Md0FBakJZaCs2WVhnRzJMc1JBQU1FS1V6QXRSQUxZdHpvSUFRQytSc2k1TUFkaTJXQXNEQUMxRnk3aFFCV0RiNGkwUUFMd3FZcmFGS3dEYkZuT2hBT0NLcUprV3NnQnNXOXdGQTRDakltZFoyQUt3YmJFWERnQWVpWjVob1F2QXRzVmZRQUI0SzBOMmhUL0FlNSsvZlAwMit4Z0E0Q01aZ3Y4bS9BN0F2VXdMQzBBdDJUSXFWUUhZdG53TERNRDZNbVpUdWdPKzU1VUFBRE5sRFA2YmREc0E5ekl2UEFDNVpjK2cxQVZnMi9KZkFBRHlXU0Y3MHAvQVBhOEVBT2hwaGVDL1NiOERjRytsQ3dOQUxLdGx6RkluYzg5dUFBQXRyQmI4TjB1ZTFEMUZBSUFyVmczK202VmVBZXhaL1FJQzBGNkY3RmorQk8vWkRRRGdrUXJCZjFQbVJPOHBBZ0RjcXhUOE4rVk8rSjRpQUZCYnhlQy9LWHZpOXhRQmdGb3FCLzlOK1FXNHB3Z0FyRTN3LzhkQ2ZFQVpBRmlEME45blVaNVFCQUJ5RXZ5UFdad1RsQUdBMklUK2NSYnFJbVVBSUFhaGY0MUZhMEFaQUJoTDZML09BbmFnRUFDMEpmRGJzNkFES0FRQTV3ajgvaXp3SkVvQndIZkNmZzZMSHBTQ0FLeEN3TWYwZjVJRkQyUGxHQmd6QUFBQUFFbEZUa1N1UW1DQyIsICJzaXplcyI6ICI1MTJ4NTEyIiwgInR5cGUiOiAiaW1hZ2UvcG5nIiwgInB1cnBvc2UiOiAiYW55IG1hc2thYmxlIn1dfQ==">
+
+<style>
+  :root {
+    --bg: #f7f8fa;
+    --card: #ffffff;
+    --border: #e4e7ec;
+    --border-strong: #d0d5dd;
+    --text: #1a1d23;
+    --muted: #667085;
+    --accent: #4f6ef7;
+    --accent-soft: #eef1fe;
+    --time-bg: #f9fafb;
+    --hour-line: #c9ced6;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    padding: 24px;
+  }
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+    max-width: 1400px;
+    margin: 0 auto 18px;
+  }
+  h1 {
+    font-size: 22px;
+    font-weight: 650;
+    margin: 0;
+    letter-spacing: -0.01em;
+  }
+  .sub { color: var(--muted); font-size: 13px; margin-top: 3px; }
+  .actions { display: flex; gap: 8px; }
+  button {
+    font: inherit;
+    font-size: 13px;
+    font-weight: 550;
+    padding: 8px 14px;
+    border-radius: 8px;
+    border: 1px solid var(--border-strong);
+    background: var(--card);
+    color: var(--text);
+    cursor: pointer;
+    transition: background .12s, border-color .12s;
+  }
+  button:hover { background: #f0f2f5; }
+  button.danger:hover { background: #fdecec; border-color: #f3b4b4; color: #b42318; }
+  .wrap {
+    max-width: 1400px;
+    margin: 0 auto;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    overflow: hidden;
+    box-shadow: 0 1px 3px rgba(16,24,40,.05), 0 1px 2px rgba(16,24,40,.04);
+  }
+  .scroll { overflow: auto; max-height: calc(100vh - 150px); }
+  table { border-collapse: separate; border-spacing: 0; width: 100%; }
+  th, td { border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+  thead th {
+    position: sticky; top: 0; z-index: 3;
+    background: var(--card);
+    font-size: 12px; font-weight: 650;
+    text-transform: uppercase; letter-spacing: .04em;
+    color: var(--muted);
+    padding: 12px 10px;
+    text-align: center;
+    border-bottom: 2px solid var(--border-strong);
+  }
+  thead th.timehead { z-index: 4; left: 0; }
+  .timecell {
+    position: sticky; left: 0; z-index: 2;
+    background: var(--time-bg);
+    font-size: 11.5px; font-weight: 550;
+    color: var(--muted);
+    white-space: nowrap;
+    padding: 0 12px;
+    text-align: right;
+    width: 120px; min-width: 120px;
+    border-right: 2px solid var(--border-strong);
+  }
+  td.slot {
+    padding: 0;
+    min-width: 130px;
+    height: 34px;
+  }
+  td.slot div {
+    width: 100%; height: 100%;
+    padding: 7px 9px;
+    font-size: 13px;
+    outline: none;
+    cursor: text;
+    line-height: 1.3;
+  }
+  td.slot div:focus { background: var(--accent-soft); box-shadow: inset 0 0 0 2px var(--accent); }
+  td.slot div:empty:before { content: ""; }
+  tr.hour td, tr.hour .timecell { border-top: 1px solid var(--hour-line); }
+  tr:hover td.slot { background: #fcfcfd; }
+  td.slot:has(div:focus) { background: var(--accent-soft); }
+  .timecell.am { color: #9aa1ad; }
+  footer { max-width: 1400px; margin: 12px auto 0; color: var(--muted); font-size: 12px; }
+
+  .section-title {
+    max-width: 1400px; margin: 28px auto 12px;
+    font-size: 16px; font-weight: 650; letter-spacing: -0.01em;
+  }
+  .workouts {
+    max-width: 1400px; margin: 0 auto;
+    display: grid; grid-template-columns: repeat(7, 1fr); gap: 12px;
+  }
+  @media (max-width: 1100px) { .workouts { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 600px) { .workouts { grid-template-columns: 1fr; } }
+  .routines {
+    max-width: 1400px; margin: 0 auto;
+    display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px;
+  }
+  @media (max-width: 700px) { .routines { grid-template-columns: 1fr; } }
+  .routines .wlist { min-height: 200px; line-height: 1.9; }
+  .warmup { max-width: 1400px; margin: 0 auto; }
+  .warmup .wlist { line-height: 1.9; }
+  @media (min-width: 760px) { .warmup .wlist { column-count: 2; column-gap: 40px; } }
+  .wcard {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 12px; overflow: hidden;
+    box-shadow: 0 1px 2px rgba(16,24,40,.04);
+    display: flex; flex-direction: column;
+  }
+  .wcard h3 {
+    margin: 0; padding: 10px 12px;
+    font-size: 12px; font-weight: 650; text-transform: uppercase; letter-spacing: .04em;
+    color: var(--muted); background: var(--time-bg);
+    border-bottom: 1px solid var(--border);
+  }
+  .wlist {
+    padding: 10px 12px; min-height: 120px;
+    font-size: 13px; line-height: 1.8; outline: none; cursor: text; flex: 1;
+    white-space: pre-wrap;
+  }
+  .wlist:focus { background: var(--accent-soft); }
+  .wlist:empty:before {
+    content: "Add workouts\2026"; color: #b3b8c2;
+  }
+
+  .tabs {
+    max-width: 1400px; margin: 0 auto;
+    display: flex; flex-wrap: wrap; gap: 6px;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 0;
+  }
+  .tab {
+    font-size: 13px; font-weight: 550;
+    padding: 9px 16px; cursor: pointer;
+    color: var(--muted);
+    border: 1px solid transparent; border-bottom: none;
+    border-radius: 9px 9px 0 0;
+    margin-bottom: -1px;
+    background: transparent;
+    transition: color .12s, background .12s;
+  }
+  .tab:hover { color: var(--text); background: #f0f2f5; }
+  .tab.active {
+    color: var(--accent); background: var(--card);
+    border-color: var(--border); border-bottom: 1px solid var(--card);
+  }
+  .tabpanes {
+    max-width: 1400px; margin: 0 auto 8px;
+    background: var(--card);
+    border: 1px solid var(--border); border-top: none;
+    border-radius: 0 0 12px 12px;
+    box-shadow: 0 1px 2px rgba(16,24,40,.04);
+  }
+  .tabpane { display: none; }
+  .tabpane.active { display: grid; grid-template-columns: 220px 1fr; min-height: 320px; }
+  @media (max-width: 700px) { .tabpane.active { grid-template-columns: 1fr; } }
+  .pagelist {
+    border-right: 1px solid var(--border);
+    padding: 12px; display: flex; flex-direction: column; gap: 4px;
+    background: var(--time-bg);
+    border-radius: 0 0 0 12px;
+  }
+  @media (max-width: 700px) { .pagelist { border-right: none; border-bottom: 1px solid var(--border); border-radius: 0; } }
+  .pageitem {
+    font-size: 13px; font-weight: 550; color: var(--text);
+    padding: 8px 10px; border-radius: 7px; cursor: pointer;
+    display: flex; align-items: center; justify-content: space-between; gap: 6px;
+    border: 1px solid transparent;
+  }
+  .pageitem:hover { background: #eef0f3; }
+  .pageitem.active { background: var(--accent-soft); border-color: #cdd6fb; color: var(--accent); }
+  .pageitem .del {
+    opacity: 0; font-size: 15px; line-height: 1; color: var(--muted);
+    border: none; background: none; cursor: pointer; padding: 0 2px;
+  }
+  .pageitem:hover .del { opacity: .6; }
+  .pageitem .del:hover { opacity: 1; color: #b42318; }
+  .addpage {
+    margin-top: 6px; font-size: 13px; font-weight: 550; color: var(--accent);
+    background: none; border: 1px dashed #c3ccf7; border-radius: 7px;
+    padding: 8px; cursor: pointer; text-align: center;
+  }
+  .addpage:hover { background: var(--accent-soft); }
+  .pageeditor { padding: 16px 20px; display: flex; flex-direction: column; }
+  .pagetitle {
+    font-size: 17px; font-weight: 650; outline: none; margin-bottom: 10px;
+    padding-bottom: 8px; border-bottom: 1px solid var(--border); letter-spacing: -0.01em;
+  }
+  .pagetitle:empty:before { content: "Page title\2026"; color: #b3b8c2; }
+  .pagebody {
+    flex: 1; min-height: 200px; outline: none;
+    font-size: 14px; line-height: 1.9; white-space: pre-wrap; color: var(--text);
+  }
+  .pagebody:empty:before { content: "Workout details\2026"; color: #b3b8c2; }
+  .emptyhint { color: var(--muted); font-size: 14px; padding: 20px; }
+
+  .logtable { width: 100%; border-collapse: separate; border-spacing: 0; margin-top: 4px; }
+  .logtable th {
+    font-size: 12px; text-transform: uppercase; letter-spacing: .04em;
+    color: var(--muted); text-align: left; font-weight: 650;
+    padding: 8px 10px; background: var(--time-bg);
+    border-bottom: 2px solid var(--border-strong);
+  }
+  .logtable td { border-bottom: 1px solid var(--border); padding: 0; }
+  .logtable td div { padding: 9px 10px; outline: none; font-size: 14px; min-height: 20px; }
+  .logtable td div:focus { background: var(--accent-soft); box-shadow: inset 0 0 0 2px var(--accent); }
+  .logtable .rowdel { width: 34px; text-align: center; }
+  .logtable .rowdel button {
+    opacity: 0; border: none; background: none; cursor: pointer;
+    color: var(--muted); font-size: 16px; line-height: 1;
+  }
+  .logtable tr:hover .rowdel button { opacity: .55; }
+  .logtable .rowdel button:hover { opacity: 1; color: #b42318; }
+  .addrow {
+    margin-top: 10px; font-size: 13px; font-weight: 550; color: var(--accent);
+    background: none; border: 1px dashed #c3ccf7; border-radius: 7px;
+    padding: 8px 12px; cursor: pointer;
+  }
+  .addrow:hover { background: var(--accent-soft); }
+
+  .syncpill {
+    font-size: 12px; font-weight: 600; padding: 6px 11px; border-radius: 999px;
+    display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
+  }
+  .syncpill:before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+  .syncpill.off { background: #f0f1f3; color: #98a0ad; }
+  .syncpill.on { background: #e7f7ee; color: #157f3d; }
+  .syncpill.err { background: #fdecec; color: #b42318; }
+  .syncpill.busy { background: #eef1fe; color: var(--accent); }
+
+  .modal-overlay {
+    display: none; position: fixed; inset: 0; z-index: 50;
+    background: rgba(16,24,40,.45); align-items: flex-start; justify-content: center;
+    padding: 40px 16px; overflow: auto;
+  }
+  .modal-overlay.open { display: flex; }
+  .modal {
+    background: var(--card); border-radius: 16px; max-width: 520px; width: 100%;
+    padding: 26px 28px; box-shadow: 0 20px 50px rgba(16,24,40,.25);
+  }
+  .modal h2 { margin: 0 0 8px; font-size: 19px; font-weight: 650; }
+  .modal-desc { margin: 0 0 16px; color: var(--muted); font-size: 13.5px; line-height: 1.5; }
+  .setup-steps { margin: 0 0 18px; padding-left: 20px; color: var(--text); font-size: 13.5px; line-height: 1.7; }
+  .setup-steps b { font-weight: 600; }
+  .fld { display: block; font-size: 13px; font-weight: 600; color: var(--text); }
+  .fld input {
+    display: block; width: 100%; margin-top: 6px; padding: 10px 12px; font: inherit; font-size: 14px;
+    border: 1px solid var(--border-strong); border-radius: 8px; box-sizing: border-box;
+  }
+  .fld input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .sync-msg { font-size: 13px; margin: 10px 0 0; min-height: 18px; }
+  .sync-msg.ok { color: #157f3d; }
+  .sync-msg.bad { color: #b42318; }
+  .modal-actions { display: flex; align-items: center; gap: 8px; margin-top: 18px; }
+  .modal button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .modal button.primary:hover { background: #3f5de0; }
+  .modal button.ghost { background: transparent; }
+  .modal-note { margin: 16px 0 0; font-size: 12px; color: var(--muted); line-height: 1.5; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Weekly Schedule</h1>
+    <div class="sub">Click any cell to type. Changes save automatically.</div>
+  </div>
+  <div class="actions">
+    <span id="syncPill" class="syncpill off" title="Sync status">Sync off</span>
+    <button id="syncBtn">Sync</button>
+    <button id="clearBtn" class="danger">Clear all</button>
+  </div>
+</header>
+
+<div id="syncModal" class="modal-overlay">
+  <div class="modal">
+    <h2>Cross-device sync</h2>
+    <p class="modal-desc">Sync your schedule, workouts, routines and library across this computer and your phone using a free Firebase database. Enter the same Database URL on every device.</p>
+    <ol class="setup-steps">
+      <li>Go to <b>console.firebase.google.com</b> and create a project (any name).</li>
+      <li>In the left menu open <b>Build → Realtime Database</b>, click <b>Create Database</b>, pick a location, and start in <b>test mode</b>.</li>
+      <li>At the top of the database page, copy the URL that looks like <b>https://your-project-default-rtdb.firebaseio.com</b>.</li>
+      <li>Paste it below and click Connect. Then do the same on your phone.</li>
+    </ol>
+    <label class="fld">Database URL
+      <input id="syncUrlInput" type="text" placeholder="https://your-project-default-rtdb.firebaseio.com" />
+    </label>
+    <div id="syncMsg" class="sync-msg"></div>
+    <div class="modal-actions">
+      <button id="syncDisconnect" class="ghost" style="display:none">Disconnect</button>
+      <span style="flex:1"></span>
+      <button id="syncCancel" class="ghost">Close</button>
+      <button id="syncConnect" class="primary">Connect</button>
+    </div>
+    <p class="modal-note">Note: while connected, the most recent edit on any device wins. For better privacy you can later restrict the database with Firebase rules — ask anytime.</p>
+  </div>
+</div>
+
+<div class="wrap">
+  <div class="scroll">
+    <table id="grid"></table>
+  </div>
+</div>
+<div class="section-title">Workouts</div>
+<div class="workouts" id="workouts"></div>
+
+<div class="section-title">Daily Routines</div>
+<div class="routines" id="routines"></div>
+
+<div class="section-title">Workout Library</div>
+<div class="tabs" id="tabs"></div>
+<div class="tabpanes" id="tabpanes"></div>
+
+<div class="section-title">Warmup</div>
+<div class="warmup" id="warmup"></div>
+
+<footer id="status">Saved automatically to this browser.</footer>
+<div style="max-width:1400px;margin:4px auto 0;color:#b3b8c2;font-size:11px;">App version 5 — sync fixed</div>
+
+<script>
+  const DAYS = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+  const STORE_KEY = "weeklySchedule.v1";
+
+  // ===== Cross-device sync (Firebase Realtime DB via REST) =====
+  const SYNC_KEYS = [
+    "weeklySchedule.v1","weeklyWorkouts.v1","weeklyWorkoutsSeeded.v1",
+    "dailyRoutines.v1","warmupRoutine.v1","workoutLibrary.v2","workoutLibrarySeeded.v1"
+  ];
+  const SYNC_URL_KEY = "sync.dbUrl";
+  const SYNC_LASTV_KEY = "sync.lastV";
+  const SYNC_PATH = "trainingDashboard";
+  const _set = localStorage.setItem.bind(localStorage);
+  const _remove = localStorage.removeItem.bind(localStorage);
+  let applyingRemote = false, pendingReload = false, pushTimer = null;
+
+  // Mirror every saved change to the cloud automatically.
+  localStorage.setItem = function(k, v){ _set(k, v); if(!applyingRemote && SYNC_KEYS.includes(k)) schedulePush(); };
+  localStorage.removeItem = function(k){ _remove(k); if(!applyingRemote && SYNC_KEYS.includes(k)) schedulePush(); };
+
+  function cloudBase(){ return localStorage.getItem(SYNC_URL_KEY) || ""; }
+  function cloudUrl(){ const b = cloudBase().replace(/\/+$/,""); return b ? b + "/" + SYNC_PATH + ".json" : ""; }
+  function setPill(state, text){
+    const p = document.getElementById("syncPill"); if(!p) return;
+    p.className = "syncpill " + state; p.textContent = text;
+  }
+  function schedulePush(){
+    if(!cloudUrl()) return;
+    clearTimeout(pushTimer);
+    pushTimer = setTimeout(pushNow, 1200);
+  }
+  function showStatus(t){ const s = document.getElementById("status"); if(s) s.textContent = t; }
+  function newRev(){ return Date.now().toString(36) + "-" + Math.random().toString(36).slice(2,10); }
+  // Firebase forbids . $ # [ ] / in field names, so map our dotted keys to safe ones.
+  function safeKey(k){ return k.replace(/[.$#\[\]\/]/g, "_"); }
+  async function pushNow(){
+    const url = cloudUrl(); if(!url) return;
+    const snap = { rev: newRev(), keys: {} };
+    SYNC_KEYS.forEach(k => snap.keys[safeKey(k)] = localStorage.getItem(k));
+    setPill("busy","Syncing…");
+    try {
+      // No custom Content-Type header -> "simple" CORS request, avoids a preflight
+      // that some browsers/networks block. Firebase parses the JSON body regardless.
+      const r = await fetch(url, { method:"PUT", body: JSON.stringify(snap) });
+      if(!r.ok){ const t = await r.text().catch(()=>""); throw new Error("write HTTP "+r.status+" "+t.slice(0,160)); }
+      _set(SYNC_LASTV_KEY, snap.rev);
+      setPill("on","Synced"); showStatus("Saved & synced ✓  " + new Date().toLocaleTimeString());
+    } catch(e){ setPill("err","Sync error"); showStatus("SYNC ERROR (write): " + (e && e.message ? e.message : e)); }
+  }
+  async function pullNow(){
+    const url = cloudUrl(); if(!url) return;
+    try {
+      const r = await fetch(url, { cache:"no-store" });
+      if(!r.ok){ const t = await r.text().catch(()=>""); throw new Error("read HTTP "+r.status+" "+t.slice(0,160)); }
+      const snap = await r.json();
+      if(!snap || !snap.rev){ await pushNow(); return; }
+      const lastRev = localStorage.getItem(SYNC_LASTV_KEY);
+      if(snap.rev !== lastRev){ applySnapshot(snap); }
+      else { setPill("on","Synced"); }
+    } catch(e){ setPill("err","Sync error"); showStatus("SYNC ERROR (read): " + (e && e.message ? e.message : e)); }
+  }
+  function applySnapshot(snap){
+    applyingRemote = true;
+    SYNC_KEYS.forEach(k => {
+      const val = snap.keys ? snap.keys[safeKey(k)] : null;
+      if(val === null || val === undefined) _remove(k); else _set(k, val);
+    });
+    _set(SYNC_LASTV_KEY, snap.rev);
+    applyingRemote = false;
+    if(document.activeElement && document.activeElement.isContentEditable){
+      pendingReload = true; setPill("busy","Update ready…");
+    } else {
+      location.reload();
+    }
+  }
+  function maybeReload(){ if(pendingReload) location.reload(); }
+  function initSync(){
+    if(!cloudUrl()){ setPill("off","Sync off"); return; }
+    setPill("on","Synced");
+    pullNow();
+    setInterval(pullNow, 8000);
+    document.addEventListener("visibilitychange", () => { if(!document.hidden) pullNow(); });
+    window.addEventListener("focus", pullNow);
+    document.addEventListener("focusout", () => setTimeout(maybeReload, 150));
+  }
+  // Sync modal wiring
+  (function(){
+    const modal = document.getElementById("syncModal");
+    if(!modal) return;
+    const open = () => {
+      document.getElementById("syncUrlInput").value = cloudBase();
+      document.getElementById("syncDisconnect").style.display = cloudBase() ? "" : "none";
+      const m = document.getElementById("syncMsg"); m.textContent = ""; m.className = "sync-msg";
+      modal.classList.add("open");
+    };
+    const close = () => modal.classList.remove("open");
+    document.getElementById("syncBtn").addEventListener("click", open);
+    document.getElementById("syncCancel").addEventListener("click", close);
+    modal.addEventListener("click", e => { if(e.target === modal) close(); });
+    document.getElementById("syncConnect").addEventListener("click", async () => {
+      let url = document.getElementById("syncUrlInput").value.trim().replace(/\/+$/,"");
+      const msg = document.getElementById("syncMsg");
+      if(!/^https:\/\/.+/.test(url)){ msg.className="sync-msg bad"; msg.textContent="Please paste a valid https:// database URL."; return; }
+      _set(SYNC_URL_KEY, url);
+      msg.className="sync-msg"; msg.textContent="Connecting…";
+      try {
+        const test = await fetch(url + "/" + SYNC_PATH + ".json", { cache:"no-store" });
+        if(!test.ok) throw new Error("HTTP "+test.status);
+        const snap = await test.json();
+        if(snap && snap.rev){ applySnapshot(snap); }
+        else { await pushNow(); }
+        msg.className="sync-msg ok"; msg.textContent="Connected. This device is now syncing.";
+        document.getElementById("syncDisconnect").style.display = "";
+        setPill("on","Synced");
+      } catch(e){
+        _remove(SYNC_URL_KEY);
+        msg.className="sync-msg bad"; msg.textContent="Couldn't reach that database. Check the URL and that the database has been created.";
+        setPill("err","Sync error");
+      }
+    });
+    document.getElementById("syncDisconnect").addEventListener("click", () => {
+      _remove(SYNC_URL_KEY); _remove(SYNC_LASTV_KEY);
+      setPill("off","Sync off");
+      const m = document.getElementById("syncMsg"); m.className="sync-msg"; m.textContent="Disconnected from sync on this device.";
+      document.getElementById("syncDisconnect").style.display="none";
+    });
+  })();
+
+  // Build 48 half-hour slots starting 3:00 AM
+  function fmt(mins) {
+    let h = Math.floor(mins / 60) % 24;
+    let m = mins % 60;
+    const ampm = h < 12 ? "AM" : "PM";
+    let hh = h % 12; if (hh === 0) hh = 12;
+    return `${hh}:${m.toString().padStart(2,"0")} ${ampm}`;
+  }
+  const slots = [];
+  const startMin = 3 * 60; // 3:00 AM
+  for (let i = 0; i < 48; i++) {
+    const s = startMin + i * 30;
+    const e = s + 30;
+    slots.push({ start: s, label: `${fmt(s)} – ${fmt(e)}`, isHour: s % 60 === 0 });
+  }
+
+  let data = {};
+  try { data = JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch(e){ data = {}; }
+
+  const table = document.getElementById("grid");
+  const thead = document.createElement("thead");
+  const htr = document.createElement("tr");
+  const th0 = document.createElement("th");
+  th0.className = "timehead timecell"; th0.textContent = "Time";
+  th0.style.position = "sticky"; th0.style.top = "0";
+  htr.appendChild(th0);
+  DAYS.forEach(d => { const th = document.createElement("th"); th.textContent = d; htr.appendChild(th); });
+  thead.appendChild(htr); table.appendChild(thead);
+
+  const tbody = document.createElement("tbody");
+  slots.forEach((slot, r) => {
+    const tr = document.createElement("tr");
+    if (slot.isHour) tr.className = "hour";
+    const tc = document.createElement("td");
+    tc.className = "timecell" + (slot.start % (24*60) < 12*60 ? " am" : "");
+    tc.textContent = slot.label;
+    tr.appendChild(tc);
+    DAYS.forEach((d, c) => {
+      const td = document.createElement("td");
+      td.className = "slot";
+      const div = document.createElement("div");
+      div.contentEditable = "true";
+      div.spellcheck = false;
+      const key = r + "|" + c;
+      if (data[key]) div.textContent = data[key];
+      div.addEventListener("input", () => {
+        const v = div.textContent.trim();
+        if (v) data[key] = v; else delete data[key];
+        save();
+      });
+      td.appendChild(div);
+      tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+
+  // ---- Workouts board ----
+  const W_KEY = "weeklyWorkouts.v1";
+  const WSEED_KEY = "weeklyWorkoutsSeeded.v1";
+  let wdata = {};
+  try { wdata = JSON.parse(localStorage.getItem(W_KEY)) || {}; } catch(e){ wdata = {}; }
+  // Default per-day cards (0=Sun ... 6=Sat). Each day seeded at most once.
+  const WDEFAULTS = {
+    "0": "• Warmup\n• 50/50\n• Good Shooting\n• Bag off catch\n• Dunks + sprints",
+    "1": "• Warmup\n• 50/50\n• Good Finishing\n• Bag once by\n• Lower Lengthened Strength",
+    "2": "• Warmup\n• 50/50\n• Good Shooting\n• Bag off dribble\n• Upper strength",
+    "3": "• Warmup\n• 50/50\n• Good Finishing\n• Dunks + sprints\n• Bag off Screen",
+    "4": "• Warmup\n• 50/50\n• Good Shooting\n• Lower heavy\n• Bag off dribble",
+    "5": "• Warmup\n• 50/50\n• Good Finishing\n• Upper rotation\n• Bag once by",
+    "6": "• Warmup\n• 50/50\n• Good Shooting\n• Mobility\n• Bag off catch"
+  };
+  let wseeded = [];
+  try { wseeded = JSON.parse(localStorage.getItem(WSEED_KEY)) || []; } catch(e){ wseeded = []; }
+  // Migration: the old seeder only ever added Sunday (index 0).
+  if (localStorage.getItem(WSEED_KEY) === null && localStorage.getItem(W_KEY) !== null) {
+    wseeded = ["0"];
+  }
+  let wSeedChanged = false;
+  Object.keys(WDEFAULTS).forEach(k => {
+    if (!wseeded.includes(k)) {
+      if (wdata[k] === undefined) wdata[k] = WDEFAULTS[k];
+      wseeded.push(k); wSeedChanged = true;
+    }
+  });
+  if (wSeedChanged) {
+    localStorage.setItem(W_KEY, JSON.stringify(wdata));
+    localStorage.setItem(WSEED_KEY, JSON.stringify(wseeded));
+  }
+  const wboard = document.getElementById("workouts");
+  DAYS.forEach((d, i) => {
+    const card = document.createElement("div"); card.className = "wcard";
+    const h3 = document.createElement("h3"); h3.textContent = d; card.appendChild(h3);
+    const list = document.createElement("div");
+    list.className = "wlist"; list.contentEditable = "true"; list.spellcheck = false;
+    if (wdata[String(i)]) list.textContent = wdata[String(i)];
+    list.addEventListener("input", () => {
+      const v = list.textContent.replace(/ /g, " ");
+      if (v.trim()) wdata[String(i)] = v; else delete wdata[String(i)];
+      wsave();
+    });
+    card.appendChild(list);
+    wboard.appendChild(card);
+  });
+  let wTimer;
+  function wsave() {
+    clearTimeout(wTimer);
+    wTimer = setTimeout(() => {
+      localStorage.setItem(W_KEY, JSON.stringify(wdata));
+      const s = document.getElementById("status");
+      s.textContent = "Saved ✓  " + new Date().toLocaleTimeString();
+    }, 250);
+  }
+  // ---- Daily Routines (Morning / Night) ----
+  const R_KEY = "dailyRoutines.v1";
+  let rdata = {};
+  try { rdata = JSON.parse(localStorage.getItem(R_KEY)) || {}; } catch(e){ rdata = {}; }
+  if (!localStorage.getItem(R_KEY)) {
+    rdata = {
+      morning: "Go get sunlight\nPray\nWater\nQi Gong\nCARS\nCrawls\nMeditate 5 minutes\nVortex\nJournal the day out\nEggs, orange, Creatine\nBrush teeth\nGet teeth gum in\nmake bed - room tidy",
+      night: "Plan Tomorrow\n\nBanded stuff 10 per side:\nanti ankle rolls\ntib raise\nHamstring curl (lay on stomach, keep 1 leg stiff)\nQuad extension (lay on stomach, keep 1 leg stiff)\nHip flex/extension (on back, both knees bent, straighten 1 leg forward)\nElbow flexion/extension\nshoulder pull aparts\nShoulder flexion\n\nShower, teeth brush, White strips, pimple patches\nCARS\nLeg sleeves\nread 5 pages\nJournal how the day went, what energy to bring into tomorrow\nMouth Tape\nSlow Breathe\nGet good sleep"
+    };
+    localStorage.setItem(R_KEY, JSON.stringify(rdata));
+  }
+  const routinesEl = document.getElementById("routines");
+  [["morning","Morning Routine"],["night","Night Routine"]].forEach(([key, label]) => {
+    const card = document.createElement("div"); card.className = "wcard";
+    const h3 = document.createElement("h3"); h3.textContent = label; card.appendChild(h3);
+    const list = document.createElement("div");
+    list.className = "wlist"; list.contentEditable = "true"; list.spellcheck = false;
+    if (rdata[key]) list.textContent = rdata[key];
+    list.addEventListener("input", () => {
+      const v = list.textContent;
+      if (v.trim()) rdata[key] = v; else delete rdata[key];
+      rsave();
+    });
+    card.appendChild(list);
+    routinesEl.appendChild(card);
+  });
+  let rTimer;
+  function rsave() {
+    clearTimeout(rTimer);
+    rTimer = setTimeout(() => {
+      localStorage.setItem(R_KEY, JSON.stringify(rdata));
+      const s = document.getElementById("status");
+      s.textContent = "Saved ✓  " + new Date().toLocaleTimeString();
+    }, 250);
+  }
+
+  // ---- Warmup section ----
+  const WU_KEY = "warmupRoutine.v1";
+  let wudata = "";
+  const WU_DEFAULT = "1 high 1 low\nrapid switch\nlow around the leg\nunder the low arm\nhi ho\nfigure 8\nskips through and backwards\nlowmans\nmisdirection through/behind\nRegular Mikans\nWide 1 foot mikans\nspin mikans high and low\nspin mikans 1 side\nfloaters around the arc\nvitamins - killer cross to burnsey, in and out to spin layup, reverse through to euro\n5 1 hand form shots\n5 Pickens 3 jumps\n5 Pickens 1 leg\n5 Pickens side jump\n5 Pickens lateral bound\n5 Pickens jump backs\n5 Pickens three through pickups\n10 one leg chair\n10 chair high arcs\n10 3 free throws";
+  if (localStorage.getItem(WU_KEY) === null) {
+    wudata = WU_DEFAULT;
+    localStorage.setItem(WU_KEY, JSON.stringify(wudata));
+  } else {
+    try { wudata = JSON.parse(localStorage.getItem(WU_KEY)) || ""; } catch(e){ wudata = ""; }
+  }
+  const warmupEl = document.getElementById("warmup");
+  (function(){
+    const card = document.createElement("div"); card.className = "wcard";
+    const h3 = document.createElement("h3"); h3.textContent = "Everyday Warmup"; card.appendChild(h3);
+    const list = document.createElement("div");
+    list.className = "wlist"; list.contentEditable = "true"; list.spellcheck = false;
+    list.textContent = wudata;
+    list.addEventListener("input", () => { wudata = list.textContent; wusave(); });
+    card.appendChild(list); warmupEl.appendChild(card);
+  })();
+  let wuTimer;
+  function wusave() {
+    clearTimeout(wuTimer);
+    wuTimer = setTimeout(() => {
+      localStorage.setItem(WU_KEY, JSON.stringify(wudata));
+      const s = document.getElementById("status");
+      s.textContent = "Saved ✓  " + new Date().toLocaleTimeString();
+    }, 250);
+  }
+
+  // ---- Workout Library: categories -> pages ----
+  const CATS = ["Lifts","Good Drills","Bag shooting","50/50","Conditioning","Group workouts","Court movement"];
+  const L_KEY = "workoutLibrary.v2";
+  // ldata[catIdx] = { sel: <pageIdx>, pages: [ {title, body} ] }
+  const SEED_KEY = "workoutLibrarySeeded.v1";
+  let ldata = {};
+  try { ldata = JSON.parse(localStorage.getItem(L_KEY)) || {}; } catch(e){ ldata = {}; }
+  function cat(i){ if(!ldata[String(i)]) ldata[String(i)] = { sel:0, pages:[] }; return ldata[String(i)]; }
+
+  // Default pages. Each is added at most once (tracked by id), so new defaults
+  // appear on reload without duplicating or wiping pages you've edited/deleted.
+  const DEFAULTS = [
+    { cat:0, id:"lifts-day1", title:"Day 1 - Sprints + Dunks",
+      body:"Pogo Jumps - 2×15\n1 up 2 down - 2×10\nDepth Drop into box jump 2x5\n\nGet loose on 9ish\n\nLeft right 2 foot at 9ish, right left 2 foot at 9ish, 2 hands with left 1 hand with right, 3 each side, raise to 9.5, 3 each side, keep raising until you cant do it anymore,\n\nThen same thing 1 foot 2 hands - start at 9.5\n\n4 full sprints up hill roughly 40 yards - slow controlled walk down and rest 2:30 at the bottom" },
+    { cat:0, id:"lifts-day2", title:"Day 2 - Lower Body Power and Max Strength",
+      body:"Short Foot Holds - 2×20s\nTibialis Raises - 2×15\nHip Internal Rotation Lift-Offs - 2×8\nGlute Bridges - 2×12\nSpanish Squat Hold — 2×20s\nHip Flexor Iso Hold — 2×15s each\nBanded Ankle Inversion/Eversion - 2×12 each\nQuarter Squat push — 2×30s\nSingle-Leg Calf Raise push — 2×15s\n\nZercher Squat - 4×5\nNordic Hamstring Curls - 4×6\nDeadlift - 3×5\nBulgarian Split Squat - 3×5\n\nSled/Reverse Sled - 3x3 down and backs\nPower cleans 3x5" },
+    { cat:0, id:"lifts-day3", title:"Day 3 - Upper Body Strength and Rotation",
+      body:"Open Books (Thoracic Rotation) - 2×10 each side\nQuadruped T-Spine Rotations - 2×8 each side\nSerratus Wall Slides - 2×10\nScap Pull-Ups - 2×8\nSerratus Wall Hold — 2×15\nDead Hang — 2×25s\nWrist Extension Iso — 2×15s\nWrist Flexion Iso — 2×15s\nGrip Hold — 2×20s\n\nBench Press - 5×5\nWeighted Pullups - 4×failure then failure bodyweight\nBridge Russian twist variation\nkettle bell pull through\nSide-Lying External Rotations - 3×12\nBottoms-Up Kettlebell Press - 3×8 each arm\nRear Delt Flys - 3×12\nHalf-Kneeling Landmine Rotations - 4×8 each side" },
+    { cat:0, id:"lifts-day6", title:"Day 6 - Lower Body Lengthened Strength and Stability",
+      body:"Short Foot Holds - 2×20s\nTibialis Raises - 2×15\nHip Internal Rotation Lift-Offs - 2×8\nGlute Bridges - 2×12\nSpanish Squat Hold — 2×20s\nHip Flexor Iso Hold — 2×15s each\nBanded Ankle Inversion/Eversion - 2×12 each\nQuarter Squat push — 2×30s\nSingle-Leg Calf Raise push — 2×15\n\nATG Squats - 3×6\nJefferson Curl - 3×8\nReverse Nordic - 3×8\nKettlebell swing - 3x8\nNordics - 3×8\nCossack Squats - 3×6\n\nSled/Reverse Sled - 3x3 down and backs\nPower cleans 3x5" },
+    { cat:0, id:"lifts-day7", title:"Day 7 - Lower Body Lengthened Strength",
+      body:"Warm-Up\nShort Foot Holds - 2×20s\nTibialis Raises - 2×15\nHip Internal Rotation Lift-Offs - 2×8\nDeep Bodyweight Squats - 2×10\n\nDeep Split Squat Iso — 2×20s each\nHip Flexor Iso Raise — 2×15s\nShort Foot Hold — 2×20s\nAdductor Squeeze — 2×20s\n\nStrength (Deep ROM)\nATG Squats - 3×6\nReverse Nordic - 3×8\nJefferson Curl - 3×8\nNordics - 3×8\nKettlebell swing - 3x8\n\nAdductors\nCossack Squats - 3×6 each side\n\nFinisher\nHip Flexor Isometric Raise - 3×45s each\nHip outward drive - 2x45s\nSeated Calf Raise - 3×45s\nBackward sled run - 3xfail\n\nSeated Calf Raise Hold — 3×40s\nCossack Hold — 2×25s each\nHip Flexor Iso Hold — 2×30s each\nHamstring Bridge Hold — 2×30s" },
+    { cat:2, id:"bag-off-dribble", title:"Bag Off Dribble",
+      body:"Mistiming pull up - 5/7\nDrop hezi pull volleyball line - 3/4 each way\nTop of key sprint to corner - 3/4 each way\nFull sprint into stop transition - 3/4 each way\nFull sprint hard stop step back transition - 3/4 each way\nDrop through step back - 3/4 each way\nDrop through cross hang - 3/4 each way\nDrop misdirection through - 3/4 each way\nMcGarrity - 3/4 each way" },
+    { cat:3, id:"5050-log", title:"Log", type:"table",
+      columns:["Date","Threes/50","Free Throws/50"],
+      rows:[["","",""]] }
+  ];
+  let seeded = [];
+  try { seeded = JSON.parse(localStorage.getItem(SEED_KEY)) || []; } catch(e){ seeded = []; }
+  // Migration: the old seeder only ever added lifts-day1.
+  if (localStorage.getItem(SEED_KEY) === null && localStorage.getItem(L_KEY) !== null) {
+    seeded = ["lifts-day1"];
+  }
+  let seedChanged = false;
+  DEFAULTS.forEach(d => {
+    if (!seeded.includes(d.id)) {
+      const page = { title: d.title };
+      if (d.type === "table") {
+        page.type = "table";
+        page.columns = d.columns.slice();
+        page.rows = (d.rows || []).map(r => r.slice());
+      } else {
+        page.body = d.body || "";
+      }
+      cat(d.cat).pages.push(page);
+      seeded.push(d.id); seedChanged = true;
+    }
+  });
+  if (seedChanged) {
+    localStorage.setItem(L_KEY, JSON.stringify(ldata));
+    localStorage.setItem(SEED_KEY, JSON.stringify(seeded));
+  }
+
+  const tabsEl = document.getElementById("tabs");
+  const panesEl = document.getElementById("tabpanes");
+
+  CATS.forEach((name, i) => {
+    const tab = document.createElement("button");
+    tab.className = "tab" + (i === 0 ? " active" : "");
+    tab.textContent = name;
+    tab.addEventListener("click", () => {
+      document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+      document.querySelectorAll(".tabpane").forEach(p => p.classList.remove("active"));
+      tab.classList.add("active");
+      panesEl.children[i].classList.add("active");
+    });
+    tabsEl.appendChild(tab);
+
+    const pane = document.createElement("div");
+    pane.className = "tabpane" + (i === 0 ? " active" : "");
+    pane.innerHTML = '<div class="pagelist"></div><div class="pageeditor"></div>';
+    panesEl.appendChild(pane);
+    renderCat(i);
+  });
+
+  function renderCat(i) {
+    const c = cat(i);
+    const pane = panesEl.children[i];
+    const listEl = pane.querySelector(".pagelist");
+    const edEl = pane.querySelector(".pageeditor");
+    listEl.innerHTML = ""; edEl.innerHTML = "";
+
+    if (c.sel >= c.pages.length) c.sel = c.pages.length - 1;
+    if (c.sel < 0) c.sel = 0;
+
+    c.pages.forEach((p, pi) => {
+      const item = document.createElement("div");
+      item.className = "pageitem" + (pi === c.sel ? " active" : "");
+      const label = document.createElement("span");
+      label.textContent = p.title || "Untitled";
+      item.appendChild(label);
+      const del = document.createElement("button");
+      del.className = "del"; del.innerHTML = "×"; del.title = "Delete page";
+      del.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (!confirm('Delete "' + (p.title || "Untitled") + '"?')) return;
+        c.pages.splice(pi, 1);
+        if (c.sel >= c.pages.length) c.sel = c.pages.length - 1;
+        lsave(); renderCat(i);
+      });
+      item.appendChild(del);
+      item.addEventListener("click", () => { c.sel = pi; lsave(); renderCat(i); });
+      listEl.appendChild(item);
+    });
+
+    const add = document.createElement("button");
+    add.className = "addpage"; add.textContent = "+ New page";
+    add.addEventListener("click", () => {
+      c.pages.push({ title: "", body: "" });
+      c.sel = c.pages.length - 1;
+      lsave(); renderCat(i);
+      panesEl.children[i].querySelector(".pagetitle").focus();
+    });
+    listEl.appendChild(add);
+
+    if (c.pages.length === 0) {
+      edEl.innerHTML = '<div class="emptyhint">No pages yet. Click “+ New page” to add one.</div>';
+      return;
+    }
+    const page = c.pages[c.sel];
+    const title = document.createElement("div");
+    title.className = "pagetitle"; title.contentEditable = "true"; title.spellcheck = false;
+    title.textContent = page.title;
+    title.addEventListener("input", () => {
+      page.title = title.textContent.trim();
+      const item = listEl.children[c.sel];
+      if (item) item.querySelector("span").textContent = page.title || "Untitled";
+      lsave();
+    });
+    edEl.appendChild(title);
+
+    if (page.type === "table") {
+      renderTable(edEl, page);
+    } else {
+      const body = document.createElement("div");
+      body.className = "pagebody"; body.contentEditable = "true"; body.spellcheck = false;
+      body.textContent = page.body;
+      body.addEventListener("input", () => { page.body = body.textContent; lsave(); });
+      edEl.appendChild(body);
+    }
+  }
+
+  function renderTable(edEl, page) {
+    const table = document.createElement("table");
+    table.className = "logtable";
+    const thead = document.createElement("thead");
+    const htr = document.createElement("tr");
+    page.columns.forEach(col => { const th = document.createElement("th"); th.textContent = col; htr.appendChild(th); });
+    htr.appendChild(document.createElement("th")); // delete column header
+    thead.appendChild(htr); table.appendChild(thead);
+
+    const tbody = document.createElement("tbody");
+    function buildRow(row, ri) {
+      const tr = document.createElement("tr");
+      page.columns.forEach((_, ci) => {
+        const td = document.createElement("td");
+        const div = document.createElement("div");
+        div.contentEditable = "true"; div.spellcheck = false;
+        div.textContent = row[ci] || "";
+        div.addEventListener("input", () => { row[ci] = div.textContent; lsave(); });
+        td.appendChild(div); tr.appendChild(td);
+      });
+      const delTd = document.createElement("td");
+      delTd.className = "rowdel";
+      const del = document.createElement("button");
+      del.innerHTML = "×"; del.title = "Delete row";
+      del.addEventListener("click", () => {
+        page.rows.splice(ri, 1);
+        if (page.rows.length === 0) page.rows.push(page.columns.map(() => ""));
+        lsave();
+        edEl.removeChild(edEl.querySelector(".logtable"));
+        const btn = edEl.querySelector(".addrow"); if (btn) edEl.removeChild(btn);
+        renderTable(edEl, page);
+      });
+      delTd.appendChild(del); tr.appendChild(delTd);
+      return tr;
+    }
+    page.rows.forEach((row, ri) => tbody.appendChild(buildRow(row, ri)));
+    table.appendChild(tbody);
+    edEl.appendChild(table);
+
+    const add = document.createElement("button");
+    add.className = "addrow"; add.textContent = "+ Add row";
+    add.addEventListener("click", () => {
+      page.rows.push(page.columns.map(() => ""));
+      lsave();
+      tbody.appendChild(buildRow(page.rows[page.rows.length - 1], page.rows.length - 1));
+    });
+    edEl.appendChild(add);
+  }
+
+  let lTimer;
+  function lsave() {
+    clearTimeout(lTimer);
+    lTimer = setTimeout(() => {
+      localStorage.setItem(L_KEY, JSON.stringify(ldata));
+      const s = document.getElementById("status");
+      s.textContent = "Saved ✓  " + new Date().toLocaleTimeString();
+    }, 250);
+  }
+
+  let saveTimer;
+  function save() {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+      localStorage.setItem(STORE_KEY, JSON.stringify(data));
+      const s = document.getElementById("status");
+      s.textContent = "Saved ✓  " + new Date().toLocaleTimeString();
+    }, 250);
+  }
+
+  document.getElementById("clearBtn").addEventListener("click", () => {
+    if (!confirm("Clear everything in the schedule, workouts, and library? This can't be undone.")) return;
+    data = {}; wdata = {}; ldata = {}; rdata = {}; wudata = "";
+    localStorage.removeItem(STORE_KEY);
+    localStorage.removeItem(W_KEY);
+    localStorage.removeItem(L_KEY);
+    localStorage.removeItem(R_KEY);
+    localStorage.removeItem(WU_KEY);
+    document.querySelectorAll("td.slot div").forEach(d => d.textContent = "");
+    document.querySelectorAll(".wlist").forEach(d => d.textContent = "");
+    CATS.forEach((_, i) => renderCat(i));
+    document.getElementById("status").textContent = "Cleared.";
+  });
+
+  // Start cross-device sync if a database has been connected.
+  initSync();
+</script>
+</body>
+</html>

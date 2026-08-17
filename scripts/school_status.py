@@ -169,7 +169,12 @@ def main():
     section("PACE — are you ahead of each class?")
     if not courses:
         print("  no courses.csv rows yet")
-    for c in courses:
+    # lead_target_days = 0 means "not a prep-driven course" — the varsity-athletics
+    # PHED row and the AIQS administrative shell both live in courses.csv because
+    # they're real enrollments, but reporting a reading-lead figure for basketball
+    # is noise that makes the real six harder to scan.
+    for c in [c for c in courses
+              if int((c.get("lead_target_days") or "0").strip() or 0) > 0]:
         code = c.get("course") or c.get("code") or "?"
         target = int((c.get("lead_target_days") or "0").strip() or 0)
         prepared = date(c.get("prepared_through"))
