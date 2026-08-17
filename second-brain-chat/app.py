@@ -810,9 +810,15 @@ open and what has shipped. Alex is never the middleman between you and your own 
 abilities — tell him you've filed it and move on to what you CAN do for him right now.
 
 You have TWO ways to act on the open web, and they are not interchangeable:
-  - browse_web_sandbox is the DEFAULT. It drives an isolated, cloud-hosted browser
-    (Browserbase) — navigating, clicking, filling forms, reading pages — completely
-    separate from Alex's real machine. Use this for anything that's just a webpage.
+  - Your own browser is the DEFAULT: browse_web opens a page in an isolated cloud
+    browser, and browse_act clicks/types/scrolls/goes back on that SAME page — the
+    session stays open, keeping cookies, scroll and half-filled forms, so work through
+    a flow step by step rather than re-opening the site each time. browse_screenshot
+    shows you the page when the text alone doesn't say where something is; use it when
+    a click misses rather than guessing again. Alex WATCHES this live in a pane beside
+    the chat, so narrate what you're doing as you go, and call browse_close when the
+    task is done — an open session costs him account minutes and the pane stays up
+    until it closes. None of it touches his real machine.
   - screen_control_* is HIGH-RISK and reaches for it ONLY when a task genuinely needs
     Alex's actual desktop (a native app, not a website) and he's explicitly asked for it.
     It requires screen_control_start first (which fails closed if the Escape kill-switch
@@ -4357,7 +4363,7 @@ def _dispatch_tool_call(tool_name: str, tool_input: dict) -> str:
         return capability_escalation.handle_tool_call(tool_name, tool_input)
     if tool_name in ("list_generated_files", "remove_generated_file", "restore_generated_file"):
         return generated_files.handle_tool_call(tool_name, tool_input)
-    if tool_name in ("browse_web_sandbox",):
+    if tool_name in browser_sandbox.TOOL_NAMES:
         return browser_sandbox.handle_tool_call(tool_name, tool_input, handle_tool_call)
     if tool_name in ("screen_control_start", "screen_control_act",
                      "screen_control_screenshot", "screen_control_stop"):
@@ -5218,7 +5224,7 @@ TOOL_STATUS_LABELS.update(generated_files.TOOL_STATUS_LABELS)
 import browser_sandbox  # noqa: E402
 browser_sandbox.init(composio, COMPOSIO_USER_ID)
 TOOLS.extend(browser_sandbox.TOOL_SCHEMAS)
-TOOL_STATUS_LABELS["browse_web_sandbox"] = "Opening a sandboxed browser…"
+TOOL_STATUS_LABELS.update(browser_sandbox.TOOL_STATUS_LABELS)
 
 # ------------------------------------------------------------
 # Screen control (screen_control.py) — HIGH RISK, gated, local-only, hard
@@ -5677,6 +5683,24 @@ def api_training():
     except Exception as e:
         print(f"Warning: /api/training failed: {e}")
         return jsonify({"error": "schedule unavailable"}), 503
+
+
+@app.route("/api/browser")
+def api_browser():
+    """What the chat's browser pane polls: whether a session is live and the
+    embeddable live-view URL for it. Cheap and side-effect free — it reads
+    module state and never opens a session, so polling can't cost minutes."""
+    try:
+        return jsonify(browser_sandbox.session_info())
+    except Exception as e:
+        print(f"Warning: /api/browser failed: {e}")
+        return jsonify({"ready": False, "active": False, "live_url": ""})
+
+
+@app.route("/api/browser/close", methods=["POST"])
+def api_browser_close():
+    """The pane's X button — Alex closing the session himself."""
+    return jsonify({"message": browser_sandbox.close_session()})
 
 
 @app.route("/api/pending-count")

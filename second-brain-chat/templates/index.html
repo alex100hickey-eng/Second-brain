@@ -142,6 +142,52 @@
     margin: 0 auto;
   }
 
+  /* Browser pane — the live view of the cloud browser CLARVIS is driving.
+     Chat and its input share the left column so the composer stays put when
+     the pane opens; the pane is a sibling, not an overlay. */
+  #workspace { flex: 1; display: flex; min-height: 0; }
+  #chat-col { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  #browser-pane {
+    width: min(46vw, 760px);
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    border-left: 1px solid var(--hud-cyan-25);
+    background: #05122a;
+  }
+  #browser-pane[hidden] { display: none; }
+  .bp-head {
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--hud-cyan-25);
+    font-size: 11px; color: var(--hud-label);
+  }
+  .bp-dot {
+    width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
+    background: var(--hud-accent);
+    box-shadow: 0 0 6px var(--hud-accent);
+    animation: bp-pulse 2s ease-in-out infinite;
+  }
+  @keyframes bp-pulse { 0%,100% { opacity: 1 } 50% { opacity: .35 } }
+  #bp-url {
+    flex: 1; min-width: 0;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .bp-btn {
+    background: none; border: 1px solid var(--hud-cyan-25); color: var(--hud-cyan);
+    font: inherit; font-size: 11px; line-height: 1;
+    padding: 5px 8px; border-radius: 4px; cursor: pointer; text-decoration: none;
+  }
+  .bp-btn:hover { border-color: var(--hud-accent); color: var(--hud-accent); }
+  #bp-frame { flex: 1; width: 100%; border: 0; background: #0b1a33; }
+
+  @media (max-width: 900px) {
+    /* No room to sit beside chat: the pane becomes the bottom half. */
+    #workspace { flex-direction: column; }
+    #browser-pane { width: 100%; height: 50vh; border-left: 0;
+                    border-top: 1px solid var(--hud-cyan-25); }
+  }
+
   .empty-state {
     height: 100%;
     display: flex;
@@ -518,6 +564,8 @@
   </div>
 </header>
 
+<div id="workspace">
+<div id="chat-col">
 <main id="chat">
   <div class="empty-state" id="empty-state">
     <div class="glyph">Standing by</div>
@@ -538,6 +586,20 @@
     <button type="submit" id="send-btn">Send</button>
   </div>
 </form>
+</div><!-- /#chat-col -->
+
+<aside id="browser-pane" hidden>
+  <div class="bp-head">
+    <span class="bp-dot" title="CLARVIS is driving this browser"></span>
+    <span id="bp-url">Browser</span>
+    <a class="bp-btn" id="bp-pop" href="#" target="_blank" rel="noopener"
+       title="Open the live view in its own tab">↗</a>
+    <button class="bp-btn" id="bp-close" title="Close the browser session">✕</button>
+  </div>
+  <iframe id="bp-frame" title="CLARVIS's browser"
+          allow="clipboard-read; clipboard-write"></iframe>
+</aside>
+</div><!-- /#workspace -->
 
 <script>
   const chat = document.getElementById('chat');
@@ -833,6 +895,9 @@
       // Close the loop — including after an error, so one failed turn doesn't
       // silently drop Alex out of a hands-free conversation.
       armListening();
+      // The browser pane checks now rather than waiting out its poll interval:
+      // if this turn opened or closed a session, the pane should already agree.
+      window.dispatchEvent(new Event('clarvis:turn-done'));
     }
   });
 
@@ -1293,6 +1358,63 @@
   });
 
   input.focus();
+
+  /* ---- Browser pane -------------------------------------------------------
+     Shows the live view of the cloud browser whenever CLARVIS has a session
+     open. Polls /api/browser, which only reads module state — it never opens a
+     session, so watching this page can't cost account minutes. */
+  (function browserPane() {
+    const pane = document.getElementById('browser-pane');
+    const frame = document.getElementById('bp-frame');
+    const urlEl = document.getElementById('bp-url');
+    const pop = document.getElementById('bp-pop');
+    let shownUrl = null;   // the src actually loaded, so polling never re-sets it
+
+    function apply(info) {
+      const live = info && info.active && info.live_url;
+      if (!live) {
+        if (shownUrl !== null) { frame.src = 'about:blank'; shownUrl = null; }
+        pane.hidden = true;
+        return;
+      }
+      if (info.live_url !== shownUrl) {
+        // Re-assigning src on every poll would reload the view a few times a
+        // minute and fight whatever CLARVIS is doing mid-page.
+        frame.src = info.live_url;
+        pop.href = info.live_url;
+        shownUrl = info.live_url;
+      }
+      // Host first, path only if there is one: the domain is the bit worth
+      // reading at a glance, and a long URL would clip it away.
+      let label = info.url || 'Browser';
+      try {
+        const u = new URL(info.url);
+        label = u.hostname + (u.pathname && u.pathname !== '/' ? u.pathname : '');
+      } catch (e) { /* about:blank and friends aren't parseable — show as-is */ }
+      urlEl.textContent = label;
+      urlEl.title = info.url || '';
+      pane.hidden = false;
+    }
+
+    async function poll() {
+      try { apply(await (await fetch('/api/browser', { cache: 'no-store' })).json()); }
+      catch (e) { /* a failed poll is not a reason to tear down a live view */ }
+    }
+
+    document.getElementById('bp-close').addEventListener('click', async () => {
+      pane.hidden = true;                      // respond now, confirm after
+      frame.src = 'about:blank'; shownUrl = null;
+      try { await fetch('/api/browser/close', { method: 'POST' }); } catch (e) {}
+      poll();
+    });
+
+    poll();
+    setInterval(poll, 4000);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) poll(); });
+    // A turn that used the browser will have opened it by the time the reply
+    // lands, so check immediately rather than waiting out the interval.
+    window.addEventListener('clarvis:turn-done', poll);
+  })();
 </script>
 
 </body>

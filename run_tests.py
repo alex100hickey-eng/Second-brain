@@ -5499,6 +5499,102 @@ def suite_training(app, live):
         app._calendar_cache.clear(); app._calendar_cache.update(saved_cal)
 
 
+def suite_browser(app, live):
+    section("browser pane (session lifecycle + the feed the chat pane polls)")
+    import time as _time
+    import browser_sandbox as bs
+
+    saved_env = os.environ.get("BROWSERBASE_API_KEY")
+    saved_session = dict(bs._session)
+    saved_release = bs._release
+    released = []
+    # Never let this suite reach Browserbase: releasing a fake session id would
+    # be a real HTTP call, and the offline run must cost nothing.
+    bs._release = lambda sid: released.append(sid)
+    try:
+        # ---- not configured: registered but inert, and NOTHING is attempted ----
+        os.environ.pop("BROWSERBASE_API_KEY", None)
+        check("readiness follows the API key", not bs.is_ready())
+        msg = bs.handle_tool_call("browse_web", {"url": "https://example.com"})
+        check("without a key it explains itself instead of trying",
+              "BROWSERBASE_API_KEY" in msg and "Nothing was attempted" in msg)
+        check("the pane's feed reports not-ready rather than erroring",
+              bs.session_info()["ready"] is False)
+        os.environ["BROWSERBASE_API_KEY"] = "test-key-not-used-for-network"
+        check("an unknown tool name is refused",
+              "Unknown" in bs.handle_tool_call("browse_nonsense", {}))
+        check("closing with nothing open is a no-op message, not an error",
+              "No browser session" in bs.close_session())
+
+        # ---- session_info: what decides whether the pane is shown ----
+        bs._session.update({"id": "sess-1", "connect_url": "wss://x",
+                            "live_url": "https://www.browserbase.com/devtools/x",
+                            "started_at": _time.time() - 30,
+                            "last_used": _time.time(), "last_url": "https://example.com/"})
+        info = bs.session_info()
+        check("an active session hands the pane a live-view URL",
+              info["active"] and info["live_url"].startswith("https://")
+              and info["url"] == "https://example.com/" and info["age_s"] >= 0)
+        bs._session["last_used"] = _time.time() - (bs.IDLE_TIMEOUT_S + 5)
+        idle = bs.session_info()
+        check("an idle session reads as inactive so the pane closes itself",
+              not idle["active"] and idle["live_url"] == "")
+        check("...and no live URL leaks once it's inactive", idle["url"] == "")
+
+        # ---- the endpoints the pane uses ----
+        saved_code = app.ACCESS_CODE
+        app.app.config["TESTING"] = True
+        c = app.app.test_client()
+        try:
+            app.ACCESS_CODE = ""
+            r = c.get("/api/browser")
+            check("/api/browser serves the pane's feed as JSON",
+                  r.status_code == 200 and set(("ready", "active", "live_url"))
+                  <= set(r.get_json().keys()))
+            check("polling the feed never opens a session (it would cost minutes)",
+                  bs._session["id"] == "sess-1")
+            r = c.post("/api/browser/close")
+            check("/api/browser/close releases it for the pane's X button",
+                  r.status_code == 200 and bs._session["id"] is None
+                  and released == ["sess-1"], str(released))
+        finally:
+            app.ACCESS_CODE = saved_code
+
+        # ---- wiring ----
+        check("every browse tool is registered with the model",
+              set(bs.TOOL_NAMES) <= {t["name"] for t in app.TOOLS})
+        check("every browse tool has a UI status label",
+              all(n in app.TOOL_STATUS_LABELS for n in bs.TOOL_NAMES))
+        os.environ.pop("BROWSERBASE_API_KEY", None)
+        check("app dispatch routes the browse tools to the module",
+              "Nothing was attempted" in app._dispatch_tool_call(
+                  "browse_web", {"url": "https://example.com"}))
+        os.environ["BROWSERBASE_API_KEY"] = "test-key-not-used-for-network"
+
+        # ---- the chat page actually carries the pane ----
+        tmpl = open(os.path.join(CHAT_DIR, "templates", "index.html")).read()
+        for needle, why in [
+            ("browser-pane", "the pane element"),
+            ("/api/browser", "the poll"),
+            ("bp-frame", "the live-view iframe"),
+        ]:
+            check(f"chat page includes {why}", needle in tmpl)
+        check("the pane only reassigns the iframe src when the URL changes",
+              "shownUrl" in tmpl and "info.live_url !== shownUrl" in tmpl)
+
+        if live:
+            skip("real Browserbase session", "costs account minutes — exercised by hand")
+        else:
+            skip("real Browserbase session", "offline — run with --live")
+    finally:
+        bs._release = saved_release
+        bs._session.clear(); bs._session.update(saved_session)
+        if saved_env is None:
+            os.environ.pop("BROWSERBASE_API_KEY", None)
+        else:
+            os.environ["BROWSERBASE_API_KEY"] = saved_env
+
+
 SUITES = {
     "vault": suite_vault,
     "gate": suite_gate,
@@ -5554,6 +5650,7 @@ SUITES = {
     "egress": suite_egress,
     "canvas": suite_canvas,
     "training": suite_training,
+    "browser": suite_browser,
 }
 
 
