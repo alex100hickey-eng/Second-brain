@@ -5369,6 +5369,51 @@ def suite_training(app, live):
             os.environ["TRAINING_SYNC_TOKEN"] = "testtok-training-suite"
         check("app dispatch routes training tools",
               "Monday:" in app._dispatch_tool_call("get_training_schedule", {"day": "week"}))
+
+        # ---- /schedule page + its feed ----
+        pay = tsync.week_payload(_dt(2026, 8, 17, 13, 0))  # a Monday, 1 PM
+        mon_day = pay["days"][1]
+        check("week_payload lays the week out Sun..Sat with slot-indexed blocks",
+              pay["connected"] and len(pay["days"]) == 7
+              and mon_day["short"] == "MON" and mon_day["is_today"]
+              and {"slot_start", "slot_end", "label"} <= set(mon_day["blocks"][0]),
+              str(mon_day["blocks"][:2]))
+        check("slot indices match the 3AM origin (7am Class -> slot 8)",
+              any(b["slot_start"] == 8 and b["slot_end"] == 10 and b["label"] == "Class"
+                  for b in mon_day["blocks"]), str(mon_day["blocks"]))
+        check("now_slot places 1 PM at slot 20 of the current column",
+              abs(pay["now_slot"] - 20) < 0.01 and pay["days"][1]["is_current_column"])
+        check("before 3 AM the marker stays in the previous column",
+              tsync.week_payload(_dt(2026, 8, 18, 1, 0))["days"][1]["is_current_column"])
+        check("workout card rides along with its day", mon_day["workout"] == "Lower body")
+        # These pages sit behind the login gate, which the repo .env arms during
+        # tests; drop it so the checks exercise the views, not the redirect.
+        saved_code2 = app.ACCESS_CODE
+        try:
+            app.ACCESS_CODE = ""
+            r = c.get("/api/training")
+            check("/api/training serves the feed", r.status_code == 200
+                  and r.get_json()["connected"] is True)
+            r = c.get("/schedule")
+            check("/schedule renders the page, not JSON",
+                  r.status_code == 200 and b"<html" in r.data.lower()
+                  and b"SCHEDULE</h1>" in r.data and b"/api/training" in r.data,
+                  str(r.status_code))
+            # regression: /school /revenue /schedule were decorating api_august,
+            # so all three answered with the August JSON blob instead of a page
+            for path in ("/school", "/revenue"):
+                rr = c.get(path)
+                check(f"{path} renders a page, not the August JSON",
+                      rr.status_code == 200 and b"<html" in rr.data.lower()
+                      and not rr.data.lstrip().startswith(b"{"), str(rr.status_code))
+            aug = c.get("/api/august")
+            check("/api/august still serves JSON", aug.status_code == 200 and aug.is_json)
+            tsync._state.update({"snapshot": None})
+            check("the page's feed says 'not connected' rather than erroring",
+                  c.get("/api/training").get_json()["connected"] is False)
+            tsync._state.update({"snapshot": snap})
+        finally:
+            app.ACCESS_CODE = saved_code2
         check("never-synced tools point at the connect flow",
               (tsync._state.update({"snapshot": None}) or True)
               and "sync" in tsync.get_training_schedule("week").lower())

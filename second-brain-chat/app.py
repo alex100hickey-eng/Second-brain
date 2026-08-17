@@ -5560,12 +5560,25 @@ def chat_classic():
     return render_template("index.html")
 
 
-# Expanded views behind the HUD widgets. One template serves all four — it reads
+@app.route("/schedule")
+def schedule_page():
+    """Alex's training-app week, read-only, inside CLARVIS.
+
+    Its own template rather than a subpage.html page config: those are SVG panels
+    at fixed deck coordinates, which a 7-column x 48-row grid can't live in and
+    stay readable on a phone. Same palette, fonts and glow (HUD_STYLE.md)."""
+    return render_template("schedule.html")
+
+
+# Expanded views behind the HUD widgets. One template serves them — it reads
 # the page key off the URL — and every one draws the same shell (floor, lettering,
 # core reactor), so the reactor is a consistent "back to the deck" control.
 @app.route("/school")
 @app.route("/revenue")
-@app.route("/schedule")
+def hud_expanded():
+    return render_template("subpage.html")
+
+
 @app.route("/api/august")
 def api_august():
     """Feed for the August tab. Its own endpoint rather than another section of
@@ -5644,6 +5657,17 @@ def hud_demo():
     # HUD_STYLE.md. Displays every component; used to iterate the visual style
     # against references/hud-target.png.
     return render_template("hud-demo.html")
+
+
+@app.route("/api/training")
+def api_training():
+    """Feed for the /schedule page. Assembly lives in training_sync.week_payload
+    so the page, the tests, and any offline preview all render the same shape."""
+    try:
+        return jsonify(training_sync.week_payload(datetime.now(LOCAL_TZ)))
+    except Exception as e:
+        print(f"Warning: /api/training failed: {e}")
+        return jsonify({"error": "schedule unavailable"}), 503
 
 
 @app.route("/api/pending-count")

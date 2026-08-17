@@ -349,6 +349,59 @@ def get_workout_library(category: str = "", page: str = "") -> str:
     return "\n\n".join(out)
 
 
+def week_payload(now: datetime) -> dict:
+    """The /schedule page's feed: the week as columns of slot-positioned blocks.
+
+    Slot indices (0-47, 30 min each from 3 AM) go to the client rather than clock
+    strings, so the page lays the grid out by row span instead of re-deriving the
+    same arithmetic in JS and drifting from it."""
+    p = parsed()
+    if p is None:
+        return {"connected": False, "now": now.strftime("%-I:%M %p")}
+
+    col_date, slot_now = training_schedule.current_position(now)
+    today = now.date()
+    # A weekly template, not a rolling 7 days: Monday's column is Monday's
+    # blocks whatever today is, which is how the app itself reads.
+    week_start = today - timedelta(days=training_schedule.day_index(today))
+    days = []
+    for i in range(7):
+        d = week_start + timedelta(days=i)
+        anchor = datetime(d.year, d.month, d.day) + timedelta(
+            minutes=training_schedule.DAY_START_MIN)
+        blocks = []
+        for ev in training_schedule.column_events(p.get("grid") or {}, d):
+            per = training_schedule.SLOT_MIN
+            blocks.append({
+                "label": ev["title"],
+                "slot_start": int((ev["start"] - anchor).total_seconds() // 60 // per),
+                "slot_end": int((ev["end"] - anchor).total_seconds() // 60 // per),
+                "start": training_schedule.clock(ev["start"]),
+                "end": training_schedule.clock(ev["end"]),
+            })
+        days.append({
+            "index": i,
+            "name": training_schedule.DAYS[i],
+            "short": training_schedule.DAYS[i][:3].upper(),
+            "is_today": d == today,
+            "is_current_column": d == col_date,
+            "blocks": blocks,
+            "workout": training_schedule.workout_for_date(p, d),
+        })
+    return {
+        "connected": True,
+        "saved_at": last_synced_at(),
+        "now": now.strftime("%-I:%M %p"),
+        "now_slot": round(slot_now, 3),
+        "today_name": training_schedule.DAYS[training_schedule.day_index(today)],
+        "days": days,
+        "warmup": p.get("warmup") or "",
+        "routines": p.get("routines") or {},
+        "library": p.get("library") or {},
+        "app_url": APP_ORIGIN,
+    }
+
+
 def get_training_sync_url() -> str:
     out = (
         "Training-app sync URL (paste into the app's Sync dialog on each device):\n"

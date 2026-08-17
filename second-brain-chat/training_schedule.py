@@ -135,7 +135,7 @@ def day_index(d: date) -> int:
     return (d.weekday() + 1) % 7
 
 
-def _column_events(grid: dict, col_date: date) -> list:
+def column_events(grid: dict, col_date: date) -> list:
     """Merge one column's contiguous identical cells into absolute-datetime events."""
     col = day_index(col_date)
     slots = sorted((r, txt) for (r, c), txt in grid.items() if c == col)
@@ -166,7 +166,7 @@ def events_for_date(parsed: dict, d: date) -> list:
     day_hi = day_lo + timedelta(days=1)
     out = []
     for col_date in (d - timedelta(days=1), d):
-        for ev in _column_events(grid, col_date):
+        for ev in column_events(grid, col_date):
             if ev["start"] < day_hi and ev["end"] > day_lo:
                 out.append(ev)
     out.sort(key=lambda e: e["start"])
@@ -175,6 +175,19 @@ def events_for_date(parsed: dict, d: date) -> list:
 
 def clock(dt: datetime) -> str:
     return dt.strftime("%-I:%M%p").lower()
+
+
+def current_position(now: datetime):
+    """(column date, fractional slot) for `now` in the grid's own frame.
+
+    Before 3 AM you are still inside the PREVIOUS column — that's the frame the
+    app draws in, so a 1 AM "you are here" marker belongs at the bottom of
+    yesterday's column, not the top of today's."""
+    anchor = datetime.combine(now.date(), time(0, 0)) + timedelta(minutes=DAY_START_MIN)
+    if now.replace(tzinfo=None) < anchor:
+        anchor -= timedelta(days=1)
+    slot = (now.replace(tzinfo=None) - anchor).total_seconds() / 60.0 / SLOT_MIN
+    return anchor.date(), slot
 
 
 def format_block(ev: dict, ref: date) -> str:
@@ -202,10 +215,10 @@ def schedule_summary(parsed: dict) -> str:
     lines = []
     grid = parsed.get("grid") or {}
     for c, name in enumerate(DAYS):
-        # borrow _column_events via a synthetic date with the right column index:
+        # borrow column_events via a synthetic date with the right column index:
         # any date works as an anchor because we only print clock times here.
         anchor = date(2000, 1, 2 + c)  # 2000-01-02 was a Sunday
-        evs = _column_events(grid, anchor)
+        evs = column_events(grid, anchor)
         if not evs:
             continue
         lines.append(name + ":")

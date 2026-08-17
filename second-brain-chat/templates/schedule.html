@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>CLARVIS · Schedule</title>
+<link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32.png">
+<link rel="manifest" href="/static/manifest.json">
+<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+<meta name="theme-color" content="#010A20">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="stylesheet" href="/static/hud/hud.css?v=18">
+<style>
+  /* Scrolls, unlike the fixed 1600x1000 deck pages: a week grid is taller than
+     any viewport and must stay legible on a phone. Palette/fonts/glow per
+     HUD_STYLE.md, inherited from hud.css. */
+  html, body { margin: 0; min-height: 100%; }
+  body {
+    font-family: 'Share Tech Mono', ui-monospace, Menlo, monospace;
+    color: var(--hud-cyan);
+    background: radial-gradient(ellipse at 50% 0%, var(--hud-bg-center) 0%, #0a2450 42%, var(--hud-bg-edge) 100%);
+    background-attachment: fixed;
+    padding: 20px 16px 60px;
+    -webkit-text-size-adjust: 100%;
+  }
+  a { color: var(--hud-accent); }
+  .wrap { max-width: 1500px; margin: 0 auto; }
+
+  header { display: flex; align-items: flex-end; gap: 16px; flex-wrap: wrap;
+           margin-bottom: 6px; }
+  h1 { font-family: 'Orbitron', sans-serif; font-size: 28px; font-weight: 700;
+       letter-spacing: 0.12em; margin: 0; color: var(--hud-accent);
+       filter: var(--hud-glow-strong); }
+  .sub { font-size: 12px; color: var(--hud-label); filter: var(--hud-glow); }
+  .back { margin-left: auto; font-size: 11px; letter-spacing: 0.14em;
+          text-transform: uppercase; text-decoration: none;
+          border: 1px solid var(--hud-cyan-45); padding: 7px 13px; border-radius: 3px;
+          filter: var(--hud-glow); }
+  .back:hover { border-color: var(--hud-accent); }
+  .rule { height: 1px; background: linear-gradient(90deg, var(--hud-cyan-70), transparent);
+          filter: var(--hud-glow); margin: 10px 0 18px; }
+
+  .panel { border: 1px solid var(--hud-cyan-25); background: var(--hud-fill);
+           border-radius: 3px; padding: 14px 16px; margin-bottom: 18px; }
+  .panel > h2 { font-family: 'Orbitron', sans-serif; font-size: 12px; font-weight: 700;
+                letter-spacing: 0.18em; text-transform: uppercase; margin: 0 0 10px;
+                color: var(--hud-cyan); filter: var(--hud-glow); }
+
+  /* now / next strip */
+  .strip { display: flex; gap: 26px; flex-wrap: wrap; }
+  .strip .cell { min-width: 150px; }
+  .cap { font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase;
+         color: var(--hud-label); filter: var(--hud-glow); margin-bottom: 4px; }
+  .big { font-family: 'Orbitron', sans-serif; font-size: 19px; color: var(--hud-white);
+         filter: var(--hud-glow-strong); line-height: 1.25; }
+  .big.dim { color: var(--hud-cyan); font-size: 15px; filter: var(--hud-glow); }
+
+  /* week grid */
+  .gridwrap { overflow-x: auto; padding-bottom: 6px; }
+  .grid { display: grid; position: relative; min-width: 880px;
+          grid-template-columns: 62px repeat(7, minmax(108px, 1fr)); }
+  .grid .head { position: sticky; top: 0; z-index: 3; text-align: center;
+                font-size: 11px; letter-spacing: 0.16em; padding: 7px 2px;
+                color: var(--hud-label); filter: var(--hud-glow);
+                background: #061633; border-bottom: 1px solid var(--hud-cyan-45); }
+  .grid .head.today { color: var(--hud-accent); }
+  .grid .tick { grid-column: 1; font-size: 10px; text-align: right; padding-right: 8px;
+                color: var(--hud-label); opacity: .8; transform: translateY(-6px); }
+  .grid .lane { border-left: 1px solid var(--hud-cyan-12); position: relative; }
+  .grid .lane.today { background: rgba(79, 212, 232, 0.06); }
+  .grid .hline { grid-column: 2 / -1; border-top: 1px solid var(--hud-cyan-12); }
+  .grid .hline.hour { border-top-color: var(--hud-cyan-25); }
+
+  .block { position: absolute; left: 3px; right: 3px; overflow: hidden;
+           border: 1px solid var(--hud-cyan-45); border-left: 2px solid var(--hud-accent);
+           background: rgba(79, 212, 232, 0.10); border-radius: 2px;
+           padding: 3px 5px; font-size: 11px; line-height: 1.2;
+           filter: var(--hud-glow); }
+  .block b { display: block; font-weight: normal; color: var(--hud-accent); }
+  .block span { font-size: 9px; color: var(--hud-label); }
+  .nowline { position: absolute; left: 0; right: 0; height: 0;
+             border-top: 1px solid var(--hud-white); filter: var(--hud-glow-core); z-index: 2; }
+  .nowline::before { content: ''; position: absolute; left: -3px; top: -3px;
+                     width: 6px; height: 6px; border-radius: 50%; background: var(--hud-white); }
+
+  /* text sections */
+  .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 18px; }
+  pre.body { white-space: pre-wrap; font-family: inherit; font-size: 12px; line-height: 1.55;
+             margin: 0; color: var(--hud-cyan); opacity: .92; }
+  details { border-top: 1px solid var(--hud-cyan-12); padding: 9px 0; }
+  details summary { cursor: pointer; font-size: 11px; letter-spacing: 0.14em;
+                    text-transform: uppercase; color: var(--hud-label); filter: var(--hud-glow); }
+  details[open] summary { color: var(--hud-accent); }
+  details pre.body { margin-top: 8px; }
+  .empty { font-size: 12px; color: var(--hud-label); }
+  .warn { border-color: var(--hud-accent); }
+
+  @media (max-width: 640px) {
+    body { padding: 14px 10px 50px; }
+    h1 { font-size: 22px; }
+    .grid { min-width: 760px; }
+  }
+</style>
+</head>
+<body class="hud-body">
+<div class="wrap">
+  <header>
+    <div>
+      <h1>SCHEDULE</h1>
+      <div class="sub" id="sub">Loading…</div>
+    </div>
+    <a class="back" href="/">← Deck</a>
+  </header>
+  <div class="rule"></div>
+  <div id="content"></div>
+</div>
+
+<script>
+  const SLOTS = 48, SLOT_MIN = 30, DAY_START = 3 * 60, ROW_H = 26;
+  const esc = s => String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+  function slotLabel(slot) {
+    const m = (DAY_START + slot * SLOT_MIN) % (24 * 60);
+    let h = Math.floor(m / 60), ap = h < 12 ? 'am' : 'pm';
+    h = h % 12 || 12;
+    return h + (m % 60 ? ':' + String(m % 60).padStart(2, '0') : '') + ap;
+  }
+
+  // Only draw the hours that carry something (plus an hour of air), so an empty
+  // 3 AM-to-3 AM frame doesn't push the real day off the screen.
+  function windowFor(days) {
+    let lo = SLOTS, hi = 0;
+    days.forEach(d => d.blocks.forEach(b => {
+      lo = Math.min(lo, b.slot_start); hi = Math.max(hi, b.slot_end);
+    }));
+    if (lo > hi) { lo = 6; hi = 40; }               // nothing scheduled anywhere
+    return [Math.max(0, lo - 2), Math.min(SLOTS, hi + 2)];
+  }
+
+  function renderGrid(d) {
+    const [lo, hi] = windowFor(d.days), n = hi - lo;
+    let h = '<div class="gridwrap"><div class="grid" style="grid-template-rows:auto repeat(' +
+            n + ',' + ROW_H + 'px)">';
+    h += '<div class="head" style="background:#061633"></div>';
+    d.days.forEach(day => {
+      h += '<div class="head' + (day.is_today ? ' today' : '') + '">' +
+           esc(day.short) + (day.is_today ? ' ·' : '') + '</div>';
+    });
+    // horizontal rules + hour ticks
+    for (let s = lo; s < hi; s++) {
+      const isHour = ((DAY_START + s * SLOT_MIN) % 60) === 0;
+      h += '<div class="tick" style="grid-row:' + (s - lo + 2) + '">' +
+           (isHour ? slotLabel(s) : '') + '</div>';
+      h += '<div class="hline' + (isHour ? ' hour' : '') +
+           '" style="grid-row:' + (s - lo + 2) + '"></div>';
+    }
+    // one positioned lane per day, blocks placed inside it
+    d.days.forEach((day, i) => {
+      let inner = '';
+      day.blocks.forEach(b => {
+        const top = (b.slot_start - lo) * ROW_H,
+              hgt = Math.max(ROW_H - 2, (b.slot_end - b.slot_start) * ROW_H - 2);
+        inner += '<div class="block" style="top:' + top + 'px;height:' + hgt + 'px">' +
+                 '<b>' + esc(b.label) + '</b><span>' + esc(b.start) + '–' + esc(b.end) + '</span></div>';
+      });
+      if (day.is_current_column && d.now_slot >= lo && d.now_slot <= hi) {
+        inner += '<div class="nowline" style="top:' + ((d.now_slot - lo) * ROW_H) + 'px"></div>';
+      }
+      h += '<div class="lane' + (day.is_today ? ' today' : '') +
+           '" style="grid-column:' + (i + 2) + ';grid-row:2 / span ' + n + '">' + inner + '</div>';
+    });
+    return h + '</div></div>';
+  }
+
+  function nowNext(d) {
+    const col = d.days.find(x => x.is_current_column);
+    if (!col) return { now: null, next: null };
+    const cur = col.blocks.find(b => d.now_slot >= b.slot_start && d.now_slot < b.slot_end);
+    const nxt = col.blocks.filter(b => b.slot_start > d.now_slot)
+                          .sort((a, b) => a.slot_start - b.slot_start)[0];
+    return { now: cur, next: nxt };
+  }
+
+  function render(d) {
+    const sub = document.getElementById('sub'), el = document.getElementById('content');
+    if (!d.connected) {
+      sub.textContent = 'Not connected';
+      el.innerHTML = '<div class="panel warn"><h2>No training data yet</h2>' +
+        '<div class="empty">The training app hasn\'t synced into CLARVIS. Ask in chat ' +
+        'for the sync URL, then paste it into the app’s Sync dialog ' +
+        '(Sync → Database URL → Connect).</div></div>';
+      return;
+    }
+    const stamp = d.saved_at ? new Date(d.saved_at) : null;
+    sub.textContent = 'Read-only · edit in the training app · synced ' +
+      (stamp ? stamp.toLocaleString([], { month: 'short', day: 'numeric',
+        hour: 'numeric', minute: '2-digit' }) : '—');
+
+    const nn = nowNext(d), today = d.days.find(x => x.is_today) || {};
+    let h = '<div class="panel"><div class="strip">' +
+      '<div class="cell"><div class="cap">Right now · ' + esc(d.now) + '</div><div class="big">' +
+        (nn.now ? esc(nn.now.label) : '<span class="big dim">Nothing blocked</span>') + '</div>' +
+        (nn.now ? '<div class="cap" style="margin-top:4px">until ' + esc(nn.now.end) + '</div>' : '') +
+      '</div>' +
+      '<div class="cell"><div class="cap">Next up</div><div class="big">' +
+        (nn.next ? esc(nn.next.label) : '<span class="big dim">Clear</span>') + '</div>' +
+        (nn.next ? '<div class="cap" style="margin-top:4px">at ' + esc(nn.next.start) + '</div>' : '') +
+      '</div>' +
+      '<div class="cell"><div class="cap">' + esc(d.today_name) + ' workout</div><div class="big dim">' +
+        (today.workout ? esc(today.workout).replace(/\n/g, '<br>') : 'No card') + '</div>' +
+      '</div></div></div>';
+
+    h += '<div class="panel"><h2>The week</h2>' + renderGrid(d) + '</div>';
+
+    const routines = d.routines || {}, lib = d.library || {};
+    h += '<div class="cols">';
+    h += '<div class="panel"><h2>Routines &amp; warmup</h2>' +
+      (routines.morning ? '<details><summary>Morning routine</summary><pre class="body">' +
+        esc(routines.morning) + '</pre></details>' : '') +
+      (routines.night ? '<details><summary>Night routine</summary><pre class="body">' +
+        esc(routines.night) + '</pre></details>' : '') +
+      (d.warmup ? '<details><summary>Everyday warmup</summary><pre class="body">' +
+        esc(d.warmup) + '</pre></details>' : '') +
+      (!routines.morning && !routines.night && !d.warmup ? '<div class="empty">Nothing saved.</div>' : '') +
+      '</div>';
+    h += '<div class="panel"><h2>Workout library</h2>' +
+      (Object.keys(lib).length ? Object.keys(lib).map(cat =>
+        '<details><summary>' + esc(cat) + ' · ' + lib[cat].length + '</summary>' +
+        lib[cat].map(p => '<pre class="body"><b style="color:var(--hud-accent)">' +
+          esc(p.title) + '</b>\n' + esc(p.body) + '</pre>').join('') +
+        '</details>').join('') : '<div class="empty">Library is empty.</div>') +
+      '</div>';
+    h += '</div>';
+
+    h += '<div class="sub" style="margin-top:6px">Edits made in the app appear here ' +
+         'within about a minute · <a href="' + esc(d.app_url || '#') +
+         '" target="_blank" rel="noopener">open the training app ↗</a></div>';
+    el.innerHTML = h;
+
+    // On a phone the grid is wider than the screen, so centre today's column —
+    // otherwise Thursday means scrolling before you can read your own day.
+    const gw = el.querySelector('.gridwrap'), lane = el.querySelector('.lane.today');
+    if (gw && lane && gw.scrollWidth > gw.clientWidth) {
+      gw.scrollLeft = Math.max(0, lane.offsetLeft - (gw.clientWidth - lane.offsetWidth) / 2);
+    }
+  }
+
+  function load() {
+    fetch('/api/training', { cache: 'no-store' })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(render)
+      .catch(e => {
+        document.getElementById('sub').textContent = 'Feed unavailable';
+        document.getElementById('content').innerHTML =
+          '<div class="panel warn"><h2>Couldn’t load the schedule</h2>' +
+          '<div class="empty">' + esc(e === 401 ? 'Session expired — reload to log in.'
+            : 'The feed returned an error (' + e + ').') + '</div></div>';
+      });
+  }
+  load();
+  setInterval(load, 60000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) load(); });
+</script>
+</body>
+</html>
