@@ -194,10 +194,12 @@ def require_login():
     # api_version is deliberately ungated: it exposes only the deployed commit SHA,
     # and its whole purpose is answering "did the deploy land?" WITHOUT credentials
     # or SSH — the two things that made deploy verification need a human.
-    # training_sync_endpoint is ungated because the training app's sync fetch can't
-    # log in — its auth is the unguessable token segment in the URL path itself
-    # (checked with a constant-time compare inside the view; wrong token = 404).
-    if request.endpoint in ("login", "static", "api_version", "training_sync_endpoint"):
+    # training_sync_endpoint and api_widget are ungated because their callers
+    # can't log in (the training app's sync fetch; the iPhone widget's Scriptable
+    # request). Both authenticate with an unguessable token segment in the URL
+    # path (constant-time compare inside the view; wrong token = bare 404).
+    if request.endpoint in ("login", "static", "api_version",
+                            "training_sync_endpoint", "api_widget"):
         return None
     if session.get("authed"):
         return None
@@ -5701,6 +5703,20 @@ def api_browser():
 def api_browser_close():
     """The pane's X button — Alex closing the session himself."""
     return jsonify({"message": browser_sandbox.close_session()})
+
+
+@app.route("/api/widget/<token>")
+def api_widget(token):
+    """Ungated (see require_login): feed for the iPhone home-screen widget.
+    Read-only now/next from the training grid — its own token, separate from the
+    sync token, so the widget script never carries write access."""
+    if not training_sync.widget_token_matches(token):
+        return Response("Not found", status=404, mimetype="text/plain")
+    try:
+        return jsonify(training_sync.widget_payload(datetime.now(LOCAL_TZ)))
+    except Exception as e:
+        print(f"Warning: /api/widget failed: {e}")
+        return jsonify({"connected": False, "updated": ""})
 
 
 @app.route("/api/pending-count")

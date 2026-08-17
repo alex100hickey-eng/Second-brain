@@ -5477,6 +5477,60 @@ def suite_training(app, live):
         check("undo with nothing left says so rather than erroring",
               "Nothing to undo" in tsync.undo_training_edit())
 
+        # ---- phone widget feed ----
+        saved_wtok = os.environ.get("WIDGET_FEED_TOKEN")
+        try:
+            os.environ["WIDGET_FEED_TOKEN"] = "widget-test-token"
+            tsync._state.update({"snapshot": _copy.deepcopy(snap), "undo": []})
+            check("widget token is its own secret, never the write token",
+                  tsync.widget_token() == "widget-test-token"
+                  and tsync.widget_token() != tsync.sync_token())
+            # fixture grid: Monday Class 7-8am (slots 8-9), Lift 8-8:30 (slot 10)
+            wp = tsync.widget_payload(_dt(2026, 8, 17, 7, 30, tzinfo=tsync.LOCAL_TZ))
+            check("mid-block: widget shows the block he's in and its end",
+                  wp["connected"] and wp["now"] == {"label": "Class", "until": "8:00am"},
+                  str(wp["now"]))
+            check("...and what's next with its start time",
+                  wp["next"] and wp["next"]["label"] == "Lift"
+                  and wp["next"]["start"] == "8:00am", str(wp["next"]))
+            wp2 = tsync.widget_payload(_dt(2026, 8, 17, 22, 0, tzinfo=tsync.LOCAL_TZ))
+            check("evening: next rolls into tomorrow, labeled so 3am reads right",
+                  wp2["now"] is None and wp2["next"] and wp2["next"]["day"] == "tomorrow",
+                  str(wp2["next"]))
+            tsync._state.update({"snapshot": None})
+            check("unsynced widget payload degrades, never errors",
+                  tsync.widget_payload(_dt.now(tsync.LOCAL_TZ))["connected"] is False)
+            tsync._state.update({"snapshot": _copy.deepcopy(snap)})
+
+            saved_code3 = app.ACCESS_CODE
+            try:
+                app.ACCESS_CODE = "gate-armed-for-test"
+                r = c.get("/api/widget/widget-test-token")
+                check("widget feed is reachable through the login gate",
+                      r.status_code == 200 and r.get_json()["connected"] is True)
+                wrong = c.get("/api/widget/WRONG")
+                check("wrong widget token gets the same bare 404 as the sync endpoint",
+                      wrong.status_code == 404
+                      and b"connected" not in wrong.data)
+            finally:
+                app.ACCESS_CODE = saved_code3
+
+            setup = tsync.get_widget_setup()
+            check("widget setup embeds the tokened feed URL in the script",
+                  "/api/widget/widget-test-token" in setup
+                  and "Script.setWidget" in setup)
+            check("talk widget deep-links into voice chat",
+                  "chat-classic?talk=1" in setup)
+            tmpl2 = open(os.path.join(CHAT_DIR, "templates", "index.html")).read()
+            check("chat page carries the ?talk=1 entry with a tap fallback",
+                  "talk-overlay" in tmpl2 and "params.get('talk')" in tmpl2
+                  and "setConvoMode(true)" in tmpl2)
+        finally:
+            if saved_wtok is None:
+                os.environ.pop("WIDGET_FEED_TOKEN", None)
+            else:
+                os.environ["WIDGET_FEED_TOKEN"] = saved_wtok
+
         tsync._state.update({"snapshot": None, "undo": []})
         check("editing before the app has ever synced explains itself",
               "hasn't synced" in tsync.edit_schedule("monday", "3pm", "4pm", "x"))

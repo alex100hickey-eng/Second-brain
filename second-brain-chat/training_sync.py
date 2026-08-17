@@ -265,6 +265,119 @@ def _staleness_note() -> str:
     return ""
 
 
+# Scriptable widget sources. %s slots: feed URL / schedule page URL (schedule
+# widget), talk URL (talk widget). Plain %-substitution, not f-strings — these
+# are JavaScript, and escaping every brace would make them unreadable.
+_SCHEDULE_WIDGET_JS = """\
+// CLARVIS — Schedule widget (add as a LARGE Scriptable widget)
+const FEED = "%s";
+const OPEN = "%s";
+const CYAN = new Color("#4fd4e8"), ACCENT = new Color("#9bf2fa");
+const DIM = new Color("#96e1f5", 0.72), WHITE = new Color("#e8fdff");
+let d = null;
+try { d = await new Request(FEED).loadJSON(); } catch (e) {}
+const w = new ListWidget();
+w.backgroundColor = new Color("#010a20");
+w.url = OPEN;
+w.setPadding(16, 16, 14, 16);
+const head = w.addText("CLARVIS · " + (d && d.day ? d.day.toUpperCase() : "SCHEDULE"));
+head.font = Font.boldSystemFont(11); head.textColor = CYAN;
+w.addSpacer(10);
+if (!d) {
+  const t = w.addText("Couldn't reach CLARVIS"); t.font = Font.systemFont(14); t.textColor = DIM;
+} else if (!d.connected) {
+  const t = w.addText("No schedule synced yet"); t.font = Font.systemFont(14); t.textColor = DIM;
+} else {
+  const capNow = w.addText("RIGHT NOW"); capNow.font = Font.mediumSystemFont(9); capNow.textColor = DIM;
+  const nowT = w.addText(d.now ? d.now.label : "Nothing blocked");
+  nowT.font = Font.boldSystemFont(20); nowT.textColor = d.now ? WHITE : CYAN; nowT.lineLimit = 2;
+  if (d.now) { const u = w.addText("until " + d.now.until); u.font = Font.systemFont(11); u.textColor = DIM; }
+  w.addSpacer(10);
+  const capNext = w.addText("NEXT"); capNext.font = Font.mediumSystemFont(9); capNext.textColor = DIM;
+  if (d.next) {
+    const n = w.addText(d.next.label); n.font = Font.boldSystemFont(15); n.textColor = ACCENT; n.lineLimit = 1;
+    const nt = w.addText(d.next.start + (d.next.day ? " " + d.next.day : ""));
+    nt.font = Font.systemFont(11); nt.textColor = DIM;
+  } else {
+    const n = w.addText("Clear"); n.font = Font.systemFont(14); n.textColor = CYAN;
+  }
+  for (const item of (d.later || [])) {
+    w.addSpacer(4);
+    const row = w.addText(item.start + "  " + item.label + (item.day ? " (" + item.day + ")" : ""));
+    row.font = Font.systemFont(11); row.textColor = CYAN; row.lineLimit = 1;
+  }
+  w.addSpacer();
+  const foot = w.addText("updated " + d.updated);
+  foot.font = Font.systemFont(8); foot.textColor = DIM;
+}
+w.refreshAfterDate = new Date(Date.now() + 5 * 60 * 1000);
+Script.setWidget(w);
+Script.complete();
+"""
+
+_TALK_WIDGET_JS = """\
+// CLARVIS — Talk button (add as a MEDIUM or LARGE Scriptable widget)
+const TALK = "%s";
+const w = new ListWidget();
+const g = new LinearGradient();
+g.colors = [new Color("#123a6e"), new Color("#010a20")];
+g.locations = [0, 1];
+w.backgroundGradient = g;
+w.url = TALK;
+const stack = w.addStack();
+stack.layoutVertically();
+stack.centerAlignContent();
+w.addSpacer();
+const mic = w.addText("🎙");
+mic.font = Font.systemFont(44);
+mic.centerAlignText();
+w.addSpacer(8);
+const label = w.addText("TALK TO CLARVIS");
+label.font = Font.boldSystemFont(16);
+label.textColor = new Color("#9bf2fa");
+label.centerAlignText();
+w.addSpacer();
+Script.setWidget(w);
+Script.complete();
+"""
+
+
+def get_widget_setup() -> str:
+    is_server = (os.environ.get("JARVIS_RUNTIME") or "local").strip().lower() == "server"
+    warn = ""
+    if not is_server and not os.environ.get("WIDGET_FEED_TOKEN", "").strip():
+        warn = ("\n\n⚠️ I'm answering from the Mac node with no WIDGET_FEED_TOKEN "
+                "pinned, so this feed URL's token comes from THIS machine's access "
+                "code and the server may reject it. Ask again in the web chat for "
+                "the authoritative version.")
+    feed = f"{PUBLIC_BASE_URL}/api/widget/{widget_token()}"
+    schedule_js = _SCHEDULE_WIDGET_JS % (feed, f"{PUBLIC_BASE_URL}/schedule")
+    talk_js = _TALK_WIDGET_JS % (f"{PUBLIC_BASE_URL}/chat-classic?talk=1",)
+    return (
+        "Home-screen widgets, one-time setup (~5 min):\n\n"
+        "1. Install the free **Scriptable** app from the App Store.\n"
+        "2. In Scriptable, tap + and paste SCRIPT 1 below; name it `CLARVIS Schedule`.\n"
+        "3. Tap + again and paste SCRIPT 2; name it `CLARVIS Talk`.\n"
+        "4. Long-press the home screen → + → search Scriptable → add a LARGE "
+        "widget → long-press it → Edit Widget → Script: CLARVIS Schedule.\n"
+        "5. Repeat with a MEDIUM widget → Script: CLARVIS Talk. Set 'When "
+        "Interacting' to 'Open URL' if shown.\n"
+        "6. Optional 'Hey Siri': in the Shortcuts app, create a shortcut named "
+        f"'Talk to CLARVIS' with one action — Open URL → {PUBLIC_BASE_URL}/chat-classic?talk=1 "
+        "— then saying 'Hey Siri, talk to CLARVIS' opens the mic.\n\n"
+        "Notes: iOS refreshes widgets on its own clock (typically every 5–15 "
+        "min), so RIGHT NOW can lag a few minutes at block boundaries. Tapping "
+        "the schedule widget opens /schedule; tapping the talk widget opens the "
+        "chat listening. Safari must be logged in to CLARVIS once for the talk "
+        "button to land in chat directly."
+        f"{warn}\n\n"
+        "----- SCRIPT 1: CLARVIS Schedule -----\n"
+        f"{schedule_js}\n"
+        "----- SCRIPT 2: CLARVIS Talk -----\n"
+        f"{talk_js}"
+    )
+
+
 # ---- model-facing tools -------------------------------------------------
 
 _DAY_ALIASES = {d.lower(): i for i, d in enumerate(training_schedule.DAYS)}
@@ -616,6 +729,69 @@ def week_payload(now: datetime) -> dict:
     }
 
 
+def widget_token() -> str:
+    """Read-only token for the phone-widget feed. Separate from sync_token on
+    purpose: the sync token can WRITE the whole dataset, and it shouldn't have
+    to live inside a Scriptable script just so a widget can read now/next."""
+    explicit = os.environ.get("WIDGET_FEED_TOKEN", "").strip()
+    if explicit:
+        return explicit
+    access_code = os.environ.get("ACCESS_CODE") or os.environ.get("JARVIS_PASSWORD") or ""
+    if not access_code:
+        return "local-dev"
+    return hmac.new(
+        access_code.encode("utf-8"), b"widget-feed-v1", hashlib.sha256
+    ).hexdigest()[:24]
+
+
+def widget_token_matches(candidate: str) -> bool:
+    return hmac.compare_digest(
+        str(candidate or "").encode("utf-8", "replace"),
+        widget_token().encode("utf-8", "replace"),
+    )
+
+
+def widget_payload(now: datetime) -> dict:
+    """What the home-screen widget shows: the block he's in, what's next, and a
+    couple after that. Clock strings are formatted HERE so the Scriptable side
+    stays a dumb renderer — one place owns the grid's time semantics."""
+    p = parsed()
+    updated = now.strftime("%-I:%M %p")
+    if p is None:
+        return {"connected": False, "updated": updated}
+    naive = now.replace(tzinfo=None)
+    events_today = training_schedule.events_for_date(p, now.date())
+    current = next((e for e in events_today if e["start"] <= naive < e["end"]), None)
+    upcoming = [e for e in events_today if e["start"] > naive]
+    # If today is running dry, keep the widget useful into the evening by
+    # showing tomorrow's opening blocks (labeled, so 5:30am isn't read as PM).
+    tom = now.date() + timedelta(days=1)
+    tomorrow = [e for e in training_schedule.events_for_date(p, tom)
+                if e["start"].date() == tom]
+    queue = ([{"e": e, "day": ""} for e in upcoming]
+             + [{"e": e, "day": "tomorrow"} for e in tomorrow])
+
+    def enc(item):
+        e, day = item["e"], item["day"]
+        return {"label": e["title"],
+                "start": training_schedule.clock(e["start"]),
+                "end": training_schedule.clock(e["end"]),
+                "day": day}
+
+    workout = training_schedule.workout_for_date(p, now.date())
+    return {
+        "connected": True,
+        "updated": updated,
+        "day": now.strftime("%A"),
+        "now": ({"label": current["title"],
+                 "until": training_schedule.clock(current["end"])} if current else None),
+        "next": enc(queue[0]) if queue else None,
+        "later": [enc(i) for i in queue[1:4]],
+        "workout_line": (workout.splitlines()[-1].lstrip("• ").strip()
+                         if workout else ""),
+    }
+
+
 def get_training_sync_url() -> str:
     out = (
         "Training-app sync URL (paste into the app's Sync dialog on each device):\n"
@@ -744,6 +920,16 @@ TOOL_SCHEMAS = [
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
     {
+        "name": "get_widget_setup",
+        "description": (
+            "Setup instructions + ready-to-paste Scriptable scripts for Alex's "
+            "iPhone home-screen widgets: a schedule widget (what's happening now / "
+            "next, from his training app) and a talk-to-CLARVIS button. Use when he "
+            "asks to set up, fix, or re-install his phone widgets."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
         "name": "get_training_sync_url",
         "description": (
             "The URL Alex pastes into his training app's Sync dialog to connect it "
@@ -759,6 +945,7 @@ TOOL_STATUS_LABELS = {
     "get_workout_info": "Pulling up your workout…",
     "get_workout_library": "Opening the workout library…",
     "get_training_sync_url": "Getting your sync link…",
+    "get_widget_setup": "Building your widget setup…",
     "edit_schedule": "Updating your schedule…",
     "set_workout_card": "Rewriting that workout card…",
     "undo_training_edit": "Putting that back…",
@@ -778,6 +965,8 @@ def handle_tool_call(tool_name: str, tool_input: dict) -> str:
         )
     if tool_name == "get_training_sync_url":
         return get_training_sync_url()
+    if tool_name == "get_widget_setup":
+        return get_widget_setup()
     if tool_name == "edit_schedule":
         return edit_schedule(tool_input["day"], tool_input["start"],
                              tool_input["end"], tool_input.get("text", ""))

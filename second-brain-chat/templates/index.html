@@ -188,6 +188,28 @@
                     border-top: 1px solid var(--hud-cyan-25); }
   }
 
+  /* Talk overlay — the ?talk=1 landing from the home-screen widget. One giant
+     tap target, because the whole point is mic-in-two-taps from the phone. */
+  #talk-overlay {
+    position: fixed; inset: 0; z-index: 50;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 18px; cursor: pointer;
+    background: radial-gradient(ellipse at 50% 42%, var(--hud-bg-center) 0%, var(--hud-bg-edge) 75%);
+  }
+  #talk-overlay .talk-ring {
+    width: 130px; height: 130px; border-radius: 50%;
+    border: 2px solid var(--hud-accent);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 52px;
+    filter: drop-shadow(0 0 12px rgba(155, 242, 250, 0.7));
+    animation: talk-pulse 1.8s ease-in-out infinite;
+  }
+  @keyframes talk-pulse { 0%,100% { transform: scale(1) } 50% { transform: scale(1.07) } }
+  #talk-overlay .talk-label {
+    font-family: 'Orbitron', sans-serif; font-size: 15px; letter-spacing: 0.22em;
+    color: var(--hud-accent); filter: var(--hud-glow);
+  }
+
   .empty-state {
     height: 100%;
     display: flex;
@@ -1414,6 +1436,36 @@
     // A turn that used the browser will have opened it by the time the reply
     // lands, so check immediately rather than waiting out the interval.
     window.addEventListener('clarvis:turn-done', poll);
+  })();
+
+  /* ---- ?talk=1: the home-screen talk widget lands here ------------------
+     Goal is mic-open in as few taps as possible. We try to start conversation
+     mode outright — if the browser remembers mic permission this just works and
+     the overlay never appears armed. When iOS insists on a user gesture,
+     getUserMedia rejects, setConvoMode cleans up after itself, and the overlay
+     is one giant tap covering the whole screen. */
+  (function talkEntry() {
+    const params = new URLSearchParams(location.search);
+    if (params.get('talk') !== '1') return;
+    history.replaceState(null, '', location.pathname);
+    if (!canRecord) return;  // nothing to offer — the normal page explains voice
+    const ov = document.createElement('div');
+    ov.id = 'talk-overlay';
+    ov.innerHTML = '<div class="talk-ring">🎙</div>' +
+                   '<div class="talk-label">TAP TO TALK</div>';
+    document.body.appendChild(ov);
+    let done = false;
+    const finish = () => { if (!done) { done = true; ov.remove(); } };
+    ov.addEventListener('pointerdown', async (e) => {
+      e.preventDefault();
+      if (done) return;
+      await setConvoMode(true);
+      finish();
+    });
+    (async () => {
+      try { await setConvoMode(true); } catch (e) { /* overlay stays */ }
+      if (convoMode) finish();   // hands-free start worked — no tap needed
+    })();
   })();
 </script>
 
