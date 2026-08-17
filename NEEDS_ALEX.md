@@ -126,11 +126,18 @@ device that uses the app:
    field → **Connect**. That device's data pushes up immediately; every edit
    after that syncs within ~1 second.
 
-Notes: if you ever rotate the access code, the URL changes — ask CLARVIS for it
-again and re-paste. Optional hardening: set a `TRAINING_SYNC_TOKEN` env var in
-Coolify to pin the URL so access-code rotations don't move it. If you had a
-Firebase database connected in the app, the CLARVIS URL simply replaces it
-(your data migrates on first connect; the Firebase copy can be deleted).
+**Ask in the web chat, not the Mac node.** Verified live: the two nodes have
+different access codes, and without a pinned token each derives its own — so a
+URL built on the Mac carries a token the server rejects. CLARVIS now warns you
+when that's the case, but the web chat is the one that always answers correctly.
+
+Worth doing while you're in Coolify anyway: set **`TRAINING_SYNC_TOKEN`** to any
+long random string (and the same value in `~/.zshrc` on the Mac). That pins one
+URL for good — both nodes agree, and rotating the access code stops moving it.
+
+If you had a Firebase database connected in the app, the CLARVIS URL simply
+replaces it: your data pushes up on first connect, and the Firebase copy can be
+deleted afterwards.
 
 ### In the Coolify dashboard (one visit, ~5 min)
 

@@ -5322,6 +5322,23 @@ def suite_training(app, live):
         check("library tool fetches a page case-insensitively", "Squats" in lib)
         check("sync-url tool hands over the paste-able URL",
               "/training-sync/testtok-training-suite" in tsync.get_training_sync_url())
+        # unpinned token on the Mac node derives from THAT node's access code,
+        # which the server would reject — the tool has to say so
+        os.environ.pop("TRAINING_SYNC_TOKEN", None)
+        saved_rt = os.environ.get("JARVIS_RUNTIME")
+        try:
+            os.environ["JARVIS_RUNTIME"] = "local"
+            check("unpinned URL from the Mac node warns it may not match the server",
+                  "may reject it" in tsync.get_training_sync_url())
+            os.environ["JARVIS_RUNTIME"] = "server"
+            check("the server's own URL carries no such warning",
+                  "may reject it" not in tsync.get_training_sync_url())
+        finally:
+            if saved_rt is None:
+                os.environ.pop("JARVIS_RUNTIME", None)
+            else:
+                os.environ["JARVIS_RUNTIME"] = saved_rt
+            os.environ["TRAINING_SYNC_TOKEN"] = "testtok-training-suite"
         check("app dispatch routes training tools",
               "Monday:" in app._dispatch_tool_call("get_training_schedule", {"day": "week"}))
         check("never-synced tools point at the connect flow",

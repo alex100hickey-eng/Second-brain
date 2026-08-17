@@ -350,7 +350,7 @@ def get_workout_library(category: str = "", page: str = "") -> str:
 
 
 def get_training_sync_url() -> str:
-    return (
+    out = (
         "Training-app sync URL (paste into the app's Sync dialog on each device):\n"
         f"{sync_url()}\n\n"
         "Steps: open the training app → tap Sync → paste that URL into the "
@@ -359,6 +359,20 @@ def get_training_sync_url() -> str:
         "access code is ever rotated, this URL changes — just ask me for it "
         "again and re-paste it.)"
     )
+    is_server = (os.environ.get("JARVIS_RUNTIME") or "local").strip().lower() == "server"
+    if not is_server and not os.environ.get("TRAINING_SYNC_TOKEN", "").strip():
+        # The URL always points at the public server, but with no pinned token
+        # each node derives its own from its own ACCESS_CODE — so a URL built
+        # here on the Mac carries a token the server would reject. Say so rather
+        # than handing over a link that 404s.
+        out += (
+            "\n\nHeads up: I'm answering from the Mac node, and no "
+            "TRAINING_SYNC_TOKEN is pinned, so this URL's token was derived "
+            "from THIS machine's access code — the server may reject it. Ask "
+            "me again in the web chat (the server) for the authoritative link, "
+            "or set the same TRAINING_SYNC_TOKEN on both to pin one URL."
+        )
+    return out
 
 
 TOOL_SCHEMAS = [
