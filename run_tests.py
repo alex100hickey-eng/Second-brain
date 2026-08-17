@@ -5071,6 +5071,7 @@ def suite_egress(app, live):
 
 def suite_training(app, live):
     section("training (app-sync endpoint + grid parsing + today's-schedule wiring)")
+    import copy as _copy
     import json as _json
     import training_schedule as ts
     import training_sync as tsync
@@ -5414,6 +5415,75 @@ def suite_training(app, live):
             tsync._state.update({"snapshot": snap})
         finally:
             app.ACCESS_CODE = saved_code2
+
+        # ---- writing back into the app ----
+        tsync._state.update({"snapshot": _copy.deepcopy(snap), "undo": []})
+        cells = lambda: _json.loads(
+            tsync._state["snapshot"]["keys"]["weeklySchedule_v1"])
+        check("clock parsing covers the forms he'd actually say",
+              [tsync.parse_clock(x) for x in ("5", "5pm", "5:30 PM", "17:00", "12am")]
+              == [300, 1020, 1050, 1020, 0]
+              and tsync.parse_clock("half past noon") is None)
+
+        rev_before = tsync._state["snapshot"]["rev"]
+        # 7-8am Monday is slots 8-9, both "Class" in the fixture above
+        out = tsync.edit_schedule("monday", "7am", "8am", "Film study")
+        check("an edit writes every slot in the range and names what it replaced",
+              cells().get("8|1") == "Film study" and cells().get("9|1") == "Film study"
+              and "replacing Class" in out, out.split("\n")[0])
+        check("every write mints a new rev — devices only pull on a rev they haven't seen",
+              tsync._state["snapshot"]["rev"] != rev_before)
+        check("the reply tells him how to reverse it", "undo that" in out)
+        # THE day-boundary trap: columns run 3AM-3AM, so the 1 AM that happens on
+        # Monday lives in SUNDAY's column. Taking "monday" at face value would
+        # silently write it to Tuesday morning.
+        tsync.edit_schedule("monday", "1am", "2am", "Deep sleep")
+        check("a pre-3am range lands on the calendar day he named, not the next one",
+              cells().get("44|0") == "Deep sleep" and cells().get("45|0") == "Deep sleep"
+              and "44|1" not in cells() and "45|1" not in cells(),
+              str([k for k, v in cells().items() if v == "Deep sleep"]))
+        check("re-issuing the same edit reports a no-op instead of a fake success",
+              "nothing to change" in tsync.edit_schedule("monday", "1am", "2am", "Deep sleep"))
+        check("a range crossing 3am is refused with the fix spelled out",
+              "split it in two" in tsync.edit_schedule("monday", "2am", "5am", "x"))
+        check("a zero-length range is refused",
+              "give the range an end time" in tsync.edit_schedule("monday", "5am", "5am", "x"))
+        check("an unresolvable day is refused",
+              "isn't one I can resolve" in tsync.edit_schedule("someday", "3pm", "4pm", "x"))
+        cleared = tsync.edit_schedule("monday", "8am", "8:30am", "")  # slot 10 = "Lift"
+        check("empty text clears the range and says what was there",
+              "Cleared" in cleared and "was Lift" in cleared and "10|1" not in cells(),
+              cleared.split("\n")[0])
+        check("clearing an empty range is a no-op, not a claimed change",
+              "no change made" in tsync.edit_schedule("saturday", "9am", "10am", ""))
+
+        card = tsync.set_workout_card("sunday", "• Warmup\n• Shooting")
+        check("workout cards are editable too",
+              "• Shooting" in card and _json.loads(
+                  tsync._state["snapshot"]["keys"]["weeklyWorkouts_v1"])["0"]
+              == "• Warmup\n• Shooting")
+
+        rev_pre_undo = tsync._state["snapshot"]["rev"]
+        u = tsync.undo_training_edit()
+        check("undo restores the previous state under a fresh rev",
+              "Reverted" in u and _json.loads(
+                  tsync._state["snapshot"]["keys"]["weeklyWorkouts_v1"]).get("0")
+              != "• Warmup\n• Shooting"
+              and tsync._state["snapshot"]["rev"] != rev_pre_undo)
+        check("undo history is capped, oldest dropped",
+              len(tsync._state["undo"]) <= tsync.UNDO_DEPTH)
+        for _ in range(tsync.UNDO_DEPTH + 2):
+            tsync.undo_training_edit()
+        check("undo with nothing left says so rather than erroring",
+              "Nothing to undo" in tsync.undo_training_edit())
+
+        tsync._state.update({"snapshot": None, "undo": []})
+        check("editing before the app has ever synced explains itself",
+              "hasn't synced" in tsync.edit_schedule("monday", "3pm", "4pm", "x"))
+        check("app dispatch routes the write tools too",
+              "isn't one I can resolve" in app._dispatch_tool_call(
+                  "edit_schedule", {"day": "someday", "start": "3pm", "end": "4pm"}))
+        tsync._state.update({"snapshot": snap})
         check("never-synced tools point at the connect flow",
               (tsync._state.update({"snapshot": None}) or True)
               and "sync" in tsync.get_training_schedule("week").lower())

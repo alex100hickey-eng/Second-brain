@@ -39,7 +39,7 @@ DAY_START_MIN = 3 * 60  # each column starts at 3:00 AM
 _SAFE = {".": "_", "$": "_", "#": "_", "[": "_", "]": "_", "/": "_"}
 
 
-def _safe_key(k: str) -> str:
+def safe_key(k: str) -> str:
     return "".join(_SAFE.get(ch, ch) for ch in k)
 
 
@@ -48,7 +48,7 @@ def _get_key(snapshot: dict, storage_key: str):
     keys = snapshot.get("keys") if isinstance(snapshot, dict) else None
     if not isinstance(keys, dict):
         return None
-    raw = keys.get(_safe_key(storage_key))
+    raw = keys.get(safe_key(storage_key))
     if raw is None:
         return None
     try:

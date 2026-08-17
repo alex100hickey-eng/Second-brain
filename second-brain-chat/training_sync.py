@@ -32,12 +32,15 @@ Supabase (in-memory cache serves every GET; Supabase is touched on writes and
 once at first read after boot).
 """
 
+import copy
 import hmac
 import hashlib
 import json
 import os
+import re
 import threading
 import time
+import uuid
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -45,6 +48,7 @@ import training_schedule
 
 AGENT_NAME = "training_dashboard"
 MAX_SNAPSHOT_BYTES = 200_000  # same cap as draft_store; real snapshots are ~10-50KB
+MAX_ROW_BYTES = 250_000       # snapshot + undo history together (his is ~18KB each)
 LOCAL_TZ = ZoneInfo("America/New_York")
 # Supabase retries (hydrate + failed persist) are rate-limited: the app GET-polls
 # every 8s per open device, and each attempt is blocking network I/O under _lock.
@@ -69,7 +73,8 @@ _state = {"loaded": False, "row_id": None, "snapshot": None, "saved_at": None,
           # attempt push the persist retry another minute out every time, so an
           # un-saved edit could stay un-saved indefinitely while Supabase is flaky.
           "next_hydrate_at": 0.0,
-          "next_persist_at": 0.0}
+          "next_persist_at": 0.0,
+          "undo": []}              # previous snapshots, oldest first (see UNDO_DEPTH)
 _on_update = None  # app-provided callback: bust downstream caches on new data
 
 
@@ -138,6 +143,8 @@ def _hydrate_locked():
             if _state["snapshot"] is None:
                 _state["snapshot"] = stored.get("snapshot")
                 _state["saved_at"] = stored.get("saved_at")
+                undo = stored.get("undo")
+                _state["undo"] = undo if isinstance(undo, list) else []
         _state["loaded"] = True
     except Exception as e:
         print(f"[training_sync] hydrate failed (will retry): {e}")
@@ -178,7 +185,13 @@ def validate_snapshot(payload) -> str:
 def _persist_locked() -> str:
     """Write current in-memory state to Supabase. Caller must hold _lock.
     Returns an error string or ""; failure marks the state dirty for retry."""
-    body = json.dumps({"snapshot": _state["snapshot"], "saved_at": _state["saved_at"]})
+    body = json.dumps({"snapshot": _state["snapshot"], "saved_at": _state["saved_at"],
+                       "undo": _state["undo"]})
+    if len(body) > MAX_ROW_BYTES:
+        # Undo history is the disposable part — never let it push the live
+        # snapshot past what the row can hold.
+        body = json.dumps({"snapshot": _state["snapshot"],
+                           "saved_at": _state["saved_at"], "undo": []})
     try:
         if _state["row_id"] is not None:
             _supabase.table("Agent Outputs").update({"output_text": body}).eq(
@@ -255,6 +268,10 @@ def _staleness_note() -> str:
 # ---- model-facing tools -------------------------------------------------
 
 _DAY_ALIASES = {d.lower(): i for i, d in enumerate(training_schedule.DAYS)}
+
+
+def _resolve_day_name(d) -> str:
+    return training_schedule.DAYS[training_schedule.day_index(d)]
 
 
 def _resolve_day(day: str, now=None):
@@ -347,6 +364,203 @@ def get_workout_library(category: str = "", page: str = "") -> str:
     for pg in pages:
         out.append(f"--- {pg['title']} ---\n{pg['body']}")
     return "\n\n".join(out)
+
+
+# ---- writing back into the app ---------------------------------------------
+#
+# Writes are real edits to Alex's own schedule, so three rules hold them down:
+#   1. Read-modify-write happens INSIDE _lock, so a device push landing mid-edit
+#      can't interleave and produce a half-applied grid.
+#   2. Every write stashes the previous snapshot, so "undo that" always works.
+#   3. A new rev is minted on every write — that is the signal the app polls for,
+#      and without it devices would never pull the change.
+# The one race we cannot close from here: if Alex is typing in the app at the
+# same moment, its debounced push carries a FULL pre-edit snapshot and will
+# overwrite what we just wrote. It's a ~1s window, and the tools say so.
+
+UNDO_DEPTH = 3
+
+
+def _new_rev() -> str:
+    return uuid.uuid4().hex[:16]
+
+
+def _decode(keys: dict, storage_key: str):
+    raw = keys.get(training_schedule.safe_key(storage_key))
+    if raw is None:
+        return {}
+    try:
+        val = json.loads(raw)
+        return val if isinstance(val, dict) else {}
+    except (ValueError, TypeError):
+        return {}
+
+
+def _encode(keys: dict, storage_key: str, value) -> None:
+    keys[training_schedule.safe_key(storage_key)] = json.dumps(value)
+
+
+def parse_clock(text: str):
+    """'5', '5pm', '5:30 PM', '17:00' -> minutes from midnight, or None."""
+    s = str(text or "").strip().lower().replace(".", "")
+    m = re.match(r"^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$", s)
+    if not m:
+        return None
+    h, mins, ap = int(m.group(1)), int(m.group(2) or 0), m.group(3)
+    if mins > 59:
+        return None
+    if ap:
+        if h < 1 or h > 12:
+            return None
+        h = (h % 12) + (12 if ap == "pm" else 0)
+    elif h > 23:
+        return None
+    return h * 60 + mins
+
+
+def _resolve_span(target, start: str, end: str):
+    """(column index, start slot, exclusive end slot) for a day + clock range.
+
+    The subtle part is which COLUMN a time belongs to. Columns run 3AM-3AM, so
+    "Monday 2am" is the 2 AM that happens on Monday — which the app stores in
+    SUNDAY's column, in its after-midnight tail. Taking the day at face value
+    would silently write it to Tuesday morning instead.
+    Returns (None, error) on bad input."""
+    s_min, e_min = parse_clock(start), parse_clock(end)
+    if s_min is None:
+        return None, f"Couldn't read the start time {start!r} — try '5:30am' or '17:00'."
+    if e_min is None:
+        return None, f"Couldn't read the end time {end!r} — try '6pm' or '18:00'."
+    if s_min == e_min:
+        return None, f"Start and end are both {start} — give the range an end time."
+    origin = training_schedule.DAY_START_MIN
+    day = target - timedelta(days=1) if s_min < origin else target
+    s_slot = (s_min - origin) % (24 * 60) // training_schedule.SLOT_MIN
+    e_slot = (e_min - origin) % (24 * 60) // training_schedule.SLOT_MIN
+    if e_slot <= s_slot:
+        e_slot += training_schedule.N_SLOTS  # runs into the column's post-midnight tail
+    if e_slot > training_schedule.N_SLOTS:
+        return None, ("That range crosses 3:00am, where the app starts a new day "
+                      "column, so it can't be one block — split it in two "
+                      "(…until 3:00am, then 3:00am onward).")
+    return (training_schedule.day_index(day), int(s_slot), int(e_slot)), ""
+
+
+def _mutate(apply_fn, label: str) -> str:
+    """Run apply_fn(keys) against a copy of the snapshot and store the result.
+    apply_fn returns (summary, error); a non-empty error aborts with nothing written."""
+    with _lock:
+        _hydrate_locked()
+        current = _state["snapshot"]
+        if current is None:
+            return ("The training app hasn't synced into CLARVIS yet, so there's "
+                    "nothing to edit. Use get_training_sync_url to connect it first.")
+        new_snap = copy.deepcopy(current)
+        summary, err = apply_fn(new_snap.setdefault("keys", {}))
+        if err:
+            return err
+        new_snap["rev"] = _new_rev()
+        _state["undo"].append({"snapshot": current, "label": label})
+        del _state["undo"][:-UNDO_DEPTH]
+        _state["snapshot"] = new_snap
+        _state["saved_at"] = datetime.now(LOCAL_TZ).isoformat()
+        perr = _persist_locked()
+    if _on_update is not None:
+        try:
+            _on_update()
+        except Exception:
+            pass
+    tail = ("\n\nNote: saved here and pushed to his devices, but the durable copy "
+            "failed to write (" + perr[:120] + ") — it will retry.") if perr else ""
+    return (summary + "\n\nHis devices pick this up within about 8 seconds. Say "
+            "'undo that' to reverse it." + tail)
+
+
+def edit_schedule(day: str, start: str, end: str, text: str = "") -> str:
+    """Set (or clear, with empty text) a time range on one day of the grid."""
+    target = _resolve_day(day)
+    if target in (None, "unknown"):
+        return (f"Which day? {day!r} isn't one I can resolve — use a weekday name, "
+                "'today' or 'tomorrow'.")
+    span, err = _resolve_span(target, start, end)
+    if err:
+        return err
+    col, s_slot, e_slot = span
+    label = text.strip()
+    # The label names the day Alex said; col may be the previous column when the
+    # range starts before 3 AM (see _resolve_span).
+    span_txt = f"{_resolve_day_name(target)} {start}–{end}"
+
+    def apply(keys):
+        grid = _decode(keys, "weeklySchedule.v1")
+        replaced, changed = [], False
+        for slot in range(s_slot, e_slot):
+            k = f"{slot}|{col}"
+            old = grid.get(k)
+            old_txt = old.strip() if isinstance(old, str) else ""
+            if old_txt and old_txt != label:
+                replaced.append(old_txt)
+            if label:
+                if old_txt != label:
+                    changed = True
+                grid[k] = label
+            else:
+                if k in grid:
+                    changed = True
+                grid.pop(k, None)
+        _encode(keys, "weeklySchedule.v1", grid)
+        if not changed:
+            return "", (f"{span_txt} already reads \"{label}\" — nothing to change."
+                        if label else f"Nothing was booked {span_txt} — no change made.")
+        if not label:
+            return f"Cleared {span_txt} (was {', '.join(dict.fromkeys(replaced))}).", ""
+        over = f" — replacing {', '.join(dict.fromkeys(replaced))}" if replaced else ""
+        return f"Set {span_txt} to \"{label}\"{over}.", ""
+
+    return _mutate(apply, f"edit {span_txt}")
+
+
+def set_workout_card(day: str, text: str) -> str:
+    """Replace a day's workout card (the list under the grid)."""
+    target = _resolve_day(day)
+    if target in (None, "unknown"):
+        return f"Which day? {day!r} isn't one I can resolve."
+    col = training_schedule.day_index(target)
+
+    def apply(keys):
+        cards = _decode(keys, "weeklyWorkouts.v1")
+        body = text.strip()
+        if body:
+            cards[str(col)] = body
+        else:
+            cards.pop(str(col), None)
+        _encode(keys, "weeklyWorkouts.v1", cards)
+        name = training_schedule.DAYS[col]
+        return (f"{name}'s workout card is now:\n{body}" if body
+                else f"Cleared {name}'s workout card."), ""
+
+    return _mutate(apply, f"workout card {training_schedule.DAYS[col]}")
+
+
+def undo_training_edit() -> str:
+    """Roll back the most recent change CLARVIS made."""
+    with _lock:
+        _hydrate_locked()
+        if not _state["undo"]:
+            return "Nothing to undo — I haven't changed his schedule this session."
+        entry = _state["undo"].pop()
+        restored = copy.deepcopy(entry["snapshot"])
+        restored["rev"] = _new_rev()  # devices only pull on a rev they haven't seen
+        _state["snapshot"] = restored
+        _state["saved_at"] = datetime.now(LOCAL_TZ).isoformat()
+        _persist_locked()
+        label = entry.get("label") or "the last change"
+    if _on_update is not None:
+        try:
+            _on_update()
+        except Exception:
+            pass
+    return f"Reverted {label}. His devices will show the old version within ~8 seconds."
 
 
 def week_payload(now: datetime) -> dict:
@@ -484,6 +698,52 @@ TOOL_SCHEMAS = [
         },
     },
     {
+        "name": "edit_schedule",
+        "description": (
+            "Change a time range on Alex's training-app schedule — the real grid he "
+            "sees on his phone. Use for 'move my lift to 5', 'block 7-9 for film', "
+            "'clear Thursday afternoon'. Leave text empty to CLEAR the range. Times "
+            "are wall-clock ('5:30am', '6pm', '17:00'); end is exclusive. Confirm "
+            "with him first when the day or time is ambiguous, and tell him what it "
+            "replaced. He can say 'undo that'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "day": {"type": "string", "description": "Weekday name, 'today', or 'tomorrow'."},
+                "start": {"type": "string", "description": "Start time, e.g. '3pm' or '15:00'."},
+                "end": {"type": "string", "description": "End time (exclusive), e.g. '4:30pm'."},
+                "text": {"type": "string", "description": "What goes in the block. Empty clears it."},
+            },
+            "required": ["day", "start", "end"],
+        },
+    },
+    {
+        "name": "set_workout_card",
+        "description": (
+            "Replace the workout card for one day in Alex's training app (the bullet "
+            "list under the grid — e.g. '• Warmup\\n• 50/50\\n• Lower heavy'). Pass "
+            "the full new card; empty text clears it. Not for schedule blocks — use "
+            "edit_schedule for those."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "day": {"type": "string", "description": "Weekday name, 'today', or 'tomorrow'."},
+                "text": {"type": "string", "description": "The full card text, newline-separated."},
+            },
+            "required": ["day", "text"],
+        },
+    },
+    {
+        "name": "undo_training_edit",
+        "description": (
+            "Reverse the last change made to Alex's training app (schedule block or "
+            "workout card). Use when he says 'undo that' or 'put it back'."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
         "name": "get_training_sync_url",
         "description": (
             "The URL Alex pastes into his training app's Sync dialog to connect it "
@@ -499,7 +759,12 @@ TOOL_STATUS_LABELS = {
     "get_workout_info": "Pulling up your workout…",
     "get_workout_library": "Opening the workout library…",
     "get_training_sync_url": "Getting your sync link…",
+    "edit_schedule": "Updating your schedule…",
+    "set_workout_card": "Rewriting that workout card…",
+    "undo_training_edit": "Putting that back…",
 }
+
+TOOL_NAMES = tuple(t["name"] for t in TOOL_SCHEMAS)
 
 
 def handle_tool_call(tool_name: str, tool_input: dict) -> str:
@@ -513,4 +778,11 @@ def handle_tool_call(tool_name: str, tool_input: dict) -> str:
         )
     if tool_name == "get_training_sync_url":
         return get_training_sync_url()
+    if tool_name == "edit_schedule":
+        return edit_schedule(tool_input["day"], tool_input["start"],
+                             tool_input["end"], tool_input.get("text", ""))
+    if tool_name == "set_workout_card":
+        return set_workout_card(tool_input["day"], tool_input.get("text", ""))
+    if tool_name == "undo_training_edit":
+        return undo_training_edit()
     return f"Unknown tool: {tool_name}"
