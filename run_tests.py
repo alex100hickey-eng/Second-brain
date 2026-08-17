@@ -3492,6 +3492,34 @@ def suite_profile(app, live):
               os.path.exists(os.path.join(vault, "Profile", "People.md")))
         check("stats count them", P.stats(vault)["facts"] == 3, str(P.stats(vault)))
 
+        # ---- digest spends its budget fairly across categories -------------------
+        # Regression, 2026-08-16: the digest filled categories in declaration order,
+        # so once the profile outgrew the budget the LAST categories vanished whole.
+        # Alex corrected "plays football" -> "plays basketball"; the correction was
+        # written correctly, sat in `health` (a late category), and never reached the
+        # model. A silently half-loaded person-model is worse than a small one.
+        bulky = os.path.join(tmp, "bulky")
+        # Wordy on purpose: a long unbroken alphanumeric run reads as a leaked
+        # credential to _is_unsafe and would be dropped before it could pad anything.
+        filler = [{"category": "identity",
+                   "fact": f"Filler identity fact number {i} about a long and "
+                           "thoroughly unremarkable detail of his daily life "
+                           "that exists only to consume digest budget."}
+                  for i in range(12)]
+        P.record(bulky, filler + [
+            {"category": "health", "fact": "Alex plays basketball, not football."},
+            {"category": "constraints", "fact": "Alex never lets CLARVIS send email itself."},
+        ], source="test")
+        d = P.digest(bulky, max_chars=1500)
+        check("digest honours its char budget", len(d) <= 1500, str(len(d)))
+        check("a late category still appears when identity is bulky",
+              "basketball" in d, d[-200:])
+        check("every populated category is represented, not just the early ones",
+              d.count(":\n") >= 3, str(d.count(":\n")))
+        tiny = P.digest(bulky, max_chars=250)
+        check("a tight budget still spreads across categories rather than one",
+              len([l for l in tiny.splitlines() if l.endswith(":")]) >= 2, tiny)
+
         # ---- dedup: trivially-reworded restatement confirms, doesn't duplicate ---
         r2 = P.record(vault, [
             {"category": "people", "fact": "Coach Dan runs his Tuesday/Thursday practices."}])

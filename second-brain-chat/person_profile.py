@@ -318,34 +318,60 @@ def stats(vault_path: str) -> dict:
     }
 
 
-def digest(vault_path: str, max_chars: int = 4000) -> str:
+def digest(vault_path: str, max_chars: int = 6000) -> str:
     """The compact person-model injected into the system prompt every turn.
 
     Ordered by confidence within each category and truncated to a char budget, so a
     profile that grows for years degrades gracefully instead of eating the context window.
+
+    The budget is spent ROUND-ROBIN across categories — every category's best fact
+    before any category's second — rather than filling categories in declaration order.
+    That order-based fill had a silent failure mode: on 2026-08-16 the profile crossed
+    the budget and `identity`/`people`/`preferences` consumed all of it, so health,
+    constraints, goals and timeline vanished from the model's context ENTIRELY. Alex
+    corrected "plays football" to "plays basketball"; the correction was written to the
+    right file, ranked below older facts (rank is by times-seen, and a fresh correction
+    has been seen once), and never reached the model. A profile that silently drops
+    whole categories is worse than a smaller one that doesn't.
     """
     loaded = load_all(vault_path)
     if not loaded:
         return ""
-    chunks, used = [], 0
-    for category, (_, title, _blurb) in CATEGORIES.items():
+    ranked = {}
+    for category in CATEGORIES:
         facts = loaded.get(category)
-        if not facts:
-            continue
-        ranked = sorted(facts, key=lambda x: (-x["n"], x["seen"]))
-        lines = [f"{title}:"]
-        for f in ranked:
-            line = f"- {f['text']}"
-            if used + len(line) > max_chars:
-                break
-            lines.append(line)
-            used += len(line)
-        if len(lines) > 1:
-            chunks.append("\n".join(lines))
-        if used >= max_chars:
+        if facts:
+            # -n: better-confirmed facts first. seen desc: among equally-confirmed
+            # facts the most recently observed wins, so a correction outranks the
+            # stale fact it sits beside.
+            ranked[category] = sorted(facts, key=lambda x: (-x["n"], x["seen"]),
+                                      reverse=False)
+    picked = {c: [] for c in ranked}
+    used, depth = 0, 0
+    while ranked and used < max_chars:
+        progressed = False
+        for category in list(ranked):
+            if depth >= len(ranked[category]):
+                continue
+            line = f"- {ranked[category][depth]['text']}"
+            # A category's first fact also pays for its heading, so the returned
+            # digest actually honours max_chars instead of overshooting by a header
+            # per category.
+            cost = len(line) + (len(CATEGORIES[category][1]) + 3 if not picked[category] else 1)
+            if used + cost > max_chars:
+                ranked.pop(category)      # this one's facts are too long to fit
+                continue
+            picked[category].append(line)
+            used += cost
+            progressed = True
+        if not progressed:
             break
-    if not chunks:
-        return ""
+        depth += 1
+
+    chunks = []
+    for category, (_, title, _blurb) in CATEGORIES.items():
+        if picked.get(category):
+            chunks.append("\n".join([f"{title}:"] + picked[category]))
     return "\n\n".join(chunks)
 
 
