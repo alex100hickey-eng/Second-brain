@@ -1579,3 +1579,47 @@ crash in the staleness note).
 
 **On Alex:** paste the sync URL (ask CLARVIS for it) into the app on each
 device — see NEEDS_ALEX.
+
+## 2026-08-17 — Capability run: bulk schedule edits, surfacing the Canvas deadline sync
+
+Watcher-triggered on-demand run (1 request pending). Request: CLARVIS wanted a way to
+proactively populate the training-app schedule from real school sources — syllabus/portal
+ingestion, a Canvas/SIS connector, and a batch version of edit_schedule — instead of
+reconstructing dates from scraps of email.
+
+**Shipped:** `batch_edit_schedule` in `training_sync.py` — applies many edit_schedule-shaped
+edits as one snapshot mutation / one undo entry, for bulk-populating a week (e.g. off a
+pasted syllabus) with one confirmation instead of one per block. Best-effort: entries that
+fail to resolve are skipped and reported, not fatal to the rest; capped at 60/call. Wired
+into `TOOL_SCHEMAS` / `TOOL_STATUS_LABELS` / `handle_tool_call` the normal way, dispatched
+generically via `training_sync.TOOL_NAMES` in app.py (no new dispatch wiring needed there).
+
+Also discovered `canvas_sync.py` already existed (built 2026-08-15) and already runs via
+launchd every 30 min, pulling Canvas assignment/test deadlines into `School/assignments.csv`
+via CWRU's personal ICS feed (CWRU disabled student Canvas API tokens, verified in that
+file's own docstring) — but the chat system prompt never mentioned it, so CLARVIS didn't
+know this pipeline existed and filed a request partly duplicating it. Added a paragraph to
+app.py's system prompt: point Alex at `School/assignments.csv` / `scripts/school_status.py`
+for deadlines, and for bulk-populating class times, read them straight out of whatever Alex
+pastes (no separate ingestion tool needed — that's just reading) and confirm the whole batch
+once via `batch_edit_schedule`.
+
+**Declined, needs Alex's sign-off:** a live read-only Canvas/SIS connector for recurring
+class MEETING times (not deadlines) — no API route exists (see above), so it would mean
+scraping some school portal, which needs Alex to say which one and accept the
+credential-handling tradeoffs. Bulk PDF/file-upload syllabus ingestion — would need a new
+parsing dependency (none of PyPDF2/pdfplumber/etc. are in requirements.txt, and this repo
+treats new dependencies as a deliberate, Alex-approved edit) plus new upload plumbing that
+doesn't exist yet. The paste-and-parse path above covers the same practical need today
+without either.
+
+**Tests:** new `test_training_sync.py`, 32 checks (bulk apply, mixed valid/invalid entries,
+all-invalid writes nothing, no-op detection, empty/oversized batches, clear+overwrite
+reporting, single-undo-reverts-whole-batch, never-synced path). Full suite green
+(9/9 files, incl. this one).
+
+Commit c021d45. Marked `live-school-system-connectors-for-schedu-08172257` done in the
+capability queue (note there also names the declined portions). One stray note: I mistyped
+the slug on a `mark` call before the real one, which filed one throwaway "done" row against
+a nonexistent slug (`live-school-school-...`) — harmless (no request in the queue has that
+slug, so nothing reads it), left as-is rather than risk a worse fix with no delete tool.
