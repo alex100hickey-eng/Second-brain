@@ -20,6 +20,12 @@ import csv
 import os
 import sys
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+
+# Alex's actual day. Pinned rather than system-local because this script also runs
+# inside the server container (UTC) via school_data.get_school_brief — where a naive
+# datetime.now() flips to tomorrow at 8pm ET and reports today's work as overdue.
+LOCAL_TZ = ZoneInfo("America/New_York")
 
 VAULT = os.path.expanduser(
     "~/Library/Mobile Documents/com~apple~CloudDocs/Obsidian/Second brain")
@@ -81,7 +87,7 @@ def main():
     ap.add_argument("--course", help="limit to one course code")
     args = ap.parse_args()
 
-    today = datetime.now().date()
+    today = datetime.now(LOCAL_TZ).date()
     horizon = today + timedelta(days=args.days)
 
     courses = load("courses.csv")

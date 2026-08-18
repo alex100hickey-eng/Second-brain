@@ -103,6 +103,7 @@ import weather  # noqa: E402 — local module
 # Alex's real schedule: his training app syncs its whole dataset (30-min schedule
 # grid, workouts, routines, library) into us via /training-sync — see training_sync.py.
 import training_sync  # noqa: E402 — local module
+import school_data  # noqa: E402 — local module
 import training_schedule  # noqa: E402 — local module (pure snapshot parsing)
 
 # Video input pipeline (ffmpeg frame sampling + local Whisper transcription +
@@ -771,19 +772,23 @@ on his phone within seconds. Treat it as his diary, not yours:
   - If he's editing in the app at that exact moment, his device can overwrite what you
     wrote a second later. Rare, but if he says it didn't take, that's why — just redo it.
 
-Populating many blocks at once (e.g. a whole week of class times off a pasted syllabus,
-or a semester's recurring lecture slots he typed or forwarded): read the times yourself
-from whatever he gave you — there is no separate ingestion tool, you're already the
-parser — then show him the full list of blocks you're about to set and get one yes
+Populating many blocks at once (a whole week of class times, exam or study blocks):
+you do NOT need him to paste anything — get_class_schedule returns every course's
+meeting days, times, and rooms straight from School/courses.csv in his vault. Read
+the times, then show him the full list of blocks you're about to set and get one yes
 before calling batch_edit_schedule with all of them, instead of confirming block by
-block. You do NOT have a live connector into any school portal/SIS for recurring class
-meeting times, and CWRU has disabled student-facing Canvas API tokens, so there is no
-API route to get them automatically either — the syllabus/paste-from-him route above is
-the real one. Assignment and test DEADLINES are different: those already sync
-automatically every 30 minutes straight from his Canvas calendar feed into
-School/assignments.csv in his vault (canvas_sync.py) — point him there / at
-`python3 scripts/school_status.py` for a due-date brief rather than reconstructing
-deadlines from scraps of email, which is unreliable.
+block. THE SCHOOL SOURCE OF TRUTH is his vault, and you can read all of it:
+get_class_schedule (courses, meeting times, what each course covers next off the
+imported syllabus timeline) and get_school_brief (overdue, due-soon, pace vs lead
+target per course, exam readiness). Assignment and test deadlines sync automatically
+every 30 minutes straight from his Canvas calendar feed into School/assignments.csv
+(canvas_sync.py), so answer deadline questions from get_school_brief rather than
+reconstructing them from scraps of email, which is unreliable. When you block time
+for an exam and no length is stated (the brief's notes often carry one — e.g. the
+Math Placement exam is a hard 60 minutes, one attempt), default to 2 hours and say
+it's a default rather than stalling on the question. One hard line: ECON 103 bans
+ALL AI on submitted work, including reading submissions — build study guides and
+quiz him freely, but never draft anything he will submit.
 
 Alex has THREE mail accounts: personal Gmail, school Gmail, and iCloud Mail. You can
 read ALL of it, and there are two layers that do different jobs — don't confuse them:
@@ -4373,6 +4378,8 @@ def _dispatch_tool_call(tool_name: str, tool_input: dict) -> str:
         return mail_reader.handle_tool_call(tool_name, tool_input)
     if tool_name in training_sync.TOOL_NAMES:
         return training_sync.handle_tool_call(tool_name, tool_input)
+    if tool_name in school_data.TOOL_NAMES:
+        return school_data.handle_tool_call(tool_name, tool_input)
     if tool_name in ("create_email_draft", "list_email_drafts"):
         return mail_drafts.handle_tool_call(tool_name, tool_input)
     if tool_name in ("request_capability", "check_capability_requests"):
@@ -5115,6 +5122,12 @@ def _training_data_changed():
 TOOLS.extend(training_sync.TOOL_SCHEMAS)
 TOOL_STATUS_LABELS.update(training_sync.TOOL_STATUS_LABELS)
 training_sync.init(supabase, on_update=_training_data_changed)
+
+# School data (read-only): class times + due-date/pace brief off the vault's
+# School/*.csv — see school_data.py for why CLARVIS reads but never writes these.
+TOOLS.extend(school_data.TOOL_SCHEMAS)
+TOOL_STATUS_LABELS.update(school_data.TOOL_STATUS_LABELS)
+school_data.init(VAULT_PATH)
 
 # ------------------------------------------------------------
 # Multi-account mail: school Gmail (its own Composio entity — see
@@ -6075,6 +6088,7 @@ def _hud_toolkit() -> dict:
         n = name.lower()
         if n.startswith("gmail"):    return "Google"
         if n.startswith(("get_training", "get_workout")):    return "Training"
+        if n.startswith(("get_class", "get_school")):        return "School"
         if "vault" in n or "note" in n or "obsidian" in n: return "Vault"
         if "task" in n or "goal" in n:                    return "Tasks"
         if "money" in n or "revenue" in n:                return "Money"
