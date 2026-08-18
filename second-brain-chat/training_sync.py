@@ -633,6 +633,77 @@ def edit_schedule(day: str, start: str, end: str, text: str = "") -> str:
     return _mutate(apply, f"edit {span_txt}")
 
 
+MAX_BATCH_EDITS = 60  # a full week at 30-min granularity is nowhere near this
+
+
+def batch_edit_schedule(edits: list) -> str:
+    """Apply many edit_schedule-shaped edits as ONE mutation / ONE undo entry —
+    for bulk-populating a week from a pasted syllabus rather than one
+    confirmation per block. Best-effort: edits that fail to resolve (bad day
+    or time) are reported and skipped; the rest still apply. Nothing writes
+    at all if every edit fails to resolve, or if none of them change anything."""
+    if not edits:
+        return "No edits given."
+    if len(edits) > MAX_BATCH_EDITS:
+        return f"That's {len(edits)} edits at once — split into batches of {MAX_BATCH_EDITS} or fewer."
+
+    resolved, errors = [], []
+    for i, e in enumerate(edits):
+        if not isinstance(e, dict):
+            errors.append(f"#{i + 1}: not a valid edit.")
+            continue
+        day, start, end = e.get("day", ""), e.get("start", ""), e.get("end", "")
+        target = _resolve_day(day)
+        if target in (None, "unknown"):
+            errors.append(f"#{i + 1} ({day!r}): couldn't resolve the day.")
+            continue
+        span, err = _resolve_span(target, start, end)
+        if err:
+            errors.append(f"#{i + 1} {_resolve_day_name(target)}: {err}")
+            continue
+        col, s_slot, e_slot = span
+        span_txt = f"{_resolve_day_name(target)} {start}–{end}"
+        resolved.append((span_txt, col, s_slot, e_slot, str(e.get("text", "")).strip()))
+
+    if not resolved:
+        return "None of those edits could be resolved:\n" + "\n".join(errors)
+
+    def apply(keys):
+        grid = _decode(keys, "weeklySchedule.v1")
+        applied_lines = []
+        for span_txt, col, s_slot, e_slot, label in resolved:
+            replaced, changed = [], False
+            for slot in range(s_slot, e_slot):
+                k = f"{slot}|{col}"
+                old = grid.get(k)
+                old_txt = old.strip() if isinstance(old, str) else ""
+                if old_txt and old_txt != label:
+                    replaced.append(old_txt)
+                if label:
+                    if old_txt != label:
+                        changed = True
+                    grid[k] = label
+                else:
+                    if k in grid:
+                        changed = True
+                    grid.pop(k, None)
+            if changed:
+                verb = f'set to "{label}"' if label else "cleared"
+                over = f" (replacing {', '.join(dict.fromkeys(replaced))})" if replaced else ""
+                applied_lines.append(f"{span_txt}: {verb}{over}")
+        if not applied_lines:
+            return "", "None of those edits changed anything — every block already matched."
+        _encode(keys, "weeklySchedule.v1", grid)
+        lines = [f"Applied {len(applied_lines)} of {len(edits)} edits:"]
+        lines += ["  " + l for l in applied_lines]
+        if errors:
+            lines.append(f"Skipped {len(errors)}:")
+            lines += ["  " + e for e in errors]
+        return "\n".join(lines), ""
+
+    return _mutate(apply, f"batch edit ({len(resolved)} blocks)")
+
+
 def set_workout_card(day: str, text: str) -> str:
     """Replace a day's workout card (the list under the grid)."""
     target = _resolve_day(day)
@@ -895,6 +966,39 @@ TOOL_SCHEMAS = [
         },
     },
     {
+        "name": "batch_edit_schedule",
+        "description": (
+            "Apply MANY schedule edits at once — e.g. populating a whole week of "
+            "class times parsed from a pasted syllabus — as a single change with a "
+            "single undo, instead of one edit_schedule call per block. Same rules as "
+            "edit_schedule (weekday/'today'/'tomorrow', wall-clock times, exclusive "
+            "end, empty text clears). Bad entries (unresolvable day/time) are skipped "
+            "and reported, not fatal to the rest. ALWAYS show him the full list of "
+            "blocks you're about to set and get a yes before calling this — bulk "
+            "writes are the easiest way to make a mess of his week."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "edits": {
+                    "type": "array",
+                    "description": "Up to 60 edits.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "day": {"type": "string", "description": "Weekday name, 'today', or 'tomorrow'."},
+                            "start": {"type": "string", "description": "Start time, e.g. '3pm' or '15:00'."},
+                            "end": {"type": "string", "description": "End time (exclusive), e.g. '4:30pm'."},
+                            "text": {"type": "string", "description": "What goes in the block. Empty clears it."},
+                        },
+                        "required": ["day", "start", "end"],
+                    },
+                },
+            },
+            "required": ["edits"],
+        },
+    },
+    {
         "name": "set_workout_card",
         "description": (
             "Replace the workout card for one day in Alex's training app (the bullet "
@@ -947,6 +1051,7 @@ TOOL_STATUS_LABELS = {
     "get_training_sync_url": "Getting your sync link…",
     "get_widget_setup": "Building your widget setup…",
     "edit_schedule": "Updating your schedule…",
+    "batch_edit_schedule": "Filling in your schedule…",
     "set_workout_card": "Rewriting that workout card…",
     "undo_training_edit": "Putting that back…",
 }
@@ -970,6 +1075,8 @@ def handle_tool_call(tool_name: str, tool_input: dict) -> str:
     if tool_name == "edit_schedule":
         return edit_schedule(tool_input["day"], tool_input["start"],
                              tool_input["end"], tool_input.get("text", ""))
+    if tool_name == "batch_edit_schedule":
+        return batch_edit_schedule(tool_input.get("edits") or [])
     if tool_name == "set_workout_card":
         return set_workout_card(tool_input["day"], tool_input.get("text", ""))
     if tool_name == "undo_training_edit":
