@@ -74,7 +74,9 @@ longer compounding" straight through those eleven silent days. Suite 815 → 829
    a few hundred messages/day to Gmail, and your whole plan tops out at 5/day. An
    empty chart here is **not** a deliverability signal — don't read it as one.
    mail-tester on 08-21 is the real gate, and it works on a single email.
-6. **Confirm the move-in date** and make the Week 3/4 swap call.
+6. ~~**Confirm the move-in date** and make the Week 3/4 swap call.~~ ✅ MOOT
+   2026-08-20 — you moved in Aug 16 (Sherman 222); verified from your own texts
+   during the schedule rebuild. The swap-call question died with the move.
 7. **Two stale drafts to bin** (deletions are never automated, so they're yours):
    "Re: this week" — written 08-06 for a thread you already replied to on 08-11,
    so sending it now would be a duplicate. And "CLARVIS draft test — safe to
