@@ -116,12 +116,13 @@ Grouped by where you'd be when you do them, so each group is one sitting.
 
 ### 🆕 2026-08-19 — redeploy the training app to Netlify (~1 min, laptop)
 
-Training app **v6** is built, tested and committed (`42b1bef`): week headers
-now carry real dates and highlight today, one-off entries (amber, via the new
-"Edits" toggle) clear automatically when the week rolls over while classes /
-workouts / practice stay, and a **Big Stuff Coming Up** section holds dated
-boxes for the 1–3 big things on future days. The CLARVIS server side is
-already live. The app itself needs its Netlify redeploy:
+Training app **v7** is built, tested and committed: week headers carry real
+dates and highlight today, one-off entries (amber, via the new "Edits" toggle)
+clear automatically when the week rolls over while classes / workouts /
+practice stay, and a **Calendar** section shows every day of the next 3 weeks
+as its own box (the window rolls forward on its own) with an "after that" zone
+for only the big-big stuff further out. The CLARVIS server side is already
+live. The app itself needs its Netlify redeploy:
 
 1. Log in at **app.netlify.com** → open the **luminous-madeleine-bf89fa** site
    → **Deploys** tab.

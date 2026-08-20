@@ -307,14 +307,23 @@
 
   .bigstuff {
     max-width: 1400px; margin: 0 auto;
-    display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px;
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 12px;
   }
   .bigcard {
     background: var(--card); border: 1px solid var(--border); border-radius: 12px;
     box-shadow: 0 1px 2px rgba(16,24,40,.04); overflow: hidden;
     display: flex; flex-direction: column;
   }
-  .bigcard.thisweek { border-color: #eec06a; box-shadow: 0 1px 2px rgba(16,24,40,.04), inset 0 3px 0 #f5b840; }
+  .bigcard.today { border-color: var(--accent); box-shadow: 0 1px 2px rgba(16,24,40,.04), inset 0 3px 0 var(--accent); }
+  .bigcard.empty { border-style: dashed; background: transparent; box-shadow: none; }
+  .bigcard.empty .bighead { background: transparent; border-bottom-style: dashed; }
+  .bigcard.daily .bigbody { min-height: 40px; }
+  .bigdate { font-size: 12.5px; font-weight: 600; color: var(--text); white-space: nowrap; }
+  .bigsub {
+    grid-column: 1 / -1; margin: 10px 0 -2px;
+    font-size: 12px; font-weight: 650; letter-spacing: .04em; text-transform: uppercase;
+    color: var(--muted);
+  }
   .bighead {
     display: flex; align-items: center; gap: 8px; padding: 8px 10px;
     background: var(--time-bg); border-bottom: 1px solid var(--border);
@@ -341,7 +350,6 @@
     padding: 18px; cursor: pointer; min-height: 64px;
   }
   .addbig:hover { background: var(--accent-soft); }
-  .bigempty { color: var(--muted); font-size: 13px; padding: 14px 4px; grid-column: 1 / -1; }
 </style>
 </head>
 <body>
@@ -387,7 +395,7 @@
     <table id="grid"></table>
   </div>
 </div>
-<div class="section-title">Big Stuff Coming Up</div>
+<div class="section-title">Calendar</div>
 <div class="bigstuff" id="bigstuff"></div>
 
 <div class="section-title">Workouts</div>
@@ -404,7 +412,7 @@
 <div class="warmup" id="warmup"></div>
 
 <footer id="status">Saved automatically to this browser.</footer>
-<div style="max-width:1400px;margin:4px auto 0;color:#b3b8c2;font-size:11px;">App version 6 — weekly reset + big stuff</div>
+<div style="max-width:1400px;margin:4px auto 0;color:#b3b8c2;font-size:11px;">App version 7 — calendar</div>
 
 <script>
   const DAYS = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
@@ -421,7 +429,7 @@
   const SYNC_PATH = "trainingDashboard";
   const _set = localStorage.setItem.bind(localStorage);
   const _remove = localStorage.removeItem.bind(localStorage);
-  let applyingRemote = false, pendingReload = false, pushTimer = null;
+  let applyingRemote = false, pendingReload = false, pendingSnap = null, pushTimer = null;
 
   // Mirror every saved change to the cloud automatically.
   localStorage.setItem = function(k, v){ _set(k, v); if(!applyingRemote && SYNC_KEYS.includes(k)) schedulePush(); };
@@ -453,6 +461,7 @@
       const r = await fetch(url, { method:"PUT", body: JSON.stringify(snap) });
       if(!r.ok){ const t = await r.text().catch(()=>""); throw new Error("write HTTP "+r.status+" "+t.slice(0,160)); }
       _set(SYNC_LASTV_KEY, snap.rev);
+      pendingSnap = null; // our push supersedes any deferred remote snapshot (last edit wins)
       setPill("on","Synced"); showStatus("Saved & synced ✓  " + new Date().toLocaleTimeString());
     } catch(e){ setPill("err","Sync error"); showStatus("SYNC ERROR (write): " + (e && e.message ? e.message : e)); }
   }
@@ -469,6 +478,13 @@
     } catch(e){ setPill("err","Sync error"); showStatus("SYNC ERROR (read): " + (e && e.message ? e.message : e)); }
   }
   function applySnapshot(snap){
+    if(document.activeElement && document.activeElement.isContentEditable){
+      // Mid-edit: don't touch localStorage yet, or the 250ms save debounce
+      // would race the remote data (either losing his last keystrokes or
+      // clobbering the other device's write). Stash it; focusout applies it.
+      pendingSnap = snap; setPill("busy","Update ready…");
+      return;
+    }
     applyingRemote = true;
     SYNC_KEYS.forEach(k => {
       const val = snap.keys ? snap.keys[safeKey(k)] : null;
@@ -476,13 +492,15 @@
     });
     _set(SYNC_LASTV_KEY, snap.rev);
     applyingRemote = false;
-    if(document.activeElement && document.activeElement.isContentEditable){
-      pendingReload = true; setPill("busy","Update ready…");
-    } else {
-      location.reload();
-    }
+    location.reload();
   }
-  function maybeReload(){ if(pendingReload) location.reload(); }
+  function maybeReload(){
+    // Never reload while focus sits in another editable — tabbing from card
+    // to card must not reboot the page mid-typing.
+    if(document.activeElement && document.activeElement.isContentEditable) return;
+    if(pendingSnap){ const s = pendingSnap; pendingSnap = null; applySnapshot(s); }
+    else if(pendingReload){ location.reload(); }
+  }
   function initSync(){
     if(!cloudUrl()){ setPill("off","Sync off"); return; }
     setPill("on","Synced");
@@ -490,7 +508,8 @@
     setInterval(pullNow, 8000);
     document.addEventListener("visibilitychange", () => { if(!document.hidden) pullNow(); });
     window.addEventListener("focus", pullNow);
-    document.addEventListener("focusout", () => setTimeout(maybeReload, 150));
+    // 400ms > the 250ms save debounce, so the last keystrokes flush first.
+    document.addEventListener("focusout", () => setTimeout(maybeReload, 400));
   }
   // Sync modal wiring
   (function(){
@@ -557,8 +576,12 @@
   // ===== The current week (columns run 3AM–3AM, so before 3AM still counts
   // as the previous day — same frame the grid itself draws in) =====
   function gridToday() {
-    const t = new Date(Date.now() - 3 * 3600 * 1000);
-    return new Date(t.getFullYear(), t.getMonth(), t.getDate());
+    // Wall-clock 3AM, not now-minus-3-hours: a fixed shift drifts an hour on
+    // DST transition days (and the server's parser uses wall-clock 3AM too).
+    const n = new Date();
+    const d = new Date(n.getFullYear(), n.getMonth(), n.getDate());
+    if (n.getHours() < 3) d.setDate(d.getDate() - 1);
+    return d;
   }
   function currentWeekStart() {
     const d = gridToday();
@@ -599,10 +622,23 @@
       showStatus("Saved ✓  " + new Date().toLocaleTimeString());
     }, 250);
   }
-  // A tab left open across the Sunday-3AM boundary re-runs the rollover.
-  document.addEventListener("visibilitychange", () => {
-    if (!document.hidden && isoDate(currentWeekStart()) !== once.weekStart) location.reload();
-  });
+  // A tab left open across the 3AM boundary must reload, or every date-bound
+  // card (the calendar's daily slots, the today highlight, the week rollover)
+  // is off by a day — typing into a stale "today" card would write to a date
+  // the next load PURGES. Checked on visibility and once a minute; while he's
+  // mid-edit it arms the sync layer's pendingReload instead of yanking the
+  // page out from under him (focusout finishes the job).
+  const LOADED_DAY = isoDate(gridToday());
+  function dayRollover() {
+    if (isoDate(gridToday()) === LOADED_DAY) return;
+    if (document.activeElement && document.activeElement.isContentEditable) {
+      pendingReload = true;
+    } else {
+      location.reload();
+    }
+  }
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) dayRollover(); });
+  setInterval(dayRollover, 60000);
 
   // Mode toggle: where do NEW entries (and edits made while it's on) land?
   const MODE_KEY = "entryMode.v1"; // per-device on purpose — not synced
@@ -690,8 +726,12 @@
   });
   table.appendChild(tbody);
 
-  // ---- Big Stuff Coming Up: dated one-off obligations for future weeks ----
+  // ---- Calendar: the next 3 weeks day by day, then only the big big stuff.
+  // The window is computed from today on every load, so it rolls forward on
+  // its own. Storage is unchanged (bigObligations.v1 = [{date, text}]): only
+  // days with text are stored; the daily cards are just rendered slots.
   const BIG_KEY = "bigObligations.v1";
+  const HORIZON_DAYS = 21;
   let big = [];
   try { big = JSON.parse(localStorage.getItem(BIG_KEY)) || []; } catch(e){ big = []; }
   if (!Array.isArray(big)) big = [];
@@ -711,6 +751,7 @@
   if (big.length !== beforePurge) bsave();
 
   const bigEl = document.getElementById("bigstuff");
+  function addDays(base, n) { const d = new Date(base); d.setDate(d.getDate() + n); return d; }
   function bigDate(iso) {
     const p = iso.split("-").map(Number);
     return new Date(p[0], p[1] - 1, p[2]);
@@ -721,39 +762,134 @@
     if (diff === 1) return "tomorrow";
     return "in " + diff + " days";
   }
+  function fmtDay(d) {
+    return d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+  }
   function renderBig() {
     bigEl.innerHTML = "";
+    // One entry per date: merge duplicates so each daily card binds to one.
+    const byDate = {};
+    const undated = [];
+    big.forEach(o => {
+      if (!o.date) { undated.push(o); return; }
+      if (byDate[o.date]) {
+        const held = (byDate[o.date].text || "").trim();
+        byDate[o.date].text = held ? held + "\n" + (o.text || "") : (o.text || "");
+      } else {
+        byDate[o.date] = o;
+      }
+    });
+    big = Object.values(byDate).concat(undated);
     big.sort((a, b) => (a.date || "9999").localeCompare(b.date || "9999"));
-    const weekEndIso = isoDate(WEEK_DATES[6]);
-    if (big.length === 0) {
-      const hint = document.createElement("div");
-      hint.className = "bigempty";
-      hint.textContent = "Nothing big on the horizon. Add exams, games, trips — anything out of the ordinary.";
-      bigEl.appendChild(hint);
+
+    // --- every day of the next 3 weeks ---
+    const t0 = gridToday();
+    const horizonEndIso = isoDate(addDays(t0, HORIZON_DAYS - 1));
+    for (let i = 0; i < HORIZON_DAYS; i++) {
+      const d = addDays(t0, i);
+      const iso = isoDate(d);
+      let entry = byDate[iso] || null;
+      const card = document.createElement("div"); card.className = "bigcard daily";
+      card.dataset.date = iso;
+      if (i === 0) card.classList.add("today");
+      if (!entry || !(entry.text || "").trim()) card.classList.add("empty");
+      const head = document.createElement("div"); head.className = "bighead";
+      const label = document.createElement("span");
+      label.className = "bigdate"; label.textContent = fmtDay(d);
+      head.appendChild(label);
+      const when = document.createElement("span"); when.className = "when";
+      when.textContent = i === 0 ? "today" : i === 1 ? "tomorrow" : "in " + i + " days";
+      head.appendChild(when);
+      card.appendChild(head);
+      const body = document.createElement("div");
+      body.className = "bigbody"; body.contentEditable = "true"; body.spellcheck = false;
+      if (entry) body.textContent = entry.text || "";
+      body.addEventListener("input", () => {
+        // innerText, not textContent: Enter creates <div>/<br> blocks in
+        // contenteditable, and textContent would silently glue lines together.
+        const v = body.innerText;
+        if (v.trim()) {
+          if (!entry) { entry = { date: iso, text: v }; big.push(entry); byDate[iso] = entry; }
+          else entry.text = v;
+          card.classList.remove("empty");
+        } else if (entry) {
+          const at = big.indexOf(entry);
+          if (at !== -1) big.splice(at, 1);
+          delete byDate[iso];
+          entry = null;
+          card.classList.add("empty");
+        }
+        bsave();
+      });
+      body.addEventListener("blur", () => {
+        // deleting all text can leave a stray <br>, which keeps the :empty
+        // placeholder from coming back — clear it once focus leaves
+        if (!body.textContent.trim()) body.innerHTML = "";
+      });
+      card.appendChild(body);
+      bigEl.appendChild(card);
     }
-    big.forEach((o, idx) => {
+
+    // --- past the window: only the big big stuff ---
+    const sub = document.createElement("div");
+    sub.className = "bigsub";
+    sub.textContent = "After that — just the big big stuff";
+    bigEl.appendChild(sub);
+    const fars = big.filter(o => !o.date || o.date > horizonEndIso);
+    fars.forEach(o => {
       const card = document.createElement("div"); card.className = "bigcard";
-      if (o.date && o.date <= weekEndIso) card.classList.add("thisweek");
       const head = document.createElement("div"); head.className = "bighead";
       const inp = document.createElement("input"); inp.type = "date";
+      inp.min = todayIso; // no past dates — they'd be invisible until purged
       if (o.date) inp.value = o.date;
-      inp.addEventListener("change", () => { o.date = inp.value; bsave(); renderBig(); });
-      head.appendChild(inp);
       const when = document.createElement("span"); when.className = "when";
       when.textContent = o.date ? daysAway(o.date) : "pick a date";
+      // Keyboard date editing fires change on EVERY committed segment, so
+      // re-rendering here would tear the input out from under the caret and
+      // persist half-typed dates as the card jumps around. Save on change,
+      // relocate only once focus leaves the input.
+      inp.addEventListener("change", () => {
+        if (inp.value && inp.value < todayIso) { inp.value = o.date || ""; return; }
+        o.date = inp.value;
+        when.textContent = o.date ? daysAway(o.date) : "pick a date";
+        bsave();
+      });
+      inp.addEventListener("blur", () => setTimeout(() => {
+        if (!o.date || o.date > horizonEndIso) return; // still a far card
+        // The date landed inside the 3-week window: this card's home is now
+        // that daily slot. An empty just-added entry isn't worth storing —
+        // the daily card recreates it on the first keystroke.
+        const wasEmpty = !(o.text || "").trim();
+        if (wasEmpty) {
+          const at = big.indexOf(o);
+          if (at !== -1) big.splice(at, 1);
+        }
+        bsave(); renderBig();
+        const c = bigEl.querySelector('.bigcard.daily[data-date="' + o.date + '"]');
+        if (c) {
+          c.scrollIntoView({ block: "center" });
+          if (wasEmpty) c.querySelector(".bigbody").focus();
+        }
+      }, 0));
+      head.appendChild(inp);
       head.appendChild(when);
       const del = document.createElement("button");
       del.className = "del"; del.innerHTML = "×"; del.title = "Remove this day";
       del.addEventListener("click", () => {
         if (o.text && o.text.trim() && !confirm("Remove this day and its items?")) return;
-        big.splice(idx, 1); bsave(); renderBig();
+        const at = big.indexOf(o);
+        if (at !== -1) big.splice(at, 1);
+        bsave(); renderBig();
       });
       head.appendChild(del);
       card.appendChild(head);
       const body = document.createElement("div");
       body.className = "bigbody"; body.contentEditable = "true"; body.spellcheck = false;
       body.textContent = o.text || "";
-      body.addEventListener("input", () => { o.text = body.textContent; bsave(); });
+      body.addEventListener("input", () => { o.text = body.innerText; bsave(); });
+      body.addEventListener("blur", () => {
+        if (!body.textContent.trim()) body.innerHTML = "";
+      });
       card.appendChild(body);
       bigEl.appendChild(card);
     });
@@ -1105,7 +1241,7 @@
   }
 
   document.getElementById("clearBtn").addEventListener("click", () => {
-    if (!confirm("Clear everything in the schedule, big stuff, workouts, and library? This can't be undone.")) return;
+    if (!confirm("Clear everything in the schedule, calendar, workouts, and library? This can't be undone.")) return;
     data = {}; wdata = {}; ldata = {}; rdata = {}; wudata = "";
     once = { weekStart: WEEK_START_ISO, cells: {} }; big = [];
     localStorage.removeItem(STORE_KEY);

@@ -1090,12 +1090,14 @@ TOOL_SCHEMAS = [
     {
         "name": "set_big_obligation",
         "description": (
-            "Set, replace, or remove the 'Big Stuff Coming Up' entry for one date "
-            "in Alex's training app — dated one-off obligations beyond this week "
-            "(exams, games, trips, deadlines), NOT routine classes/workouts. text "
-            "is the FULL list for that day (1-3 lines, newline-separated); it "
-            "replaces whatever that date had, and empty text removes the date. "
-            "Past dates drop off the app automatically."
+            "Set, replace, or remove one date's entry in the training app's "
+            "'Calendar' section — dated one-off obligations (exams, games, trips, "
+            "deadlines, anything out of the ordinary), NOT routine classes/"
+            "workouts. The app shows every day of the next 3 weeks as its own "
+            "box, then only dated big stuff beyond that; this tool writes any "
+            "date either way. text is the FULL list for that day (1-3 lines, "
+            "newline-separated); it replaces whatever that date had, and empty "
+            "text removes the date. Past dates drop off the app automatically."
         ),
         "input_schema": {
             "type": "object",

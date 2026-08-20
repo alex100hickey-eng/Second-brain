@@ -16,8 +16,12 @@ App version 6 (2026-08-19) added the weekly reset:
   amber, covers the repeating cell it sits on, and is wiped client-side when
   the week rolls over. The "Edits:" header toggle picks which layer edits land
   in; cells already in the once layer always edit the once layer.
-- "Big Stuff Coming Up" (`bigObligations.v1` = `[{date, text}]`): dated boxes
-  for the 1–3 big/unusual things on future days. Past dates purge on load.
+- "Calendar" (`bigObligations.v1` = `[{date, text}]`, v7 renamed from "Big
+  Stuff Coming Up"): every day of the next 3 weeks renders as its own box (a
+  rolling window computed from today — empty days are dashed placeholder
+  slots, only days with text are stored), then an "after that" zone showing
+  only dated big-big stuff plus "+ Add a date". Duplicate dates merge on
+  render. Past dates purge on load.
 - Server counterpart: `second-brain-chat/training_schedule.py` parses both new
   keys (once layer merges into events via `grid_for_week`; obligations feed
   today's context and the schedule tools), and `training_sync.py` gained
