@@ -58,11 +58,10 @@ longer compounding" straight through those eleven silent days. Suite 815 → 829
 
 ## 🟠 Money — the rest, in the order I'd do them
 
-1. **Send the outside-reader email.** Draft has been sitting in your personal gmail
-   Drafts since 08-06 ("quick favor — 5 min read"); PDF at
-   `Desktop/splitframe-sample-pack.pdf`. Pick one person whose taste you trust,
-   attach, send. This is the cheapest real signal you can get before pitching
-   anyone, and it costs one email.
+1. ~~**Send the outside-reader email.**~~ ❌ STRUCK 2026-08-20 — superseded by your
+   own later decision to keep the personal circle out of the money process entirely
+   (warmup runs self-contained). The 08-06 draft ("quick favor — 5 min read") should
+   be **deleted**, not sent — it joins the stale-drafts bin in item 7.
 2. ~~**The 14-brand call**~~ ✅ DECIDED 2026-08-14 — you delegated it ("up to you"),
    so the under-150 rule was applied. See the table below for the record.
 3. **Stripe** — dashboard.stripe.com/register, sole prop, personal checking, ACH on,
