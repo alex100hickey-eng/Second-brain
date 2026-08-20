@@ -114,7 +114,24 @@ day. Overrule any of this by telling CLARVIS; the pre-decision snapshot is
 
 Grouped by where you'd be when you do them, so each group is one sitting.
 
-### 🆕 2026-08-17 — put CLARVIS on your home screen (~5 min, phone only)
+### 🆕 2026-08-19 — redeploy the training app to Netlify (~1 min, laptop)
+
+Training app **v6** is built, tested and committed (`42b1bef`): week headers
+now carry real dates and highlight today, one-off entries (amber, via the new
+"Edits" toggle) clear automatically when the week rolls over while classes /
+workouts / practice stay, and a **Big Stuff Coming Up** section holds dated
+boxes for the 1–3 big things on future days. The CLARVIS server side is
+already live. The app itself needs its Netlify redeploy:
+
+1. Log in at **app.netlify.com** → open the **luminous-madeleine-bf89fa** site
+   → **Deploys** tab.
+2. Drag the folder `~/second-brain/training-app` onto the drop zone (or just
+   drag `index.html` if it asks for files). Done — the URL doesn't change and
+   your data is untouched (it all lives in sync/localStorage, not the page).
+
+**Until this is done, don't ask CLARVIS to add one-week entries or big
+obligations** — the old app version doesn't know the two new sync keys and
+will drop them on its next push. Everything else keeps working as before.
 
 Two widgets are ready: a schedule widget (what you're doing now + what's next,
 straight from your training grid) and a TALK button that opens the mic.
