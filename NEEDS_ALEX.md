@@ -64,9 +64,16 @@ longer compounding" straight through those eleven silent days. Suite 815 → 829
    be **deleted**, not sent — it joins the stale-drafts bin in item 7.
 2. ~~**The 14-brand call**~~ ✅ DECIDED 2026-08-14 — you delegated it ("up to you"),
    so the under-150 rule was applied. See the table below for the record.
-3. **Stripe** — dashboard.stripe.com/register, sole prop, personal checking, ACH on,
-   tax auto-transfer 25–30%. 15 minutes. Not urgent until someone says yes, but it's
-   the only thing between a "yes" and money landing. Do it while warmup runs.
+3. **Stripe — the account EXISTS, it just isn't activated.** Corrected 2026-08-20:
+   `dashboard.stripe.com` already has a "Splitframe Studio" account and you're signed
+   in, but it sits in **Sandbox/test mode** (`sk_test_` keys, "Verify your business"
+   banner, no payouts). So there is nothing to *register* — the remaining work is
+   **Activate Payments**: category (use **Consulting services**), business description,
+   sole prop, SSN/DOB identity check, personal checking for payouts, then set the
+   payout schedule. Afterwards **switch the dashboard out of Sandbox and re-copy the
+   LIVE keys** — anything wired to the test keys collects nothing. ~15 min, all of it
+   yours (Claude never enters SSN/bank/ID). This is the only thing between a "yes"
+   and money landing, and Wave 1 goes out 08-21.
 4. **The call card's open question** — vault [[call-card]]: keep or strike the
    teardown refund guarantee. Decide it now, not on a live call.
 5. ~~**Postmaster Tools**~~ ✅ CHECKED 2026-08-14 — domain **Verified** since Aug 1.
