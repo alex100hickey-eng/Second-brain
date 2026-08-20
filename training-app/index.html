@@ -294,15 +294,64 @@
   .modal button.primary:hover { background: #3f5de0; }
   .modal button.ghost { background: transparent; }
   .modal-note { margin: 16px 0 0; font-size: 12px; color: var(--muted); line-height: 1.5; }
+
+  thead th .hdate {
+    display: block; font-size: 10.5px; font-weight: 550;
+    color: #98a0ad; letter-spacing: 0; text-transform: none; margin-top: 2px;
+  }
+  thead th.today { color: var(--accent); }
+  thead th.today .hdate { color: var(--accent); }
+  td.slot.once { background: #fff8ea; }
+  td.slot.once div { color: #7a4d00; }
+  #modeBtn.once { background: #fff3d6; border-color: #eec06a; color: #8a5a00; }
+
+  .bigstuff {
+    max-width: 1400px; margin: 0 auto;
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px;
+  }
+  .bigcard {
+    background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+    box-shadow: 0 1px 2px rgba(16,24,40,.04); overflow: hidden;
+    display: flex; flex-direction: column;
+  }
+  .bigcard.thisweek { border-color: #eec06a; box-shadow: 0 1px 2px rgba(16,24,40,.04), inset 0 3px 0 #f5b840; }
+  .bighead {
+    display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+    background: var(--time-bg); border-bottom: 1px solid var(--border);
+  }
+  .bighead input[type=date] {
+    font: inherit; font-size: 12.5px; font-weight: 600; color: var(--text);
+    border: none; background: transparent; padding: 2px 0;
+  }
+  .bighead .when { font-size: 11px; color: var(--muted); white-space: nowrap; margin-left: auto; }
+  .bighead .del {
+    border: none; background: none; cursor: pointer; color: var(--muted);
+    font-size: 15px; line-height: 1; padding: 0 2px;
+  }
+  .bighead .del:hover { color: #b42318; }
+  .bigbody {
+    padding: 10px 12px; min-height: 64px; flex: 1;
+    font-size: 13px; line-height: 1.7; outline: none; cursor: text; white-space: pre-wrap;
+  }
+  .bigbody:focus { background: var(--accent-soft); }
+  .bigbody:empty:before { content: "The 1\2013 3 big things that day\2026"; color: #b3b8c2; }
+  .addbig {
+    font: inherit; font-size: 13px; font-weight: 550; color: var(--accent);
+    background: none; border: 1px dashed #c3ccf7; border-radius: 12px;
+    padding: 18px; cursor: pointer; min-height: 64px;
+  }
+  .addbig:hover { background: var(--accent-soft); }
+  .bigempty { color: var(--muted); font-size: 13px; padding: 14px 4px; grid-column: 1 / -1; }
 </style>
 </head>
 <body>
 <header>
   <div>
     <h1>Weekly Schedule</h1>
-    <div class="sub">Click any cell to type. Changes save automatically.</div>
+    <div class="sub" id="subLine">Click any cell to type. Changes save automatically.</div>
   </div>
   <div class="actions">
+    <button id="modeBtn" title="Choose whether new entries repeat every week or clear when the week rolls over"></button>
     <span id="syncPill" class="syncpill off" title="Sync status">Sync off</span>
     <button id="syncBtn">Sync</button>
     <button id="clearBtn" class="danger">Clear all</button>
@@ -338,6 +387,9 @@
     <table id="grid"></table>
   </div>
 </div>
+<div class="section-title">Big Stuff Coming Up</div>
+<div class="bigstuff" id="bigstuff"></div>
+
 <div class="section-title">Workouts</div>
 <div class="workouts" id="workouts"></div>
 
@@ -352,7 +404,7 @@
 <div class="warmup" id="warmup"></div>
 
 <footer id="status">Saved automatically to this browser.</footer>
-<div style="max-width:1400px;margin:4px auto 0;color:#b3b8c2;font-size:11px;">App version 5 — sync fixed</div>
+<div style="max-width:1400px;margin:4px auto 0;color:#b3b8c2;font-size:11px;">App version 6 — weekly reset + big stuff</div>
 
 <script>
   const DAYS = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
@@ -361,7 +413,8 @@
   // ===== Cross-device sync (Firebase Realtime DB via REST) =====
   const SYNC_KEYS = [
     "weeklySchedule.v1","weeklyWorkouts.v1","weeklyWorkoutsSeeded.v1",
-    "dailyRoutines.v1","warmupRoutine.v1","workoutLibrary.v2","workoutLibrarySeeded.v1"
+    "dailyRoutines.v1","warmupRoutine.v1","workoutLibrary.v2","workoutLibrarySeeded.v1",
+    "weeklyOnce.v1","bigObligations.v1"
   ];
   const SYNC_URL_KEY = "sync.dbUrl";
   const SYNC_LASTV_KEY = "sync.lastV";
@@ -501,6 +554,75 @@
   let data = {};
   try { data = JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch(e){ data = {}; }
 
+  // ===== The current week (columns run 3AM–3AM, so before 3AM still counts
+  // as the previous day — same frame the grid itself draws in) =====
+  function gridToday() {
+    const t = new Date(Date.now() - 3 * 3600 * 1000);
+    return new Date(t.getFullYear(), t.getMonth(), t.getDate());
+  }
+  function currentWeekStart() {
+    const d = gridToday();
+    d.setDate(d.getDate() - d.getDay()); // back to Sunday
+    return d;
+  }
+  function isoDate(d) {
+    return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0")
+      + "-" + String(d.getDate()).padStart(2, "0");
+  }
+  function fmtShort(d) { return d.toLocaleDateString("en-US", { month: "short", day: "numeric" }); }
+  const WEEK_START = currentWeekStart();
+  const WEEK_START_ISO = isoDate(WEEK_START);
+  const WEEK_DATES = [];
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(WEEK_START); d.setDate(d.getDate() + i); WEEK_DATES.push(d);
+  }
+  const todayCol = gridToday().getDay();
+
+  // ===== One-week layer: entries here sit on top of the repeating grid and
+  // are wiped when the week rolls over (Sunday 3AM) =====
+  const ONCE_KEY = "weeklyOnce.v1";
+  let once = null;
+  try { once = JSON.parse(localStorage.getItem(ONCE_KEY)); } catch(e){ once = null; }
+  if (!once || typeof once !== "object" || typeof once.cells !== "object" || !once.cells) {
+    once = { weekStart: WEEK_START_ISO, cells: {} };
+  }
+  if (once.weekStart !== WEEK_START_ISO) {
+    // New week: last week's one-off entries clear, the repeating grid stays.
+    once = { weekStart: WEEK_START_ISO, cells: {} };
+    localStorage.setItem(ONCE_KEY, JSON.stringify(once));
+  }
+  let oTimer;
+  function osave() {
+    clearTimeout(oTimer);
+    oTimer = setTimeout(() => {
+      localStorage.setItem(ONCE_KEY, JSON.stringify(once));
+      showStatus("Saved ✓  " + new Date().toLocaleTimeString());
+    }, 250);
+  }
+  // A tab left open across the Sunday-3AM boundary re-runs the rollover.
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && isoDate(currentWeekStart()) !== once.weekStart) location.reload();
+  });
+
+  // Mode toggle: where do NEW entries (and edits made while it's on) land?
+  const MODE_KEY = "entryMode.v1"; // per-device on purpose — not synced
+  let entryMode = localStorage.getItem(MODE_KEY) === "once" ? "once" : "base";
+  const modeBtn = document.getElementById("modeBtn");
+  function paintMode() {
+    modeBtn.classList.toggle("once", entryMode === "once");
+    modeBtn.textContent = entryMode === "once" ? "1× Edits: this week only" : "↻ Edits: every week";
+  }
+  modeBtn.addEventListener("click", () => {
+    entryMode = entryMode === "once" ? "base" : "once";
+    localStorage.setItem(MODE_KEY, entryMode);
+    paintMode();
+  });
+  paintMode();
+
+  document.getElementById("subLine").textContent =
+    "Week of " + fmtShort(WEEK_DATES[0]) + " – " + fmtShort(WEEK_DATES[6]) +
+    " · amber entries are this week only and clear when the new week starts";
+
   const table = document.getElementById("grid");
   const thead = document.createElement("thead");
   const htr = document.createElement("tr");
@@ -508,7 +630,15 @@
   th0.className = "timehead timecell"; th0.textContent = "Time";
   th0.style.position = "sticky"; th0.style.top = "0";
   htr.appendChild(th0);
-  DAYS.forEach(d => { const th = document.createElement("th"); th.textContent = d; htr.appendChild(th); });
+  DAYS.forEach((d, i) => {
+    const th = document.createElement("th");
+    th.textContent = d;
+    const sp = document.createElement("span");
+    sp.className = "hdate"; sp.textContent = fmtShort(WEEK_DATES[i]);
+    th.appendChild(sp);
+    if (i === todayCol) th.classList.add("today");
+    htr.appendChild(th);
+  });
   thead.appendChild(htr); table.appendChild(thead);
 
   const tbody = document.createElement("tbody");
@@ -526,11 +656,32 @@
       div.contentEditable = "true";
       div.spellcheck = false;
       const key = r + "|" + c;
-      if (data[key]) div.textContent = data[key];
+      // A one-week entry covers the repeating one for display; the repeating
+      // entry survives underneath and comes back next week.
+      if (once.cells[key] !== undefined) {
+        div.textContent = once.cells[key];
+        td.classList.add("once");
+      } else if (data[key]) {
+        div.textContent = data[key];
+      }
       div.addEventListener("input", () => {
         const v = div.textContent.trim();
-        if (v) data[key] = v; else delete data[key];
-        save();
+        const inOnce = Object.prototype.hasOwnProperty.call(once.cells, key);
+        if (inOnce || entryMode === "once") {
+          if (v) once.cells[key] = v; else delete once.cells[key];
+          td.classList.toggle("once", !!v);
+          osave();
+        } else {
+          if (v) data[key] = v; else delete data[key];
+          save();
+        }
+      });
+      div.addEventListener("blur", () => {
+        // Re-resolve what this cell shows: clearing a one-week entry reveals
+        // the repeating one underneath again.
+        const ov = once.cells[key];
+        if (ov !== undefined) { div.textContent = ov; td.classList.add("once"); }
+        else { div.textContent = data[key] || ""; td.classList.remove("once"); }
       });
       td.appendChild(div);
       tr.appendChild(td);
@@ -538,6 +689,86 @@
     tbody.appendChild(tr);
   });
   table.appendChild(tbody);
+
+  // ---- Big Stuff Coming Up: dated one-off obligations for future weeks ----
+  const BIG_KEY = "bigObligations.v1";
+  let big = [];
+  try { big = JSON.parse(localStorage.getItem(BIG_KEY)) || []; } catch(e){ big = []; }
+  if (!Array.isArray(big)) big = [];
+  big = big.filter(o => o && typeof o === "object");
+  // Days that have passed drop off on their own (undated drafts are kept).
+  const todayIso = isoDate(gridToday());
+  const beforePurge = big.length;
+  big = big.filter(o => !o.date || o.date >= todayIso);
+  let bTimer;
+  function bsave() {
+    clearTimeout(bTimer);
+    bTimer = setTimeout(() => {
+      localStorage.setItem(BIG_KEY, JSON.stringify(big));
+      showStatus("Saved ✓  " + new Date().toLocaleTimeString());
+    }, 250);
+  }
+  if (big.length !== beforePurge) bsave();
+
+  const bigEl = document.getElementById("bigstuff");
+  function bigDate(iso) {
+    const p = iso.split("-").map(Number);
+    return new Date(p[0], p[1] - 1, p[2]);
+  }
+  function daysAway(iso) {
+    const diff = Math.round((bigDate(iso) - gridToday()) / 86400000);
+    if (diff <= 0) return "today";
+    if (diff === 1) return "tomorrow";
+    return "in " + diff + " days";
+  }
+  function renderBig() {
+    bigEl.innerHTML = "";
+    big.sort((a, b) => (a.date || "9999").localeCompare(b.date || "9999"));
+    const weekEndIso = isoDate(WEEK_DATES[6]);
+    if (big.length === 0) {
+      const hint = document.createElement("div");
+      hint.className = "bigempty";
+      hint.textContent = "Nothing big on the horizon. Add exams, games, trips — anything out of the ordinary.";
+      bigEl.appendChild(hint);
+    }
+    big.forEach((o, idx) => {
+      const card = document.createElement("div"); card.className = "bigcard";
+      if (o.date && o.date <= weekEndIso) card.classList.add("thisweek");
+      const head = document.createElement("div"); head.className = "bighead";
+      const inp = document.createElement("input"); inp.type = "date";
+      if (o.date) inp.value = o.date;
+      inp.addEventListener("change", () => { o.date = inp.value; bsave(); renderBig(); });
+      head.appendChild(inp);
+      const when = document.createElement("span"); when.className = "when";
+      when.textContent = o.date ? daysAway(o.date) : "pick a date";
+      head.appendChild(when);
+      const del = document.createElement("button");
+      del.className = "del"; del.innerHTML = "×"; del.title = "Remove this day";
+      del.addEventListener("click", () => {
+        if (o.text && o.text.trim() && !confirm("Remove this day and its items?")) return;
+        big.splice(idx, 1); bsave(); renderBig();
+      });
+      head.appendChild(del);
+      card.appendChild(head);
+      const body = document.createElement("div");
+      body.className = "bigbody"; body.contentEditable = "true"; body.spellcheck = false;
+      body.textContent = o.text || "";
+      body.addEventListener("input", () => { o.text = body.textContent; bsave(); });
+      card.appendChild(body);
+      bigEl.appendChild(card);
+    });
+    const add = document.createElement("button");
+    add.className = "addbig"; add.textContent = "+ Add a date";
+    add.addEventListener("click", () => {
+      big.push({ date: "", text: "" });
+      renderBig();
+      const inputs = bigEl.querySelectorAll("input[type=date]");
+      const last = inputs[inputs.length - 1];
+      if (last) { last.focus(); try { last.showPicker(); } catch(e){} }
+    });
+    bigEl.appendChild(add);
+  }
+  renderBig();
 
   // ---- Workouts board ----
   const W_KEY = "weeklyWorkouts.v1";
@@ -874,16 +1105,21 @@
   }
 
   document.getElementById("clearBtn").addEventListener("click", () => {
-    if (!confirm("Clear everything in the schedule, workouts, and library? This can't be undone.")) return;
+    if (!confirm("Clear everything in the schedule, big stuff, workouts, and library? This can't be undone.")) return;
     data = {}; wdata = {}; ldata = {}; rdata = {}; wudata = "";
+    once = { weekStart: WEEK_START_ISO, cells: {} }; big = [];
     localStorage.removeItem(STORE_KEY);
     localStorage.removeItem(W_KEY);
     localStorage.removeItem(L_KEY);
     localStorage.removeItem(R_KEY);
     localStorage.removeItem(WU_KEY);
+    localStorage.removeItem(ONCE_KEY);
+    localStorage.removeItem(BIG_KEY);
     document.querySelectorAll("td.slot div").forEach(d => d.textContent = "");
+    document.querySelectorAll("td.slot").forEach(t => t.classList.remove("once"));
     document.querySelectorAll(".wlist").forEach(d => d.textContent = "");
     CATS.forEach((_, i) => renderCat(i));
+    renderBig();
     document.getElementById("status").textContent = "Cleared.";
   });
 

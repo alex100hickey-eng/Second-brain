@@ -14,6 +14,12 @@ no changes). The keys that matter:
     dailyRoutines.v1    {"morning": str, "night": str}
     warmupRoutine.v1    plain string
     workoutLibrary.v2   {"<catIdx>": {"sel": int, "pages": [{title, body} | table]}}
+    weeklyOnce.v1       {"weekStart": "YYYY-MM-DD" (a Sunday), "cells": same shape
+                        as weeklySchedule.v1} — one-week-only entries; the app
+                        wipes them at week rollover and they OVERRIDE the
+                        repeating cell they sit on (app v6+)
+    bigObligations.v1   [{"date": "YYYY-MM-DD", "text": "1-3 big things"}] —
+                        dated one-off obligations; the app drops past dates
 
 Grid semantics (must match the app's rendering exactly): slot r covers
 3:00 AM + r*30min for 30 minutes, so a day column spans 3:00 AM of its day to
@@ -120,6 +126,42 @@ def parse_snapshot(snapshot: dict) -> dict:
             if pages:
                 library[LIBRARY_CATS[i]] = pages
 
+    once_week_start = None
+    once_cells = {}
+    oc = _get_key(snapshot, "weeklyOnce.v1")
+    if isinstance(oc, dict):
+        ws = oc.get("weekStart")
+        if isinstance(ws, str):
+            try:
+                once_week_start = date.fromisoformat(ws)
+            except ValueError:
+                once_week_start = None
+        cells = oc.get("cells")
+        if isinstance(cells, dict):
+            for key, text in cells.items():
+                try:
+                    r_s, c_s = key.split("|", 1)
+                    r, c = int(r_s), int(c_s)
+                except (ValueError, AttributeError):
+                    continue
+                if 0 <= r < N_SLOTS and 0 <= c < 7 and isinstance(text, str) and text.strip():
+                    once_cells[(r, c)] = text.strip()
+
+    obligations = []
+    big = _get_key(snapshot, "bigObligations.v1")
+    if isinstance(big, list):
+        for item in big:
+            if not isinstance(item, dict):
+                continue
+            try:
+                d = date.fromisoformat(str(item.get("date") or ""))
+            except ValueError:
+                continue
+            text = item.get("text")
+            if isinstance(text, str) and text.strip():
+                obligations.append({"date": d, "text": text.strip()})
+        obligations.sort(key=lambda o: o["date"])
+
     return {
         "rev": (snapshot or {}).get("rev") if isinstance(snapshot, dict) else None,
         "grid": grid,
@@ -127,12 +169,44 @@ def parse_snapshot(snapshot: dict) -> dict:
         "routines": routines,
         "warmup": warmup.strip(),
         "library": library,
+        "once_week_start": once_week_start,
+        "once_cells": once_cells,
+        "obligations": obligations,
     }
 
 
 def day_index(d: date) -> int:
     """Python weekday (Mon=0) -> app column index (Sun=0)."""
     return (d.weekday() + 1) % 7
+
+
+def week_start(d: date) -> date:
+    """The Sunday that starts d's week (the app's week boundary)."""
+    return d - timedelta(days=day_index(d))
+
+
+def grid_for_week(parsed: dict, col_date: date) -> dict:
+    """The effective grid for a column dated col_date: the repeating grid with
+    the one-week layer overlaid IF col_date falls inside the layer's week.
+    One-week cells override repeating cells, matching the app's rendering."""
+    grid = parsed.get("grid") or {}
+    ws = parsed.get("once_week_start")
+    cells = parsed.get("once_cells") or {}
+    if ws is None or not cells or not (ws <= col_date < ws + timedelta(days=7)):
+        return grid
+    merged = dict(grid)
+    merged.update(cells)
+    return merged
+
+
+def obligations_for_date(parsed: dict, d: date) -> list:
+    """Texts of the big obligations dated exactly d."""
+    return [o["text"] for o in parsed.get("obligations") or [] if o["date"] == d]
+
+
+def upcoming_obligations(parsed: dict, start: date) -> list:
+    """Big obligations dated start or later, soonest first."""
+    return [o for o in parsed.get("obligations") or [] if o["date"] >= start]
 
 
 def column_events(grid: dict, col_date: date) -> list:
@@ -160,13 +234,14 @@ def column_events(grid: dict, col_date: date) -> list:
 
 def events_for_date(parsed: dict, d: date) -> list:
     """All schedule blocks overlapping calendar date d, sorted by start time.
-    Checks column d-1 too, since columns run 3AM-3AM and can spill past midnight."""
-    grid = parsed.get("grid") or {}
+    Checks column d-1 too, since columns run 3AM-3AM and can spill past midnight.
+    Each column uses its own week's effective grid (one-week layer merged in),
+    so the two columns straddling a week boundary resolve independently."""
     day_lo = datetime.combine(d, time(0, 0))
     day_hi = day_lo + timedelta(days=1)
     out = []
     for col_date in (d - timedelta(days=1), d):
-        for ev in column_events(grid, col_date):
+        for ev in column_events(grid_for_week(parsed, col_date), col_date):
             if ev["start"] < day_hi and ev["end"] > day_lo:
                 out.append(ev)
     out.sort(key=lambda e: e["start"])

@@ -4690,7 +4690,17 @@ def get_today_events() -> list:
             return _calendar_cache["events"] or []
         parsed = training_schedule.parse_snapshot(snap)
         today = datetime.now(LOCAL_TZ).date()
+        # Big Stuff entries for today lead as all-day events, then timed blocks.
         events = [
+            {
+                "title": text,
+                "start": today.isoformat(),
+                "end": today.isoformat(),
+                "all_day": True,
+            }
+            for text in training_schedule.obligations_for_date(parsed, today)
+        ]
+        events += [
             {
                 "title": ev["title"],
                 "start": ev["start"].isoformat(),

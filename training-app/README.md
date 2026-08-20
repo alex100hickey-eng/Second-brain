@@ -3,9 +3,25 @@
 Alex's training app — the weekly 30-minute-block schedule grid plus workout
 cards, daily routines, everyday warmup, and workout library. **The live copy is
 the Netlify deploy at https://luminous-madeleine-bf89fa.netlify.app/** — this
-folder is a recovered backup (saved 2026-08-16 from the live site, "App version
-5 — sync fixed") so the app can be redeployed if Netlify ever loses it. It was
-built in an earlier session and previously existed nowhere in git.
+folder is the source of truth in git (recovered 2026-08-16 from the live site;
+edited here since). It was built in an earlier session and previously existed
+nowhere in git.
+
+App version 6 (2026-08-19) added the weekly reset:
+
+- Column headers carry the current week's dates (computed client-side, Sunday
+  start, 3 AM day boundary) and highlight today.
+- Two grid layers: the repeating week (`weeklySchedule.v1`, unchanged shape)
+  plus a one-week overlay (`weeklyOnce.v1` = `{weekStart, cells}`) that renders
+  amber, covers the repeating cell it sits on, and is wiped client-side when
+  the week rolls over. The "Edits:" header toggle picks which layer edits land
+  in; cells already in the once layer always edit the once layer.
+- "Big Stuff Coming Up" (`bigObligations.v1` = `[{date, text}]`): dated boxes
+  for the 1–3 big/unusual things on future days. Past dates purge on load.
+- Server counterpart: `second-brain-chat/training_schedule.py` parses both new
+  keys (once layer merges into events via `grid_for_week`; obligations feed
+  today's context and the schedule tools), and `training_sync.py` gained
+  `edit_schedule(this_week_only=…)` + `set_big_obligation`.
 
 Single self-contained HTML file, no build step. All data lives in
 localStorage; the built-in Sync feature mirrors everything to any URL speaking

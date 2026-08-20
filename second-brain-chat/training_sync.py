@@ -41,7 +41,7 @@ import re
 import threading
 import time
 import uuid
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import training_schedule
@@ -417,14 +417,44 @@ def get_training_schedule(day: str = "") -> str:
     if target == "unknown":
         return f"Unknown day {day!r} — use a weekday name, 'today', 'tomorrow', or 'week'."
     if target is None:
-        return "Alex's week (from his training app):\n" + training_schedule.schedule_summary(p) + _staleness_note()
+        out = "Alex's week (from his training app):\n" + training_schedule.schedule_summary(p)
+        today = datetime.now(LOCAL_TZ).date()
+        ws = training_schedule.week_start(today)
+        cells = p.get("once_cells") or {}
+        if cells and p.get("once_week_start") == ws:
+            out += "\n\nThis week only (clears when the week rolls over):"
+            for i in range(7):
+                d = ws + timedelta(days=i)
+                for ev in training_schedule.column_events(cells, d):
+                    out += "\n  %s  %s–%s  %s" % (
+                        d.strftime("%a %b %-d"),
+                        training_schedule.clock(ev["start"]),
+                        training_schedule.clock(ev["end"]), ev["title"])
+        obls = training_schedule.upcoming_obligations(p, today)
+        if obls:
+            out += "\n\nBig stuff coming up:"
+            for o in obls[:12]:
+                out += "\n  %s — %s" % (o["date"].strftime("%a %b %-d"),
+                                        o["text"].replace("\n", " / "))
+            if len(obls) > 12:
+                out += f"\n  (+{len(obls) - 12} more further out)"
+        return out + _staleness_note()
     events = training_schedule.events_for_date(p, target)
     label = target.strftime("%A %b %-d")
-    if not events:
+    obls = training_schedule.obligations_for_date(p, target)
+    if not events and not obls:
         return f"Nothing blocked in the schedule for {label}." + _staleness_note()
-    lines = [f"Schedule for {label}:"]
-    for ev in events:
-        lines.append("  " + training_schedule.format_block(ev, target))
+    lines = []
+    if events:
+        lines.append(f"Schedule for {label}:")
+        for ev in events:
+            lines.append("  " + training_schedule.format_block(ev, target))
+    else:
+        lines.append(f"Nothing blocked in the schedule for {label}.")
+    if obls:
+        lines.append(f"Big stuff on {label}:")
+        for t in obls:
+            lines.append("  " + t.replace("\n", " / "))
     return "\n".join(lines) + _staleness_note()
 
 
@@ -589,8 +619,32 @@ def _mutate(apply_fn, label: str) -> str:
             "'undo that' to reverse it." + tail)
 
 
-def edit_schedule(day: str, start: str, end: str, text: str = "") -> str:
-    """Set (or clear, with empty text) a time range on one day of the grid."""
+def _apply_span_to(store: dict, col: int, s_slot: int, e_slot: int, label: str):
+    """Write (or clear) one resolved span into a grid-shaped dict in place.
+    Returns (replaced_texts, changed)."""
+    replaced, changed = [], False
+    for slot in range(s_slot, e_slot):
+        k = f"{slot}|{col}"
+        old = store.get(k)
+        old_txt = old.strip() if isinstance(old, str) else ""
+        if old_txt and old_txt != label:
+            replaced.append(old_txt)
+        if label:
+            if old_txt != label:
+                changed = True
+            store[k] = label
+        else:
+            if k in store:
+                changed = True
+            store.pop(k, None)
+    return replaced, changed
+
+
+def edit_schedule(day: str, start: str, end: str, text: str = "",
+                  this_week_only: bool = False) -> str:
+    """Set (or clear, with empty text) a time range on one day of the grid.
+    this_week_only writes the one-week layer instead: it shows on top of the
+    repeating grid and clears when the week rolls over (Sunday 3 AM)."""
     target = _resolve_day(day)
     if target in (None, "unknown"):
         return (f"Which day? {day!r} isn't one I can resolve — use a weekday name, "
@@ -604,23 +658,46 @@ def edit_schedule(day: str, start: str, end: str, text: str = "") -> str:
     # range starts before 3 AM (see _resolve_span).
     span_txt = f"{_resolve_day_name(target)} {start}–{end}"
 
+    if this_week_only:
+        now = datetime.now(LOCAL_TZ)
+        col_now, _slot = training_schedule.current_position(now.replace(tzinfo=None))
+        ws = training_schedule.week_start(col_now)
+        # The date the resolved COLUMN represents (target-1 for before-3AM
+        # ranges) must sit inside the current week, or the entry would land on
+        # a day that already passed / be wiped before its week arrives.
+        col_date = target if training_schedule.day_index(target) == col else target - timedelta(days=1)
+        if not (ws <= col_date < ws + timedelta(days=7)):
+            week_end = (ws + timedelta(days=6)).strftime("%a %b %-d")
+            return (f"{_resolve_day_name(target)} {target.strftime('%b %-d')} is outside "
+                    f"the current week (through {week_end}) — one-week entries only "
+                    "cover this week. Use set_big_obligation for it, or make it a "
+                    "repeating block.")
+        span_txt += " (this week only)"
+
+        def apply_once(keys):
+            oc = _decode(keys, "weeklyOnce.v1")
+            cells = oc.get("cells") if isinstance(oc.get("cells"), dict) else {}
+            if oc.get("weekStart") != ws.isoformat():
+                cells = {}  # stale layer from a previous week — roll it over here
+            replaced, changed = _apply_span_to(cells, col, s_slot, e_slot, label)
+            _encode(keys, "weeklyOnce.v1", {"weekStart": ws.isoformat(), "cells": cells})
+            if not changed:
+                return "", (f"{span_txt} already reads \"{label}\" — nothing to change."
+                            if label else
+                            f"No one-week entry at {span_txt} — no change made. (Clearing "
+                            "here only removes one-week entries; the repeating grid shows "
+                            "through. To blank a repeating block for just this week, set a "
+                            "this-week text like \"CANCELED\" instead.)")
+            if not label:
+                return f"Cleared {span_txt} (was {', '.join(dict.fromkeys(replaced))}).", ""
+            over = f" — covering {', '.join(dict.fromkeys(replaced))} for this week" if replaced else ""
+            return f"Set {span_txt} to \"{label}\"{over}. It clears when the week rolls over.", ""
+
+        return _mutate(apply_once, f"edit {span_txt}")
+
     def apply(keys):
         grid = _decode(keys, "weeklySchedule.v1")
-        replaced, changed = [], False
-        for slot in range(s_slot, e_slot):
-            k = f"{slot}|{col}"
-            old = grid.get(k)
-            old_txt = old.strip() if isinstance(old, str) else ""
-            if old_txt and old_txt != label:
-                replaced.append(old_txt)
-            if label:
-                if old_txt != label:
-                    changed = True
-                grid[k] = label
-            else:
-                if k in grid:
-                    changed = True
-                grid.pop(k, None)
+        replaced, changed = _apply_span_to(grid, col, s_slot, e_slot, label)
         _encode(keys, "weeklySchedule.v1", grid)
         if not changed:
             return "", (f"{span_txt} already reads \"{label}\" — nothing to change."
@@ -672,21 +749,7 @@ def batch_edit_schedule(edits: list) -> str:
         grid = _decode(keys, "weeklySchedule.v1")
         applied_lines = []
         for span_txt, col, s_slot, e_slot, label in resolved:
-            replaced, changed = [], False
-            for slot in range(s_slot, e_slot):
-                k = f"{slot}|{col}"
-                old = grid.get(k)
-                old_txt = old.strip() if isinstance(old, str) else ""
-                if old_txt and old_txt != label:
-                    replaced.append(old_txt)
-                if label:
-                    if old_txt != label:
-                        changed = True
-                    grid[k] = label
-                else:
-                    if k in grid:
-                        changed = True
-                    grid.pop(k, None)
+            replaced, changed = _apply_span_to(grid, col, s_slot, e_slot, label)
             if changed:
                 verb = f'set to "{label}"' if label else "cleared"
                 over = f" (replacing {', '.join(dict.fromkeys(replaced))})" if replaced else ""
@@ -724,6 +787,54 @@ def set_workout_card(day: str, text: str) -> str:
                 else f"Cleared {name}'s workout card."), ""
 
     return _mutate(apply, f"workout card {training_schedule.DAYS[col]}")
+
+
+def set_big_obligation(when: str, text: str = "") -> str:
+    """Set, replace, or (with empty text) remove the Big Stuff entry for one
+    date in the training app. text is the FULL list for that day (1-3 lines)."""
+    w = (when or "").strip()
+    target = None
+    try:
+        target = date.fromisoformat(w)
+    except ValueError:
+        r = _resolve_day(w)
+        if isinstance(r, date):
+            target = r
+    if target is None:
+        return (f"Couldn't read {when!r} as a date — use YYYY-MM-DD, a weekday "
+                "name, 'today', or 'tomorrow'.")
+    if target < datetime.now(LOCAL_TZ).date():
+        return (f"{target.strftime('%a %b %-d')} already passed — the app drops "
+                "past dates on its own, so there's nothing to put there.")
+    label = text.strip()
+    day_txt = target.strftime("%a %b %-d")
+
+    def apply(keys):
+        raw = keys.get(training_schedule.safe_key("bigObligations.v1"))
+        try:
+            arr = json.loads(raw) if raw else []
+        except (ValueError, TypeError):
+            arr = []
+        if not isinstance(arr, list):
+            arr = []
+        iso = target.isoformat()
+        existing = [o for o in arr if isinstance(o, dict) and o.get("date") == iso]
+        rest = [o for o in arr if not (isinstance(o, dict) and o.get("date") == iso)]
+        if not label and not existing:
+            return "", f"No big stuff listed for {day_txt} — nothing to remove."
+        if label:
+            rest.append({"date": iso, "text": label})
+            rest.sort(key=lambda o: str(o.get("date") or "9999")
+                      if isinstance(o, dict) else "9999")
+        keys[training_schedule.safe_key("bigObligations.v1")] = json.dumps(rest)
+        if not label:
+            old = " / ".join(str(o.get("text") or "").replace("\n", " / ") for o in existing)
+            return f"Removed the big stuff for {day_txt} (was: {old}).", ""
+        if existing:
+            return f"Replaced the big stuff for {day_txt} with: {label}", ""
+        return f"Added big stuff for {day_txt}: {label}", ""
+
+    return _mutate(apply, f"big stuff {day_txt}")
 
 
 def undo_training_edit() -> str:
@@ -768,7 +879,7 @@ def week_payload(now: datetime) -> dict:
         anchor = datetime(d.year, d.month, d.day) + timedelta(
             minutes=training_schedule.DAY_START_MIN)
         blocks = []
-        for ev in training_schedule.column_events(p.get("grid") or {}, d):
+        for ev in training_schedule.column_events(training_schedule.grid_for_week(p, d), d):
             per = training_schedule.SLOT_MIN
             blocks.append({
                 "label": ev["title"],
@@ -796,6 +907,12 @@ def week_payload(now: datetime) -> dict:
         "warmup": p.get("warmup") or "",
         "routines": p.get("routines") or {},
         "library": p.get("library") or {},
+        "obligations": [
+            {"date": o["date"].isoformat(),
+             "label": o["date"].strftime("%a %b %-d"),
+             "text": o["text"]}
+            for o in training_schedule.upcoming_obligations(p, today)
+        ],
         "app_url": APP_ORIGIN,
     }
 
@@ -950,9 +1067,13 @@ TOOL_SCHEMAS = [
             "Change a time range on Alex's training-app schedule — the real grid he "
             "sees on his phone. Use for 'move my lift to 5', 'block 7-9 for film', "
             "'clear Thursday afternoon'. Leave text empty to CLEAR the range. Times "
-            "are wall-clock ('5:30am', '6pm', '17:00'); end is exclusive. Confirm "
-            "with him first when the day or time is ambiguous, and tell him what it "
-            "replaced. He can say 'undo that'."
+            "are wall-clock ('5:30am', '6pm', '17:00'); end is exclusive. Set "
+            "this_week_only=true for one-off things in the CURRENT week (an "
+            "appointment, a canceled class) — those show in amber on top of the "
+            "repeating grid and clear when the week rolls over; default false "
+            "changes the repeating week. Confirm with him first when the day, time, "
+            "or one-off-vs-repeating is ambiguous, and tell him what it replaced. "
+            "He can say 'undo that'."
         ),
         "input_schema": {
             "type": "object",
@@ -961,8 +1082,28 @@ TOOL_SCHEMAS = [
                 "start": {"type": "string", "description": "Start time, e.g. '3pm' or '15:00'."},
                 "end": {"type": "string", "description": "End time (exclusive), e.g. '4:30pm'."},
                 "text": {"type": "string", "description": "What goes in the block. Empty clears it."},
+                "this_week_only": {"type": "boolean", "description": "True = one-off entry for the current week only (clears at week rollover). False/omitted = repeating grid."},
             },
             "required": ["day", "start", "end"],
+        },
+    },
+    {
+        "name": "set_big_obligation",
+        "description": (
+            "Set, replace, or remove the 'Big Stuff Coming Up' entry for one date "
+            "in Alex's training app — dated one-off obligations beyond this week "
+            "(exams, games, trips, deadlines), NOT routine classes/workouts. text "
+            "is the FULL list for that day (1-3 lines, newline-separated); it "
+            "replaces whatever that date had, and empty text removes the date. "
+            "Past dates drop off the app automatically."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "when": {"type": "string", "description": "Date as YYYY-MM-DD (preferred), or a weekday name / 'today' / 'tomorrow'."},
+                "text": {"type": "string", "description": "The 1-3 big things that day, newline-separated. Empty removes the date."},
+            },
+            "required": ["when"],
         },
     },
     {
@@ -1052,6 +1193,7 @@ TOOL_STATUS_LABELS = {
     "get_widget_setup": "Building your widget setup…",
     "edit_schedule": "Updating your schedule…",
     "batch_edit_schedule": "Filling in your schedule…",
+    "set_big_obligation": "Noting that big day…",
     "set_workout_card": "Rewriting that workout card…",
     "undo_training_edit": "Putting that back…",
 }
@@ -1074,9 +1216,12 @@ def handle_tool_call(tool_name: str, tool_input: dict) -> str:
         return get_widget_setup()
     if tool_name == "edit_schedule":
         return edit_schedule(tool_input["day"], tool_input["start"],
-                             tool_input["end"], tool_input.get("text", ""))
+                             tool_input["end"], tool_input.get("text", ""),
+                             bool(tool_input.get("this_week_only")))
     if tool_name == "batch_edit_schedule":
         return batch_edit_schedule(tool_input.get("edits") or [])
+    if tool_name == "set_big_obligation":
+        return set_big_obligation(tool_input["when"], tool_input.get("text", ""))
     if tool_name == "set_workout_card":
         return set_workout_card(tool_input["day"], tool_input.get("text", ""))
     if tool_name == "undo_training_edit":

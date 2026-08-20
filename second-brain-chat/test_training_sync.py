@@ -202,6 +202,136 @@ def test_batch_before_any_sync():
 
 
 # ============================================================
+# One-week layer (weeklyOnce.v1) + big obligations (bigObligations.v1)
+# — app v6's weekly-reset features. All date math uses LOCAL_TZ via the
+# grid frame (current_position), never host-local time.
+
+from datetime import datetime, timedelta
+
+
+def _grid_now():
+    now = datetime.now(training_sync.LOCAL_TZ)
+    col_now, _ = training_schedule.current_position(now.replace(tzinfo=None))
+    return now, col_now, training_schedule.week_start(col_now)
+
+
+def test_once_layer_parses_and_overrides():
+    print("\n=== one-week layer: parse, merge, and override ===")
+    now, col_now, ws = _grid_now()
+    col = training_schedule.day_index(col_now)
+    keys = {}
+    training_sync._encode(keys, "weeklySchedule.v1", {f"12|{col}": "Class"})
+    training_sync._encode(keys, "weeklyOnce.v1", {
+        "weekStart": ws.isoformat(),
+        "cells": {f"12|{col}": "Dentist", f"20|{col}": "One-off thing"},
+    })
+    training_sync._state.update({
+        "loaded": False, "row_id": None, "snapshot": None, "saved_at": None,
+        "dirty": False, "next_hydrate_at": 0.0, "next_persist_at": 0.0, "undo": [],
+    })
+    training_sync.init(FakeSB())
+    training_sync.store_snapshot({"rev": "seed", "keys": keys})
+    p = training_sync.parsed()
+    check("once week start parsed", p["once_week_start"] == ws)
+    check("once cells parsed", p["once_cells"].get((20, col)) == "One-off thing")
+    evs = training_schedule.events_for_date(p, col_now)
+    titles = [e["title"] for e in evs]
+    check("one-off entry appears", "One-off thing" in titles)
+    check("once entry overrides the repeating cell", "Dentist" in titles and "Class" not in titles)
+    week = training_sync.get_training_schedule("week")
+    check("week view calls out this-week-only entries", "This week only" in week and "Dentist" in week)
+    payload = training_sync.week_payload(now)
+    day_blocks = [b["label"] for d in payload["days"] if d["index"] == col for b in d["blocks"]]
+    check("/schedule payload shows the override too", "Dentist" in day_blocks and "Class" not in day_blocks)
+
+    # A STALE layer (last week's) must be ignored everywhere.
+    training_sync._encode(keys, "weeklyOnce.v1", {
+        "weekStart": (ws - timedelta(days=7)).isoformat(),
+        "cells": {f"12|{col}": "Dentist"},
+    })
+    training_sync.store_snapshot({"rev": "seed2", "keys": keys})
+    p = training_sync.parsed()
+    titles = [e["title"] for e in training_schedule.events_for_date(p, col_now)]
+    check("stale once layer ignored — repeating grid shows", titles == ["Class"])
+    check("stale layer absent from week view", "This week only" not in training_sync.get_training_schedule("week"))
+
+
+def test_once_layer_failsoft_on_junk():
+    print("\n=== one-week layer: junk data parses fail-soft ===")
+    keys = {}
+    keys[training_schedule.safe_key("weeklyOnce.v1")] = "not json {"
+    keys[training_schedule.safe_key("bigObligations.v1")] = '{"wrong": "shape"}'
+    p = training_schedule.parse_snapshot({"rev": "x", "keys": keys})
+    check("junk once layer -> empty", p["once_week_start"] is None and p["once_cells"] == {})
+    check("junk obligations -> empty list", p["obligations"] == [])
+    p2 = training_schedule.parse_snapshot({"rev": "x", "keys": {}})
+    check("missing keys -> defaults", p2["once_cells"] == {} and p2["obligations"] == [])
+
+
+def test_edit_schedule_this_week_only():
+    print("\n=== edit_schedule this_week_only ===")
+    now, col_now, ws = _grid_now()
+    col = training_schedule.day_index(col_now)
+    _reset(seed_grid={f"12|{col}": "Class"})
+    expected_ok = ws <= now.date() < ws + timedelta(days=7)
+    out = training_sync.edit_schedule("today", "9am", "10am", "Advisor meeting",
+                                      this_week_only=True)
+    if expected_ok:
+        check("one-off write says this week only", "this week only" in out)
+        snap = training_sync.get_snapshot()
+        once = training_sync._decode(snap["keys"], "weeklyOnce.v1")
+        check("weekStart pinned to the grid's current week", once.get("weekStart") == ws.isoformat())
+        check("cells landed in the once layer", "Advisor meeting" in (once.get("cells") or {}).values())
+        grid = training_sync._decode(snap["keys"], "weeklySchedule.v1")
+        check("repeating grid untouched", list(grid.values()) == ["Class"])
+        p = training_sync.parsed()
+        titles = [e["title"] for e in training_schedule.events_for_date(p, now.date())]
+        check("one-off shows for today", "Advisor meeting" in titles)
+        # clearing an empty once span explains the show-through rule
+        out2 = training_sync.edit_schedule("today", "1pm", "2pm", "", this_week_only=True)
+        check("clearing empty once span explains show-through", "shows through" in out2)
+    else:
+        # pre-3AM Sunday edge: calendar-today belongs to the NEXT grid week
+        check("pre-rollover edge rejected with guidance", "outside the current week" in out)
+
+    if training_schedule.day_index(col_now) != 0 and col_now == now.date():
+        # the weekday furthest out resolves to next week -> must be rejected
+        name6 = training_schedule.DAYS[(training_schedule.day_index(now.date()) + 6) % 7]
+        out3 = training_sync.edit_schedule(name6, "9am", "10am", "X", this_week_only=True)
+        check("future-week one-off rejected toward big stuff",
+              "outside the current week" in out3 and "set_big_obligation" in out3)
+    else:
+        print("  (skipped future-week rejection — grid week just started)")
+
+
+def test_set_big_obligation_lifecycle():
+    print("\n=== set_big_obligation: add / replace / remove ===")
+    now, _col, _ws = _grid_now()
+    _reset(seed_grid={})
+    iso = (now.date() + timedelta(days=10)).isoformat()
+    out = training_sync.set_big_obligation(iso, "Physics exam\nTeam dinner")
+    check("add reports added", "Added big stuff" in out)
+    week = training_sync.get_training_schedule("week")
+    check("week view lists it", "Big stuff coming up" in week and "Physics exam / Team dinner" in week)
+    payload = training_sync.week_payload(now)
+    check("/schedule payload carries obligations", any(o["date"] == iso for o in payload["obligations"]))
+    out = training_sync.set_big_obligation(iso, "Physics exam moved to 9am")
+    check("same date replaces", "Replaced" in out)
+    out = training_sync.set_big_obligation(iso, "")
+    check("empty text removes (and echoes old)", "Removed" in out and "Physics exam moved" in out)
+    out = training_sync.set_big_obligation(iso, "")
+    check("removing nothing explains", "nothing to remove" in out)
+    out = training_sync.set_big_obligation("2020-01-01", "too late")
+    check("past dates rejected", "already passed" in out)
+    out = training_sync.set_big_obligation("not-a-date", "x")
+    check("junk date rejected", "Couldn't read" in out)
+    out = training_sync.set_big_obligation("tomorrow", "Early flight")
+    check("day words resolve", "Added big stuff" in out)
+    tomorrow_view = training_sync.get_training_schedule("tomorrow")
+    check("day view shows big stuff for that date", "Big stuff on" in tomorrow_view and "Early flight" in tomorrow_view)
+
+
+# ============================================================
 if __name__ == "__main__":
     test_batch_populates_multiple_blocks()
     test_batch_mixed_valid_and_invalid()
@@ -211,6 +341,10 @@ if __name__ == "__main__":
     test_batch_clear_and_replace_reporting()
     test_batch_undo_reverts_whole_batch_in_one_step()
     test_batch_before_any_sync()
+    test_once_layer_parses_and_overrides()
+    test_once_layer_failsoft_on_junk()
+    test_edit_schedule_this_week_only()
+    test_set_big_obligation_lifecycle()
     total, passed = len(_results), sum(_results)
     print("\n" + "=" * 48)
     print(f"{passed}/{total} checks passed")

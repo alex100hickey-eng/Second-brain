@@ -5124,6 +5124,33 @@ def suite_training(app, live):
           ts.format_block(ts.events_for_date(p, mon)[1], mon) == "7:00am–8:00am  Class",
           ts.format_block(ts.events_for_date(p, mon)[1], mon))
 
+    # ---- app v6: one-week layer + big obligations (explicit dates) ----
+    v6 = _copy.deepcopy(snap)
+    v6["keys"]["weeklyOnce_v1"] = _json.dumps({
+        "weekStart": "2026-08-16",  # the Sunday of mon's week
+        "cells": {"8|1": "Advisor mtg", "9|1": "Advisor mtg", "30|1": "Dentist"}})
+    v6["keys"]["bigObligations_v1"] = _json.dumps([
+        {"date": "2026-08-21", "text": "Physical 2pm\nPick up books"},
+        {"date": "2026-08-10", "text": "already passed"},
+        {"date": "bad-date", "text": "junk"},
+        {"date": "2026-09-12", "text": "First scrimmage"}])
+    pv6 = ts.parse_snapshot(v6)
+    titles6 = [e["title"] for e in ts.events_for_date(pv6, mon)]
+    check("one-week cell overrides the repeating cell it sits on",
+          "Advisor mtg" in titles6 and "Class" not in titles6, str(titles6))
+    check("one-week-only cell shows in its week", "Dentist" in titles6)
+    check("the same day NEXT week sees only the repeating grid",
+          [e["title"] for e in ts.events_for_date(pv6, mon + _td(days=7))
+           if e["title"] in ("Class", "Advisor mtg", "Dentist")] == ["Class"])
+    check("obligations parse sorted with junk dates dropped",
+          [o["date"].isoformat() for o in pv6["obligations"]]
+          == ["2026-08-10", "2026-08-21", "2026-09-12"])
+    check("obligations_for_date picks the exact day",
+          ts.obligations_for_date(pv6, _date(2026, 8, 21)) == ["Physical 2pm\nPick up books"])
+    check("upcoming_obligations drops the past",
+          [o["text"] for o in ts.upcoming_obligations(pv6, _date(2026, 8, 21))]
+          == ["Physical 2pm\nPick up books", "First scrimmage"])
+
     # ---- sync module storage against a fake Supabase (never the real one) ----
     class _FakeSB:
         def __init__(self):
@@ -5311,6 +5338,23 @@ def suite_training(app, live):
         else:
             check("situational renders a grid event with a clock time", False,
                   "no events computed — see the previous failure")
+
+        # Big Stuff dated today reaches the RIGHT NOW context as an all-day event
+        wired_big = {"rev": "wired-big", "keys": {
+            "weeklySchedule_v1": _json.dumps({f"{slot}|{today_col}": "Focus block"}),
+            "bigObligations_v1": _json.dumps(
+                [{"date": now.date().isoformat(), "text": "Team photo day"}])}}
+        tsync._state.update({"snapshot": wired_big, "saved_at": _dt.now().isoformat(),
+                             "loaded": True})
+        app._calendar_cache["events"] = None
+        app._calendar_cache["fetched_at"] = 0.0
+        evs_big = app.get_today_events()
+        check("today's Big Stuff leads as an all-day event",
+              bool(evs_big) and evs_big[0]["title"] == "Team photo day"
+              and evs_big[0]["all_day"] is True and len(evs_big) == 2, str(evs_big))
+        check("situational renders the all-day line",
+              "all day" in app.situational.format_event_line(evs_big[0], _dt.now())
+              if evs_big else False)
 
         # a push landing mid-compute must not be overwritten by the stale result
         app._calendar_cache["events"] = None
