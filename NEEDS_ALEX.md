@@ -131,6 +131,36 @@ day. Overrule any of this by telling CLARVIS; the pre-decision snapshot is
 
 ---
 
+## 🎒 2026-08-21 — school week-1 buy/do list (from the freshly imported syllabi)
+
+All four available syllabi are now imported and verified (CSDS 101 still
+unpublished — it gets swept when the prof opens it). These are the items only
+you can do, ordered by deadline pressure:
+
+1. **Order the AIQS course pack at FedEx in Thwing — Saturday.** Printing takes
+   days and physical copies are REQUIRED in class; first reading due Wed 8/26.
+2. **MATH textbook before Monday** (Zill & Dewar, Essentials of Precalculus 6e,
+   ISBN 9781284056327) — daily quizzes start immediately, no make-ups.
+3. **AIQS books:** They Say I Say 6e (978-1324070030), Arden Romeo & Juliet
+   (978-1903436912), Arden Antony & Cleopatra (978-1904271017).
+4. **Email Dr. N (jtn33@case.edu) THIS WEEK** re: basketball absences — >4 hurt,
+   >9 = automatic F, no excused/unexcused distinction. Same for known travel to
+   Prof. Jarvis (ACCT, no makeups) and Dr. Krause (MATH, notify BEFORE exams).
+5. **WileyPlus decision by 9/4** (Drop/Add end): ACCT digital textbook
+   auto-charges ~$120 to your student account; opting out costs more. Create the
+   WileyPlus login with your case email.
+6. **Install full desktop Excel** from the university software center (not the
+   web version) — 3 ACCT homeworks + both projects need it; Prep 1 lands 9/4.
+7. **Print ACCT Class 1+2 lecture packets** from Canvas; calculator; PollEverywhere
+   on your phone (ECON attendance from day 1).
+8. **Sickle cell**: test Saturday, or faster — call your pediatrician for your
+   newborn-screening record. Emily Randall email is drafted in your school Gmail.
+   Teamworks has TWO forms waiting (NCAA statement + Business Office).
+
+Every exam and hard deadline from all four syllabi is already in your training
+app's Calendar (32 dates) — including the **Dec 8 double final** (ACCT 8-11 AM,
+MATH 3:30-6:30 PM).
+
 ## 🟡 CLARVIS / infra — what's genuinely still open
 
 Grouped by where you'd be when you do them, so each group is one sitting.
