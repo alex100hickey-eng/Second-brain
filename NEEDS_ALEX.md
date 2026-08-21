@@ -12,7 +12,20 @@ is still yours to do.
 
 ---
 
-## 🔴 THE ONE THAT MATTERS — warmup restarts today
+## ✅ 2026-08-21 — THE GATE IS PASSED: mail-tester 10/10, Wave 1 is cleared
+
+Run Friday 8/21 ~5:45 PM with a real pitch-shaped email (subject "quick idea for
+your next ad test"): **10/10.** SpamAssassin clean, SPF/DKIM/DMARC all green, no
+blocklists. The domain is proven. Per the plan Wave 1 (3 emails) is now cleared
+to send — recommendation on record: Monday 8–10 AM so founders see it at the top
+of the inbox, not under a weekend pile. Wave-1 drafts get generated fresh against
+live ads right before send.
+
+Same day: Hetzner overdue invoice ($13.73, warning level 2, lockout threatened
+8/22) found and paid, and a card was saved for auto-collection — that failure
+mode is permanently closed.
+
+## 🔴 (RESOLVED — history) warmup restarts today
 
 Everything on the money side is behind this single gate, and it has now slipped
 eleven days.
