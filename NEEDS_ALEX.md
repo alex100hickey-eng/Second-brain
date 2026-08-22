@@ -12,6 +12,25 @@ is still yours to do.
 
 ---
 
+## 🟢 One 2-minute job unlocks the studio mailbox
+
+`python3 scripts/connect_studio_gmail.py` on your Mac, sign in as
+**alexhickey@splitframestudio.com** (the account picker defaults to whichever
+Google account you used last — watch it), then put `STUDIO_GMAIL_ENTITY=alex-studio`
+in `.env` and in Coolify, and restart.
+
+What it buys: CLARVIS can then read the studio inbox directly and put reply
+**drafts in the account replies have to be sent from**. Today it can only see
+studio mail through the forward into your personal Gmail and can only draft in
+personal/school — so every prospect reply means retyping in the right account.
+Still draft-only; there is no send path anywhere and there won't be.
+
+Everything else on the grade engine is already done and live — the weights for
+all four published courses are imported and independently verified, so you can
+just say *"got an 88 on exam 1"* and ask *"what do I need for an A in ACCT?"*
+or *"is this APQ worth doing tonight?"* (it's 0.44% of your grade, and the
+first four are dropped).
+
 ## 🔵 MONDAY 8/24 — three things converge on one day
 
 First day of classes, Wave 1 opens, and the Quest appointment. In order:
