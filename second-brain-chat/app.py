@@ -806,8 +806,10 @@ it's a default rather than stalling on the question. One hard line: ECON 103 ban
 ALL AI on submitted work, including reading submissions — build study guides and
 quiz him freely, but never draft anything he will submit.
 
-Alex has THREE mail accounts: personal Gmail, school Gmail, and iCloud Mail. You can
-read ALL of it, and there are two layers that do different jobs — don't confuse them:
+Alex has FOUR mail accounts: personal Gmail, school Gmail, the SPLITFRAME STUDIO
+Gmail (alexhickey@splitframestudio.com — the business identity every outreach email
+is sent from), and iCloud Mail. You can read ALL of it, and there are two layers that
+do different jobs — don't confuse them:
   - list_emails / read_email are the RAW layer: every message, unfiltered, full bodies,
     any account. Use them whenever Alex asks what's in an inbox, what the latest email
     is, or about ANY specific email.
@@ -820,8 +822,11 @@ read ALL of it, and there are two layers that do different jobs — don't confus
 are preferred because they cover all three accounts uniformly.)
 
 REPLYING TO MAIL: compose replies yourself (Alex's voice, sign as Alex) and save them
-with create_email_draft — it creates a real draft in the personal or school Gmail
-Drafts folder, threaded onto the original conversation when you pass its thread_id.
+with create_email_draft — it creates a real draft in the personal, school, or studio
+Gmail Drafts folder, threaded onto the original conversation when you pass its
+thread_id. ANYTHING business-facing — a prospect reply, a client email, anything to a
+brand — drafts to account="studio", because that is the address it must go out from;
+drafting a client reply in his personal account just makes him retype it.
 Alex reviews, edits, and presses Send himself in Gmail; you CANNOT send email, ever,
 by design — never imply that you sent something, always point him at the draft. For
 iCloud replies, put the reply text in chat for him to copy. list_email_drafts shows
@@ -5840,8 +5845,12 @@ def _prospect_reply_pass() -> str:
     the +3d follow-up clock running against a brand that had already answered,
     and prepared nothing. This closes notice-and-prepare; SENDING stays entirely
     Alex's, here as everywhere."""
+    # Watch the STUDIO inbox directly when it's connected — that's where a
+    # prospect actually replies. Personal only ever saw these through the
+    # auto-forward, which is one more moving part between a hot lead and Alex.
+    watch_account = "studio" if "studio" in mail_reader._ENTITIES else "personal"
     hits = ad_creative_pipeline.detect_prospect_replies(
-        lambda q: mail_reader._gmail_fetch("personal", q, 15),
+        lambda q: mail_reader._gmail_fetch(watch_account, q, 15),
         seen=set(intake._load_state(_PROSPECT_SEEN_KEY).get("ids") or []))
     if not hits:
         return "none"
@@ -5853,8 +5862,11 @@ def _prospect_reply_pass() -> str:
                 f"prospect-reply:{h['brand']}",
                 f"💬 {h['brand']} replied",
                 f"{h['sender']}\nSubject: {h['subject']}\n\n"
-                "Open CLARVIS — I'll pull the thread and draft a response for you "
-                "to edit and send.",
+                + ("Open CLARVIS — I'll pull the thread and put a reply draft in "
+                   "the studio mailbox for you to edit and send."
+                   if watch_account == "studio" else
+                   "Open CLARVIS — I'll pull the thread and draft a response for "
+                   "you to edit and send."),
                 priority="high", tags="moneybag", renudge_hours=6)
         except Exception as e:
             print(f"prospect-reply nudge failed: {e}")
