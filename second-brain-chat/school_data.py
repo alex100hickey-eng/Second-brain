@@ -827,9 +827,9 @@ def mark_prepared_tool(course: str, through: str) -> str:
     if _RUNTIME != "local":
         return ("Course files are only writable on the Mac node — say this again "
                 "there, or I'll pick it up from your logged reviews.")
-    code = _canonical_course(course)
-    if not code:
-        return _unknown_course_msg(course)
+    code, err = _canonical_course(course)
+    if err:
+        return err
     d = _parse_date(through)
     if not d:
         return f"Couldn't read '{through}' as a date — try YYYY-MM-DD or 'Sep 12'."

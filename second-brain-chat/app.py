@@ -3667,11 +3667,18 @@ def _gather_weekly_digest(days: int = 7) -> dict:
     try:
         exams = school_data.study_plan_data().get("exams") or []
         if exams:
-            school = {"exams": exams, "review": ""}
+            school = {"exams": exams, "review": "", "grades": ""}
             try:
                 school["review"] = school_data.get_review_status_tool()
             except Exception as e:
                 print(f"weekly: review status failed: {e}")
+            try:
+                # Only once real scores exist — a projection off an empty
+                # ledger is a column of "nothing returned yet" lines.
+                if school_grades.scores():
+                    school["grades"] = school_grades.grade_projection_tool()
+            except Exception as e:
+                print(f"weekly: grade projection failed: {e}")
             d["school"] = school
     except Exception as e:
         print(f"weekly: school failed: {e}")
@@ -3916,6 +3923,11 @@ def build_weekly_review(days: int = 7, with_observations: bool = True) -> str:
             for e_ in school["exams"][:6]:
                 out.append(f"- **{e_.get('course','?')} {e_.get('name','')}** — "
                            f"{e_.get('date','')} ({e_.get('days_out','?')}d out)")
+            grades = str(school.get("grades") or "").strip()
+            if grades:
+                for ln in grades.splitlines():
+                    if ln.strip() and not ln.startswith(("GRADE PROJECTION", "(a need")):
+                        out.append(("  - " if ln.startswith("  ") else "- ") + ln.strip())
             review = str(school.get("review") or "")
             m = re.search(r"DUE FOR REVIEW \((\d+)\)", review)
             if m and int(m.group(1)):
@@ -4644,6 +4656,8 @@ def _dispatch_tool_call(tool_name: str, tool_input: dict) -> str:
         return training_sync.handle_tool_call(tool_name, tool_input)
     if tool_name in school_data.TOOL_NAMES:
         return school_data.handle_tool_call(tool_name, tool_input)
+    if tool_name in school_grades.TOOL_NAMES:
+        return school_grades.handle_tool_call(tool_name, tool_input)
     if tool_name in daily_orders.TOOL_NAMES:
         return daily_orders.handle_tool_call(tool_name, tool_input)
     if tool_name in ("create_email_draft", "list_email_drafts"):
@@ -5407,6 +5421,15 @@ TOOLS.extend(school_data.TOOL_SCHEMAS)
 TOOL_STATUS_LABELS.update(school_data.TOOL_STATUS_LABELS)
 school_data.init(VAULT_PATH, node_runtime=task_manager.RUNTIME)
 
+# Grade engine: rubric weights (School/grading.csv) + returned scores
+# (School/grades.csv) -> where he stands, what the rest has to average, and what
+# a single item is actually worth. Serves the "high grades, least time" goal by
+# making satisficing a calculation instead of a guess. Imports AFTER
+# school_data.init because it reads through school_data's loaders and runtime.
+import school_grades  # noqa: E402
+TOOLS.extend(school_grades.TOOL_SCHEMAS)
+TOOL_STATUS_LABELS.update(school_grades.TOOL_STATUS_LABELS)
+
 # Daily orders + scorecard. Reads school_data/august_tracker/ad_creative_pipeline/
 # training_sync and ranks the day; persists via intake's state helpers, so it
 # must init AFTER intake.init above.
@@ -5425,6 +5448,11 @@ TOOLS.extend(icloud_intake.TOOL_SCHEMAS)
 TOOL_STATUS_LABELS.update(icloud_intake.TOOL_STATUS_LABELS)
 
 SCHOOL_GMAIL_ENTITY = "alex-school"
+# The Splitframe studio mailbox — the account every revenue email is sent FROM.
+# Empty until Alex runs scripts/connect_studio_gmail.py and sets the env var;
+# the mail modules then register the account, and until then they explain how to
+# connect it rather than failing with a Composio toolkit error.
+STUDIO_GMAIL_ENTITY = os.environ.get("STUDIO_GMAIL_ENTITY", "").strip()
 
 
 def scan_school_gmail_intake_tool(newer_than: str = "1d", cap: int = 15) -> str:
@@ -5453,12 +5481,14 @@ TOOL_STATUS_LABELS["scan_school_gmail_intake"] = "Checking your school email…"
 # Alex's own finger in Gmail. See mail_drafts.py's HARD GATE note.
 # ------------------------------------------------------------
 import mail_reader  # noqa: E402
-mail_reader.init(composio, COMPOSIO_USER_ID, SCHOOL_GMAIL_ENTITY)
+mail_reader.init(composio, COMPOSIO_USER_ID, SCHOOL_GMAIL_ENTITY,
+                 STUDIO_GMAIL_ENTITY)
 TOOLS.extend(mail_reader.TOOL_SCHEMAS)
 TOOL_STATUS_LABELS.update(mail_reader.TOOL_STATUS_LABELS)
 
 import mail_drafts  # noqa: E402
-mail_drafts.init(composio, COMPOSIO_USER_ID, SCHOOL_GMAIL_ENTITY)
+mail_drafts.init(composio, COMPOSIO_USER_ID, SCHOOL_GMAIL_ENTITY,
+                 STUDIO_GMAIL_ENTITY)
 TOOLS.extend(mail_drafts.TOOL_SCHEMAS)
 TOOL_STATUS_LABELS.update(mail_drafts.TOOL_STATUS_LABELS)
 

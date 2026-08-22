@@ -26,11 +26,25 @@ BODY_CAP = 20_000   # sanity ceiling; a reply email is never this long
 _composio = None
 _ENTITIES = {}      # account name -> Composio entity user_id
 
+_STUDIO_NOT_CONNECTED = (
+    "The Splitframe studio mailbox isn't connected to Composio yet, so I can't "
+    "put a draft in it. Connect it (~2 min, one Google login): run "
+    "`python3 scripts/connect_studio_gmail.py` on your Mac and authorize "
+    "alexhickey@splitframestudio.com. Until then I can draft the text here for "
+    "you to paste.")
 
-def init(composio_client, personal_entity: str, school_entity: str):
+
+def init(composio_client, personal_entity: str, school_entity: str,
+         studio_entity: str = ""):
     global _composio, _ENTITIES
     _composio = composio_client
     _ENTITIES = {"personal": personal_entity, "school": school_entity}
+    # Drafting INTO the studio mailbox is the point: outreach replies have to be
+    # sent from alexhickey@splitframestudio.com, and a draft sitting in the
+    # personal account is one Alex has to retype. Still draft-only — this module
+    # has no send path for any account, pinned by test_no_send_capability.
+    if studio_entity:
+        _ENTITIES["studio"] = studio_entity
 
 
 def create_email_draft(account: str, to: str, subject: str, body: str,
@@ -38,8 +52,10 @@ def create_email_draft(account: str, to: str, subject: str, body: str,
     if account == "icloud":
         return ("iCloud has no draft API connected — show Alex the reply text in "
                 "chat to copy, or draft it from the personal/school Gmail instead.")
+    if account == "studio" and "studio" not in _ENTITIES:
+        return _STUDIO_NOT_CONNECTED
     if account not in _ENTITIES:
-        return f"Unknown account {account!r} — use personal or school."
+        return f"Unknown account {account!r} — use personal, school, or studio."
     if not (to or "").strip() or "@" not in to:
         return f"Need a valid recipient address, got {to!r}."
     if not (body or "").strip():
@@ -63,7 +79,7 @@ def create_email_draft(account: str, to: str, subject: str, body: str,
                     if isinstance(d, dict) else None)
     except Exception as e:
         return f"Draft creation failed: {str(e)[:200]}"
-    where = "school" if account == "school" else "personal"
+    where = account if account in ("school", "studio") else "personal"
     return (f"Draft saved to the {where} Gmail Drafts folder"
             + (f" (draft id {draft_id})" if draft_id else "")
             + f", addressed to {to.strip()}"
@@ -73,6 +89,8 @@ def create_email_draft(account: str, to: str, subject: str, body: str,
 
 
 def list_email_drafts(account: str = "personal", limit: int = 5) -> str:
+    if account == "studio" and "studio" not in _ENTITIES:
+        return _STUDIO_NOT_CONNECTED
     if account not in _ENTITIES:
         return f"Unknown account {account!r} — use personal or school."
     try:
@@ -108,7 +126,7 @@ TOOL_SCHEMAS = [
      "input_schema": {"type": "object",
                       "required": ["account", "to", "subject", "body"],
                       "properties": {
-         "account": {"type": "string", "enum": ["personal", "school"]},
+         "account": {"type": "string", "enum": ["personal", "school", "studio"]},
          "to": {"type": "string", "description": "Recipient email address."},
          "subject": {"type": "string", "description": "Subject ('Re: ...' for replies)."},
          "body": {"type": "string", "description": "Plain-text email body."},
@@ -117,7 +135,7 @@ TOOL_SCHEMAS = [
     {"name": "list_email_drafts",
      "description": "List what's currently sitting in a Gmail account's Drafts folder.",
      "input_schema": {"type": "object", "properties": {
-         "account": {"type": "string", "enum": ["personal", "school"]},
+         "account": {"type": "string", "enum": ["personal", "school", "studio"]},
          "limit": {"type": "integer", "description": "Max drafts (default 5)."}}}},
 ]
 
