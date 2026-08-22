@@ -302,6 +302,7 @@ with open(os.path.join(sp_school, "assignments.csv"), "w", encoding="utf-8") as 
     f.write("MATH120,Weekly quiz,quiz,2026-09-09,,,,open,,manual,,,\n")
     f.write("AIQS100,Final Paper,exam,2026-09-20,,,,open,,canvas,,,\n")
     f.write("AIQS100,Paper 1,paper,2026-09-13,,,,open,,canvas,,,\n")
+    f.write("MATH120,Math Placement Exam,exam,2026-09-10,,,,done,,manual,,,skipped by decision\n")
 
 with open(os.path.join(sp_school, "review-log.csv"), "w", encoding="utf-8") as f:
     f.write("course,topic,last_reviewed,confidence,next_due,times_reviewed,notes\n")
@@ -365,6 +366,8 @@ check("AIQS 'Final Paper' mistyped as exam is excluded",
       not any(e["course"] == "AIQS100" for e in exams))
 check("'Exam 1 Review' day is prep, not an exam",
       not any("Review" in e["name"] for e in exams))
+check("a done exam row (taken or skipped by decision) keeps no runway alive",
+      not any("Placement" in e["name"] for e in exams))
 check("exams >30 days out stay off the list",
       not any(e["date"] in ("2026-12-11", "2026-12-14") for e in exams))
 check("exam days_out counted from the plan date",

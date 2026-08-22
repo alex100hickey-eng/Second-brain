@@ -452,6 +452,10 @@ def _collect_exams(courses, curriculum, assignments, for_date):
         title = (r.get("title") or "").strip()
         if code not in codes or typ not in _EXAM_TYPES:
             continue
+        # a closed exam row (taken — or deliberately skipped, like the math
+        # placement) must not keep a runway alive
+        if (r.get("status") or "").strip().lower() in _DONE_STATUSES:
+            continue
         # canvas_sync mistyped AIQS papers as exams — a Final Paper is not a
         # final (AIQS has no exams at all; the Writing Folder replaces one).
         if code == "AIQS100" and "paper" in title.lower():
