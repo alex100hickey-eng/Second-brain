@@ -5521,6 +5521,38 @@ def suite_training(app, live):
         check("undo with nothing left says so rather than erroring",
               "Nothing to undo" in tsync.undo_training_edit())
 
+        # ---- 50/50 shooting log ----
+        snap5050 = _copy.deepcopy(tsync._state["snapshot"])
+        snap5050["keys"]["workoutLibrary_v2"] = _json.dumps({"3": {"sel": 0, "pages": [
+            {"title": "Log", "type": "table",
+             "columns": ["Date", "Threes/50", "Free Throws/50"],
+             "rows": [["", "", ""], ["", "", ""]]}]}})
+        tsync._state.update({"snapshot": snap5050, "undo": []})
+        out5050 = tsync.log_5050(38, 44, when="8/22")
+        lib5050 = _json.loads(tsync._state["snapshot"]["keys"]["workoutLibrary_v2"])
+        rows5050 = lib5050["3"]["pages"][0]["rows"]
+        check("50/50 log fills the FIRST empty row, not row 79",
+              rows5050[0] == ["8/22", "38", "44"] and rows5050[1] == ["", "", ""],
+              str(rows5050))
+        check("50/50 log echoes the trend back",
+              "Logged 50/50" in out5050 and "38/50 threes" in out5050
+              and "best:" in out5050, out5050[:160])
+        check("out-of-range numbers are refused",
+              "Out of range" in tsync.log_5050(51, 10))
+        check("junk numbers are refused",
+              "didn't parse" in tsync.log_5050("lots", 10))
+        tsync.log_5050(40, 47)   # second entry -> second empty row
+        rows5050b = _json.loads(tsync._state["snapshot"]["keys"]["workoutLibrary_v2"])["3"]["pages"][0]["rows"]
+        check("second log takes the next empty row; appends when none remain",
+              rows5050b[1][1] == "40" and len(rows5050b) == 2
+              and "40" in tsync.log_5050(41, 48) and len(_json.loads(
+                  tsync._state["snapshot"]["keys"]["workoutLibrary_v2"])["3"]["pages"][0]["rows"]) == 3)
+        check("trend reads filled rows with bests",
+              "3 sessions" in tsync.fifty_fifty_trend() and "best: 41/50" in tsync.fifty_fifty_trend(),
+              tsync.fifty_fifty_trend())
+        tsync._state.update({"snapshot": _copy.deepcopy(snap), "undo": []})
+
+
         # ---- phone widget feed ----
         saved_wtok = os.environ.get("WIDGET_FEED_TOKEN")
         try:

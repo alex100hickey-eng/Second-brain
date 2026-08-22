@@ -994,6 +994,101 @@ def widget_payload(now: datetime) -> dict:
     }
 
 
+
+def _5050_table(keys):
+    """(library_dict, page) for the 50/50 Log table, or (lib, None). Category 3
+    is "50/50" in the app's fixed CATS list; the page is the seeded type=table
+    "Log". Matched by shape (a table whose first column is Date) so a renamed
+    title survives."""
+    lib = _decode(keys, "workoutLibrary.v2")
+    cat = lib.get("3") or {}
+    for page in cat.get("pages") or []:
+        if (isinstance(page, dict) and page.get("type") == "table"
+                and (page.get("columns") or [""])[0].strip().lower() == "date"):
+            return lib, page
+    return lib, None
+
+
+def log_5050(threes, free_throws, when: str = "") -> str:
+    """Log a 50/50 session (threes made /50, free throws made /50) into the
+    app's Log table. Fills the first empty row (that's where he'd type) so the
+    entry lands at the top of the table, not under 78 blank rows."""
+    try:
+        t, f = int(threes), int(free_throws)
+    except (TypeError, ValueError):
+        return "Numbers didn't parse — give threes and free throws as counts out of 50."
+    if not (0 <= t <= 50 and 0 <= f <= 50):
+        return f"Out of range: {t}/50 threes, {f}/50 free throws — the drill is out of 50."
+    if when.strip():
+        d = None
+        for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m/%d"):
+            try:
+                d = datetime.strptime(when.strip(), fmt)
+                break
+            except ValueError:
+                continue
+        if d is None:
+            return f"Couldn't read the date {when!r} — use M/D or YYYY-MM-DD, or omit for today."
+        if fmt == "%m/%d":
+            d = d.replace(year=datetime.now(LOCAL_TZ).year)
+    else:
+        d = datetime.now(LOCAL_TZ)
+    stamp = f"{d.month}/{d.day}"
+
+    def apply(keys):
+        lib, page = _5050_table(keys)
+        if page is None:
+            return "", ("No 50/50 Log table found in the workout library — has the "
+                        "app's library been cleared?")
+        rows = page.get("rows") or []
+        entry = [stamp, str(t), str(f)]
+        for row in rows:
+            if not any((c or "").strip() for c in row):
+                row[:] = entry
+                break
+        else:
+            rows.append(entry)
+            page["rows"] = rows
+        _encode(keys, "workoutLibrary.v2", lib)
+        return f"Logged 50/50 for {stamp}: {t}/50 threes, {f}/50 free throws.", ""
+
+    out = _mutate(apply, f"50/50 log {stamp}")
+    if out.startswith("Logged"):
+        out += "\n" + fifty_fifty_trend(limit=5)
+    return out
+
+
+def fifty_fifty_trend(limit: int = 10) -> str:
+    """Recent 50/50 entries plus bests — the measurable behind 'am I improving'."""
+    snap = get_snapshot()
+    if snap is None:
+        return "No training-app data synced yet."
+    _, page = _5050_table(snap.get("keys") or {})
+    if page is None:
+        return "No 50/50 Log table found in the workout library."
+    filled = [r for r in page.get("rows") or []
+              if any((c or "").strip() for c in r)]
+    if not filled:
+        return ("No 50/50 sessions logged yet. Say 'log 50/50: <threes> and "
+                "<free throws>' after a session to start the record.")
+
+    def num(v):
+        try:
+            return int(str(v).strip().split("/")[0])
+        except (TypeError, ValueError):
+            return None
+
+    lines = [f"50/50 log — last {min(limit, len(filled))} of {len(filled)} sessions:"]
+    for r in filled[-limit:]:
+        lines.append(f"  {(r[0] or '?').strip():>6}  threes {(r[1] or '?').strip():>2}/50   FTs {(r[2] or '?').strip():>2}/50")
+    threes = [n for r in filled if (n := num(r[1] if len(r) > 1 else None)) is not None]
+    fts = [n for r in filled if (n := num(r[2] if len(r) > 2 else None)) is not None]
+    if threes and fts:
+        lines.append(f"  best: {max(threes)}/50 threes · {max(fts)}/50 FTs"
+                     f"   avg last 5: {sum(threes[-5:]) / len(threes[-5:]):.0f} / {sum(fts[-5:]) / len(fts[-5:]):.0f}")
+    return "\n".join(lines)
+
+
 def get_training_sync_url() -> str:
     out = (
         "Training-app sync URL (paste into the app's Sync dialog on each device):\n"
@@ -1173,6 +1268,33 @@ TOOL_SCHEMAS = [
         },
     },
     {
+        "name": "log_5050",
+        "description": (
+            "Log Alex's 50/50 shooting session (threes made out of 50 and free "
+            "throws made out of 50) into his training app's Log table — use the "
+            "moment he reports numbers ('50/50 was 38 and 44'). Defaults to "
+            "today; returns the recent trend so he sees the trajectory."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "threes": {"type": "integer", "description": "Threes made, out of 50."},
+                "free_throws": {"type": "integer", "description": "Free throws made, out of 50."},
+                "when": {"type": "string", "description": "Session date M/D or YYYY-MM-DD; omit for today."},
+            },
+            "required": ["threes", "free_throws"],
+        },
+    },
+    {
+        "name": "get_5050_trend",
+        "description": (
+            "Alex's recent 50/50 shooting numbers and bests from the training "
+            "app's log — the measurable behind 'is my shooting improving'. Use "
+            "for any question about his shooting trend or when reviewing the week."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
         "name": "undo_training_edit",
         "description": (
             "Reverse the last change made to Alex's training app (schedule block or "
@@ -1211,6 +1333,8 @@ TOOL_STATUS_LABELS = {
     "batch_edit_schedule": "Filling in your schedule…",
     "set_big_obligation": "Noting that big day…",
     "set_workout_card": "Rewriting that workout card…",
+    "log_5050": "Logging your shooting numbers…",
+    "get_5050_trend": "Pulling your shooting trend…",
     "undo_training_edit": "Putting that back…",
 }
 
@@ -1240,6 +1364,11 @@ def handle_tool_call(tool_name: str, tool_input: dict) -> str:
         return set_big_obligation(tool_input["when"], tool_input.get("text", ""))
     if tool_name == "set_workout_card":
         return set_workout_card(tool_input["day"], tool_input.get("text", ""))
+    if tool_name == "log_5050":
+        return log_5050(tool_input.get("threes"), tool_input.get("free_throws"),
+                        tool_input.get("when", ""))
+    if tool_name == "get_5050_trend":
+        return fifty_fifty_trend()
     if tool_name == "undo_training_edit":
         return undo_training_edit()
     return f"Unknown tool: {tool_name}"
