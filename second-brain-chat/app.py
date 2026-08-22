@@ -3654,6 +3654,93 @@ def _gather_weekly_digest(days: int = 7) -> dict:
     except Exception as e:
         print(f"weekly: cost failed: {e}")
 
+    # Follow-through: the daily scorecard (✓/✗ per pillar) plus streaks. Only
+    # stored when at least one day was logged — an empty ledger stays silent
+    # so the sparse-week early return keeps its honesty.
+    try:
+        if daily_orders._scorecard_days():
+            d["scorecard"] = daily_orders.scorecard_text(days)
+    except Exception as e:
+        print(f"weekly: scorecard failed: {e}")
+
+    # Exam runways: every exam ≤30d out plus spaced-review readiness against it.
+    try:
+        exams = school_data.study_plan_data().get("exams") or []
+        if exams:
+            school = {"exams": exams, "review": ""}
+            try:
+                school["review"] = school_data.get_review_status_tool()
+            except Exception as e:
+                print(f"weekly: review status failed: {e}")
+            d["school"] = school
+    except Exception as e:
+        print(f"weekly: school failed: {e}")
+
+    # Money pipeline: plan headline, outreach follow-ups due, sends this week.
+    try:
+        money = {}
+        today = datetime.now(LOCAL_TZ).date()
+        try:
+            st = august_tracker.status()
+            if st.get("total"):
+                money["steps"] = {"done": st.get("done", 0), "total": st.get("total", 0),
+                                  "overdue": len(st.get("overdue") or []),
+                                  "due_today": len(st.get("due_today") or [])}
+                nxt = st.get("next_for_alex")
+                if nxt:
+                    money["next_for_alex"] = nxt.get("title", "")
+        except Exception as e:
+            print(f"weekly: money plan failed: {e}")
+        try:
+            fu = daily_orders._followups_due(today)
+            money["followups"] = fu.get("due") or []
+            money["unlogged"] = sorted(fu.get("unlogged") or [])
+        except Exception as e:
+            print(f"weekly: followups failed: {e}")
+        try:
+            money["sends"] = sorted(
+                (s, brand) for brand, dates in daily_orders._sends().items()
+                for s in (dates or [])
+                if (dd := daily_orders._parse_iso_date(s)) and 0 <= (today - dd).days < days)
+        except Exception as e:
+            print(f"weekly: sends failed: {e}")
+        if any(money.get(k) for k in ("steps", "followups", "sends", "unlogged")):
+            d["money"] = money
+    except Exception as e:
+        print(f"weekly: money failed: {e}")
+
+    # Next week's load: per-course open-assignment counts due in the next 7 days
+    # plus dated calendar obligations from the training app.
+    try:
+        nw = {"courses": {}, "obligations": []}
+        today = datetime.now(LOCAL_TZ).date()
+        horizon = today + timedelta(days=7)
+        try:
+            assignments = school_data._load("assignments.csv")
+            for c in school_data._load("courses.csv"):
+                code = (c.get("course") or "").strip()
+                if not code:
+                    continue
+                n = sum(1 for dd, _r in school_data._open_assignments(assignments, code)
+                        if today <= dd <= horizon)
+                if n:
+                    nw["courses"][code] = n
+        except Exception as e:
+            print(f"weekly: next-week assignments failed: {e}")
+        try:
+            p = training_sync.parsed()
+            if p:
+                nw["obligations"] = [
+                    {"date": o["date"].isoformat(), "text": o["text"]}
+                    for o in training_schedule.upcoming_obligations(p, today)
+                    if o["date"] <= horizon]
+        except Exception as e:
+            print(f"weekly: next-week obligations failed: {e}")
+        if nw["courses"] or nw["obligations"]:
+            d["next_week"] = nw
+    except Exception as e:
+        print(f"weekly: next week failed: {e}")
+
     return d
 
 
@@ -3676,6 +3763,18 @@ def _weekly_observations(digest: dict) -> list:
     for c in digest["council"][:5]:
         facts.append(f"  - Council: {c['idea']} → {c['headline']}")
     facts.append(f"Estimated API cost this week: ${digest.get('cost',{}).get('week',{}).get('cost',0):.4f}")
+    # Newer digest keys are optional (.get) — older callers pass dicts without them.
+    if digest.get("scorecard"):
+        facts.append("Follow-through scorecard:\n" + str(digest["scorecard"]))
+    money = digest.get("money") or {}
+    if money.get("steps"):
+        st = money["steps"]
+        facts.append(f"Money plan: {st.get('done',0)}/{st.get('total',0)} steps done, "
+                     f"{st.get('overdue',0)} overdue; sends this week: "
+                     f"{len(money.get('sends') or [])}; follow-ups due: "
+                     f"{len(money.get('followups') or [])}")
+    for e in ((digest.get("school") or {}).get("exams") or [])[:4]:
+        facts.append(f"Exam ahead: {e.get('course','?')} {e.get('name','')} in {e.get('days_out','?')}d")
     fact_block = "\n".join(facts)
 
     system = (
@@ -3762,6 +3861,81 @@ def build_weekly_review(days: int = 7, with_observations: bool = True) -> str:
         out.append(f"- Estimated Claude API spend this week: **${w.get('cost',0):.4f}** "
                    f"over {w.get('requests',0)} request(s) (verify rates in pricing.json). "
                    f"Local transcription & embeddings are free.")
+
+    # Follow-through (daily scorecard + streaks). Every block below is
+    # digest.get-guarded AND try/except'd: one malformed source must never
+    # kill the whole review.
+    try:
+        if digest.get("scorecard"):
+            out.append("\n## Follow-through")
+            out.append(str(digest["scorecard"]))
+    except Exception as e:
+        print(f"weekly: follow-through section failed: {e}")
+
+    # Exam runways (exams ≤30d + spaced-review readiness)
+    try:
+        school = digest.get("school") or {}
+        if school.get("exams"):
+            out.append("\n## Exam runways")
+            for e_ in school["exams"][:6]:
+                out.append(f"- **{e_.get('course','?')} {e_.get('name','')}** — "
+                           f"{e_.get('date','')} ({e_.get('days_out','?')}d out)")
+            review = str(school.get("review") or "")
+            m = re.search(r"DUE FOR REVIEW \((\d+)\)", review)
+            if m and int(m.group(1)):
+                out.append(f"- {m.group(1)} topic(s) due for spaced review — "
+                           "get_review_status has the list.")
+            if "EXAM READINESS" in review:
+                for ln in review[review.index("EXAM READINESS"):].splitlines()[1:9]:
+                    if ln.strip():
+                        out.append(("  - " if ln.startswith("    ") else "- ") + ln.strip())
+    except Exception as e:
+        print(f"weekly: exam runways section failed: {e}")
+
+    # Money pipeline (plan headline + follow-ups due + sends this week)
+    try:
+        money = digest.get("money") or {}
+        if any(money.get(k) for k in ("steps", "followups", "sends", "unlogged")):
+            out.append("\n## Money pipeline")
+            st = money.get("steps") or {}
+            if st:
+                line = f"- Plan: **{st.get('done',0)}/{st.get('total',0)} steps done**"
+                if st.get("overdue"):
+                    line += f", {st['overdue']} overdue"
+                if st.get("due_today"):
+                    line += f", {st['due_today']} due today"
+                if money.get("next_for_alex"):
+                    line += f". Next for Alex: {money['next_for_alex']}"
+                out.append(line)
+            sends = money.get("sends") or []
+            out.append(f"- Sends this week: **{len(sends)}**"
+                       + (" — " + ", ".join(f"{b} ({s})" for s, b in sends[:6]) if sends else ""))
+            fu = money.get("followups") or []
+            if fu:
+                out.append(f"- Follow-ups due ({len(fu)}): " + ", ".join(
+                    f"{f.get('brand','?')} {f.get('which','')} ({f.get('age','?')}d since send)"
+                    for f in fu[:6]))
+            if money.get("unlogged"):
+                out.append("- Sent in chat but missing from the tracker CSV: "
+                           + ", ".join(money["unlogged"][:6]))
+    except Exception as e:
+        print(f"weekly: money section failed: {e}")
+
+    # Next week's load (per-course due counts + calendar obligations, 7 days)
+    try:
+        nw = digest.get("next_week") or {}
+        if nw.get("courses") or nw.get("obligations"):
+            out.append("\n## Next week's load")
+            courses = nw.get("courses") or {}
+            if courses:
+                total = sum(courses.values())
+                out.append(f"- **{total} assignment(s) due in the next 7 days:** "
+                           + ", ".join(f"{c} ({n})" for c, n in sorted(courses.items())))
+            for o in (nw.get("obligations") or [])[:8]:
+                out.append(f"- {o.get('date','')} — "
+                           + str(o.get('text','')).replace("\n", " / "))
+    except Exception as e:
+        print(f"weekly: next-week section failed: {e}")
 
     # Observations (Claude-written, grounded, honest)
     if with_observations:
@@ -5161,11 +5335,13 @@ TOOLS.extend(training_sync.TOOL_SCHEMAS)
 TOOL_STATUS_LABELS.update(training_sync.TOOL_STATUS_LABELS)
 training_sync.init(supabase, on_update=_training_data_changed)
 
-# School data (read-only): class times + due-date/pace brief off the vault's
-# School/*.csv — see school_data.py for why CLARVIS reads but never writes these.
+# School data: class times + due-date/pace brief off the vault's School/*.csv —
+# read-only except review-log.csv, the spaced-repetition ledger log_study_review
+# appends to (local node only; the server vault is a pull mirror, so the runtime
+# gates the write exactly like august_tracker.reconcile_vault).
 TOOLS.extend(school_data.TOOL_SCHEMAS)
 TOOL_STATUS_LABELS.update(school_data.TOOL_STATUS_LABELS)
-school_data.init(VAULT_PATH)
+school_data.init(VAULT_PATH, node_runtime=task_manager.RUNTIME)
 
 # Daily orders + scorecard. Reads school_data/august_tracker/ad_creative_pipeline/
 # training_sync and ranks the day; persists via intake's state helpers, so it

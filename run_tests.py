@@ -2432,8 +2432,79 @@ def suite_weekly(app, live):
               sparse[:160])
         check("sparse review does NOT fabricate sections",
               "## What you worked on" not in sparse and "## Decisions" not in sparse)
+        check("sparse review stays silent on the new sections too",
+              all(h not in sparse for h in ("## Follow-through", "## Exam runways",
+                                            "## Money pipeline", "## Next week's load")))
     finally:
         app._gather_weekly_digest = orig
+
+    # --- the four new sections render from their digest keys ---
+    app._gather_weekly_digest = lambda days=7: {
+        "conversations": [{"title": "Built a thing", "summary": "s", "when": "yesterday"}],
+        "tasks_done": [], "tasks_active": [], "tasks_new": [],
+        "goals_moved": [], "goals_stalled": [], "council": [], "agents": [], "cost": {},
+        "scorecard": "**Scorecard — last 7 days**\n2026-08-21  school ✓  ball ✗\nStreaks: school 3d",
+        "school": {"exams": [{"course": "ECON103", "name": "Exam 1",
+                              "date": "2026-09-10", "days_out": 19}],
+                   "review": ("REVIEW STATUS\nDUE FOR REVIEW (2):\n  ECON103 elasticity\n"
+                              "EXAM READINESS (target: 3 spaced recalls per topic):\n"
+                              "  ECON103 — Exam 1 (in 19d)\n    1/2 topics at target")},
+        "money": {"steps": {"done": 5, "total": 9, "overdue": 1, "due_today": 0},
+                  "next_for_alex": "Send wave 1",
+                  "followups": [{"brand": "AcmeCo", "which": "+3d",
+                                 "sent": "2026-08-18", "age": 4}],
+                  "sends": [("2026-08-20", "AcmeCo")], "unlogged": ["Bravo"]},
+        "next_week": {"courses": {"ECON103": 2, "MATH120": 3},
+                      "obligations": [{"date": "2026-08-25", "text": "Scrimmage"}]}}
+    try:
+        rich = app.build_weekly_review(with_observations=False)
+        check("Follow-through section renders scorecard + streaks",
+              "## Follow-through" in rich and "Streaks: school 3d" in rich)
+        check("Exam runways section renders exams + readiness",
+              "## Exam runways" in rich and "ECON103 Exam 1" in rich
+              and "2 topic(s) due for spaced review" in rich and "1/2 topics at target" in rich)
+        check("Money pipeline section renders headline, sends, follow-ups",
+              "## Money pipeline" in rich and "5/9 steps done" in rich
+              and "Sends this week: **1**" in rich and "AcmeCo +3d (4d since send)" in rich
+              and "Bravo" in rich)
+        check("Next week's load section renders course counts + obligations",
+              "## Next week's load" in rich and "5 assignment(s) due in the next 7 days" in rich
+              and "ECON103 (2)" in rich and "2026-08-25 — Scrimmage" in rich)
+
+        # composer is fail-soft per section: garbage in one digest key must not
+        # kill the review or the other sections
+        bad = dict(app._gather_weekly_digest())
+        bad["school"] = "garbage"          # .get on a str raises → caught per-section
+        bad["money"] = {"steps": object()}  # .get(...) on steps object raises
+        app._gather_weekly_digest = lambda days=7, _b=bad: _b
+        broken = app.build_weekly_review(with_observations=False)
+        check("a malformed digest key degrades to a missing section, not a crash",
+              "# Weekly Review" in broken and "## Follow-through" in broken
+              and "## Next week's load" in broken)
+    finally:
+        app._gather_weekly_digest = orig
+
+    # --- gatherer is fail-soft: kill every new source, review still renders ---
+    def _boom(*a, **k):
+        raise RuntimeError("source down")
+    saved = [(app.daily_orders, "_scorecard_days"), (app.august_tracker, "status"),
+             (app.school_data, "study_plan_data"), (app.school_data, "_load"),
+             (app.training_sync, "parsed"), (app.daily_orders, "_followups_due"),
+             (app.daily_orders, "_sends")]
+    originals = [(mod, name, getattr(mod, name)) for mod, name in saved]
+    try:
+        for mod, name, _fn in originals:
+            setattr(mod, name, _boom)
+        digest = app._gather_weekly_digest()
+        check("digest survives every new source raising (fail-soft gatherer)",
+              isinstance(digest, dict) and "conversations" in digest
+              and not any(k in digest for k in ("scorecard", "school", "money", "next_week")))
+        dead = app.build_weekly_review(with_observations=False)
+        check("review still renders with all new sources dead",
+              isinstance(dead, str) and "# Weekly Review" in dead)
+    finally:
+        for mod, name, fn in originals:
+            setattr(mod, name, fn)
 
     # --- observations are fail-soft (return [] instead of raising when the model errors) ---
     class _BoomMsgs:

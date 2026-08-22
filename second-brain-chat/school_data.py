@@ -10,9 +10,17 @@ official syllabus 2026-08-18, others land as professors publish), and
 assignments.csv every Canvas deadline (auto-synced every 30 minutes by
 canvas_sync.py). The limit was wiring, not data — these two tools close it.
 
-Read-only on purpose: school truth is written by canvas_sync, syllabus imports,
-and Alex; CLARVIS reads it here and puts blocks on the week with the EXISTING
-training-schedule tools (batch_edit_schedule, after one yes). No new write path.
+Read-only on purpose — with ONE deliberate exception: school truth is written
+by canvas_sync, syllabus imports, and Alex; CLARVIS reads it here and puts
+blocks on the week with the EXISTING training-schedule tools
+(batch_edit_schedule, after one yes). The exception is review-log.csv, the
+spaced-repetition ledger scripts/school_status.py reads — its own DO NEXT says
+"log topics in review-log.csv as you learn them", and until log_study_review
+below, that logging was manual, so the ledger sat header-only. Writes happen on
+the LOCAL node only (the server's vault is a pull mirror; a write there would
+be silently reverted by the next sync — same guard stance as
+august_tracker.reconcile_vault). assignments.csv/courses.csv/curriculum.csv
+stay machine/Alex-owned and are never written here.
 
 Vault path: init(vault_path) from app.py — VAULT_PATH resolves to the iCloud
 vault on the Mac node and /data/vault on the server, so the same code reads
@@ -39,6 +47,7 @@ from zoneinfo import ZoneInfo
 LOCAL_TZ = ZoneInfo("America/New_York")
 
 _SCHOOL_DIR = None  # set by init()
+_RUNTIME = "local"  # set by init(); gates the ONE write path (review-log.csv)
 
 # scripts/school_status.py lives at the second-brain REPO ROOT, one level above
 # this module's directory — true both locally and in the deployed container
@@ -47,9 +56,10 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _STATUS_SCRIPT = os.path.join(_REPO_ROOT, "scripts", "school_status.py")
 
 
-def init(vault_path):
-    global _SCHOOL_DIR
+def init(vault_path, node_runtime="local"):
+    global _SCHOOL_DIR, _RUNTIME
     _SCHOOL_DIR = os.path.join(vault_path, "School")
+    _RUNTIME = node_runtime or "local"
 
 
 # ---------------------------------------------------------------------------
@@ -587,6 +597,247 @@ def study_plan(day: str = "") -> str:
 
 
 # ---------------------------------------------------------------------------
+# Study-review logger — the write half of the spaced-repetition loop
+# ---------------------------------------------------------------------------
+# review-log.csv is the ONE writable School CSV (see module docstring). The
+# constants mirror scripts/school_status.py exactly (SPACING / RELEARN_TARGET /
+# EXAM_GAP_FRAC / EXAM_TYPES there) so the logger and the brief never disagree
+# about when a topic is due. Note _REVIEW_EXAM_TYPES includes "quiz" — that's
+# school_status's review-anchoring set, deliberately wider than this module's
+# _EXAM_TYPES (which excludes quiz to keep MATH's daily quizzes off exam lists).
+
+_REVIEW_LOG = "review-log.csv"
+# Pinned verbatim — test_school_data and school_status both depend on this order.
+_REVIEW_COLUMNS = ["course", "topic", "last_reviewed", "confidence",
+                   "next_due", "times_reviewed", "notes"]
+# confidence (1 = blank stare, 5 = could teach it) -> days until next review
+_SPACING = {1: 1, 2: 3, 3: 7, 4: 16, 5: 35}
+# Rawson & Dunlosky: ~3 spaced recalls per topic before an assessment.
+_RELEARN_TARGET = 3
+# Cepeda et al. 2008: first review gap ≈ 10-20% of time-to-test.
+_EXAM_GAP_FRAC = 0.15
+_REVIEW_EXAM_TYPES = {"exam", "quiz", "test", "midterm", "final"}
+
+
+def _clamp_confidence(confidence) -> int:
+    """1-5 int; anything unreadable lands on 3 ('fine'), out-of-range clamps."""
+    try:
+        c = int(confidence)
+    except (TypeError, ValueError):
+        return 3
+    return min(5, max(1, c))
+
+
+def _canonical_course(course: str):
+    """(code, error): resolve to the courses.csv spelling ('econ103'→'ECON103').
+
+    A wrong code would create a ledger row no exam ever anchors to, so unknown
+    codes are refused with the known list. When courses.csv itself is
+    empty/unreadable the study event still gets logged as typed — losing the
+    review because the vault hadn't synced would be worse than a raw code."""
+    want = (course or "").strip()
+    if not want:
+        return None, "course is required — e.g. ECON103 (see get_class_schedule)."
+    courses = _load("courses.csv")
+    if not courses:
+        return want, None
+    matches = _filter_courses(courses, want.lower())
+    if not matches:
+        return None, _unknown_course_msg(course)
+    return (matches[0].get("course") or want).strip(), None
+
+
+def _next_review_exams(assignments, for_date):
+    """{course_lower: (date, row)} — next OPEN exam-ish deadline per course,
+    using school_status's wider set (quiz included) since reviews anchor to it."""
+    out = {}
+    for r in assignments:
+        if (r.get("type") or "").strip().lower() not in _REVIEW_EXAM_TYPES:
+            continue
+        if (r.get("status") or "").strip().lower() in _DONE_STATUSES:
+            continue
+        d = _parse_date(r.get("due_date"))
+        if d and d >= for_date:
+            key = (r.get("course") or "").strip().lower()
+            if key not in out or d < out[key][0]:
+                out[key] = (d, r)
+    return out
+
+
+def _effective_next_due(r, next_exam, today):
+    """When a ledger row is actually due — same math as school_status lines
+    228-248: stored next_due wins, blank recomputes from last_reviewed +
+    SPACING[confidence], and an interval that lands past the exam it serves is
+    pulled in to a Cepeda-fraction gap (never 'after the test')."""
+    nd = _parse_date(r.get("next_due"))
+    if not nd:
+        last = _parse_date(r.get("last_reviewed"))
+        try:
+            conf = int((r.get("confidence") or "3").strip())
+        except ValueError:
+            conf = 3
+        nd = last + timedelta(days=_SPACING.get(conf, 7)) if last else None
+    exam = next_exam.get((r.get("course") or "").strip().lower())
+    if nd and exam and nd >= exam[0]:
+        frac_gap = max(1, int((exam[0] - today).days * _EXAM_GAP_FRAC))
+        nd = min(exam[0] - timedelta(days=1), today + timedelta(days=frac_gap))
+    return nd
+
+
+def log_study_review_tool(course: str, topic: str, confidence=3,
+                          notes: str = "") -> str:
+    if _RUNTIME != "local":
+        return ("Review logging lives on the Mac node — this node's vault is a "
+                "pull mirror, so a write here would be silently reverted by the "
+                "next sync. Nothing was logged; tell Alex to mention it to the "
+                "Mac-side CLARVIS (or add the row to School/review-log.csv "
+                "himself).")
+    topic = (topic or "").strip()
+    if not topic:
+        return "topic is required — name what he actually reviewed."
+    if not _SCHOOL_DIR or not os.path.isdir(_SCHOOL_DIR):
+        # Never invent a vault tree: a missing School/ means the path is wrong,
+        # and rows written into a fabricated dir would sync nowhere.
+        return (f"School folder not found at {_SCHOOL_DIR or '(uninitialized)'} "
+                "— nothing was logged.")
+    code, err = _canonical_course(course)
+    if err:
+        return err
+    conf = _clamp_confidence(confidence)
+    today = datetime.now(LOCAL_TZ).date()
+    next_due = today + timedelta(days=_SPACING[conf])
+
+    rows = _load(_REVIEW_LOG)
+    updated = None
+    for r in rows:
+        if ((r.get("course") or "").strip().lower() == code.lower()
+                and (r.get("topic") or "").strip().lower() == topic.lower()):
+            try:
+                n = int((r.get("times_reviewed") or "0").strip() or 0)
+            except ValueError:
+                n = 0
+            r["times_reviewed"] = str(n + 1)
+            r["last_reviewed"] = today.isoformat()
+            r["confidence"] = str(conf)
+            r["next_due"] = next_due.isoformat()
+            if notes.strip():
+                r["notes"] = notes.strip()  # blank notes keep the old note
+            updated = r
+            break
+    if updated is None:
+        updated = {"course": code, "topic": topic,
+                   "last_reviewed": today.isoformat(),
+                   "confidence": str(conf),
+                   "next_due": next_due.isoformat(),
+                   "times_reviewed": "1",
+                   "notes": (notes or "").strip()}
+        rows.append(updated)
+
+    path = os.path.join(_SCHOOL_DIR, _REVIEW_LOG)
+    tmp_path = path + ".tmp"
+    try:
+        with open(tmp_path, "w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=_REVIEW_COLUMNS,
+                               extrasaction="ignore")
+            w.writeheader()
+            for r in rows:
+                # Only the seven pinned columns; a malformed source row's None
+                # fields become "" instead of the literal string "None".
+                w.writerow({c: (r.get(c) or "") for c in _REVIEW_COLUMNS})
+        os.replace(tmp_path, path)  # atomic — a crash never truncates the ledger
+    except OSError as e:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+        return f"couldn't write review-log.csv: {e} — nothing was logged."
+
+    n = int(updated["times_reviewed"])
+    out = (f"Logged: {code} — {topic} (confidence {conf}/5, recall "
+           f"{n}/{_RELEARN_TARGET}). Next review {next_due.isoformat()} "
+           f"(+{_SPACING[conf]}d).")
+    exam = _next_review_exams(_load("assignments.csv"), today).get(code.lower())
+    if exam and (exam[0] - today).days <= 21:
+        days_out = (exam[0] - today).days
+        when = "TODAY" if days_out == 0 else f"in {days_out}d"
+        out += (f" Heads up: {code} "
+                f"{(exam[1].get('title') or 'exam').strip()} is {when} — "
+                "the brief will pull the review in if needed.")
+    return out
+
+
+def get_review_status_tool(course: str = "") -> str:
+    today = datetime.now(LOCAL_TZ).date()
+    want = (course or "").strip().lower()
+    if want:
+        courses = _load("courses.csv")
+        if courses and not _filter_courses(courses, want):
+            return _unknown_course_msg(course)
+    reviews = _load(_REVIEW_LOG)
+    assignments = _load("assignments.csv")
+    if want:
+        reviews = [r for r in reviews
+                   if want in (r.get("course") or "").lower()]
+        assignments = [a for a in assignments
+                       if want in (a.get("course") or "").lower()]
+    next_exam = _next_review_exams(assignments, today)
+
+    due = []
+    for r in reviews:
+        nd = _effective_next_due(r, next_exam, today)
+        if nd and nd <= today:
+            due.append((nd, r))
+    due.sort(key=lambda t: t[0])
+
+    out = [f"REVIEW STATUS — {_fmt_day(today)} ({today.isoformat()})",
+           f"DUE FOR REVIEW ({len(due)}):"]
+    if not due:
+        out.append("  nothing due — log reviews with log_study_review as he studies")
+    for nd, r in due[:15]:
+        od = (today - nd).days
+        conf = (r.get("confidence") or "?").strip()
+        out.append(f"  {(r.get('course') or ''):<10} "
+                   f"{(r.get('topic') or '')[:44]:<44} "
+                   f"confidence {conf}/5"
+                   + (f"  {od}d overdue" if od > 0 else ""))
+
+    # Exam readiness — school_status's 21-day horizon and 3-recall target.
+    horizon = sorted(((d, a) for d, a in next_exam.values()
+                      if (d - today).days <= 21), key=lambda t: t[0])
+    if horizon:
+        out.append(f"EXAM READINESS (target: {_RELEARN_TARGET} spaced recalls "
+                   "per topic):")
+        for d, a in horizon:
+            code = (a.get("course") or "?").strip()
+            days_out = (d - today).days
+            when = "TODAY" if days_out == 0 else f"in {days_out}d"
+            out.append(f"  {code} — {(a.get('title') or '').strip()[:40]} ({when})")
+            topics = [r for r in reviews
+                      if (r.get("course") or "").strip().lower() == code.lower()]
+            if not topics:
+                out.append("    no topics logged in review-log.csv — "
+                           "readiness unknown")
+                continue
+            behind, ok = [], 0
+            for r in topics:
+                try:
+                    n = int((r.get("times_reviewed") or "0").strip() or 0)
+                except ValueError:
+                    n = 0
+                if n >= _RELEARN_TARGET:
+                    ok += 1
+                else:
+                    behind.append((n, (r.get("topic") or "").strip()))
+            out.append(f"    {ok}/{len(topics)} topics at target")
+            behind.sort(key=lambda t: t[0])
+            for n, t in behind[:5]:
+                out.append(f"    → {t[:48]} ({n}/{_RELEARN_TARGET} recalls)")
+            if len(behind) > 5:
+                out.append(f"    … +{len(behind) - 5} more below target")
+    return "\n".join(out)
+
+
+# ---------------------------------------------------------------------------
 # Tool plumbing (same shape as training_sync)
 # ---------------------------------------------------------------------------
 
@@ -660,6 +911,68 @@ TOOL_SCHEMAS = [
             },
         },
     },
+    {
+        "name": "log_study_review",
+        "description": (
+            "Log that Alex ACTUALLY studied or reviewed a topic — this appends "
+            "to (or updates) School/review-log.csv, the spaced-repetition "
+            "ledger the school brief reads. Call it whenever he says he "
+            "studied, reviewed, did practice problems, read a chapter, or "
+            "prepped for a class — including when it surfaces in the evening "
+            "scorecard ('did the econ reading', 'ground through math "
+            "problems'). Infer the course code from context (get_class_schedule "
+            "lists them) and set confidence 1-5 from how he sounds about it: "
+            "shaky/confused=2, fine=3, solid=4, could-teach-it=5; default 3 "
+            "when he doesn't say. Re-logging the same course+topic bumps the "
+            "recall count — that's the point: 3 spaced recalls per topic "
+            "before an exam. Writes only work on the Mac node (the server "
+            "vault is a pull mirror); off-node this tells you so instead."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "course": {
+                    "type": "string",
+                    "description": "Course code, e.g. ECON103 — infer from context, don't ask if it's obvious.",
+                },
+                "topic": {
+                    "type": "string",
+                    "description": "The specific topic reviewed, e.g. 'Supply and demand elasticity'. Reuse the exact wording of an existing ledger topic when he's re-reviewing it, so the recall count accrues.",
+                },
+                "confidence": {
+                    "type": "integer",
+                    "description": "1-5: 1 blank stare, 3 fine (default), 5 could teach it.",
+                },
+                "notes": {
+                    "type": "string",
+                    "description": "Optional: what tripped him up, e.g. 'missed ch4 Q6'.",
+                },
+            },
+            "required": ["course", "topic"],
+        },
+    },
+    {
+        "name": "get_review_status",
+        "description": (
+            "His spaced-repetition queue from School/review-log.csv: every "
+            "topic due for review today (stored next_due, or last_reviewed + "
+            "spacing when blank, pulled forward when it would land past an "
+            "upcoming exam) plus per-exam readiness — topics at the 3-recall "
+            "target vs. behind — for exams within 21 days. Same math as the "
+            "school brief's REVIEW DUE / EXAM READINESS sections, computed "
+            "directly. Use for 'what should I review tonight' and to show what "
+            "a just-logged review changed. Works on both nodes (read-only)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "course": {
+                    "type": "string",
+                    "description": "Optional course code filter, e.g. ECON103. Empty = all courses.",
+                },
+            },
+        },
+    },
 ]
 
 TOOL_NAMES = {t["name"] for t in TOOL_SCHEMAS}
@@ -668,6 +981,8 @@ TOOL_STATUS_LABELS = {
     "get_class_schedule": "Checking your class schedule…",
     "get_school_brief": "Pulling up your school brief…",
     "get_study_plan": "Building your study plan…",
+    "log_study_review": "Logging that review…",
+    "get_review_status": "Checking your review queue…",
 }
 
 
@@ -681,4 +996,10 @@ def handle_tool_call(tool_name: str, tool_input: dict) -> str:
             14 if days is None else days, tool_input.get("course", ""))
     if tool_name == "get_study_plan":
         return study_plan(tool_input.get("day", ""))
+    if tool_name == "log_study_review":
+        return log_study_review_tool(
+            tool_input.get("course", ""), tool_input.get("topic", ""),
+            tool_input.get("confidence", 3), tool_input.get("notes", "") or "")
+    if tool_name == "get_review_status":
+        return get_review_status_tool(tool_input.get("course", ""))
     return f"unknown tool {tool_name}"

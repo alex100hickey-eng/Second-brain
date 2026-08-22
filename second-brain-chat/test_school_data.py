@@ -8,6 +8,7 @@ temp SCHOOL dir, same harness style as test_training_sync.py.
 Run:  python3 test_school_data.py
 """
 
+import csv
 import os
 import shutil
 import subprocess
@@ -426,6 +427,140 @@ shutil.rmtree(sp, ignore_errors=True)
 school_data.init(tmp)
 
 
+# ---- study review logger ---------------------------------------------
+# The write half of the review loop, against the same tmp fixture: ECON103 has
+# an open quiz due TOMORROW (so exam anchoring is live), review-log.csv starts
+# header-only. school_status.py stays the read-side source of truth — the last
+# check below proves it can read every row this logger writes.
+
+print("study review logger")
+
+rl_path = os.path.join(school, "review-log.csv")
+_PINNED_HEADER = "course,topic,last_reviewed,confidence,next_due,times_reviewed,notes"
+
+
+def _ledger():
+    with open(rl_path, newline="", encoding="utf-8") as f:
+        return list(csv.DictReader(f))
+
+
+# append path
+out = school_data.log_study_review_tool(
+    "econ103", "Supply and demand", 4, "missed elasticity Q6")
+check("append reports course, spacing, and recall count",
+      "ECON103" in out and "+16d" in out and "1/3" in out)
+check("append warns about the exam it now anchors to", "Syllabus Quiz" in out)
+rows = _ledger()
+check("one row appended with times_reviewed=1",
+      len(rows) == 1 and rows[0]["times_reviewed"] == "1")
+with open(rl_path, encoding="utf-8") as f:
+    check("header stays the pinned seven columns",
+          f.readline().strip() == _PINNED_HEADER)
+check("course canonicalized to the courses.csv spelling",
+      rows[0]["course"] == "ECON103")
+check("next_due = today + SPACING[confidence] (4 -> +16d)",
+      rows[0]["last_reviewed"] == et_today.isoformat()
+      and rows[0]["next_due"] == (et_today + timedelta(days=16)).isoformat())
+
+# update path — same course+topic matches case-insensitively
+out = school_data.log_study_review_tool("ECON103", "supply AND demand", 2)
+rows = _ledger()
+check("re-log updates the row instead of appending",
+      len(rows) == 1 and rows[0]["times_reviewed"] == "2")
+check("re-log recomputes next_due from the NEW confidence (2 -> +3d)",
+      rows[0]["confidence"] == "2"
+      and rows[0]["next_due"] == (et_today + timedelta(days=3)).isoformat())
+check("re-log without notes keeps the old note",
+      rows[0]["notes"] == "missed elasticity Q6")
+
+# a different topic appends; confidence garbage/overflow degrades sanely
+school_data.log_study_review_tool("MATH120", "Function transformations", 5)
+school_data.log_study_review_tool("ECON103", "Garbled confidence", "not-a-number")
+school_data.log_study_review_tool("ECON103", "Clamp check", 9)
+rows = {r["topic"]: r for r in _ledger()}
+check("different topics append their own rows", len(rows) == 4)
+check("unreadable confidence defaults to 3 (+7d)",
+      rows["Garbled confidence"]["confidence"] == "3"
+      and rows["Garbled confidence"]["next_due"]
+      == (et_today + timedelta(days=7)).isoformat())
+check("out-of-range confidence clamps to 5 (+35d)",
+      rows["Clamp check"]["confidence"] == "5"
+      and rows["Clamp check"]["next_due"]
+      == (et_today + timedelta(days=35)).isoformat())
+
+# bad inputs never touch the ledger
+before = open(rl_path, encoding="utf-8").read()
+out = school_data.log_study_review_tool("BIO999", "Cells", 3)
+check("unknown course guarded with the known list",
+      "No course matching" in out and "ECON103" in out)
+out = school_data.log_study_review_tool("ECON103", "   ", 3)
+check("blank topic guarded", "topic is required" in out)
+check("guarded calls leave the ledger untouched",
+      open(rl_path, encoding="utf-8").read() == before)
+
+# off-node guard — the server vault is a pull mirror (august_tracker stance)
+school_data.init(tmp, node_runtime="server")
+out = school_data.log_study_review_tool("ECON103", "Server-side attempt", 3)
+check("off-node write refused, pointing at the Mac node",
+      "Mac node" in out and "Nothing was logged" in out)
+check("off-node call leaves the ledger untouched",
+      open(rl_path, encoding="utf-8").read() == before)
+out = school_data.get_review_status_tool()
+check("review status still READS off-node", "REVIEW STATUS" in out)
+school_data.init(tmp)  # back to local
+
+# get_review_status: due filter + exam pull-forward + readiness
+# ECON's quiz is tomorrow, so every ECON next_due (+3/+7/+35) lands past it and
+# must pull in to today (Cepeda gap); MATH has no exam, so its +35 stays out.
+with open(rl_path, "a", newline="", encoding="utf-8") as f:
+    f.write(f"MATH120,Old blank next due,{(et_today - timedelta(days=10)).isoformat()},3,,1,\n")
+out = school_data.get_review_status_tool()
+due_part = out.split("EXAM READINESS")[0]
+check("exam-anchored rows pull forward into today's queue",
+      "Supply and demand" in due_part and "Clamp check" in due_part)
+check("far-future review with no exam stays out of the due list",
+      "Function transformations" not in due_part)
+check("blank next_due computes from last_reviewed + spacing (10d ago, conf 3 -> 3d overdue)",
+      "Old blank next due" in due_part and "3d overdue" in due_part)
+check("readiness section fires for the quiz tomorrow",
+      "EXAM READINESS" in out and "Syllabus Quiz" in out and "in 1d" in out)
+check("readiness counts topics against the 3-recall target",
+      "0/3 topics at target" in out and "(2/3 recalls)" in out
+      and "(1/3 recalls)" in out)
+
+out = school_data.get_review_status_tool("math120")
+check("course filter narrows queue and readiness to that course",
+      "Old blank next due" in out and "Supply and demand" not in out
+      and "Syllabus Quiz" not in out)
+out = school_data.get_review_status_tool("BIO999")
+check("review status guards unknown courses too", "No course matching" in out)
+
+# tool plumbing
+check("both review tools registered",
+      {"log_study_review", "get_review_status"} <= school_data.TOOL_NAMES
+      and "log_study_review" in school_data.TOOL_STATUS_LABELS
+      and "get_review_status" in school_data.TOOL_STATUS_LABELS)
+out = school_data.handle_tool_call(
+    "log_study_review", {"course": "ECON103", "topic": "Routed via tool call"})
+check("handle_tool_call routes log_study_review (confidence defaults to 3)",
+      "Routed via tool call" in out and "+7d" in out)
+out = school_data.handle_tool_call("get_review_status", {})
+check("handle_tool_call routes get_review_status", "REVIEW STATUS" in out)
+
+# the read-side source of truth accepts everything the logger wrote
+out = school_data.get_school_brief_tool(days=14)
+check("school_status.py reads the ledger this module wrote",
+      "SCHOOL BRIEF" in out and "Supply and demand" in out)
+
+# a deleted ledger is recreated with the pinned header
+os.remove(rl_path)
+school_data.log_study_review_tool("ECON103", "Fresh ledger", 3)
+with open(rl_path, encoding="utf-8") as f:
+    check("missing ledger recreated with the pinned header",
+          f.readline().strip() == _PINNED_HEADER
+          and "Fresh ledger" in f.read())
+
+
 # ---- missing data fail-soft ------------------------------------------
 
 print("fail-soft")
@@ -433,6 +568,9 @@ print("fail-soft")
 school_data.init(os.path.join(tmp, "nonexistent"))
 out = school_data.get_class_schedule_tool()
 check("missing vault explains itself", "empty or unreadable" in out)
+out = school_data.log_study_review_tool("ECON103", "Anything", 3)
+check("logger refuses to invent a School dir in a missing vault",
+      "School folder not found" in out)
 
 school_data.init(tmp)  # restore for cleanliness
 
