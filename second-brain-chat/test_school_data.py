@@ -229,6 +229,200 @@ shutil.rmtree(tz, ignore_errors=True)
 school_data.init(tmp)
 
 
+# ---- study plan -------------------------------------------------------
+# Fixed September-2026 fixture (Sep 1 is a Tuesday, Labor Day is Mon Sep 7) so
+# every date is deterministic — targets go in through the for_date/day arg, not
+# the wall clock. Mirrors each course's real curriculum shape: ECON/ACCT rows
+# carry lecture_ref, ACCT adds paren deadline rows, AIQS has no lecture_ref
+# anywhere, MATH has only exam rows, CSDS has nothing at all.
+
+print("study plan")
+
+sp = tempfile.mkdtemp(prefix="school-data-plan-")
+sp_school = os.path.join(sp, "School")
+os.makedirs(sp_school)
+
+with open(os.path.join(sp_school, "courses.csv"), "w", encoding="utf-8") as f:
+    f.write(
+        "course,code,title,instructor,meets,term,lead_target_days,"
+        "prepared_through,syllabus_status,notes\n"
+        "ACCT100,ACCT 100,Foundations of Accounting I,Mark Jarvis,"
+        "TuTh 10:00-11:15AM Peter B Lewis 201,Fall 2026,5,2026-08-24,imported,\n"
+        "AIQS100,AIQS 100,Academic Inquiry Seminar,Dr. N,"
+        "MWF 10:25-11:15AM Crawford Hall A13,Fall 2026,3,2026-08-24,imported,\n"
+        "CSDS101,CSDS 101,The Digital Revolution,,"
+        "MW 12:35-1:50PM Sears 333 + Lab W 6:30-8:30PM Olin 304,Fall 2026,5,"
+        "2026-08-24,pending,\n"
+        "ECON103,ECON 103,Prin of Macroeconomics,Peter Hammack,"
+        "TuTh 11:30AM-12:45PM Peter B Lewis 201,Fall 2026,5,2026-08-24,imported,\n"
+        "MATH120,MATH 120,Elem Functions,Adam Krause,"
+        "MWF 9:20-10:10AM Olin 305,Fall 2026,7,2026-08-24,imported,\n"
+        "PHED171,PHED 171,Varsity Basketball (Men),,TBA,Fall 2026,0,"
+        "2026-08-24,n/a,\n"
+    )
+
+with open(os.path.join(sp_school, "curriculum.csv"), "w", encoding="utf-8") as f:
+    f.write("course,week,date,topic,readings,lecture_ref,deliverable,prepared,notes\n")
+    # ECON/ACCT style: meetings have lecture_ref
+    f.write("ECON103,1,2026-09-01,Foundations I,T1,class 1,,,\n")
+    f.write("ECON103,1,2026-09-03,Foundations II,T2,class 2,,,\n")
+    f.write("ECON103,2,2026-09-08,Supply and Demand,T3,class 3,,,\n")
+    f.write("ECON103,2,2026-09-10,Elasticity,T4,class 4,,,\n")
+    f.write("ECON103,5,2026-10-01,EXAM 1 (in class),all to date,class 9,Exam 1,,\n")
+    f.write("ACCT100,1,2026-09-01,Business Organization,Ch.1,class 1,,,\n")
+    f.write("ACCT100,1,2026-09-03,Financial Statements,Ch.2,class 2,,,\n")
+    f.write("ACCT100,2,2026-09-08,GAAP,Ch.3,class 3,APQ due 10:00 at start of class,,\n")
+    f.write("ACCT100,2,2026-09-10,Adjustments,Ch.4,class 4,,,\n")
+    f.write("ACCT100,2,2026-08-31,(deadline — no class),,,HW Day 1&2 due 11:59pm,,\n")
+    f.write("ACCT100,3,2026-09-07,(Labor Day — no class),,,HW Day 3&4 due 11:59pm,,\n")
+    f.write("ACCT100,3,2026-09-15,Exam 1 Review (if time),HW material,class 5,,,\n")
+    f.write("ACCT100,3,2026-09-17,EXAM 1 (in class) — financial accounting,"
+            "all material,class 6,Exam 1,,\n")
+    # AIQS style: lecture_ref empty everywhere; paren rows are not meetings
+    f.write("AIQS100,1,2026-09-02,Close reading,TSIS intro,,,,\n")
+    f.write("AIQS100,1,2026-09-04,Sonnets 1 18 20,Sonnets,,,,\n")
+    f.write("AIQS100,2,2026-09-07,(Labor Day — no class),,,,,\n")
+    f.write("AIQS100,2,2026-09-09,Sonnets 42 116 130,Sonnets,,,,\n")
+    f.write("AIQS100,2,2026-09-13,(Sunday deadline),,,Paper 1 due 11:59pm,,\n")
+    # MATH style: ONLY exam rows — class days come from meets weekday math
+    f.write("MATH120,3,2026-09-25,TEST 1 (in class),per weekly Canvas lists,,Test 1,,\n")
+    f.write("MATH120,15,2026-12-11,FINAL EXAM (cumulative),all material,final,Final Exam,,\n")
+
+with open(os.path.join(sp_school, "assignments.csv"), "w", encoding="utf-8") as f:
+    f.write("course,title,type,due_date,weight_pct,est_hours,actual_hours,status,"
+            "topic,source,submitted_date,grade,notes\n")
+    f.write("ECON103,HW 2,homework,2026-09-09,,,,open,,canvas,,,\n")
+    f.write("ECON103,Reading 3,reading,2026-09-11,,,,open,,canvas,,,\n")
+    f.write("ECON103,Problem Set 4,homework,2026-09-12,,,,open,,canvas,,,\n")
+    f.write("ECON103,Old HW,homework,2026-09-08,,,,submitted,,canvas,,,\n")
+    f.write("ECON103,Exam 1,exam,2026-10-01T02:30,16.7,,,open,,canvas,,,\n")
+    f.write("ECON103,Final Exam,exam,2026-12-14T12:00,33.3,,,open,,canvas,,,\n")
+    f.write("ACCT100,Day 3 APQ - GAAP,assignment,2026-09-08T10:00,,,,open,,canvas,,,\n")
+    f.write("MATH120,HW week 3,homework,2026-09-12,,,,open,,manual,,,\n")
+    f.write("MATH120,Weekly quiz,quiz,2026-09-09,,,,open,,manual,,,\n")
+    f.write("AIQS100,Final Paper,exam,2026-09-20,,,,open,,canvas,,,\n")
+    f.write("AIQS100,Paper 1,paper,2026-09-13,,,,open,,canvas,,,\n")
+
+with open(os.path.join(sp_school, "review-log.csv"), "w", encoding="utf-8") as f:
+    f.write("course,topic,last_reviewed,confidence,next_due,times_reviewed,notes\n")
+
+school_data.init(sp)
+
+# Sunday Sep 6: tomorrow is Labor Day — a MATH "class weekday" that is NOT a
+# class day. The plan must skip it for next-class AND stay quiet on the quiz.
+data = school_data.study_plan_data("2026-09-06")
+pc = data["per_course"]
+
+check("ECON lead window catches HW 2",
+      any("HW 2" in s for s in pc["ECON103"]["due_soon"]))
+check("lead-window boundary day (+5) is included",
+      any("Reading 3" in s for s in pc["ECON103"]["due_soon"]))
+check("one day past the lead window (+6) is excluded",
+      not any("Problem Set 4" in s for s in pc["ECON103"]["due_soon"]))
+check("MATH's wider lead (7d) catches what ECON's (5d) would not",
+      any("HW week 3" in s for s in pc["MATH120"]["due_soon"]))
+check("submitted work never resurfaces as due",
+      not any("Old HW" in s for s in pc["ECON103"]["due_soon"] +
+              pc["ECON103"]["before_next_class"]))
+check("APQ due at class start counts for that class",
+      any("Day 3 APQ" in s for s in pc["ACCT100"]["before_next_class"]))
+check("AIQS next class = next non-paren row, not the Labor Day row",
+      pc["AIQS100"]["next_class"] == "2026-09-09")
+check("MATH next class skips the Labor Day Monday",
+      pc["MATH120"]["next_class"] == "2026-09-09")
+check("no quiz pointer when tomorrow is a holiday",
+      pc["MATH120"]["quiz_pointer"] is None)
+check("quiz pointer only ever exists for MATH",
+      all(pc[c]["quiz_pointer"] is None for c in pc if c != "MATH120"))
+
+# Tuesday Sep 8: tomorrow (Wed) is a real MATH class — quiz covers the PRIOR
+# class (Fri Sep 4; Labor Day Monday was no class), pointing at the Canvas
+# problem list and never at an invented topic name.
+data2 = school_data.study_plan_data("2026-09-08")
+ptr = data2["per_course"]["MATH120"]["quiz_pointer"]
+check("quiz pointer fires the night before a class day", ptr is not None)
+check("pointer names the prior CLASS day (Fri Sep 4, not Labor Day Mon)",
+      ptr is not None and "Sep 4" in ptr)
+check("pointer points at the Canvas problem list, no invented topics",
+      ptr is not None and "Canvas problem list" in ptr)
+
+# Friday Sep 4: tomorrow is Saturday — no class, no pointer.
+data3 = school_data.study_plan_data("2026-09-04")
+check("no quiz pointer when tomorrow isn't a class day",
+      data3["per_course"]["MATH120"]["quiz_pointer"] is None)
+
+# Exams from Sep 6: ACCT Exam 1 (curriculum-only), MATH Test 1, ECON Exam 1
+# (in both files — deduped to one). AIQS "Final Paper" (canvas_sync mistype),
+# the ACCT review day, the quiz row, and the >30d finals must all stay out.
+exams = data["exams"]
+check("curriculum-only ACCT exam makes the list",
+      any(e["course"] == "ACCT100" and e["date"] == "2026-09-17" for e in exams))
+check("MATH test row makes the list",
+      any(e["course"] == "MATH120" and e["date"] == "2026-09-25" for e in exams))
+check("ECON exam in both files appears exactly once",
+      sum(1 for e in exams if e["course"] == "ECON103") == 1)
+check("AIQS 'Final Paper' mistyped as exam is excluded",
+      not any(e["course"] == "AIQS100" for e in exams))
+check("'Exam 1 Review' day is prep, not an exam",
+      not any("Review" in e["name"] for e in exams))
+check("exams >30 days out stay off the list",
+      not any(e["date"] in ("2026-12-11", "2026-12-14") for e in exams))
+check("exam days_out counted from the plan date",
+      next(e["days_out"] for e in exams if e["date"] == "2026-09-17") == 11)
+
+# CSDS101 has zero rows anywhere: unknown load, never "nothing due".
+check("CSDS101 lands in unknown", data["unknown"] == ["CSDS101"])
+check("CSDS101 renders as unknown load",
+      any("CSDS101: syllabus still unpublished — unknown load" in l
+          for l in data["lines"]))
+check("CSDS101 never claims nothing due", "CSDS101 —" not in "\n".join(data["lines"]))
+check("lead_target_days=0 course is skipped entirely",
+      "PHED171" not in pc and "PHED171" not in data["unknown"])
+
+# day argument plumbing
+et_now = datetime.now(ZoneInfo("America/New_York")).date()
+out = school_data.study_plan("tomorrow")
+check("day='tomorrow' plans tomorrow",
+      (et_now + timedelta(days=1)).isoformat() in out)
+out = school_data.study_plan("2026-09-06")
+check("ISO day arg plans that date", "2026-09-06" in out and "STUDY PLAN" in out)
+out = school_data.study_plan("someday")
+check("unreadable day explains itself", "Couldn't read day" in out)
+
+# tool plumbing
+check("get_study_plan registered",
+      "get_study_plan" in school_data.TOOL_NAMES
+      and "get_study_plan" in school_data.TOOL_STATUS_LABELS
+      and any(t["name"] == "get_study_plan" for t in school_data.TOOL_SCHEMAS))
+out = school_data.handle_tool_call("get_study_plan", {"day": "2026-09-06"})
+check("handle_tool_call routes get_study_plan",
+      "STUDY PLAN" in out and "2026-09-06" in out)
+
+# structured meets parser feeds the weekday math without changing parse_meets
+comps = school_data.meets_components("MWF 9:20-10:10AM Olin 305")
+check("structured parser exposes weekday numbers",
+      comps is not None and comps[0]["weekdays"] == [0, 2, 4])
+check("structured parser: TBA is None", school_data.meets_components("TBA") is None)
+comps = school_data.meets_components("MW 12:35-1:50PM Sears 333 + Lab W 6:30-8:30PM Olin 304")
+check("structured parser keeps the Lab component",
+      comps is not None and len(comps) == 2 and comps[1]["label"] == "Lab")
+
+# TZ discipline: on a skewed-clock node the plan still dates to Alex's day.
+plan_probe = (
+    "import school_data, sys;"
+    f"school_data.init({sp!r});"
+    "sys.stdout.write(school_data.study_plan_data()['date'])"
+)
+p = subprocess.run([sys.executable, "-c", plan_probe], capture_output=True,
+                   text=True, env=dict(os.environ, TZ=skewed),
+                   cwd=os.path.dirname(os.path.abspath(__file__)))
+check("on a skewed-clock node the plan is dated to Alex's day",
+      p.stdout.strip() == datetime.now(ZoneInfo("America/New_York")).date().isoformat())
+
+shutil.rmtree(sp, ignore_errors=True)
+school_data.init(tmp)
+
+
 # ---- missing data fail-soft ------------------------------------------
 
 print("fail-soft")

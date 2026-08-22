@@ -104,6 +104,9 @@ import weather  # noqa: E402 — local module
 # grid, workouts, routines, library) into us via /training-sync — see training_sync.py.
 import training_sync  # noqa: E402 — local module
 import school_data  # noqa: E402 — local module
+# The daily execution loop: turns school/ball/money state into ranked orders
+# and keeps the follow-through scorecard — see daily_orders.py.
+import daily_orders  # noqa: E402 — local module
 import training_schedule  # noqa: E402 — local module (pure snapshot parsing)
 
 # Video input pipeline (ffmpeg frame sampling + local Whisper transcription +
@@ -661,6 +664,19 @@ before the moment; a date-only due sends a heads-up as the day approaches. Work 
 value out from the clock in THE SITUATION RIGHT NOW, and confirm back in words ("got it —
 I'll ping you about the coach call around 3:30"). Due items appear under "Due & overdue"
 in your ambient context — when he finishes one, mark it done so it goes quiet.
+
+RUNNING HIS DAY — you are his chief of staff, not a search box. Three goals frame every
+recommendation: dominate at basketball, near-perfect grades, real income online. When he
+asks what to do ("what's next", "good morning", "what do I need to do"), call
+get_daily_orders and LEAD with the single top order and its why — a ranked list he can
+execute without thinking, not a status dump. get_study_plan is the school detail behind it
+(per-course lead windows, what the next class needs, quiz pointers, exam runway).
+In the evening, ask for the scorecard ONCE and log_scorecard what he says — streaks make
+slippage visible, and a broken streak is information, not a scolding. The moment he
+mentions sending outreach, call log_outreach_send so the +3d/+7d follow-up clock starts;
+get_scorecard shows the trend. Two lines you never cross, no matter how he asks: never
+draft anything he submits for a grade (ECON, ACCT, AIQS and MATH all ban AI on submitted
+work — study guides, quizzing and explanations are fine), and never send email, only draft.
 
 You have tools to look up what his agents have found, log quick notes to the database, and
 read/write actual notes in his Obsidian vault (folders: Schedule, Learning, Money, School,
@@ -2308,6 +2324,16 @@ def _situational_snapshot() -> str:
                              situational.calendar_lines(events, now) or ["nothing scheduled today"]))
     except Exception as e:
         print(f"situational: calendar section failed ({e})")
+
+    try:
+        # Today's ranked orders. Sits right after the schedule on purpose: assemble()
+        # drops TRAILING sections at the 1600-char cap, and "what he should do next"
+        # must outrank task/job bookkeeping when the digest is tight.
+        orders = daily_orders.brief_lines(now, limit=3)
+        if orders:
+            sections.append(("Today's orders (highest leverage first):", orders))
+    except Exception as e:
+        print(f"situational: orders section failed ({e})")
 
     try:
         open_statuses = {"idea", "evaluating", "approved", "in_progress"}
@@ -4380,6 +4406,8 @@ def _dispatch_tool_call(tool_name: str, tool_input: dict) -> str:
         return training_sync.handle_tool_call(tool_name, tool_input)
     if tool_name in school_data.TOOL_NAMES:
         return school_data.handle_tool_call(tool_name, tool_input)
+    if tool_name in daily_orders.TOOL_NAMES:
+        return daily_orders.handle_tool_call(tool_name, tool_input)
     if tool_name in ("create_email_draft", "list_email_drafts"):
         return mail_drafts.handle_tool_call(tool_name, tool_input)
     if tool_name in ("request_capability", "check_capability_requests"):
@@ -5138,6 +5166,13 @@ training_sync.init(supabase, on_update=_training_data_changed)
 TOOLS.extend(school_data.TOOL_SCHEMAS)
 TOOL_STATUS_LABELS.update(school_data.TOOL_STATUS_LABELS)
 school_data.init(VAULT_PATH)
+
+# Daily orders + scorecard. Reads school_data/august_tracker/ad_creative_pipeline/
+# training_sync and ranks the day; persists via intake's state helpers, so it
+# must init AFTER intake.init above.
+TOOLS.extend(daily_orders.TOOL_SCHEMAS)
+TOOL_STATUS_LABELS.update(daily_orders.TOOL_STATUS_LABELS)
+daily_orders.init(supabase)
 
 # ------------------------------------------------------------
 # Multi-account mail: school Gmail (its own Composio entity — see

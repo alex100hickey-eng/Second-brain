@@ -5716,6 +5716,32 @@ def suite_browser(app, live):
             os.environ["BROWSERBASE_API_KEY"] = saved_env
 
 
+
+def suite_modules(app, live):
+    """Run the standalone per-module test files (second-brain-chat/test_*.py).
+
+    These were only ever runnable by hand, so hundreds of real checks — training
+    sync, school data, daily orders, intake, mail — sat outside every `run_tests.py`
+    run and could rot silently between sessions. Each file is its own harness that
+    exits non-zero on failure, so we shell out and treat the exit code as the check;
+    the file's own tail line is surfaced as detail when it fails."""
+    section("standalone module tests (second-brain-chat/test_*.py)")
+    chat = os.path.join(ROOT, "second-brain-chat")
+    files = sorted(f for f in os.listdir(chat)
+                   if f.startswith("test_") and f.endswith(".py"))
+    check("module test files are discoverable", bool(files), chat)
+    for fname in files:
+        try:
+            r = subprocess.run([sys.executable, fname], cwd=chat,
+                               capture_output=True, text=True, timeout=300)
+        except subprocess.SubprocessError as e:
+            check(f"{fname} runs", False, str(e)[:200])
+            continue
+        tail = " | ".join((r.stdout or "").strip().splitlines()[-3:])[:300]
+        check(f"{fname} passes", r.returncode == 0,
+              tail or (r.stderr or "")[-300:])
+
+
 SUITES = {
     "vault": suite_vault,
     "gate": suite_gate,
@@ -5772,6 +5798,7 @@ SUITES = {
     "canvas": suite_canvas,
     "training": suite_training,
     "browser": suite_browser,
+    "modules": suite_modules,
 }
 
 

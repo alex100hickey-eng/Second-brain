@@ -491,10 +491,20 @@ def run_awareness_pass(force: bool = False) -> str:
         if not (window_start <= now < window_start + timedelta(minutes=PASS_INTERVAL // 60 + 20)):
             continue
         n_open = len(picture["open_tasks"])
-        if n_open == 0 and n_intake == 0 and not picture["due_soon"]:
+        # Ranked orders lead both briefs. Fail-soft and computed BEFORE the
+        # empty-day skip: a day with no tasks/intake/dues can still be a day with
+        # a quiz to prep and a follow-up to send, and that day deserves a brief.
+        order_lines = []
+        try:
+            import daily_orders
+            order_lines = (daily_orders.evening_lines(now) if cfg_key == "evening_review"
+                           else daily_orders.brief_lines(now, limit=4))
+        except Exception as e:   # a composer crash must never kill the whole pass
+            print(f"proactive: daily orders unavailable ({e})")
+        if not order_lines and n_open == 0 and n_intake == 0 and not picture["due_soon"]:
             continue   # nothing actionable — the respectful brief is no brief
-        head = []
-        for d in picture["due_soon"][:3]:
+        head = list(order_lines)
+        for d in picture["due_soon"][:max(0, 3 - len(head))]:
             head.append(f"• {_when_words(d['hours'], d['due'])}: {d['what'][:60]}")
         for t in picture["open_tasks"][:max(0, 3 - len(head))]:
             head.append(f"• open: {t[:60]}")
