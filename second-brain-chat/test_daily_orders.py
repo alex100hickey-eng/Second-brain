@@ -367,6 +367,11 @@ def test_grid_derived_window_and_bedtime():
                  and "Finishing" in o["title"]), None)
     check("order names BOTH real gym windows from the grid",
           card and "7:00am" in card["title"] and "2:30pm" in card["title"])
+    # One trip to the gym is titled in parts ("warmup", then "good drills"), so
+    # the grid yields adjacent events — they must read as one range, not three.
+    check("contiguous gym blocks merge into a single range",
+          bool(card) and "7:00am–8:00am" in card["title"]
+          and "7:00am–7:30am" not in card["title"])
     check("headline skips the bullets every card shares",
           card and "Warmup" not in card["title"] and "50/50" not in card["title"])
     check("headline keeps the differentiating work",

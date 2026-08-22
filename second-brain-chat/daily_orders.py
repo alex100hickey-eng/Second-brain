@@ -412,12 +412,20 @@ def _training_windows(p: dict, today: date) -> str:
                and any(w in (e.get("title") or "").lower() for w in _GYM_TITLE)]
     except Exception:
         return ""
-    spans, seen = [], set()
-    for e in evs:
-        span = f"{training_schedule.clock(e['start'])}–{training_schedule.clock(e['end'])}"
-        if span not in seen:
-            seen.add(span)
-            spans.append(span)
+    # Merge contiguous blocks into one range. Alex titles the parts of a session
+    # separately ("Gym · Cars/Crawls/warmup", then "Gym · good drills"), so the
+    # grid yields several adjacent events for what is one trip to the gym —
+    # listing them individually reads as three workouts and pushes the
+    # afternoon session off the end of the line.
+    merged = []
+    for e in sorted(evs, key=lambda x: x["start"]):
+        if merged and e["start"] <= merged[-1][1]:
+            if e["end"] > merged[-1][1]:
+                merged[-1][1] = e["end"]
+        else:
+            merged.append([e["start"], e["end"]])
+    spans = [f"{training_schedule.clock(s)}–{training_schedule.clock(t)}"
+             for s, t in merged]
     return " + ".join(spans[:3])
 
 
