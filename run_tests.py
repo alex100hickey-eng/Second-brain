@@ -5541,6 +5541,23 @@ def suite_training(app, live):
             check("evening: next rolls into tomorrow, labeled so 3am reads right",
                   wp2["now"] is None and wp2["next"] and wp2["next"]["day"] == "tomorrow",
                   str(wp2["next"]))
+            # Structural blocks (sleep/routines/meals) fill the v7 grid around
+            # the clock; NEXT/LATER must skip them or the widget reads "Sleep"
+            # all day. "now" stays unfiltered on purpose.
+            filt = _copy.deepcopy(snap)
+            filt["keys"]["weeklySchedule_v1"] = _json.dumps({
+                "10|1": "Sleep", "11|1": "Night routine",   # 8:00-9:00
+                "12|1": "Lunch", "13|1": "Team film",        # 9:00-10:00
+            })
+            tsync._state.update({"snapshot": filt, "undo": []})
+            wp3 = tsync.widget_payload(_dt(2026, 8, 17, 7, 30, tzinfo=tsync.LOCAL_TZ))
+            check("widget next/later skip structural blocks",
+                  wp3["next"] and wp3["next"]["label"] == "Team film"
+                  and all(i["label"] == "Team film" or i["day"] == "tomorrow"
+                          for i in [wp3["next"]] + wp3["later"]), str(wp3))
+            wp4 = tsync.widget_payload(_dt(2026, 8, 17, 8, 15, tzinfo=tsync.LOCAL_TZ))
+            check("widget 'now' still shows a structural block he's inside",
+                  wp4["now"] and wp4["now"]["label"] == "Sleep", str(wp4["now"]))
             tsync._state.update({"snapshot": None})
             check("unsynced widget payload degrades, never errors",
                   tsync.widget_payload(_dt.now(tsync.LOCAL_TZ))["connected"] is False)

@@ -939,6 +939,19 @@ def widget_token_matches(candidate: str) -> bool:
     )
 
 
+# Grid blocks that structure the day but never need anticipating. Since the
+# v7 full-week rebuild the grid carries sleep/routines/meals around the clock,
+# and without this filter the widget's NEXT/LATER slots were all "Sleep" —
+# accurate, useless. "now" stays unfiltered: knowing you're inside the night
+# routine is real information; being warned that sleep is coming is not.
+_STRUCTURAL_BLOCKS = {"sleep", "morning routine", "night routine",
+                      "lunch", "dinner"}
+
+
+def _is_structural(title: str) -> bool:
+    return (title or "").strip().lower() in _STRUCTURAL_BLOCKS
+
+
 def widget_payload(now: datetime) -> dict:
     """What the home-screen widget shows: the block he's in, what's next, and a
     couple after that. Clock strings are formatted HERE so the Scriptable side
@@ -950,12 +963,13 @@ def widget_payload(now: datetime) -> dict:
     naive = now.replace(tzinfo=None)
     events_today = training_schedule.events_for_date(p, now.date())
     current = next((e for e in events_today if e["start"] <= naive < e["end"]), None)
-    upcoming = [e for e in events_today if e["start"] > naive]
+    upcoming = [e for e in events_today
+                if e["start"] > naive and not _is_structural(e["title"])]
     # If today is running dry, keep the widget useful into the evening by
     # showing tomorrow's opening blocks (labeled, so 5:30am isn't read as PM).
     tom = now.date() + timedelta(days=1)
     tomorrow = [e for e in training_schedule.events_for_date(p, tom)
-                if e["start"].date() == tom]
+                if e["start"].date() == tom and not _is_structural(e["title"])]
     queue = ([{"e": e, "day": ""} for e in upcoming]
              + [{"e": e, "day": "tomorrow"} for e in tomorrow])
 
