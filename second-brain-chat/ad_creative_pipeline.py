@@ -984,6 +984,68 @@ def reconcile_prospect_csv(sends: dict = None, replies: dict = None) -> str:
         f" (+{len(changed) - 8} more)" if len(changed) > 8 else "")
 
 
+def sent_domains() -> dict:
+    """{domain: brand} for prospects Alex has emailed and who haven't replied.
+
+    The watch list for inbound: small by construction (only brands with a
+    sent_date and no reply yet), so the reply check is one narrow query, not a
+    mailbox scan."""
+    path = _tracker_path()
+    if not path:
+        return {}
+    out = {}
+    try:
+        with open(path, newline="", encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                if not (row.get("sent_date") or "").strip():
+                    continue
+                if (row.get("replied") or "").strip() or (row.get("outcome") or "").strip():
+                    continue
+                dom = (row.get("domain") or "").strip().lower().removeprefix("www.")
+                brand = (row.get("brand") or "").strip()
+                if dom and brand:
+                    out[dom] = brand
+    except (OSError, csv.Error):
+        return {}
+    return out
+
+
+def detect_prospect_replies(fetch, seen: set = None) -> list:
+    """Find inbound mail from brands Alex pitched. `fetch(query)` -> [msg dicts].
+
+    A prospect reply is the highest-value event the money machine can see, and
+    nothing was watching for it: the generic intake extractor has no prospect
+    category, so a "yes, send the spec pack" landed as a dateless 'ask' that no
+    nudge rule ever fires on. Matching is deterministic on the sender domain
+    against the tracker — no model call, so it cannot hallucinate a lead.
+
+    Returns [{brand, domain, sender, subject, id}]; pure detection, no writes."""
+    watch = sent_domains()
+    if not watch:
+        return []
+    seen = seen or set()
+    query = ("from:(" + " OR ".join(sorted(watch)) + ") newer_than:2d")
+    try:
+        msgs = fetch(query) or []
+    except Exception:
+        return []
+    hits = []
+    for m in msgs:
+        if not isinstance(m, dict):
+            continue
+        mid = str(m.get("messageId") or m.get("id") or "")
+        if mid and mid in seen:
+            continue
+        sender = str(m.get("sender") or m.get("from") or "").lower()
+        dom = next((d for d in watch if d in sender), None)
+        if not dom:
+            continue
+        hits.append({"brand": watch[dom], "domain": dom,
+                     "sender": m.get("sender") or "", "id": mid,
+                     "subject": str(m.get("subject") or "(no subject)")[:120]})
+    return hits
+
+
 def check_ad_pipeline(limit: int = 12) -> str:
     rows = _all_rows()
     brands = [r for r in rows if r["data"].get("kind") == "brand"]

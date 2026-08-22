@@ -5798,6 +5798,51 @@ if task_manager.RUNTIME == "server" or os.environ.get("RETENTION_LOCAL", "").low
 MAIL_SCAN_INTERVAL = int(os.environ.get("MAIL_SCAN_INTERVAL_SEC", "900"))  # 15 min
 
 
+_PROSPECT_SEEN_KEY = "prospect:replies-seen"
+
+
+def _prospect_reply_pass() -> str:
+    """Notice a prospect answering, inside one 15-minute cycle.
+
+    Studio mail forwards into personal Gmail, so a reply is already reachable —
+    but only the generic extractor saw it, and it has no prospect category, so
+    the single highest-value event in the money machine produced no nudge, left
+    the +3d follow-up clock running against a brand that had already answered,
+    and prepared nothing. This closes notice-and-prepare; SENDING stays entirely
+    Alex's, here as everywhere."""
+    hits = ad_creative_pipeline.detect_prospect_replies(
+        lambda q: mail_reader._gmail_fetch("personal", q, 15),
+        seen=set(intake._load_state(_PROSPECT_SEEN_KEY).get("ids") or []))
+    if not hits:
+        return "none"
+    st = intake._load_state(_PROSPECT_SEEN_KEY)
+    ids = list(st.get("ids") or [])
+    for h in hits:
+        try:
+            proactive.send_nudge(
+                f"prospect-reply:{h['brand']}",
+                f"💬 {h['brand']} replied",
+                f"{h['sender']}\nSubject: {h['subject']}\n\n"
+                "Open CLARVIS — I'll pull the thread and draft a response for you "
+                "to edit and send.",
+                priority="high", tags="moneybag", renudge_hours=6)
+        except Exception as e:
+            print(f"prospect-reply nudge failed: {e}")
+        if h["id"]:
+            ids.append(h["id"])
+    st["ids"] = ids[-200:]
+    intake._save_state(st)
+    # Stop the follow-up clock for anyone who answered: nagging Alex to chase a
+    # brand that already replied is worse than silence.
+    try:
+        today = datetime.now(LOCAL_TZ).date().isoformat()
+        ad_creative_pipeline.reconcile_prospect_csv(
+            replies={h["brand"].lower(): today for h in hits})
+    except Exception as e:
+        print(f"prospect-reply reconcile failed: {e}")
+    return "; ".join(h["brand"] for h in hits)
+
+
 def _mail_scan_pass() -> dict:
     """One sweep of every configured mail account. Returns {account: result}."""
     results = {}
@@ -5816,6 +5861,7 @@ def _mail_scan_pass() -> dict:
     _try("gmail_school", lambda: scan_school_gmail_intake_tool("1d", 15))
     if icloud_intake._configured():
         _try("icloud", lambda: icloud_intake.scan_icloud(days=2))
+    _try("prospect_replies", _prospect_reply_pass)
     # Beat even when individual accounts failed — those already report their own
     # warnings above. This heartbeat answers a different question: is the WORKER
     # still making passes at all? (2h staleness on a 15-min cadence.)

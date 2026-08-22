@@ -4548,6 +4548,33 @@ def suite_ad_pipeline(app, live):
             for n, fn in saved_fns.items():
                 setattr(acp, n, fn)
 
+        # --- prospect reply detection (the money machine's highest-value event) ---
+        with open(os.path.join(tmp, "Money", "prospect-tracker.csv"), "w", encoding="utf-8") as f:
+            f.write("brand,domain,category,size_band,signal,meta_page_guess,adlib_url,status,wave,"
+                    "sent_date,followup1_date,followup2_date,replied,call_date,outcome,notes\n"
+                    f"Pitched,pitched.com,pet,small,sig,pg,url,sent,1,{d4},,,,,,\n"
+                    "Answered,answered.com,pet,small,sig,pg,url,sent,1,"
+                    f"{d8},,,{d5},,,\n"
+                    "NotYet,notyet.com,pet,small,sig,pg,url,qualified,1,,,,,,,\n")
+        watch = acp.sent_domains()
+        check("watch list holds only pitched, unanswered brands",
+              watch == {"pitched.com": "Pitched"}, str(watch))
+        inbox = [{"messageId": "a1", "sender": "founder@pitched.com", "subject": "Re: idea"},
+                 {"messageId": "a2", "sender": "deals@random.com", "subject": "50% off"}]
+        hits = acp.detect_prospect_replies(lambda q: inbox)
+        check("a reply from a pitched brand is detected",
+              len(hits) == 1 and hits[0]["brand"] == "Pitched", str(hits))
+        check("unrelated mail is not a lead", all(h["brand"] != "random" for h in hits))
+        check("already-seen message ids are skipped",
+              acp.detect_prospect_replies(lambda q: inbox, seen={"a1"}) == [])
+        check("a dead mail connector yields no hits instead of raising",
+              acp.detect_prospect_replies(lambda q: (_ for _ in ()).throw(RuntimeError("x"))) == [])
+        q_seen = {}
+        acp.detect_prospect_replies(lambda q: q_seen.setdefault("q", q) and [])
+        check("the query is narrowed to watched domains, not a mailbox scan",
+              "pitched.com" in q_seen.get("q", "") and "answered.com" not in q_seen.get("q", ""),
+              q_seen.get("q", ""))
+
         # --- registration hygiene ---
         check("10 tools exported and every one has a status label",
               len(acp.TOOL_SCHEMAS) == 10 and

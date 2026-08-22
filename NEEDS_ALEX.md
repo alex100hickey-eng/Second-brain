@@ -12,6 +12,26 @@ is still yours to do.
 
 ---
 
+## 🔵 MONDAY 8/24 — three things converge on one day
+
+First day of classes, Wave 1 opens, and the Quest appointment. In order:
+
+1. **8–10 AM · Wave 1 (3 emails).** Drafts are no longer a manual relay: say
+   **"prepare wave 1 drafts"** and CLARVIS regenerates them fresh against each
+   brand's live site, writes them to `Money/outreach-drafts-wave1-<date>.md`,
+   and tells you which brands deserve a 2-minute Ad Library paste first. You
+   review, edit into your own voice, and send from the studio mailbox by hand —
+   there is still no send path in the code, by design. Then just tell CLARVIS
+   you sent them; the tracker CSV now updates itself.
+2. **9:20 AM · MATH 120, Olin 305** — first class. Quizzes start immediately
+   (prior class's material, no make-ups), so the 11:15 review block is where
+   Monday's quiz points get banked.
+3. **2:40 PM · Quest blood test** — bring the paper script. It overlaps your
+   2:30–5 gym block; move the session, don't skip the test (it gates Healthy
+   Roster and therefore participation).
+
+Your wake-time brief (6:30 AM Mon) now leads with these automatically.
+
 ## ✅ 2026-08-21 — THE GATE IS PASSED: mail-tester 10/10, Wave 1 is cleared
 
 Run Friday 8/21 ~5:45 PM with a real pitch-shaped email (subject "quick idea for
@@ -153,8 +173,10 @@ you can do, ordered by deadline pressure:
    web version) — 3 ACCT homeworks + both projects need it; Prep 1 lands 9/4.
 7. **Print ACCT Class 1+2 lecture packets** from Canvas; calculator; PollEverywhere
    on your phone (ECON attendance from day 1).
-8. **Sickle cell**: test Saturday, or faster — call your pediatrician for your
-   newborn-screening record. Emily Randall email is drafted in your school Gmail.
+8. **Sickle cell**: Quest is booked **Mon 8/24, 2:40 PM** — bring the paper
+   script; it overlaps your 2:30–5 gym block, so that session shifts. The Emily
+   Randall email was SENT 8/22 (not a draft any more); a pediatrician
+   newborn-screening record can still substitute if it lands first.
    Teamworks has TWO forms waiting (NCAA statement + Business Office).
 
 Every exam and hard deadline from all four syllabi is already in your training
