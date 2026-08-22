@@ -80,8 +80,11 @@ DEFAULT_CONFIG = {
     "quiet_start": "22:00",   # local time, inclusive
     "quiet_end": "08:00",     # local time, exclusive
     "max_per_day": 8,
-    "morning_brief": "08:15",  # "" disables
+    "morning_brief": "wake",   # HH:MM, or "wake" = the day's wake time from the
+                               # training grid (falls back to 08:15 on a blank
+                               # day, e.g. weekends); "" disables
     "evening_review": "20:30",  # "" disables
+    "session_nudges": True,     # kickoff ping at the start of study/work blocks
     "max_per_concern": 2,       # lifetime sends per concern within the window
     "renudge_after_hours": 20,  # min gap between sends of the same concern
     "concern_window_days": 7,   # after this quiet, a concern may earn 2 more
@@ -193,6 +196,42 @@ def _in_quiet_hours(cfg: dict) -> bool:
 
 
 # ============================================================
+# Training-grid awareness (wake time + study/work sessions)
+# ============================================================
+
+_WAKE_RE = _re.compile(r"^\s*wake\b", _re.I)
+_SESSION_RE = _re.compile(r"study|review", _re.I)
+
+
+def _today_blocks(now) -> list:
+    """Today's schedule blocks from the training grid ({title,start,end} with
+    naive local datetimes). Fail-soft: any problem returns [] and the callers
+    fall back to their grid-less behavior."""
+    try:
+        import training_schedule
+        import training_sync
+        return training_schedule.events_for_date(training_sync.parsed(), now.date())
+    except Exception as e:
+        print(f"proactive: training grid unavailable ({e})")
+        return []
+
+
+def _wake_target(now, blocks):
+    """(hour, minute, from_grid) for the 'wake'-mode morning brief. The grid's
+    'Wake …' cell names the moment (its slot start); failing that, the first
+    non-Sleep block starting today; a blank day (weekend, sync gap) falls back
+    to 08:15 with from_grid=False so quiet hours stay in force."""
+    for ev in blocks:
+        if _WAKE_RE.match(ev.get("title") or "") and ev["start"].date() == now.date():
+            return ev["start"].hour, ev["start"].minute, True
+    for ev in blocks:
+        title = (ev.get("title") or "").strip().lower()
+        if title and not title.startswith("sleep") and ev["start"].date() == now.date():
+            return ev["start"].hour, ev["start"].minute, True
+    return 8, 15, False
+
+
+# ============================================================
 # Delivery — ntfy.sh (fail-soft; disabled without a topic)
 # ============================================================
 
@@ -217,13 +256,16 @@ _sender = _post_ntfy   # test seam
 
 def send_nudge(key: str, title: str, body: str, priority: str = "default",
                tags: str = "brain", force: bool = False, recurring: bool = False,
-               renudge_hours: float = None) -> str:
+               renudge_hours: float = None, quiet_exempt: bool = False) -> str:
     """The ONLY door to Alex's phone. Applies every respect rule, then sends.
 
     `recurring=True` marks a daily window (morning brief) — exempt from the
     per-concern lifetime cap but still spaced by renudge_after_hours.
     `renudge_hours` overrides the spacing for this call (e.g. a deadline nudge
-    that's allowed one escalation a few hours before it's due)."""
+    that's allowed one escalation a few hours before it's due).
+    `quiet_exempt=True` skips ONLY the quiet-hours check (every other rule
+    still applies) — for the wake-time brief, which by definition lands at a
+    moment quiet hours would cover. Grant it to nothing else lightly."""
     cfg = get_config()
     topic = os.environ.get("NTFY_TOPIC", "")
     st = _sent_state()
@@ -238,7 +280,7 @@ def send_nudge(key: str, title: str, body: str, priority: str = "default",
         reason = "notifications disabled"
     elif not topic:
         reason = "no NTFY_TOPIC configured"
-    elif not force and _in_quiet_hours(cfg):
+    elif not force and not quiet_exempt and _in_quiet_hours(cfg):
         reason = "quiet hours"
     elif not force and st.get("day_sent", 0) >= int(cfg.get("max_per_day", 8)):
         reason = "daily cap reached"
@@ -478,15 +520,23 @@ def run_awareness_pass(force: bool = False) -> str:
 
     # 3. Morning brief / evening review windows (recurring; skipped entirely on
     #    an empty day — "0 open, 0 due" is not a notification, it's noise).
+    today_blocks = _today_blocks(now)
     for label, cfg_key, emoji in (("morning brief", "morning_brief", "🌅"),
                                   ("evening review", "evening_review", "🌆")):
         target = cfg.get(cfg_key) or ""
         if not target:
             continue
-        try:
-            t_h, t_m = map(int, target.split(":"))
-        except ValueError:
-            continue
+        # "wake" mode: the brief lands when the grid says Alex wakes (6:30 one
+        # day, 7:00 the next) — inside default quiet hours by design, hence
+        # quiet_exempt below. A grid-less day keeps quiet hours in force.
+        at_wake = False
+        if cfg_key == "morning_brief" and target.strip().lower() == "wake":
+            t_h, t_m, at_wake = _wake_target(now, today_blocks)
+        else:
+            try:
+                t_h, t_m = map(int, target.split(":"))
+            except ValueError:
+                continue
         window_start = now.replace(hour=t_h, minute=t_m, second=0, microsecond=0)
         if not (window_start <= now < window_start + timedelta(minutes=PASS_INTERVAL // 60 + 20)):
             continue
@@ -519,7 +569,39 @@ def run_awareness_pass(force: bool = False) -> str:
             f"{cfg_key}:{now.strftime('%Y-%m-%d')}", title,
             "\n".join(head + tail),
             tags="sunrise" if "morning" in cfg_key else "city_sunset",
-            force=force, recurring=True))
+            force=force, recurring=True, quiet_exempt=at_wake))
+
+    # 4. Session kickoffs — Alex's rule: he and CLARVIS sync at the START of
+    #    every study/work block, not just once a day. Any grid block whose
+    #    title mentions study or review gets one ping as its window opens.
+    #    Keys carry date+clock so each block is its own concern (one send per
+    #    block per day; a day's second session is a different key).
+    if cfg.get("session_nudges", True):
+        for ev in today_blocks:
+            title_txt = (ev.get("title") or "").strip()
+            if not _SESSION_RE.search(title_txt):
+                continue
+            start = ev["start"]
+            if start.date() != now.date():
+                continue          # a spill-over block already had its ping
+            window_start = now.replace(hour=start.hour, minute=start.minute,
+                                       second=0, microsecond=0)
+            if not (window_start <= now < window_start
+                    + timedelta(minutes=PASS_INTERVAL // 60 + 20)):
+                continue
+            lines = []
+            try:
+                import daily_orders
+                lines = daily_orders.brief_lines(now, limit=3)
+            except Exception as e:
+                print(f"proactive: daily orders unavailable ({e})")
+            body = "\n".join(
+                [title_txt] + lines +
+                ["Open CLARVIS — one minute to lock what this session is for."])
+            actions.append(send_nudge(
+                f"session:{now.strftime('%Y-%m-%d')}:{start.strftime('%H:%M')}",
+                f"📚 Session start — {title_txt[:60]}",
+                body, tags="books", force=force, recurring=True))
 
     sent = sum(1 for a in actions if a.startswith("Nudge sent"))
     # Heartbeat: a pass that decides to send NOTHING is still a completed pass —
@@ -570,6 +652,7 @@ def status_text() -> str:
              f"quiet {cfg['quiet_start']}–{cfg['quiet_end']}, max {cfg['max_per_day']}/day, "
              f"{cfg['max_per_concern']}x per concern per {cfg['concern_window_days']}d, "
              f"brief {cfg['morning_brief'] or 'off'}, review {cfg['evening_review'] or 'off'}, "
+             f"session pings {'on' if cfg.get('session_nudges', True) else 'off'}, "
              f"channel {'configured' if os.environ.get('NTFY_TOPIC') else 'NOT CONFIGURED'}. "
              f"Sent today: {st.get('day_sent', 0)}; tracked concerns: {len(st.get('concerns', {}))}."]
     for n in recent[:8]:
@@ -594,8 +677,13 @@ TOOL_SCHEMAS = [
             "quiet_start": {"type": "string", "description": "HH:MM local"},
             "quiet_end": {"type": "string", "description": "HH:MM local"},
             "max_per_day": {"type": "integer"},
-            "morning_brief": {"type": "string", "description": "HH:MM or '' to disable"},
+            "morning_brief": {"type": "string",
+                              "description": "HH:MM, 'wake' (fires at the day's wake time "
+                                             "from the training grid), or '' to disable"},
             "evening_review": {"type": "string", "description": "HH:MM or '' to disable"},
+            "session_nudges": {"type": "boolean",
+                               "description": "Ping at the start of every study/review "
+                                              "block on the training grid (default on)"},
             "max_per_concern": {"type": "integer",
                                 "description": "Lifetime nudges per concern in the window (default 2)"},
             "renudge_after_hours": {"type": "integer",

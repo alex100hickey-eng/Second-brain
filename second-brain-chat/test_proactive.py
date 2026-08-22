@@ -340,6 +340,82 @@ def test_pileup_growth_gate():
           sum(1 for s in spy.sent if "triage" in s["title"]) == 2)
 
 
+def test_wake_and_sessions():
+    print("\n=== 8. wake-time brief + session kickoffs ===")
+    now = datetime.now()
+
+    def blk(h, m, title, dur_min=30):
+        s = now.replace(hour=h, minute=m, second=0, microsecond=0)
+        return {"title": title, "start": s, "end": s + timedelta(minutes=dur_min)}
+
+    # _wake_target resolution ladder
+    wake_blocks = [blk(6, 30, "Wake 6:30 · morning routine → 7:00"),
+                   blk(9, 0, "MATH 120 · 9:20–10:10 · Olin 305")]
+    check("wake cell names the moment",
+          proactive._wake_target(now, wake_blocks) == (6, 30, True))
+    no_wake = [blk(3, 0, "Sleep 10:00 → wake"), blk(10, 0, "ACCT 100 · PBL 201")]
+    check("no wake cell → first non-Sleep block",
+          proactive._wake_target(now, no_wake) == (10, 0, True))
+    check("blank day → 08:15 fallback, quiet hours kept",
+          proactive._wake_target(now, []) == (8, 15, False))
+
+    # Wake-mode brief fires INSIDE quiet hours (that is the whole point) …
+    busy = FakeTracker()
+    busy.top_by_priority = lambda limit=10: [
+        {"id": 3, "title": "Ship the taste-pass pack", "status": "in_progress"}]
+    sb, spy = _reset(tracker=busy)
+    proactive.set_config(morning_brief="wake", evening_review="")
+    _quiet_config_now(active=True)
+    real_blocks = proactive._today_blocks
+    proactive._today_blocks = lambda n: [blk(n.hour, n.minute, "Wake · morning routine")]
+    try:
+        proactive.run_awareness_pass()
+        check("wake-mode brief pierces quiet hours",
+              any("Today:" in s["title"] for s in spy.sent))
+
+        # … but the 08:15 fallback does NOT (grid-less day, quiet stays law).
+        sb, spy = _reset(tracker=busy)
+        proactive.set_config(morning_brief="wake", evening_review="",
+                             quiet_start="08:00", quiet_end="09:00")
+        proactive._today_blocks = lambda n: []
+        real_now = proactive._now
+        proactive._now = lambda: datetime.now().replace(hour=8, minute=20)
+        try:
+            proactive.run_awareness_pass()
+            check("grid-less fallback still respects quiet hours", spy.sent == [])
+        finally:
+            proactive._now = real_now
+
+        # Session kickoff: study block starting now pings once, exactly once.
+        tracker = FakeTracker()
+        tracker.top_by_priority = lambda limit=10: []
+        sb, spy = _reset(tracker=tracker)
+        proactive.set_config(morning_brief="", evening_review="")
+        _quiet_config_now(active=False)
+        proactive._today_blocks = lambda n: [
+            blk(n.hour, n.minute, "Class review + study 1:50–2:40"),
+            blk(n.hour, n.minute, "Gym · 3:00–7:00"),               # not a session
+            blk((n.hour + 3) % 24, n.minute, "Study / work later"),  # outside window
+        ]
+        proactive.run_awareness_pass()
+        pings = [s for s in spy.sent if "Session start" in s["title"]]
+        check("study block starting now → one kickoff ping", len(pings) == 1)
+        check("gym / future blocks stay silent", len(spy.sent) == 1)
+        proactive.run_awareness_pass()
+        check("kickoff is one-shot per block",
+              sum(1 for s in spy.sent if "Session start" in s["title"]) == 1)
+
+        # Kill switch.
+        sb, spy = _reset(tracker=tracker)
+        proactive.set_config(morning_brief="", evening_review="", session_nudges=False)
+        _quiet_config_now(active=False)
+        proactive._today_blocks = lambda n: [blk(n.hour, n.minute, "Study / work")]
+        proactive.run_awareness_pass()
+        check("session_nudges=False disables kickoffs", spy.sent == [])
+    finally:
+        proactive._today_blocks = real_blocks
+
+
 # ============================================================
 if __name__ == "__main__":
     test_config()
@@ -350,6 +426,7 @@ if __name__ == "__main__":
     test_awareness_pass()
     test_concern_caps()
     test_pileup_growth_gate()
+    test_wake_and_sessions()
     total, passed = len(_results), sum(_results)
     print("\n" + "=" * 48)
     print(f"{passed}/{total} checks passed")
