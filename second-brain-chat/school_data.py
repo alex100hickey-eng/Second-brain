@@ -323,6 +323,11 @@ _EXAM_WORD_RE = re.compile(r"\b(exam|test|final)\b", re.IGNORECASE)
 _HOLIDAY_RE = re.compile(r"labor day|fall break|thanksgiving", re.IGNORECASE)
 
 _UNKNOWN_LOAD_LINE = "{code}: syllabus still unpublished — unknown load"
+# Deadlines synced from Canvas but no curriculum imported: real dates, no topic
+# map. Saying "nothing in the lead window" here would be a lie by omission on
+# the heaviest course of the semester.
+_PARTIAL_LOAD_LINE = ("{code}: deadlines synced, but no curriculum imported — "
+                      "plan is partial; drop the syllabus in School/Intake")
 
 
 def _lead_days(course_row) -> int:
@@ -437,16 +442,48 @@ def _assignment_line(d, r) -> str:
 def _quiz_pointer(for_date, class_days, exam_days):
     """MATH's daily quiz always covers the PRIOR class's material and the
     weekly Canvas problem list is the only source — there is no per-class
-    topic schedule, so this never names a topic. Fires only when tomorrow is
-    an actual (non-test) class day: that's the night the quiz prep matters."""
+    topic schedule, so this never names a topic.
+
+    Two modes, because the quiz is graded work with no make-ups and both
+    surfaces that could warn about it were blind:
+      * TONIGHT — tomorrow is a class day: prep window (the original mode).
+      * TODAY — for_date is itself a class day: the wake brief composes for
+        today, so on a Mon/Wed/Fri (where tomorrow is NOT a class day) the
+        quiz-morning brief carried no quiz line at all.
+    Returns (line, is_today) so the caller can rank a same-day graded quiz
+    above generic prep."""
     nxt = for_date + timedelta(days=1)
-    if nxt not in class_days or nxt in exam_days:
-        return None
-    prev = [d for d in class_days if d <= for_date]
-    if not prev:
-        return None
-    return (f"MATH quiz next class covers {_fmt_day(prev[-1])}'s material — "
-            "this week's Canvas problem list")
+    prev = [d for d in class_days if d < for_date]
+    if for_date in class_days and for_date not in exam_days and prev:
+        return (f"TODAY'S MATH quiz covers {_fmt_day(prev[-1])}'s material — "
+                "this week's Canvas problem list"), True
+    if nxt in class_days and nxt not in exam_days:
+        prior = [d for d in class_days if d <= for_date]
+        if prior:
+            return (f"MATH quiz next class covers {_fmt_day(prior[-1])}'s material — "
+                    "this week's Canvas problem list"), False
+    return None, False
+
+
+def courses_meeting_on(d=None) -> list:
+    """Course codes that meet on date d (default today), in start-time order.
+
+    The nightly check-in uses this to ask "which of these did you actually
+    study?" — naming the day's real classes is what turns a vague prompt into
+    a one-word answer, and a one-word answer is what fills the review ledger."""
+    d = d or datetime.now(LOCAL_TZ).date()
+    courses = _load("courses") or []
+    out = []
+    for c in courses:
+        code = (c.get("course") or "").strip()
+        comps = meets_components(c.get("meets") or "")
+        if not code or not comps:
+            continue
+        for comp in comps:
+            if comp.get("weekdays") and d.weekday() in comp["weekdays"]:
+                out.append(((comp.get("start") or "99:99"), code))
+                break
+    return [code for _, code in sorted(set(out))]
 
 
 def _collect_exams(courses, curriculum, assignments, for_date):
@@ -518,7 +555,7 @@ def study_plan_data(for_date=None) -> dict:
     assignments = _load("assignments.csv")
     class_days = _class_day_map(courses, curriculum)
 
-    per_course, unknown = {}, []
+    per_course, unknown, partial = {}, [], []
     for c in sorted(courses, key=lambda c: (c.get("course") or "")):
         code = (c.get("course") or "").strip()
         cur_rows = _course_curriculum(curriculum, code)
@@ -528,6 +565,12 @@ def study_plan_data(for_date=None) -> dict:
             # honest answer; "nothing due" would be a lie.
             unknown.append(code)
             continue
+        if not cur_rows:
+            # Canvas deadlines exist but no curriculum was ever imported. The
+            # old flag flipped off at the FIRST synced row, so the heaviest
+            # course could quietly plan on partial data. Deadlines are real
+            # here; topic/lead-window planning is not.
+            partial.append(code)
 
         cdays = class_days.get(code) or []
         next_class = next((d for d in cdays if d > for_date), None)
@@ -538,15 +581,16 @@ def study_plan_data(for_date=None) -> dict:
         # date itself, so "on or before" naturally counts them for that class.
         before_next = [_assignment_line(d, r) for d, r in open_rows
                        if next_class and for_date <= d <= next_class]
-        pointer = None
+        pointer, quiz_today = None, False
         if code == "MATH120":
             exam_days = {d for d, r in cur_rows if _row_is_exam(r)}
-            pointer = _quiz_pointer(for_date, cdays, exam_days)
+            pointer, quiz_today = _quiz_pointer(for_date, cdays, exam_days)
         per_course[code] = {
             "due_soon": due_soon,
             "before_next_class": before_next,
             "next_class": next_class.isoformat() if next_class else None,
             "quiz_pointer": pointer,
+            "quiz_today": quiz_today,
         }
 
     exams = _collect_exams(courses, curriculum, assignments, for_date)
@@ -569,6 +613,8 @@ def study_plan_data(for_date=None) -> dict:
             lines.append("  nothing in the lead window")
     for code in unknown:
         lines.append(_UNKNOWN_LOAD_LINE.format(code=code))
+    for code in partial:
+        lines.append(_PARTIAL_LOAD_LINE.format(code=code))
     if exams:
         lines.append("EXAMS WITHIN 30 DAYS:")
         for e in exams:
@@ -576,7 +622,8 @@ def study_plan_data(for_date=None) -> dict:
                          f"{_fmt_day(_parse_date(e['date']))} ({e['days_out']}d out)")
 
     return {"date": for_date.isoformat(), "lines": lines,
-            "per_course": per_course, "exams": exams, "unknown": unknown}
+            "per_course": per_course, "exams": exams, "unknown": unknown,
+            "partial": partial}
 
 
 def study_plan(day: str = "") -> str:
@@ -766,6 +813,148 @@ def log_study_review_tool(course: str, topic: str, confidence=3,
     return out
 
 
+def mark_prepared_tool(course: str, through: str) -> str:
+    """Advance a course's prepared_through — the pace engine's only input.
+
+    PACE compares prepared_through against a lead target, but no code could ever
+    write that column, so from the first day of classes it decayed a day per day
+    and every course would read "BEHIND the lecture" no matter what Alex did.
+    school_status also derives a floor from reviewed topics; this is the explicit
+    path for "I prepped through Friday's econ".
+
+    Same guards as the review-log writer: local node only, canonical course,
+    atomic replace. It touches exactly one column of one row."""
+    if _RUNTIME != "local":
+        return ("Course files are only writable on the Mac node — say this again "
+                "there, or I'll pick it up from your logged reviews.")
+    code = _canonical_course(course)
+    if not code:
+        return _unknown_course_msg(course)
+    d = _parse_date(through)
+    if not d:
+        return f"Couldn't read '{through}' as a date — try YYYY-MM-DD or 'Sep 12'."
+
+    path = os.path.join(_SCHOOL_DIR or "", "courses.csv")
+    try:
+        with open(path, newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            cols = reader.fieldnames or []
+            rows = list(reader)
+    except OSError as e:
+        return f"couldn't read courses.csv: {e} — nothing changed."
+    if "prepared_through" not in cols:
+        return "courses.csv has no prepared_through column — nothing changed."
+
+    prev = None
+    for r in rows:
+        if (r.get("course") or "").strip().lower() == code.lower():
+            prev = (r.get("prepared_through") or "").strip()
+            r["prepared_through"] = d.isoformat()
+            break
+    else:
+        return _unknown_course_msg(course)
+
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=cols, extrasaction="ignore")
+            w.writeheader()
+            for r in rows:
+                w.writerow({c: (r.get(c) or "") for c in cols})
+        os.replace(tmp, path)
+    except OSError as e:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        return f"couldn't write courses.csv: {e} — nothing changed."
+
+    lead = (d - datetime.now(LOCAL_TZ).date()).days
+    return (f"{code} prepared through {d.isoformat()}"
+            + (f" (was {prev})" if prev else "")
+            + f" — that's {lead:+d}d against the lecture.")
+
+
+def reviews_due(course: str = "", limit: int = 3) -> list:
+    """Topics whose spaced-review date has arrived, soonest-overdue first, as
+    short strings. The list surface for callers that want the queue without the
+    full report (daily orders, session pings)."""
+    today = datetime.now(LOCAL_TZ).date()
+    want = (course or "").strip().lower()
+    reviews = _load(_REVIEW_LOG)
+    assignments = _load("assignments.csv")
+    if want:
+        reviews = [r for r in reviews if want in (r.get("course") or "").lower()]
+        assignments = [a for a in assignments if want in (a.get("course") or "").lower()]
+    next_exam = _next_review_exams(assignments, today)
+    due = []
+    for r in reviews:
+        nd = _effective_next_due(r, next_exam, today)
+        if nd and nd <= today:
+            due.append((nd, r))
+    due.sort(key=lambda t: t[0])
+    out = []
+    for nd, r in due[:limit]:
+        od = (today - nd).days
+        line = f"{(r.get('course') or '').strip()}: {(r.get('topic') or '').strip()}"
+        out.append(line + (f" ({od}d overdue)" if od > 0 else ""))
+    return out
+
+
+def session_targets(block_start=None, for_date=None) -> list:
+    """What a study block starting at block_start should actually serve.
+
+    Alex dictates WHEN he studies; this only answers WHAT — so the placement
+    rule is untouched. Two sources, in priority order:
+      1. courses that already met earlier today → same-day review (which for
+         MATH is literally tomorrow's quiz material),
+      2. per-course work due before that course's next class.
+    Returns short strings, most valuable first."""
+    d = for_date or datetime.now(LOCAL_TZ).date()
+    targets, seen = [], set()
+
+    met = []
+    for c in _load("courses") or []:
+        code = (c.get("course") or "").strip()
+        comps = meets_components(c.get("meets") or "")
+        if not code or not comps:
+            continue
+        for comp in comps:
+            if not comp.get("weekdays") or d.weekday() not in comp["weekdays"]:
+                continue
+            start = comp.get("start") or ""
+            if block_start is not None and start:
+                try:
+                    h, m = (int(x) for x in start.split(":")[:2])
+                    if (h, m) >= (block_start.hour, block_start.minute):
+                        continue          # class hasn't happened yet
+                except ValueError:
+                    pass
+            met.append((start or "99:99", code))
+            break
+    for _, code in sorted(set(met)):
+        if code in seen:
+            continue
+        seen.add(code)
+        extra = ""
+        if code == "MATH120":
+            extra = " (today's class → next class's quiz)"
+        targets.append(f"review {code}{extra}")
+
+    try:
+        plan = study_plan_data(d)
+    except Exception:
+        plan = {}
+    for code, info in (plan.get("per_course") or {}).items():
+        items = info.get("before_next_class") or []
+        if not items:
+            continue
+        nc = info.get("next_class") or ""
+        targets.append(f"{code}: {str(items[0])[:60]}"
+                       + (f" (next class {nc[5:]})" if nc else ""))
+    return targets[:4]
+
+
 def get_review_status_tool(course: str = "") -> str:
     today = datetime.now(LOCAL_TZ).date()
     want = (course or "").strip().lower()
@@ -952,6 +1141,29 @@ TOOL_SCHEMAS = [
         },
     },
     {
+        "name": "mark_prepared",
+        "description": (
+            "Record how far ahead Alex is prepared in a course — sets "
+            "prepared_through in School/courses.csv, the input the PACE "
+            "section compares against his lead target. Call it when he says "
+            "he's read/prepped THROUGH a point ('done through Friday's econ', "
+            "'read ahead to chapter 5', 'caught up in math'), which is "
+            "different from log_study_review (a specific topic recalled). "
+            "Writes only work on the Mac node."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "course": {"type": "string",
+                           "description": "Course code, e.g. ECON103."},
+                "through": {"type": "string",
+                            "description": "The lecture/date he's prepared "
+                                           "through: YYYY-MM-DD or 'Sep 12'."},
+            },
+            "required": ["course", "through"],
+        },
+    },
+    {
         "name": "get_review_status",
         "description": (
             "His spaced-repetition queue from School/review-log.csv: every "
@@ -983,6 +1195,7 @@ TOOL_STATUS_LABELS = {
     "get_study_plan": "Building your study plan…",
     "log_study_review": "Logging that review…",
     "get_review_status": "Checking your review queue…",
+    "mark_prepared": "Updating how far ahead you are…",
 }
 
 
@@ -1002,4 +1215,7 @@ def handle_tool_call(tool_name: str, tool_input: dict) -> str:
             tool_input.get("confidence", 3), tool_input.get("notes", "") or "")
     if tool_name == "get_review_status":
         return get_review_status_tool(tool_input.get("course", ""))
+    if tool_name == "mark_prepared":
+        return mark_prepared_tool(tool_input.get("course", ""),
+                                  tool_input.get("through", ""))
     return f"unknown tool {tool_name}"

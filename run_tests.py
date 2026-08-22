@@ -3373,7 +3373,7 @@ def suite_weather(app, live):
 def suite_situational(app, live):
     section("situational awareness (RIGHT NOW block: format / assemble / cache / fail-soft)")
     import situational
-    from datetime import datetime
+    from datetime import datetime, timedelta
 
     now = datetime(2026, 8, 7, 14, 30)  # Friday 2:30 PM, fixed for determinism
 
@@ -3440,8 +3440,15 @@ def suite_situational(app, live):
     # ---- app-level assembly with stubbed sources ----------------------------
     saved = (app.get_today_events, app.get_pending_actions, app._calendar_cache["events"])
     try:
-        app._calendar_cache["events"] = [future]  # a fetch has succeeded
-        app.get_today_events = lambda: [future]
+        # Relative to the real clock: the app path formats against datetime.now(),
+        # so a hardcoded date would eventually land in the past and get collapsed
+        # into the "earlier blocks done" count.
+        _soon = datetime.now().replace(microsecond=0) + timedelta(hours=2)
+        live_future = {"title": "Practice",
+                       "start": _soon.isoformat(),
+                       "end": (_soon + timedelta(hours=1)).isoformat()}
+        app._calendar_cache["events"] = [live_future]  # a fetch has succeeded
+        app.get_today_events = lambda: [live_future]
         app.get_pending_actions = lambda: [1, 2]
         snap = app._situational_snapshot()
         check("app snapshot includes calendar", "Practice" in snap, snap[:200])
@@ -4527,6 +4534,8 @@ def suite_ad_pipeline(app, live):
                                     "client_approved_proof": False},
             "draft_outreach": {"brand": "X", "variant": "first_touch"},
             "check_ad_pipeline": {"limit": 3},
+            "prepare_wave_drafts": {"wave": 1, "count": 3, "ad_library_notes": ""},
+            "reconcile_prospect_csv": {},
         }
         saved_fns = {n: getattr(acp, n) for n in sample_inputs}
         try:
@@ -4534,16 +4543,16 @@ def suite_ad_pipeline(app, live):
                 setattr(acp, n, (lambda _n: lambda **kw: f"SENTINEL:{_n}")(n))
             ok = all(app.handle_tool_call(n, inp) == f"SENTINEL:{n}"
                      for n, inp in sample_inputs.items())
-            check("app.handle_tool_call routes all 8 ad tools with the right kwargs", ok)
+            check("app.handle_tool_call routes all 10 ad tools with the right kwargs", ok)
         finally:
             for n, fn in saved_fns.items():
                 setattr(acp, n, fn)
 
         # --- registration hygiene ---
-        check("8 tools exported and every one has a status label",
-              len(acp.TOOL_SCHEMAS) == 8 and
+        check("10 tools exported and every one has a status label",
+              len(acp.TOOL_SCHEMAS) == 10 and
               all(t["name"] in acp.TOOL_STATUS_LABELS for t in acp.TOOL_SCHEMAS))
-        check("all 8 tools are registered in the live app TOOLS list",
+        check("all 10 tools are registered in the live app TOOLS list",
               all(any(t.get("name") == s["name"] for t in app.TOOLS) for s in acp.TOOL_SCHEMAS))
         check("ad_pipeline rows are hidden from the public outputs feed",
               "ad_pipeline" in app.INTERNAL_AGENT_NAMES)

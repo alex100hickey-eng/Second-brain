@@ -75,6 +75,43 @@ def date(s):
     return None
 
 
+def effective_prepared(course_row, curriculum, reviews):
+    """How far ahead a course is ACTUALLY prepared, derived, never guessed.
+
+    courses.csv's prepared_through is hand-set and no code writes it, so on its
+    own it decays a day per day: within a week every course reads "BEHIND the
+    lecture" whatever Alex did, and DO NEXT nags on false data — the exact
+    failure that gets a proactive assistant muted. So take the LATEST of:
+      * the stored prepared_through (Alex's own explicit statement),
+      * the last curriculum topic flagged prepared=y,
+      * the last curriculum topic that appears in review-log.csv — reviewing a
+        lecture's topic means being prepared through that lecture's date.
+    Read-only: this writes nothing, so courses.csv stays Alex-owned."""
+    code = (course_row.get("course") or course_row.get("code") or "").strip().lower()
+    best = date(course_row.get("prepared_through"))
+
+    def bump(d):
+        nonlocal best
+        if d and (best is None or d > best):
+            best = d
+
+    reviewed = {(r.get("topic") or "").strip().lower()
+                for r in reviews
+                if (r.get("course") or "").strip().lower() == code
+                and (r.get("topic") or "").strip()}
+    for r in curriculum:
+        if (r.get("course") or "").strip().lower() != code:
+            continue
+        d = date(r.get("date"))
+        if not d:
+            continue
+        if (r.get("prepared", "") or "").strip().lower() in ("y", "yes", "1", "true"):
+            bump(d)
+        elif (r.get("topic") or "").strip().lower() in reviewed:
+            bump(d)
+    return best
+
+
 def section(title):
     print(f"\n{color(title, 'bold')}")
     print(color("─" * len(title), "dim"))
@@ -183,7 +220,7 @@ def main():
               if int((c.get("lead_target_days") or "0").strip() or 0) > 0]:
         code = c.get("course") or c.get("code") or "?"
         target = int((c.get("lead_target_days") or "0").strip() or 0)
-        prepared = date(c.get("prepared_through"))
+        prepared = effective_prepared(c, curriculum, reviews)
         if not prepared:
             print(f"  {code:<10} {color('prepared_through not set', 'dim')} "
                   f"(target: {target}d ahead)")
@@ -310,8 +347,8 @@ def main():
     else:
         print("  1. Nothing due — use the clear runway to extend your lead")
     behind = [c for c in courses
-              if date(c.get("prepared_through"))
-              and (date(c["prepared_through"]) - today).days
+              if effective_prepared(c, curriculum, reviews)
+              and (effective_prepared(c, curriculum, reviews) - today).days
               < int((c.get("lead_target_days") or "0").strip() or 0)]
     if behind:
         print(f"  2. Close the pace gap in: "

@@ -201,6 +201,10 @@ def _in_quiet_hours(cfg: dict) -> bool:
 
 _WAKE_RE = _re.compile(r"^\s*wake\b", _re.I)
 _SESSION_RE = _re.compile(r"study|review", _re.I)
+# 50/50 is Alex's one hard shooting metric. Its log sat empty for weeks not
+# because the tool was missing but because nothing asked at the moment he had
+# the numbers in his head — so this fires at the block's END, not its start.
+_5050_RE = _re.compile(r"50\s*/\s*50", _re.I)
 
 
 def _today_blocks(now) -> list:
@@ -589,19 +593,63 @@ def run_awareness_pass(force: bool = False) -> str:
             if not (window_start <= now < window_start
                     + timedelta(minutes=PASS_INTERVAL // 60 + 20)):
                 continue
-            lines = []
+            # What this block should SERVE — computed, not asked. Alex places
+            # the block; naming its target removes a decision he was making
+            # 10-15x a week. Falls back to the generic orders if school data
+            # is unavailable (weekend, sync gap, pre-semester).
+            lines, targeted = [], False
             try:
-                import daily_orders
-                lines = daily_orders.brief_lines(now, limit=3)
+                import school_data
+                targets = school_data.session_targets(block_start=start)
+                due = school_data.reviews_due(limit=2)
+                if targets:
+                    lines = [f"• {t}" for t in targets]
+                    targeted = True
+                if due:
+                    lines += [f"• due for recall: {t}" for t in due]
+                    targeted = True
             except Exception as e:
-                print(f"proactive: daily orders unavailable ({e})")
+                print(f"proactive: session targets unavailable ({e})")
+            if not targeted:
+                try:
+                    import daily_orders
+                    lines = daily_orders.brief_lines(now, limit=3)
+                except Exception as e:
+                    print(f"proactive: daily orders unavailable ({e})")
             body = "\n".join(
                 [title_txt] + lines +
-                ["Open CLARVIS — one minute to lock what this session is for."])
+                ["Open CLARVIS if you want it broken down."])
             actions.append(send_nudge(
                 f"session:{now.strftime('%Y-%m-%d')}:{start.strftime('%H:%M')}",
                 f"📚 Session start — {title_txt[:60]}",
                 body, tags="books", force=force, recurring=True))
+
+    # 5. 50/50 capture — at the END of a shooting block, while the numbers are
+    #    still in his head. Skipped the moment today's row exists.
+    if cfg.get("session_nudges", True):
+        for ev in today_blocks:
+            if not _5050_RE.search(ev.get("title") or ""):
+                continue
+            end = ev["end"]
+            if end.date() != now.date():
+                continue
+            window_start = now.replace(hour=end.hour, minute=end.minute,
+                                       second=0, microsecond=0)
+            if not (window_start <= now < window_start
+                    + timedelta(minutes=PASS_INTERVAL // 60 + 20)):
+                continue
+            try:
+                import training_sync
+                if training_sync.logged_5050_on(now):
+                    continue
+            except Exception as e:
+                print(f"proactive: 50/50 check unavailable ({e})")
+            actions.append(send_nudge(
+                f"5050:{now.strftime('%Y-%m-%d')}:{end.strftime('%H:%M')}",
+                "🏀 50/50 — what were the numbers?",
+                "Say: log 50/50: <threes> and <free throws>.\n"
+                "Thirty seconds now is the whole trend line.",
+                tags="basketball", force=force, recurring=True))
 
     sent = sum(1 for a in actions if a.startswith("Nudge sent"))
     # Heartbeat: a pass that decides to send NOTHING is still a completed pass —

@@ -1058,6 +1058,23 @@ def log_5050(threes, free_throws, when: str = "") -> str:
     return out
 
 
+def logged_5050_on(d=None) -> bool:
+    """Has a 50/50 row been stamped for date d (default today)?
+
+    The ask-for-numbers prompts read this so they go quiet the moment Alex
+    logs — a prompt that keeps asking after you answered is how a nudge
+    channel gets muted."""
+    d = d or datetime.now(LOCAL_TZ)
+    stamp = f"{d.month}/{d.day}"
+    snap = get_snapshot()
+    if snap is None:
+        return False
+    _, page = _5050_table(snap.get("keys") or {})
+    if page is None:
+        return False
+    return any((r or [""])[0].strip() == stamp for r in page.get("rows") or [])
+
+
 def fifty_fifty_trend(limit: int = 10) -> str:
     """Recent 50/50 entries plus bests — the measurable behind 'am I improving'."""
     snap = get_snapshot()

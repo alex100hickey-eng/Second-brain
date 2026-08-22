@@ -193,6 +193,18 @@ def _school_orders(today: date) -> list:
     points at stake; everything else is prep with its date."""
     plan = _study_plan(today)
     out = []
+
+    # Spaced-review queue. Without this the ledger was write-only: reviews came
+    # due and no proactive surface ever said so, so "3 recalls before the exam"
+    # depended on Alex remembering to ask.
+    try:
+        import school_data
+        for line in school_data.reviews_due(limit=3):
+            out.append((_T_PREP, _order("school", f"recall: {line}",
+                       "spaced review keeps it from re-learning cost", "today")))
+    except Exception:
+        pass
+
     per_course = plan.get("per_course") or {}
     for code in sorted(per_course):
         info = per_course[code] or {}
@@ -223,8 +235,14 @@ def _school_orders(today: date) -> list:
             out.append((_T_PREP, _order("school", f"{code}: {text}", why, "tonight")))
         ptr = info.get("quiz_pointer")
         if isinstance(ptr, str) and ptr.strip():
-            out.append((_T_PREP, _order("school", f"{code}: {ptr.strip()}",
-                       "flagged in the syllabus", "tonight")))
+            # A quiz being GRADED TODAY is not "prep" — it ranks with the day's
+            # other graded work, or the 3-4 line brief cap buries it.
+            if info.get("quiz_today"):
+                out.append((_T_EXAM, _order("school", f"{code}: {ptr.strip()}",
+                           "graded today, no make-ups", "before class")))
+            else:
+                out.append((_T_PREP, _order("school", f"{code}: {ptr.strip()}",
+                           "flagged in the syllabus", "tonight")))
     for ex in plan.get("exams") or []:
         if not isinstance(ex, dict):
             continue
@@ -357,11 +375,50 @@ def _money_orders(today: date) -> list:
     return out
 
 
+# Bullets that appear on EVERY workout card — they carry no information about
+# what today's session actually is, so a headline built from them reads the same
+# seven days a week (the bug: every card starts "Warmup / 50/50").
+_GENERIC_BULLETS = ("warmup", "50/50", "mobility", "cars", "crawls")
+
+
 def _card_headline(card: str) -> str:
-    """First 2 bullets of a workout card, joined for a one-line order title."""
+    """The DIFFERENTIATING work on a workout card, as a one-line order title.
+
+    Skips the bullets common to every card so the title names what makes today
+    today (Good Finishing, which bag, which lift). Falls back to the first
+    bullets if a card is nothing but the common ones."""
     bullets = [ln.strip().lstrip("-•*").strip()
                for ln in (card or "").splitlines() if ln.strip()]
-    return " · ".join(bullets[:2])
+    distinct = [b for b in bullets
+                if b.strip().lower() not in _GENERIC_BULLETS]
+    return " · ".join((distinct or bullets)[:3])
+
+
+_GYM_TITLE = ("gym", "50/50", "basketball", "practice", "lift", "shoot")
+# "Sleep 9:45 → wake" — the clock inside a block label, which beats the 30-min
+# slot the cell happens to sit in.
+_LABEL_CLOCK_RE = re.compile(r"(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)", re.I)
+
+
+def _training_windows(p: dict, today: date) -> str:
+    """Today's real gym/ball clock ranges from the grid, e.g. '7:25–8:30a + 2:30–5p'.
+
+    Alex dictates when he trains and it differs by day, so the window has to be
+    read from the grid — a hardcoded window is wrong the moment he moves a
+    session, and it was ("4-6 PM" survived a full rebuild of the week)."""
+    try:
+        evs = [e for e in training_schedule.events_for_date(p, today)
+               if e["start"].date() == today
+               and any(w in (e.get("title") or "").lower() for w in _GYM_TITLE)]
+    except Exception:
+        return ""
+    spans, seen = [], set()
+    for e in evs:
+        span = f"{training_schedule.clock(e['start'])}–{training_schedule.clock(e['end'])}"
+        if span not in seen:
+            seen.add(span)
+            spans.append(span)
+    return " + ".join(spans[:3])
 
 
 def _training_orders(now: datetime, today: date) -> list:
@@ -374,23 +431,36 @@ def _training_orders(now: datetime, today: date) -> list:
         return out
 
     card = (p.get("workouts") or {}).get(training_schedule.day_index(today), "")
+    windows = _training_windows(p, today)
     if card:
+        head = _card_headline(card)
         out.append((_T_TRAINING, _order("ball",
-                   f"4-6 PM window: {_card_headline(card)}",
-                   "written on today's card", "4-6 PM")))
+                   f"{windows}: {head}" if windows else head,
+                   "written on today's card", windows or "today")))
 
     try:
         obligations = training_schedule.obligations_for_date(p, today)
     except Exception:
         obligations = []
+    # Route each LINE, not each entry. One calendar day holds a 1-3 line list
+    # (set_big_obligation stores the whole day's list as one text), so judging
+    # the joined string meant a single school word swallowed everything else on
+    # that day: Monday's "First day of classes …\nBlood test (Quest) 2:40 PM"
+    # dropped a medical appointment from every surface because "class" matched.
     for text in obligations:
-        low = text.lower()
-        if any(w in low for w in _SCHOOL_WORDS):
-            continue  # the study plan owns school; don't double-list
-        if any(w in low for w in _BALL_WORDS):
-            out.append((_T_TRAINING, _order("ball", text, "on today's schedule", "today")))
-        else:
-            out.append((_T_TRAINING, _order("life", text, "on the calendar for today", "today")))
+        for line in str(text).splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            low = line.lower()
+            if any(w in low for w in _SCHOOL_WORDS):
+                continue  # the study plan owns school; don't double-list
+            if any(w in low for w in _BALL_WORDS):
+                out.append((_T_TRAINING, _order("ball", line,
+                           "on today's schedule", "today")))
+            else:
+                out.append((_T_TRAINING, _order("life", line,
+                           "on the calendar for today", "today")))
 
     if card:
         out.append((_T_HYGIENE, _order("ball", "Log 50/50 numbers after the session",
@@ -406,7 +476,42 @@ def _training_orders(now: datetime, today: date) -> list:
         evs = []
     if evs and evs[0]["start"].time() <= time(9, 30):
         t = training_schedule.clock(evs[0]["start"])
-        out.append((_T_HYGIENE, _order("life", f"Lights out 11:00 — first block {t}",
+        # Lights-out comes from tonight's own Sleep block — Alex dictated 9:45 on
+        # some nights and 10:00 on others. A hardcoded hour coached him an hour
+        # past his own plan every school night; sleep is a first-order recovery
+        # lever for the season, so the guard has to agree with the grid.
+        lights = ""
+        try:
+            for e in training_schedule.events_for_date(p, today):
+                title = (e.get("title") or "").strip()
+                if not title.lower().startswith("sleep") \
+                        or e["start"].date() != today \
+                        or e["start"].time() < time(18, 0):
+                    continue
+                # The LABEL beats the slot: the grid is 30-minute cells, so a
+                # 9:45 bedtime is stored in the 10:00 cell and titled
+                # "Sleep 9:45 → wake". The label is what Alex actually said.
+                m = _LABEL_CLOCK_RE.search(title)
+                mins = training_sync.parse_clock(m.group(1)) if m else None
+                if mins is None:
+                    lights = training_schedule.clock(e["start"])
+                else:
+                    if mins < 12 * 60:        # a bare evening hour means PM
+                        mins += 12 * 60
+                    lights = training_schedule.clock(
+                        datetime.combine(today, time(mins // 60 % 24, mins % 60)))
+                break
+        except Exception:
+            lights = ""
+        if not lights:
+            # No Sleep block (a blank weekend column). 8.5h before the first
+            # block is the LATEST defensible bedtime, not a recommendation —
+            # 8.5h before a 9am start is 12:30am — so cap it at 11pm and never
+            # coach a later night than the old constant did.
+            latest = datetime.combine(tomorrow, evs[0]["start"].time()) - timedelta(hours=8.5)
+            cap = datetime.combine(today, time(23, 0))
+            lights = training_schedule.clock(min(latest, cap))
+        out.append((_T_HYGIENE, _order("life", f"Lights out {lights} — first block {t}",
                    f"tomorrow starts at {t}", "tonight")))
     return out
 
@@ -502,8 +607,18 @@ def log_outreach_send(brand: str, when: str = "") -> str:
     saved = _save(state)
     msg = (f"Logged: {brand} sent {d.isoformat()}. Follow-ups come due "
            f"{(d + timedelta(days=3)).isoformat()} (+3d) and "
-           f"{(d + timedelta(days=7)).isoformat()} (+7d). "
-           "Mirror it into the prospect tracker CSV so both clocks agree.")
+           f"{(d + timedelta(days=7)).isoformat()} (+7d).")
+    # Mirror into the tracker CSV ourselves. Asking Alex to double-enter a send
+    # he just reported — and then spending a daily order nagging him when the
+    # two clocks disagreed — was clerical work the system created for itself.
+    try:
+        mirror = ad_creative_pipeline.reconcile_prospect_csv(sends=sends)
+        if mirror.startswith("tracker updated"):
+            msg += " Tracker CSV updated to match."
+        elif mirror.startswith("skipped"):
+            msg += " (Tracker lives on the Mac — it'll sync there.)"
+    except Exception:
+        pass
     if not saved:
         msg += " (Warning: couldn't persist to Supabase.)"
     return msg
@@ -578,11 +693,41 @@ def brief_lines(now=None, limit: int = 4) -> list:
 
 
 def evening_lines(now=None) -> list:
-    """The nightly nudge: ask for the scorecard, preview tomorrow's top 2."""
+    """The nightly nudge: ask for the scorecard, capture the day's real data,
+    preview tomorrow's top 2.
+
+    The capture asks ride the conversation that already happens every night —
+    the lesson from two empty ledgers is that a logging tool nobody is prompted
+    to use stays header-only forever."""
     lines = ["Scorecard time: how did school/ball/money/sleep go? "
              "(one sentence is enough)"]
-    tomorrow = _now(now) + timedelta(days=1)
-    for o in compose(tomorrow)["orders"][:2]:
+    ref = _now(now)
+    today = ref.date()
+
+    # 50/50 numbers, only if today's grid actually had a shooting block and
+    # nothing is logged for today yet.
+    try:
+        p = training_sync.parsed()
+        had_5050 = any("50/50" in (e.get("title") or "")
+                       for e in training_schedule.events_for_date(p, today)
+                       if e["start"].date() == today)
+        if had_5050 and not training_sync.logged_5050_on(ref):
+            lines.append("50/50 numbers? Say: log 50/50: <threes> and <free throws>.")
+    except Exception:
+        pass
+
+    # What actually got reviewed today — turns the nightly check-in into the
+    # spaced-repetition ledger's write path.
+    try:
+        import school_data
+        met = school_data.courses_meeting_on(today)
+        if met:
+            lines.append(f"Which of these did you actually study today — {', '.join(met)}? "
+                         "Name them and I'll log the recalls.")
+    except Exception:
+        pass
+
+    for o in compose(ref + timedelta(days=1))["orders"][:2]:
         lines.append(f"Tomorrow: {o['title']} — {o['why']}")
     return lines
 

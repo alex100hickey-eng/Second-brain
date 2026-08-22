@@ -348,10 +348,22 @@ check("pointer names the prior CLASS day (Fri Sep 4, not Labor Day Mon)",
 check("pointer points at the Canvas problem list, no invented topics",
       ptr is not None and "Canvas problem list" in ptr)
 
-# Friday Sep 4: tomorrow is Saturday — no class, no pointer.
+# Friday Sep 4: tomorrow is Saturday (no class) but TODAY is a MATH class day,
+# so the pointer fires in today-mode — the wake brief composes for today, and a
+# graded no-make-up quiz happening this morning has to reach that surface.
 data3 = school_data.study_plan_data("2026-09-04")
-check("no quiz pointer when tomorrow isn't a class day",
-      data3["per_course"]["MATH120"]["quiz_pointer"] is None)
+ptr3 = data3["per_course"]["MATH120"]["quiz_pointer"]
+check("quiz-day morning gets a TODAY pointer (was silent before)",
+      ptr3 is not None and "TODAY'S MATH quiz" in ptr3)
+check("today-mode pointer names the PRIOR class day (Wed Sep 2)",
+      ptr3 is not None and "Sep 2" in ptr3)
+check("today-mode is flagged so it can outrank generic prep",
+      data3["per_course"]["MATH120"]["quiz_today"] is True)
+
+# Saturday Sep 5: neither today nor tomorrow is a class day — still silent.
+data4 = school_data.study_plan_data("2026-09-05")
+check("no quiz pointer on a day with no class either side",
+      data4["per_course"]["MATH120"]["quiz_pointer"] is None)
 
 # Exams from Sep 6: ACCT Exam 1 (curriculum-only), MATH Test 1, ECON Exam 1
 # (in both files — deduped to one). AIQS "Final Paper" (canvas_sync mistype),

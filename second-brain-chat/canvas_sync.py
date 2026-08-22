@@ -156,6 +156,10 @@ def sync(vault_dir: str = DEFAULT_VAULT, ics_text: str = None, tz=None) -> dict:
     by_uid = {r["source"][len("canvas:"):]: r for r in rows
               if (r.get("source") or "").startswith("canvas:")}
     added = updated = unchanged = skipped = 0
+    # Which courses gained rows, so a course going live is visible instead of
+    # arriving as an anonymous bump in the "added" count.
+    per_course, had_rows = {}, {(r.get("course") or "").strip()
+                                for r in rows if (r.get("course") or "").strip()}
     for ev in parse_events(ics_text, tz=tz):
         if not ev["course"]:
             skipped += 1          # personal calendar event, not coursework
@@ -167,6 +171,7 @@ def sync(vault_dir: str = DEFAULT_VAULT, ics_text: str = None, tz=None) -> dict:
                          "type": _guess_type(ev["title"]), "due_date": ev["due"],
                          "status": "open", "source": f"canvas:{ev['uid']}"})
             added += 1
+            per_course[ev["course"]] = per_course.get(ev["course"], 0) + 1
         elif old.get("due_date") != ev["due"]:
             old["due_date"] = ev["due"]   # professor moved it; feed wins for its rows
             updated += 1
@@ -178,16 +183,57 @@ def sync(vault_dir: str = DEFAULT_VAULT, ics_text: str = None, tz=None) -> dict:
             w = csv.DictWriter(f, fieldnames=fields)
             w.writeheader()
             w.writerows(rows)
+    # A course appearing in the feed for the FIRST time means the professor just
+    # published it. CSDS101 — the heaviest course, 4 units + lab — was still
+    # unpublished, and without this its debut would land as a silent +6 in a log
+    # file nothing reads.
+    newly_live = sorted(c for c in per_course if c not in had_rows)
     return {"added": added, "updated": updated, "unchanged": unchanged,
-            "skipped_no_course": skipped, "error": ""}
+            "skipped_no_course": skipped, "error": "",
+            "per_course": per_course, "newly_live": newly_live}
+
+
+def _notify_newly_live(courses: list) -> str:
+    """One ntfy push when a course publishes. Deliberately dependency-free (the
+    same stance as the rest of this script, which launchd runs standalone): a
+    direct POST, no imports from the Flask app."""
+    topic = os.environ.get("NTFY_TOPIC", "").strip()
+    if not topic or not courses:
+        return "no topic" if courses else ""
+    names = ", ".join(courses)
+    body = (f"{names} just went live on Canvas — deadlines are syncing now, but "
+            "there's no curriculum imported yet, so lead-window planning is "
+            "partial. Drop the syllabus in School/Intake and ask CLARVIS to run "
+            "the import.")
+    req = urllib.request.Request(
+        f"{os.environ.get('NTFY_SERVER', 'https://ntfy.sh')}/{topic}",
+        data=body.encode("utf-8"),
+        headers={"Title": f"New course live: {names}", "Tags": "books",
+                 "Priority": "default"})
+    try:
+        urllib.request.urlopen(req, timeout=10)
+        return f"notified: {names}"
+    except Exception as e:            # a failed push must never fail the sync
+        return f"notify failed: {e}"
 
 
 if __name__ == "__main__":
     import json
     import sys
     if "--sync" in sys.argv:
+        result = sync()
+        if result.get("newly_live"):
+            result["notify"] = _notify_newly_live(result["newly_live"])
+        # Heartbeat: a sync that finds nothing looks identical to a sync that
+        # never ran. This file is what tells them apart.
+        try:
+            with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                   "..", ".canvas_sync_heartbeat"), "w") as f:
+                f.write(datetime.now().isoformat())
+        except OSError:
+            pass
         print(f"[{datetime.now().strftime('%Y-%m-%dT%H:%M:%S')}]",
-              json.dumps(sync()))
+              json.dumps(result))
     else:
         for ev in parse_events(_fetch(os.environ["CANVAS_ICS_URL"])):
             print(ev["due"], f"[{ev['course'] or 'personal'}]", ev["title"])

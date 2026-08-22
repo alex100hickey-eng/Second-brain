@@ -187,7 +187,7 @@ def test_ranking_deadlines_first():
             ranks["exam"] = o["rank"]
         if "follow-up" in o["title"]:
             ranks["money"] = o["rank"]
-        if "4-6 PM window" in o["title"]:
+        if "Ball handling" in o["title"]:
             ranks["training"] = o["rank"]
         if "Read chapter 4" in o["title"]:
             ranks["prep"] = o["rank"]
@@ -312,9 +312,11 @@ def test_training_orders_and_sleep_guard():
     )
     res = daily_orders.compose()
     by_title = {o["title"]: o for o in res["orders"]}
-    card = next((o for o in res["orders"] if "4-6 PM window" in o["title"]), None)
-    check("workout card becomes the 4-6 PM order with first 2 bullets",
+    card = next((o for o in res["orders"] if "Ball handling" in o["title"]), None)
+    check("workout card becomes the training order, naming the real work",
           card and "Ball handling" in card["title"] and "Shooting" in card["title"])
+    check("training order no longer hardcodes a 4-6 PM window",
+          card and "4-6 PM" not in card["title"])
     practice = by_title.get("Team practice 6-8pm")
     check("practice obligation routed to ball", practice and practice["pillar"] == "ball")
     life = by_title.get("Call with advisor office")
@@ -324,6 +326,69 @@ def test_training_orders_and_sleep_guard():
     guard = next((o for o in res["orders"] if "Lights out" in o["title"]), None)
     check("9:00am first block triggers the sleep guard with its time",
           guard is not None and "9:00am" in guard["title"])
+
+
+def test_multiline_obligation_routing():
+    print("\n=== a school word on one line must not swallow the rest of the day ===")
+    _reset()
+    # The real 2026-08-24 entry: first day of classes AND a medical appointment.
+    _seed_training(
+        obligations=[{"date": TODAY.isoformat(),
+                      "text": "First day of classes — MATH 120 9:20 · Olin 305\n"
+                              "Blood test (Quest) 2:40 PM — overlaps gym 2:30–5"}],
+    )
+    titles = [o["title"] for o in daily_orders.compose()["orders"]]
+    check("the non-school line survives its school-word neighbour",
+          any("Blood test" in t for t in titles))
+    check("the school line is still left to the study plan",
+          not any("First day of classes" in t for t in titles))
+    check("lines are separate orders, not one glued blob",
+          not any("\n" in t for t in titles))
+
+
+def test_grid_derived_window_and_bedtime():
+    print("\n=== training window + lights-out come from the GRID, not constants ===")
+    _reset()
+    today_col = training_schedule.day_index(TODAY)
+    tomorrow = TODAY + timedelta(days=1)
+    # slot = (minutes since 3AM)/30 → 7:00am = 8, 2:30pm = 23, 9:45pm = 37
+    _seed_training(
+        grid={
+            f"8|{today_col}": "Gym · morning session",
+            f"9|{today_col}": "Gym · morning session",
+            f"23|{today_col}": "Gym · afternoon session",
+            f"37|{today_col}": "Sleep 9:45 → wake",
+            f"12|{training_schedule.day_index(tomorrow)}": "MATH 120 · Olin 305",
+        },
+        workouts={str(today_col): "- Warmup\n- 50/50\n- Good Finishing\n- Lower Lengthened"},
+    )
+    res = daily_orders.compose()
+    card = next((o for o in res["orders"] if o["pillar"] == "ball"
+                 and "Finishing" in o["title"]), None)
+    check("order names BOTH real gym windows from the grid",
+          card and "7:00am" in card["title"] and "2:30pm" in card["title"])
+    check("headline skips the bullets every card shares",
+          card and "Warmup" not in card["title"] and "50/50" not in card["title"])
+    check("headline keeps the differentiating work",
+          card and "Good Finishing" in card["title"])
+    guard = next((o for o in res["orders"] if "Lights out" in o["title"]), None)
+    # The cell sits in the 9:30 slot but is LABELLED 9:45 — a 30-minute grid
+    # can't store 9:45, so the label is the real instruction.
+    check("lights-out reads tonight's Sleep block, not a hardcoded 11:00",
+          guard and "9:45pm" in guard["title"] and "11:00" not in guard["title"])
+
+    # No Sleep block (a blank weekend column) → 8.5h before the first block.
+    _reset()
+    _seed_training(
+        grid={f"12|{training_schedule.day_index(tomorrow)}": "MATH 120 · Olin 305"},
+        workouts={str(today_col): "- Warmup\n- Good Shooting"},
+    )
+    guard2 = next((o for o in daily_orders.compose()["orders"]
+                   if "Lights out" in o["title"]), None)
+    # 8.5h before a 9am block is 12:30am — a bound, not advice. The cap keeps
+    # the fallback from ever coaching a later night than the old constant.
+    check("no Sleep block → fallback capped at 11pm, never later",
+          guard2 and "11:00pm" in guard2["title"])
 
 
 def test_brief_and_evening_lines():
@@ -425,6 +490,8 @@ if __name__ == "__main__":
         test_failsoft_school_absent_and_supabase_down()
         test_local_tz_discipline()
         test_training_orders_and_sleep_guard()
+        test_multiline_obligation_routing()
+        test_grid_derived_window_and_bedtime()
         test_brief_and_evening_lines()
         test_tool_surface()
         test_string_study_plan_items()

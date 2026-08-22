@@ -42,6 +42,7 @@ import json
 import re
 import threading
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from data_boundary import wrap_untrusted
 
@@ -70,6 +71,17 @@ def init(claude_client, supabase_client, tool_dispatcher, tracker):
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+LOCAL_TZ = ZoneInfo("America/New_York")
+
+
+def _local_now() -> datetime:
+    """Alex's wall clock. The server runs UTC, so a naive datetime.now() is
+    already tomorrow every evening after 8 PM ET — which meant the extractor was
+    told the wrong 'today' and resolved "tomorrow"/"Friday" one day early on
+    exactly the messages that arrive in the evening."""
+    return datetime.now(LOCAL_TZ)
 
 
 # ============================================================
@@ -215,7 +227,7 @@ def extract_items(source: str, sender: str, text: str, when: str = "") -> list:
     body = wrap_untrusted(text[:4000], source=f"{source} from {sender}")
     user = (
         f"Source: {source}\nFrom: {sender}\nWhen: {when or 'recently'}\n"
-        f"Today: {datetime.now().strftime('%Y-%m-%d (%A)')}\n\n{body}"
+        f"Today: {_local_now().strftime('%Y-%m-%d (%A)')}\n\n{body}"
     )
     try:
         resp = claude.messages.create(
@@ -382,7 +394,7 @@ def capture_inbox(text: str, label: str = "") -> str:
     first-class intake event (school portal pastes, workout plans, whatever)."""
     if not (text or "").strip():
         return "Nothing to capture."
-    ref = f"inbox-{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
+    ref = f"inbox-{_local_now().strftime('%Y%m%d%H%M%S%f')}"
     res = record_raw("inbox", ref, label or "pasted by Alex", _now_iso(), text)
     if not res.get("recorded"):
         return ("Captured, but nothing actionable was extracted — if that's wrong, "
@@ -553,7 +565,7 @@ def _first(d: dict, keys):
 def get_intake() -> dict:
     rows = _load_events(60)
     counts = {"new": 0, "accepted": 0, "dismissed": 0}
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = _local_now().strftime("%Y-%m-%d")
     arrived_today = 0
     for r in rows:
         st = r["event"].get("status", "new")

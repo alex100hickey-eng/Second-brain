@@ -3709,6 +3709,42 @@ def _gather_weekly_digest(days: int = 7) -> dict:
     except Exception as e:
         print(f"weekly: money failed: {e}")
 
+    # Ball: the pillar with 2-3 sessions a day was the only one the review could
+    # say nothing quantitative about — it reported a ✓/✗ streak and nothing else.
+    try:
+        ball = {}
+        today = datetime.now(LOCAL_TZ).date()
+        try:
+            ball["trend"] = training_sync.fifty_fifty_trend(limit=7)
+        except Exception as e:
+            print(f"weekly: 50/50 trend failed: {e}")
+        try:
+            p = training_sync.parsed()
+            if p:
+                sessions, shooting = 0, 0
+                for i in range(days):
+                    dd = today - timedelta(days=i)
+                    for ev in training_schedule.events_for_date(p, dd):
+                        if ev["start"].date() != dd:
+                            continue
+                        t = (ev.get("title") or "").lower()
+                        if t.startswith("gym"):
+                            sessions += 1
+                        elif "50/50" in t:
+                            shooting += 1
+                ball["gym_blocks"] = sessions
+                ball["shooting_blocks"] = shooting
+                ball["practices"] = [
+                    o["text"] for o in (p.get("obligations") or [])
+                    if 0 <= (today - o["date"]).days < days
+                    and "practice" in (o["text"] or "").lower()]
+        except Exception as e:
+            print(f"weekly: ball blocks failed: {e}")
+        if ball:
+            d["ball"] = ball
+    except Exception as e:
+        print(f"weekly: ball failed: {e}")
+
     # Next week's load: per-course open-assignment counts due in the next 7 days
     # plus dated calendar obligations from the training app.
     try:
@@ -3891,6 +3927,27 @@ def build_weekly_review(days: int = 7, with_observations: bool = True) -> str:
                         out.append(("  - " if ln.startswith("    ") else "- ") + ln.strip())
     except Exception as e:
         print(f"weekly: exam runways section failed: {e}")
+
+    # Ball (season prep: shooting trend + sessions actually on the grid)
+    try:
+        ball = digest.get("ball") or {}
+        if ball:
+            out.append("\n## Ball")
+            gym = ball.get("gym_blocks")
+            shoot = ball.get("shooting_blocks")
+            if gym is not None:
+                out.append(f"- Sessions on the grid this week: **{gym} gym**"
+                           + (f", {shoot} shooting" if shoot else ""))
+            for p_ in (ball.get("practices") or [])[:4]:
+                out.append(f"- Practice: {p_}")
+            trend = str(ball.get("trend") or "").strip()
+            if trend:
+                for ln in trend.splitlines()[:8]:
+                    if ln.strip():
+                        out.append(f"- {ln.strip()}" if not ln.startswith(" ")
+                                   else f"  - {ln.strip()}")
+    except Exception as e:
+        print(f"weekly: ball section failed: {e}")
 
     # Money pipeline (plan headline + follow-ups due + sends this week)
     try:
@@ -4544,6 +4601,13 @@ def _dispatch_tool_call(tool_name: str, tool_input: dict) -> str:
             brand=tool_input["brand"], variant=tool_input.get("variant", "first_touch"))
     if tool_name == "check_ad_pipeline":
         return ad_creative_pipeline.check_ad_pipeline(limit=tool_input.get("limit", 12))
+    if tool_name == "prepare_wave_drafts":
+        return ad_creative_pipeline.prepare_wave_drafts(
+            wave=tool_input.get("wave", 1), count=tool_input.get("count", 3),
+            ad_library_notes=tool_input.get("ad_library_notes", ""))
+    if tool_name == "reconcile_prospect_csv":
+        return ad_creative_pipeline.reconcile_prospect_csv(
+            sends=daily_orders._sends())
     if tool_name == "check_august_plan":
         return august_tracker.check_august_plan()
     if tool_name == "complete_august_step":

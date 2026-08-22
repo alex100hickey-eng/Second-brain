@@ -108,6 +108,17 @@ def init(claude_client, supabase_client, vault_dir):
     vault_path = vault_dir
 
 
+def _runtime() -> str:
+    """'local' on Alex's Mac, 'server' in the container. The server's vault is a
+    pull-only mirror, so only the local node may write files into it — asked at
+    call time (not import time) because task_manager sets it during startup."""
+    try:
+        import task_manager
+        return getattr(task_manager, "RUNTIME", "local") or "local"
+    except Exception:
+        return "local"
+
+
 # ============================================================
 # small shared helpers
 # ============================================================
@@ -805,6 +816,174 @@ def due_followups(today: datetime = None) -> list:
     return due
 
 
+def wave_brands(wave: int = 1, limit: int = 0) -> list:
+    """Qualified, unsent tracker rows for a wave, in file order."""
+    path = _tracker_path()
+    if not path:
+        return []
+    out = []
+    try:
+        with open(path, newline="", encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                if (row.get("status") or "").strip().lower() != "qualified":
+                    continue
+                if (row.get("wave") or "").strip() != str(wave):
+                    continue
+                if (row.get("sent_date") or "").strip():
+                    continue      # already out the door
+                out.append(row)
+    except (OSError, csv.Error):
+        return []
+    return out[:limit] if limit else out
+
+
+def prepare_wave_drafts(wave: int = 1, count: int = 3, ad_library_notes: str = "") -> str:
+    """Regenerate FRESH first-touch drafts for the next `count` brands of a wave.
+
+    The plan says wave drafts are written against live ads right before send —
+    but the only refresh path was a 3-stage, one-brand-at-a-time chat workflow,
+    so in practice "fresh" meant "Alex drives 22 x 3 tool calls by hand" and the
+    fallback was sending drafts that had aged 19 days. This runs the real
+    pipeline (site re-fetch -> angles -> draft) per brand and writes one dated
+    vault file.
+
+    Ad Library data stays MANUAL by design (bulk scraping isn't ToS-clean), so a
+    brand whose stored notes are older than 14 days is flagged in the output for
+    a 2-minute paste rather than silently drafted on stale evidence.
+    Drafts only — there is no send path in this module and this adds none."""
+    brands = wave_brands(wave, count)
+    if not brands:
+        return (f"No qualified unsent brands in wave {wave}. "
+                "Check the tracker's status/wave/sent_date columns.")
+    today = datetime.now(_TZ).date()
+    done, stale_adlib, failed = [], [], []
+    for row in brands:
+        name = (row.get("brand") or "").strip()
+        site = (row.get("domain") or "").strip()
+        if not name or not site:
+            failed.append(f"{name or '(unnamed)'}: no domain in the tracker")
+            continue
+        url = site if site.startswith("http") else f"https://{site}"
+        _, existing = _find_brand(name)
+        notes = ad_library_notes
+        if not notes and existing:
+            notes = (existing.get("ad_library_notes") or "")
+            stamp = (existing.get("ingested_at") or "")[:10]
+            try:
+                age = (today - datetime.strptime(stamp, "%Y-%m-%d").date()).days
+            except ValueError:
+                age = None
+            if notes and (age is None or age > 14):
+                stale_adlib.append(f"{name} (ad notes {age}d old)" if age is not None
+                                   else f"{name} (ad notes undated)")
+        out = ingest_brand(name, url, notes)
+        if out.startswith(("No ", "Need ", "A different brand")) or "Fetch failed" in out:
+            failed.append(f"{name}: {out[:90]}")
+            continue
+        ang = generate_angles(name)
+        if ang.startswith("No ") or "failed" in ang[:40].lower():
+            failed.append(f"{name}: angles — {ang[:80]}")
+            continue
+        draft = draft_outreach(name, "first_touch")
+        if draft.startswith("No ") or "failed" in draft[:40].lower():
+            failed.append(f"{name}: draft — {draft[:80]}")
+            continue
+        done.append((name, draft))
+
+    if not done:
+        return "Nothing drafted.\n" + "\n".join(f"- {f}" for f in failed)
+
+    body = [f"# Wave {wave} first-touch drafts — {today.isoformat()}",
+            "",
+            f"Generated fresh {today.isoformat()} against live site data. "
+            "Review, edit in your own voice, send from the studio mailbox by hand.",
+            ""]
+    for name, draft in done:
+        body += [f"## {name}", "", draft, "", "---", ""]
+    if stale_adlib:
+        body += ["## Manual Ad Library check recommended", ""]
+        body += [f"- {s}" for s in stale_adlib] + [""]
+    if failed:
+        body += ["## Did not draft", ""] + [f"- {f}" for f in failed] + [""]
+    fname = f"outreach-drafts-wave{wave}-{today.isoformat()}.md"
+    written = _write_vault_file("", fname, "\n".join(body))
+    _audit("prepare_wave_drafts", f"wave {wave}: {len(done)} drafted, {len(failed)} failed")
+
+    msg = [f"Fresh wave-{wave} drafts ready: **{len(done)}** "
+           f"({', '.join(n for n, _ in done)}).", f"Written to {written}."]
+    if stale_adlib:
+        msg.append("Worth a 2-min Ad Library paste first (stored ad notes are old): "
+                   + ", ".join(stale_adlib) + ".")
+    if failed:
+        msg.append("Not drafted: " + "; ".join(failed) + ".")
+    msg.append("Drafts only — you send them, then tell me and I'll log it.")
+    return "\n\n".join(msg)
+
+
+def reconcile_prospect_csv(sends: dict = None, replies: dict = None) -> str:
+    """Stamp sent/follow-up/replied dates from CLARVIS's own state into the
+    tracker CSV, so Alex never hand-mirrors a send he already told CLARVIS about.
+
+    Two clocks disagreeing was costing an order slot every day ("Log your sends
+    in the prospect tracker") for work the system already knew about. Same
+    local-node-only stance as august_tracker.reconcile_vault: the server holds a
+    pull-only mirror of the vault, so only the Mac writes."""
+    if _runtime() != "local":
+        return "skipped: vault writes only happen on the local node."
+    path = _tracker_path()
+    if not path:
+        return "skipped: no prospect-tracker.csv on this node."
+    sends = sends or {}
+    replies = replies or {}
+    try:
+        with open(path, newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            cols = reader.fieldnames or []
+            rows = list(reader)
+    except (OSError, csv.Error) as e:
+        return f"couldn't read the tracker: {e}"
+
+    changed = []
+    for row in rows:
+        brand = (row.get("brand") or "").strip()
+        key = brand.lower()
+        dates = sorted(d for d in (sends.get(key) or []) if d)
+        if dates:
+            if not (row.get("sent_date") or "").strip():
+                row["sent_date"] = dates[0]
+                changed.append(f"{brand} sent {dates[0]}")
+            if len(dates) > 1 and not (row.get("followup1_date") or "").strip():
+                row["followup1_date"] = dates[1]
+                changed.append(f"{brand} +3d {dates[1]}")
+            if len(dates) > 2 and not (row.get("followup2_date") or "").strip():
+                row["followup2_date"] = dates[2]
+                changed.append(f"{brand} +7d {dates[2]}")
+        rep = replies.get(key)
+        if rep and not (row.get("replied") or "").strip():
+            row["replied"] = rep
+            changed.append(f"{brand} replied {rep}")
+    if not changed:
+        return "tracker already agrees with the send log — nothing to stamp."
+
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=cols, extrasaction="ignore")
+            w.writeheader()
+            for r in rows:
+                w.writerow({c: (r.get(c) or "") for c in cols})
+        os.replace(tmp, path)      # atomic — a crash never truncates the tracker
+    except OSError as e:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        return f"couldn't write the tracker: {e}"
+    _audit("reconcile_prospect_csv", f"{len(changed)} stamps")
+    return "tracker updated: " + "; ".join(changed[:8]) + (
+        f" (+{len(changed) - 8} more)" if len(changed) > 8 else "")
+
+
 def check_ad_pipeline(limit: int = 12) -> str:
     rows = _all_rows()
     brands = [r for r in rows if r["data"].get("kind") == "brand"]
@@ -898,6 +1077,22 @@ TOOL_SCHEMAS = [
          "brand": {"type": "string"},
          "variant": {"type": "string", "description": "first_touch (default) | followup_3d | followup_7d"}},
          "required": ["brand"]}},
+    {"name": "prepare_wave_drafts",
+     "description": ("Regenerate FRESH first-touch outreach drafts for the next brands in an "
+                     "outreach wave: re-fetches each site, rebuilds angles, drafts the email, "
+                     "and writes one dated file to the vault. Use the evening before or the "
+                     "morning of a send day — never send drafts written days earlier. Drafts "
+                     "only; Alex sends every email by hand."),
+     "input_schema": {"type": "object", "properties": {
+         "wave": {"type": "integer", "description": "Wave number in the tracker (default 1)"},
+         "count": {"type": "integer", "description": "How many brands to draft (default 3)"},
+         "ad_library_notes": {"type": "string", "description":
+             "Optional fresh manual Ad Library paste to apply to this batch."}}}},
+    {"name": "reconcile_prospect_csv",
+     "description": ("Stamp send/follow-up/reply dates CLARVIS already knows about into the "
+                     "prospect tracker CSV so the two clocks agree. Runs on the local node "
+                     "only. Use after Alex says he sent outreach."),
+     "input_schema": {"type": "object", "properties": {}}},
     {"name": "check_ad_pipeline",
      "description": ("Status of the ad creative pipeline: brands by stage, recent drops, and "
                      "which prospect follow-ups are due per the tracker CSV."),
@@ -913,5 +1108,7 @@ TOOL_STATUS_LABELS = {
     "package_delivery": "Packaging the drop…",
     "build_client_report": "Building the monthly readout…",
     "draft_outreach": "Drafting the outreach email…",
+    "prepare_wave_drafts": "Regenerating fresh wave drafts…",
+    "reconcile_prospect_csv": "Syncing the prospect tracker…",
     "check_ad_pipeline": "Checking the pipeline…",
 }

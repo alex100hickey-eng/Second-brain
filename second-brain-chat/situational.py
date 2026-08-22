@@ -70,16 +70,36 @@ def format_event_line(ev: dict, now: datetime) -> str:
     return f"{title} — at {_fmt_clock(start)}"
 
 
-def calendar_lines(events: list, now: datetime) -> list:
-    """Today's events as annotated lines, earliest first, next-upcoming flagged."""
-    lines = []
+def calendar_lines(events: list, now: datetime, max_lines: int = 8) -> list:
+    """Today's events as annotated lines, earliest first, next-upcoming flagged.
+
+    COMPACTED, because the schedule sits first and assemble() drops whole
+    trailing sections when the budget runs out: a fully-dictated day is ~15
+    blocks (wake, breakfast, two gym sessions, five classes, meals, 50/50,
+    study, routine, sleep), which alone can crowd out the approval queue and
+    the due-and-overdue list. What CLARVIS needs in every turn is what is
+    happening NOW and what is next — the morning's finished blocks collapse to
+    a count, and a long tail truncates with an explicit remainder so nothing
+    reads as "that's the whole day"."""
+    lines, done = [], 0
     upcoming_flagged = False
     for ev in events or []:
         line = format_event_line(ev, now)
+        if "(already happened)" in line:
+            done += 1
+            continue
         if not upcoming_flagged and ("— at " in line):
             line += " (next up)"
             upcoming_flagged = True
         lines.append(line)
+    remaining = 0
+    if len(lines) > max_lines:
+        remaining = len(lines) - max_lines
+        lines = lines[:max_lines]
+    if done:
+        lines.insert(0, f"({done} earlier block{'s' if done != 1 else ''} already done)")
+    if remaining:
+        lines.append(f"…+{remaining} more later today (ask for the full grid)")
     return lines
 
 
