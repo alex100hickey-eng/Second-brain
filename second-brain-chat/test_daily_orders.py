@@ -126,7 +126,25 @@ def _reset(sb=None):
     training_sync.init(FakeSB())
     if hasattr(school_data, "study_plan_data"):
         del school_data.study_plan_data
+    # Stub the task tracker to EMPTY. _task_orders reads the real
+    # task_tracker.db otherwise, so these tests would silently depend on
+    # whatever is on the developer's actual to-do list — orders appearing from
+    # nowhere and, worse, filling the 8-slot cap so a genuine order gets cut.
+    _stub_tracker([])
     return sb, vault
+
+
+class _FakeTracker:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def top_by_priority(self, limit=20):
+        return self.rows[:limit]
+
+
+def _stub_tracker(rows):
+    import task_tracker as tt
+    tt.get_tracker = lambda *a, **k: _FakeTracker(rows)
 
 
 def _write_tracker_csv(vault, rows):
@@ -326,6 +344,47 @@ def test_training_orders_and_sleep_guard():
     guard = next((o for o in res["orders"] if "Lights out" in o["title"]), None)
     check("9:00am first block triggers the sleep guard with its time",
           guard is not None and "9:00am" in guard["title"])
+
+
+def test_task_orders():
+    print("\n=== tracker tasks with a due date reach the ranked day ===")
+    _reset()
+    from datetime import date as _date
+    import task_tracker as tt
+    fake = [
+        {"id": 5, "status": "idea", "due": TODAY.isoformat(),
+         "title": "Order the AIQS course pack at FedEx"},
+        {"id": 6, "status": "idea", "due": (TODAY + timedelta(days=2)).isoformat(),
+         "title": "Install full desktop Excel"},
+        {"id": 7, "status": "idea", "due": (TODAY - timedelta(days=1)).isoformat(),
+         "title": "Send the absence email to Dr. N"},
+        {"id": 8, "status": "idea", "due": (TODAY + timedelta(days=30)).isoformat(),
+         "title": "Something far away"},
+        {"id": 9, "status": "done", "due": TODAY.isoformat(), "title": "Already finished"},
+        {"id": 10, "status": "idea", "due": "", "title": "No due date at all"},
+    ]
+
+    saved = tt.get_tracker
+    _stub_tracker(fake)
+    try:
+        got = daily_orders._task_orders(TODAY)
+        titles = " | ".join(o["title"] for _t, o in got)
+        check("a task due today reaches the day", "course pack" in titles)
+        check("an overdue task reaches it too", "Dr. N" in titles)
+        check("a task due in 2 days is included as prep", "Excel" in titles)
+        check("a task 30 days out is NOT", "far away" not in titles)
+        check("a completed task is skipped", "Already finished" not in titles)
+        check("a task with no due date is skipped", "No due date" not in titles)
+        tiers = {o["title"]: t for t, o in got}
+        overdue = next(t for ti, t in tiers.items() if "Dr. N" in ti)
+        prep = next(t for ti, t in tiers.items() if "Excel" in ti)
+        check("overdue outranks future prep", overdue < prep)
+        # A course pack is schoolwork even though an athlete is juggling it.
+        pillars = {o["title"]: o["pillar"] for _t, o in got}
+        check("course-specific words win the pillar over athletics words",
+              next(p for ti, p in pillars.items() if "course pack" in ti) == "school")
+    finally:
+        tt.get_tracker = saved
 
 
 def test_intake_orders():
@@ -539,6 +598,7 @@ if __name__ == "__main__":
         test_failsoft_school_absent_and_supabase_down()
         test_local_tz_discipline()
         test_training_orders_and_sleep_guard()
+        test_task_orders()
         test_intake_orders()
         test_multiline_obligation_routing()
         test_grid_derived_window_and_bedtime()

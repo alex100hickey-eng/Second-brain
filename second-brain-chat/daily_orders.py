@@ -623,6 +623,65 @@ def _intake_orders(today: date) -> list:
     return out
 
 
+# Course-specific words are checked FIRST below: "order the AIQS course pack"
+# is school work even though it is for a class an athlete is juggling.
+_TASK_BALL_WORDS = ("gym", "lift", "shoot", "basketball", "practice", "ncaa",
+                    "roster", "athlet", "team")
+_TASK_MONEY_WORDS = ("wave", "outreach", "prospect", "stripe", "client", "splitframe",
+                     "invoice", "sales")
+_TASK_SCHOOL_WORDS = ("acct", "econ", "math", "aiqs", "csds", "syllabus", "canvas",
+                      "excel", "wileyplus", "homework", "quiz", "class")
+
+
+def _task_orders(today: date) -> list:
+    """Open tracker tasks that carry a real due date.
+
+    The task tracker is where CLARVIS records work Alex agreed to do, and it was
+    absent from compose() entirely — so a task could be created, sit at the top
+    of the tracker, and never once appear in the ranked day. Nudges already read
+    the `due` column; the day did not."""
+    out = []
+    try:
+        from task_tracker import due_moment, get_tracker
+        # get_tracker(), not the module: top_by_priority lives on the TaskTracker
+        # instance. app.py holds one as a global named `task_tracker`, which is
+        # exactly the name collision that makes this easy to get wrong.
+        rows = get_tracker().top_by_priority(limit=20)
+    except Exception:
+        return out
+    for t in rows:
+        if t.get("status") not in ("idea", "approved", "in_progress"):
+            continue
+        raw = (t.get("due") or "").strip()
+        if not raw:
+            continue
+        try:
+            dt = due_moment(raw, tz=LOCAL_TZ)
+        except Exception:
+            dt = None
+        if not dt:
+            continue
+        d = dt.date()
+        if d > today + timedelta(days=3):
+            continue                       # not yet the day's business
+        title = str(t.get("title") or "").strip()
+        low = title.lower()
+        pillar = ("school" if any(w in low for w in _TASK_SCHOOL_WORDS)
+                  else "money" if any(w in low for w in _TASK_MONEY_WORDS)
+                  else "ball" if any(w in low for w in _TASK_BALL_WORDS)
+                  else "life")
+        if d < today:
+            out.append((_T_DEADLINE, _order(pillar, title[:90],
+                       f"task #{t.get('id')} — was due {d.isoformat()}", "overdue")))
+        elif d == today:
+            out.append((_T_DEADLINE, _order(pillar, title[:90],
+                       f"task #{t.get('id')} — due today", "today")))
+        else:
+            out.append((_T_PREP, _order(pillar, title[:90],
+                       f"task #{t.get('id')} — due {d.isoformat()}", "soon")))
+    return out
+
+
 def _order(pillar: str, title: str, why: str, when: str) -> dict:
     return {"pillar": pillar, "title": title, "why": why, "when": when}
 
@@ -748,6 +807,7 @@ def compose(now=None) -> dict:
     tiered += _money_orders(today)
     tiered += _training_orders(now, today)
     tiered += _intake_orders(today)
+    tiered += _task_orders(today)
     tiered.sort(key=lambda t: t[0])  # stable — insertion order holds within a tier
     picked = tiered[:MAX_ORDERS]
     # Basketball is a goal, not filler: on a training day the cap must never

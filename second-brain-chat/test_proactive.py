@@ -50,6 +50,12 @@ def _reset(tracker=None, sender=None, topic="test-topic"):
     proactive.init(claude_client=FakeClaude(), supabase_client=sb,
                    tool_dispatcher=lambda s, a: "{}",
                    tracker=tracker or FakeTracker(), intake_module=intake)
+    # daily_orders._task_orders reaches for the REAL task_tracker.db via
+    # get_tracker(), which bypasses the tracker injected above — so an "empty
+    # day" here would silently inherit whatever is on Alex's actual to-do list.
+    import task_tracker as _tt
+    _tt.get_tracker = lambda *a, **k: type(
+        "_T", (), {"top_by_priority": lambda self, limit=20: []})()
     if topic is None:
         os.environ.pop("NTFY_TOPIC", None)
     else:
