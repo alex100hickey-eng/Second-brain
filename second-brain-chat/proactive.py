@@ -575,6 +575,14 @@ def run_awareness_pass(force: bool = False) -> str:
             tags="sunrise" if "morning" in cfg_key else "city_sunset",
             force=force, recurring=True, quiet_exempt=at_wake))
 
+    # Times a 50/50 capture will fire this pass (section 5). A shooting block
+    # that ends exactly when a study block starts — his Monday grid does this at
+    # 8:00 PM — would buzz twice in one minute otherwise, and two notifications
+    # at once is how a channel gets muted. The capture wins the tie.
+    _5050_ends = {ev["end"].strftime("%H:%M") for ev in today_blocks
+                  if _5050_RE.search(ev.get("title") or "")
+                  and ev["end"].date() == now.date()}
+
     # 4. Session kickoffs — Alex's rule: he and CLARVIS sync at the START of
     #    every study/work block, not just once a day. Any grid block whose
     #    title mentions study or review gets one ping as its window opens.
@@ -588,6 +596,8 @@ def run_awareness_pass(force: bool = False) -> str:
             start = ev["start"]
             if start.date() != now.date():
                 continue          # a spill-over block already had its ping
+            if start.strftime("%H:%M") in _5050_ends:
+                continue          # the 50/50 capture covers this minute
             window_start = now.replace(hour=start.hour, minute=start.minute,
                                        second=0, microsecond=0)
             if not (window_start <= now < window_start

@@ -23,13 +23,21 @@ right account. Verified by reading the box back; `STUDIO_GMAIL_ENTITY` is set in
 
 First day of classes, Wave 1 opens, and the Quest appointment. In order:
 
-1. **8–10 AM · Wave 1 (3 emails).** Drafts are no longer a manual relay: say
-   **"prepare wave 1 drafts"** and CLARVIS regenerates them fresh against each
-   brand's live site, writes them to `Money/outreach-drafts-wave1-<date>.md`,
-   and tells you which brands deserve a 2-minute Ad Library paste first. You
-   review, edit into your own voice, and send from the studio mailbox by hand —
-   there is still no send path in the code, by design. Then just tell CLARVIS
-   you sent them; the tracker CSV now updates itself.
+1. **Wave 1 (3 emails) — send at 11:15 AM, not 8 AM.** The old "8-10 AM"
+   plan predates your schedule: 8:00-8:30 is gym drills, 8:30-9:00 is the walk
+   back and getting ready, and MATH runs 9:20-10:10. You have no free minute in
+   that window. Best slot is **11:15-11:30**, the top of your lunch/class-review
+   block — still prime inbox time. The 10:10-10:25 gap between MATH and AIQS
+   works too (phone is fine for two plain-text emails).
+   **The drafts are already written** — Diggs, Fable Pets, Gunner Kennels, fresh
+   against live sites, lint clean, in
+   `Money/Clients/outreach-drafts-wave1-2026-08-23.md`. Review, put them in your
+   own voice, send from the studio mailbox by hand, then tell CLARVIS you sent —
+   the tracker CSV updates itself now.
+   **One real caveat:** each draft makes claims about the brand's *currently
+   running* ads, but the stored Ad Library notes are undated and possibly weeks
+   old. Two minutes in the Ad Library per brand before sending. Being wrong
+   about a founder's own ads is the one mistake cold outreach doesn't survive.
 2. **9:20 AM · MATH 120, Olin 305** — first class. Quizzes start immediately
    (prior class's material, no make-ups), so the 11:15 review block is where
    Monday's quiz points get banked.
