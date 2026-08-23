@@ -30,6 +30,7 @@ import threading
 import time
 from datetime import datetime, timezone
 
+import contacts
 import intake
 
 CHAT_DB = os.path.expanduser("~/Library/Messages/chat.db")
@@ -168,7 +169,11 @@ def scan_once(cap: int = BATCH_CAP) -> str:
         if not m["text"]:
             empty += 1
             continue
-        who = "ME (Alex)" if m["from_me"] else m["sender"]
+        # Resolve the handle to a real name HERE, at ingest on the Mac — the
+        # server has no address book, so a number left raw now stays raw in
+        # every downstream nudge. An unknown number passes through unchanged.
+        person = contacts.label_for(m["sender"])
+        who = "ME (Alex)" if m["from_me"] else person
         ctx_lines = history.get(chat_key, [])
         context = ""
         if ctx_lines:
@@ -176,8 +181,8 @@ def scan_once(cap: int = BATCH_CAP) -> str:
                        "only — do NOT extract items from context lines themselves):\n"
                        + "\n".join(f"  {w}: {t[:160]}" for w, t in ctx_lines[-CONTEXT_MSGS:])
                        + "\n\nNEW MESSAGE (extract from this one):\n")
-        label = m["sender"] + (f" in '{m['chat']}'" if m["chat"] and "chat" not in
-                               str(m["chat"]).lower() else "")
+        label = person + (f" in '{m['chat']}'" if m["chat"] and "chat" not in
+                          str(m["chat"]).lower() else "")
         res = intake.record_raw("imessage", m["guid"], label, m["ts"],
                                 context + f"{who}: {m['text']}",
                                 preview=f"{who}: {m['text']}")

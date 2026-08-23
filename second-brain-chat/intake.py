@@ -76,6 +76,31 @@ def _now_iso() -> str:
 LOCAL_TZ = ZoneInfo("America/New_York")
 
 
+# Words whose meaning depends on when the message was written — the ones that
+# go wrong when a scan happens a day late.
+_RELATIVE_WORD_RE = re.compile(
+    r"\b(tonight|tomorrow|today|this (morning|afternoon|evening|weekend)|"
+    r"tmrw|later today)\b", re.I)
+
+
+def _to_local(ts):
+    """Parse a source timestamp into Alex's wall clock, or None.
+
+    Sources hand us UTC ISO strings; an 8:12pm ET message arrives as
+    `2026-08-23T00:12Z` and naively reads as the next day, which silently
+    shifts every 'tonight' by one."""
+    s = str(ts or "").strip()
+    if not s:
+        return None
+    try:
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=LOCAL_TZ)     # already local by convention
+    return dt.astimezone(LOCAL_TZ)
+
+
 def _local_now() -> datetime:
     """Alex's wall clock. The server runs UTC, so a naive datetime.now() is
     already tomorrow every evening after 8 PM ET — which meant the extractor was
@@ -202,6 +227,16 @@ INTAKE_PROMPT_RULES = (
     "newsletters, receipts for things already done, and anything already in the past.\n"
     "Each item's text must be SELF-CONTAINED (who/what/when) — it will be read without\n"
     "the original message. Use null for unknown due dates; never invent one.\n"
+    "DATES — read this twice, it is the most common way this goes wrong:\n"
+    "Resolve EVERY relative word ('tonight', 'tomorrow', 'Friday', 'this weekend')\n"
+    "against SENT (the moment the message was written), never against the current\n"
+    "date. A message is often processed hours or days after it was sent, and\n"
+    "'tomorrow' in a Friday message means Saturday even if it is now Monday.\n"
+    "If that resolved moment is already in the past, the item is stale — return\n"
+    "nothing for it. NEVER roll a past date forward to make it upcoming.\n"
+    "Write the resolved absolute date into the text itself ('lifting Sat Aug 22 at\n"
+    "10am'), never the original relative word — the text is read days later, when\n"
+    "'tomorrow' means something different than it did.\n"
     "Lines marked 'ME (Alex)' are Alex himself: his promises are commitments; his\n"
     "questions to others are NOT asks on him. When the new message CONFIRMS a plan\n"
     "proposed in the conversation context ('bet', 'let's do it', 'done', 'in the\n"
@@ -225,9 +260,27 @@ def extract_items(source: str, sender: str, text: str, when: str = "") -> list:
     if not (text or "").strip():
         return []
     body = wrap_untrusted(text[:4000], source=f"{source} from {sender}")
+    # The anchor for relative dates is when the message was SENT, in Alex's own
+    # timezone — not now, and not UTC. Both mistakes were live: a Friday message
+    # saying "lifting tomorrow" was scanned Saturday and resolved to Sunday, and
+    # an 8:12pm ET message stored as 00:12Z already read as the next day. Either
+    # one produces a notification about something that already happened.
+    sent_local = _to_local(when)
+    sent_line = (sent_local.strftime("%Y-%m-%d (%A) at %-I:%M%p")
+                 if sent_local else (when or "unknown"))
+    now_local = _local_now()
+    age_note = ""
+    if sent_local:
+        age_h = (now_local - sent_local).total_seconds() / 3600
+        if age_h >= 12:
+            age_note = (f"\nNOTE: this message is {int(age_h / 24)}d {int(age_h % 24)}h old. "
+                        "Anything it called 'tonight' or 'tomorrow' has very likely "
+                        "already happened — return nothing rather than a future date.")
     user = (
-        f"Source: {source}\nFrom: {sender}\nWhen: {when or 'recently'}\n"
-        f"Today: {_local_now().strftime('%Y-%m-%d (%A)')}\n\n{body}"
+        f"Source: {source}\nFrom: {sender}\n"
+        f"SENT (resolve all relative dates against this): {sent_line}\n"
+        f"Current date, for staleness only: {now_local.strftime('%Y-%m-%d (%A)')}"
+        f"{age_note}\n\n{body}"
     )
     try:
         resp = claude.messages.create(
@@ -246,8 +299,18 @@ def extract_items(source: str, sender: str, text: str, when: str = "") -> list:
             continue
         typ = it.get("type") if it.get("type") in (
             "commitment", "ask", "deadline", "event", "info") else "info"
-        clean.append({"type": typ, "text": it["text"].strip()[:400],
-                      "due": it.get("due") or None})
+        due = it.get("due") or None
+        # Deterministic backstop for the day-shift bug. A relative word can only
+        # ever mean a moment near the message; if the model resolved "tonight"
+        # into a date more than a day AFTER the message was sent, it anchored on
+        # the wrong day and the item would nudge about something already over.
+        # Drop the date rather than the item — the obligation may still be real,
+        # it just no longer gets to claim a time it can't support.
+        if due and sent_local and _RELATIVE_WORD_RE.search(it["text"]):
+            d = _to_local(due)
+            if d and (d.date() - sent_local.date()).days > 1:
+                due = None
+        clean.append({"type": typ, "text": it["text"].strip()[:400], "due": due})
     return clean[:6]
 
 

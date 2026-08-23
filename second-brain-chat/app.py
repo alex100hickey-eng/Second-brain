@@ -4665,6 +4665,8 @@ def _dispatch_tool_call(tool_name: str, tool_input: dict) -> str:
         return school_data.handle_tool_call(tool_name, tool_input)
     if tool_name in school_grades.TOOL_NAMES:
         return school_grades.handle_tool_call(tool_name, tool_input)
+    if tool_name in contacts.TOOL_NAMES:
+        return contacts.handle_tool_call(tool_name, tool_input)
     if tool_name in daily_orders.TOOL_NAMES:
         return daily_orders.handle_tool_call(tool_name, tool_input)
     if tool_name in ("create_email_draft", "list_email_drafts"):
@@ -5433,6 +5435,13 @@ school_data.init(VAULT_PATH, node_runtime=task_manager.RUNTIME)
 # a single item is actually worth. Serves the "high grades, least time" goal by
 # making satisficing a calculation instead of a guess. Imports AFTER
 # school_data.init because it reads through school_data's loaders and runtime.
+# Contacts: turn a bare phone number into a person's name. Mac-node only (the
+# address book lives there), which is why iMessage ingest resolves at capture
+# time — the server inherits the name on the stored row.
+import contacts  # noqa: E402
+TOOLS.extend(contacts.TOOL_SCHEMAS)
+TOOL_STATUS_LABELS.update(contacts.TOOL_STATUS_LABELS)
+
 import school_grades  # noqa: E402
 TOOLS.extend(school_grades.TOOL_SCHEMAS)
 TOOL_STATUS_LABELS.update(school_grades.TOOL_STATUS_LABELS)

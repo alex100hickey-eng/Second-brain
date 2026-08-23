@@ -440,6 +440,17 @@ def _due_context(ref: str) -> str:
             if ev:
                 src = ev.get("source", "?")
                 sender = ev.get("sender") or "?"
+                # Rows ingested before contact resolution existed still carry a
+                # bare number; resolve on the way out when we can (Mac node).
+                try:
+                    import contacts
+                    m = _re.match(r"^(\+?\d[\d\s().-]{6,})(\s+in\s+.*)?$", sender)
+                    if m:
+                        who = contacts.name_for(m.group(1).strip())
+                        if who:
+                            sender = who + (m.group(2) or "")
+                except Exception:
+                    pass
                 prev = (ev.get("preview") or "").strip().replace("\n", " ")[:160]
                 return f"From {sender} (via {src}): “{prev}”"
         elif kind == "task":
@@ -453,18 +464,29 @@ def _due_context(ref: str) -> str:
 
 
 def _when_words(hours: float, due: str) -> str:
+    """Human phrasing for a due moment, anchored to the CALENDAR DAY.
+
+    "in 23h" was being titled "Today", which is a contradiction the reader has
+    to decode — a 23-hour-away thing is tomorrow. Say which day it actually is
+    and let the hour count be the detail, not the claim."""
     try:
         dt = datetime.fromisoformat(due)
         clock = dt.strftime("%-I:%M%p").lower()
     except ValueError:
-        clock = due
+        return due
+    now = _now()
+    if dt.tzinfo is None and LOCAL_TZ:
+        dt = dt.replace(tzinfo=LOCAL_TZ)
+    day_gap = (dt.date() - now.date()).days
     if hours <= 0:
-        return f"NOW ({clock})"
+        return f"NOW ({clock})" if day_gap == 0 else f"already passed ({clock})"
     if hours < 1:
         return f"within the hour ({clock})"
-    if hours < 24:
-        return f"in {int(hours)}h ({clock})"
-    return f"{clock}"
+    if day_gap == 0:
+        return f"today in {int(hours)}h ({clock})"
+    if day_gap == 1:
+        return f"TOMORROW {clock}"
+    return f"{dt.strftime('%a %b %-d')} {clock}"
 
 
 def run_awareness_pass(force: bool = False) -> str:
@@ -481,9 +503,11 @@ def run_awareness_pass(force: bool = False) -> str:
     #    enabled by the 6h renudge override. Never a third.
     for d in picture["due_soon"]:
         close = d["hours"] <= 3
+        # The day now comes from _when_words, which knows the calendar date —
+        # the old hardcoded "Today" produced titles like "Today in 23h".
         title = (f"🔴 DUE {_when_words(d['hours'], d['due'])} — {d['what'][:55]}"
                  if close else
-                 f"⏰ Today {_when_words(d['hours'], d['due'])} — {d['what'][:55]}")
+                 f"⏰ {_when_words(d['hours'], d['due'])} — {d['what'][:55]}")
         ctx = _due_context(d["ref"])
         body = "\n".join(x for x in (
             d["what"],
