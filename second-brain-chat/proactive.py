@@ -342,16 +342,30 @@ def _gather() -> dict:
                 due = item.get("due")
                 if not due:
                     continue
+                # An `info` item is something Alex should KNOW, not something he
+                # has to DO — "Horsburgh is booked for recruit physicals Monday"
+                # is context, and dressing it up as a red deadline alert is the
+                # noise that makes a real deadline easy to swipe away.
+                if (item.get("type") or "").strip().lower() == "info":
+                    continue
                 try:
                     dt = datetime.fromisoformat(due)
                     if dt.tzinfo is None and LOCAL_TZ:
                         dt = dt.replace(tzinfo=LOCAL_TZ)
                 except ValueError:
                     continue
+                # A DATE-ONLY due means "sometime that day", not 00:00. Left as
+                # midnight it both nudges ~14h early and renders the absurd
+                # "due in 14h (12:00am)". Treat it as end of day, matching how
+                # date-only task reminders already behave.
+                date_only = len(str(due).strip()) <= 10
+                if date_only:
+                    dt = dt.replace(hour=23, minute=59)
                 hours = (dt - now).total_seconds() / 3600
                 if -2 <= hours <= DUE_SOON_HOURS:
                     picture["due_soon"].append(
-                        {"what": item["text"], "due": due, "hours": round(hours, 1),
+                        {"what": item["text"], "due": dt.isoformat(),
+                         "date_only": date_only, "hours": round(hours, 1),
                          "ref": f"intake:{r['id']}"})
     except Exception:
         pass
@@ -463,7 +477,7 @@ def _due_context(ref: str) -> str:
     return ""
 
 
-def _when_words(hours: float, due: str) -> str:
+def _when_words(hours: float, due: str, date_only: bool = False) -> str:
     """Human phrasing for a due moment, anchored to the CALENDAR DAY.
 
     "in 23h" was being titled "Today", which is a contradiction the reader has
@@ -482,6 +496,14 @@ def _when_words(hours: float, due: str) -> str:
         return f"NOW ({clock})" if day_gap == 0 else f"already passed ({clock})"
     if hours < 1:
         return f"within the hour ({clock})"
+    # A date-only due has no real clock time — saying "11:59pm" invents a
+    # precision the source never had.
+    if date_only:
+        if day_gap == 0:
+            return "by end of today"
+        if day_gap == 1:
+            return "by end of TOMORROW"
+        return f"by end of {dt.strftime('%a %b %-d')}"
     if day_gap == 0:
         return f"today in {int(hours)}h ({clock})"
     if day_gap == 1:
@@ -505,13 +527,13 @@ def run_awareness_pass(force: bool = False) -> str:
         close = d["hours"] <= 3
         # The day now comes from _when_words, which knows the calendar date —
         # the old hardcoded "Today" produced titles like "Today in 23h".
-        title = (f"🔴 DUE {_when_words(d['hours'], d['due'])} — {d['what'][:55]}"
-                 if close else
-                 f"⏰ {_when_words(d['hours'], d['due'])} — {d['what'][:55]}")
+        _w = _when_words(d["hours"], d["due"], d.get("date_only", False))
+        title = (f"🔴 DUE {_w} — {d['what'][:55]}" if close
+                 else f"⏰ {_w} — {d['what'][:55]}")
         ctx = _due_context(d["ref"])
         body = "\n".join(x for x in (
             d["what"],
-            f"Due: {_when_words(d['hours'], d['due'])}",
+            f"Due: {_w}",
             ctx,
             "Do it (or drop it), then mark it done in CLARVIS so this stays quiet.",
         ) if x)
@@ -583,7 +605,8 @@ def run_awareness_pass(force: bool = False) -> str:
             continue   # nothing actionable — the respectful brief is no brief
         head = list(order_lines)
         for d in picture["due_soon"][:max(0, 3 - len(head))]:
-            head.append(f"• {_when_words(d['hours'], d['due'])}: {d['what'][:60]}")
+            head.append(f"• {_when_words(d['hours'], d['due'], d.get('date_only', False))}: "
+                        f"{d['what'][:60]}")
         for t in picture["open_tasks"][:max(0, 3 - len(head))]:
             head.append(f"• open: {t[:60]}")
         if cfg_key == "morning_brief":
