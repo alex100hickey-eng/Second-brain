@@ -524,6 +524,105 @@ def _training_orders(now: datetime, today: date) -> list:
     return out
 
 
+_INTAKE_ACTIONABLE = ("ask", "commitment", "deadline")
+# Words that mark an intake item as belonging to a pillar, so an obligation
+# extracted from an email lands in the right column of the day.
+_INTAKE_BALL_WORDS = ("ncaa", "team", "practice", "athlet", "roster", "compliance",
+                      "physical", "basketball", "phed", "sickle")
+
+
+# Verbs that mark a real obligation rather than a passing remark. Ranking on
+# these is what separates "Complete the NCAA Student-Athlete Statement" from
+# "asked whether you prefer a window or aisle seat" — both extract as `ask`, and
+# newest-first ordering surfaces the chatter, because chatter is what's recent.
+_INTAKE_WEIGHTY = ("ncaa", "eligib", "compliance", "sign up", "signup", "register",
+                   "complete", "submit", "form", "statement", "consent", "roster",
+                   "required", "mandatory", "deadline", "due ", "renew", "pay ")
+_INTAKE_TRIVIAL = ("window or aisle", "seat", "let him know", "asked alex whether",
+                   "prefers", "wondering")
+# Standing decisions Alex has already made. A reminder is only useful about work
+# he still intends to do; re-raising something he deliberately killed is how a
+# proactive assistant earns "mute". The math placement exam is the live example
+# — he chose not to sit it, and it kept arriving as a fresh registration
+# deadline from the registrar. Dismissing the row isn't enough on its own,
+# because the source keeps emailing.
+_INTAKE_DECIDED_AGAINST = ("placement exam",)
+
+
+def _intake_score(text: str, due, today: date) -> int:
+    low = text.lower()
+    if any(w in low for w in _INTAKE_DECIDED_AGAINST):
+        return -1                              # settled; re-raising it is nagging
+    if any(w in low for w in _INTAKE_TRIVIAL):
+        return -1                              # never worth an order slot
+    score = sum(3 for w in _INTAKE_WEIGHTY if w in low)
+    if due:
+        score += 8 if due <= today else 4
+    if len(text) < 25:
+        score -= 2                             # fragments are usually noise
+    return score
+
+
+def _intake_key(text: str) -> str:
+    """Collapse the many near-identical reminders about one thing (Healthy
+    Roster alone has five rows) so a single obligation can't take all 3 slots."""
+    low = re.sub(r"[^a-z0-9 ]", " ", text.lower())
+    words = [w for w in low.split() if len(w) > 3]
+    return " ".join(sorted(set(words))[:6])
+
+
+def _intake_orders(today: date) -> list:
+    """Obligations extracted from mail/messages that nothing else surfaces.
+
+    The gap this closes: extraction worked and triage never happened, so every
+    intake event sat at status 'new' forever. Dateless items were the worst
+    case — proactive only nudges on a due date, and the pile-up branch needs
+    the pile to GROW, so a stable pile of real obligations (the NCAA forms, the
+    PHED 171 signup) was visible on exactly zero surfaces. Ranked by weight
+    rather than recency, deduped per obligation, capped at 3 so a neglected
+    inbox can't evict school/ball/money from an 8-slot day."""
+    try:
+        rows = intake.list_intake("new", limit=200)
+    except Exception:
+        return []
+    cands = {}
+    for row in rows:
+        ev = row.get("event") or {}
+        src = (ev.get("sender") or ev.get("source") or "").strip()
+        for it in (ev.get("items") or []):
+            if not isinstance(it, dict):
+                continue
+            if (it.get("type") or "").strip().lower() not in _INTAKE_ACTIONABLE:
+                continue
+            text = str(it.get("text") or "").strip()
+            if not text:
+                continue
+            due = _parse_iso_date(str(it.get("due") or "")[:10]) if it.get("due") else None
+            if due and due > today + timedelta(days=14):
+                continue                       # not yet the day's business
+            score = _intake_score(text, due, today)
+            if score <= 0:
+                continue
+            key = _intake_key(text)
+            prev = cands.get(key)
+            if prev is None or score > prev[0]:
+                cands[key] = (score, text, due, src)
+
+    out = []
+    for score, text, due, src in sorted(cands.values(), key=lambda c: -c[0])[:3]:
+        pillar = "ball" if any(w in text.lower() for w in _INTAKE_BALL_WORDS) else "life"
+        why = f"from {src}" if src and not src.startswith("+") else "still untriaged in your inbox"
+        if due and due < today:
+            out.append((_T_DEADLINE, _order(pillar, text[:90],
+                       f"{why} — was due {due.isoformat()}", "overdue")))
+        elif due == today:
+            out.append((_T_DEADLINE, _order(pillar, text[:90],
+                       f"{why} — due today", "today")))
+        else:
+            out.append((_T_PREP, _order(pillar, text[:90], why, "open")))
+    return out
+
+
 def _order(pillar: str, title: str, why: str, when: str) -> dict:
     return {"pillar": pillar, "title": title, "why": why, "when": when}
 
@@ -648,6 +747,7 @@ def compose(now=None) -> dict:
     tiered += _school_orders(today)
     tiered += _money_orders(today)
     tiered += _training_orders(now, today)
+    tiered += _intake_orders(today)
     tiered.sort(key=lambda t: t[0])  # stable — insertion order holds within a tier
     picked = tiered[:MAX_ORDERS]
     # Basketball is a goal, not filler: on a training day the cap must never

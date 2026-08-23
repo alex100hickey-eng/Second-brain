@@ -651,6 +651,17 @@ def run_awareness_pass(force: bool = False) -> str:
                 "Thirty seconds now is the whole trend line.",
                 tags="basketball", force=force, recurring=True))
 
+    # 6. Retire intake events that are only about moments already past. Runs on
+    #    the evening pass so the triage pile Alex sees in the morning is work he
+    #    can still actually do. Narrow by design — see intake.expire_stale.
+    try:
+        if now.hour >= 20:
+            gone = intake_mod.expire_stale()
+            if gone:
+                print(f"proactive: expired {gone} past-dated intake event(s)")
+    except Exception as e:
+        print(f"proactive: intake expiry failed ({e})")
+
     sent = sum(1 for a in actions if a.startswith("Nudge sent"))
     # Heartbeat: a pass that decides to send NOTHING is still a completed pass —
     # nudge rows can't tell "quiet by choice" from "worker dead", this can.

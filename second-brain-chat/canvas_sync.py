@@ -225,13 +225,39 @@ if __name__ == "__main__":
         if result.get("newly_live"):
             result["notify"] = _notify_newly_live(result["newly_live"])
         # Heartbeat: a sync that finds nothing looks identical to a sync that
-        # never ran. This file is what tells them apart.
+        # never ran, and canvas_sync had no beat, no event, and a log nothing
+        # reads — its last recorded line was a fetch timeout nobody saw. Both a
+        # local file (cheap, works offline) and a monitor heartbeat (so
+        # check_heartbeats raises an incident if the job stops firing).
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         try:
-            with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                   "..", ".canvas_sync_heartbeat"), "w") as f:
+            with open(os.path.join(root, ".canvas_sync_heartbeat"), "w") as f:
                 f.write(datetime.now().isoformat())
         except OSError:
             pass
+        import subprocess
+        if result.get("error"):
+            # Deliberately NO heartbeat on a failed run: beating here would make
+            # a permanently broken sync look perfectly healthy, which is the
+            # exact failure this is meant to catch. Raise an incident instead,
+            # and let the heartbeat go stale.
+            try:
+                subprocess.run(
+                    [sys.executable, os.path.join(root, "scripts", "report_event.py"),
+                     "canvas-sync", "warning", "canvas sync failed",
+                     str(result["error"])[:300]],
+                    timeout=30, capture_output=True)
+            except Exception:
+                pass
+        else:
+            try:
+                subprocess.run(
+                    [sys.executable, os.path.join(root, "scripts", "beat.py"),
+                     "canvas-sync", "86400",
+                     f"+{result.get('added', 0)} ~{result.get('updated', 0)}"],
+                    timeout=30, capture_output=True)
+            except Exception:
+                pass      # a heartbeat must never fail the sync it reports on
         print(f"[{datetime.now().strftime('%Y-%m-%dT%H:%M:%S')}]",
               json.dumps(result))
     else:

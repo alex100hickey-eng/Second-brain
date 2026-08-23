@@ -18,7 +18,7 @@ Event shape (one Supabase "Agent Outputs" row, agent_name="intake_event"):
       "items":      [{"type": "commitment|deadline|ask|event|info",
                       "text": "<the extracted obligation, self-contained>",
                       "due": "<ISO date or null>"}],
-      "status":     "new" | "accepted" | "dismissed",
+      "status":     "new" | "accepted" | "dismissed" | "expired",
       "task_ids":   [<task tracker ids created on accept>],
       "created_at" / "updated_at": ISO
     }
@@ -352,6 +352,50 @@ def list_intake(status: str = "new", limit: int = 25) -> list:
     return out
 
 
+def expire_stale(days: int = 2, limit: int = 200) -> int:
+    """Retire intake events that are only about moments already past.
+
+    A triage list nobody can finish is a list nobody opens, and the pile was
+    100% untriaged. But auto-clearing the wrong thing is worse than clutter, so
+    this is deliberately narrow: an event expires ONLY if every one of its items
+    is a dated event/deadline whose date is more than `days` past. A single ask
+    or commitment — or one undated item — keeps the whole event alive, because
+    those are obligations that don't stop mattering just because time passed
+    (the NCAA forms are exactly this shape). Returns how many were retired."""
+    today = _local_now().date()
+    n = 0
+    for row in _load_events(limit):
+        ev = row.get("event") or {}
+        if ev.get("status", "new") != "new":
+            continue
+        items = ev.get("items") or []
+        if not items:
+            continue
+        all_past = True
+        for it in items:
+            if not isinstance(it, dict):
+                all_past = False
+                break
+            if (it.get("type") or "").strip().lower() not in ("event", "deadline"):
+                all_past = False
+                break
+            raw = str(it.get("due") or "")[:10]
+            try:
+                d = datetime.strptime(raw, "%Y-%m-%d").date()
+            except ValueError:
+                all_past = False        # undated: can't prove it's over
+                break
+            if (today - d).days <= days:
+                all_past = False
+                break
+        if all_past:
+            ev["status"] = "expired"
+            ev["resolution"] = f"auto-expired {today.isoformat()}: all dates passed"
+            _update_event(row["id"], ev)
+            n += 1
+    return n
+
+
 def accept_intake(row_id: int) -> str:
     """Turn an event's extracted items into real tasks. The ONLY write this layer
     ever does outside its own rows — and it's into OUR task tracker."""
@@ -590,7 +634,7 @@ TOOL_SCHEMAS = [
                        "waiting to be accepted into tasks or dismissed. Use when Alex asks "
                        "'what came in', 'what did I miss', or wants to triage.",
         "input_schema": {"type": "object", "properties": {
-            "status": {"type": "string", "enum": ["new", "accepted", "dismissed", "all"],
+            "status": {"type": "string", "enum": ["new", "accepted", "dismissed", "expired", "all"],
                        "description": "Which events to list (default new)."}}},
     },
     {

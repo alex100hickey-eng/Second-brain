@@ -28,6 +28,14 @@ ts() { date "+%Y-%m-%dT%H:%M:%S%z"; }
 report() {  # report <level> <message> [detail]  — fail-soft, never blocks the job
     "$PY" "$SCRIPT_DIR/report_event.py" "vault-sync" "$1" "$2" "${3:-}" >/dev/null 2>&1 || true
 }
+# Heartbeat on a HEALTHY finish only. A job that stops firing entirely — an
+# unloaded plist, a Mac asleep for a day — is invisible otherwise: no error is
+# logged because no code runs. Stale-after 2h on a 10-min cadence tolerates
+# normal sleep without crying wolf. Never beat on a failure path, or a
+# permanently broken sync reads as healthy.
+beat() {  # beat <note>
+    "$PY" "$SCRIPT_DIR/beat.py" "vault-sync-mac" 7200 "${1:-ok}" >/dev/null 2>&1 || true
+}
 
 if ! cd "$VAULT" 2>/dev/null; then
     echo "[$(ts)] ERROR — vault path unavailable (iCloud not mounted?): $VAULT"
@@ -89,6 +97,7 @@ fi
 
 if git diff --cached --quiet; then
     echo "[$(ts)] IDLE — no vault changes to sync (healthy)."
+    beat "idle — no changes"
     exit 0
 fi
 
@@ -105,3 +114,4 @@ if ! git push origin main 2>&1; then
 fi
 
 echo "[$(ts)] SYNCED — vault changes committed and pushed to GitHub."
+beat "synced"

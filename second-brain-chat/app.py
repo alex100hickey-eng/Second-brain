@@ -2385,7 +2385,9 @@ def _situational_snapshot() -> str:
     except Exception as e:
         print(f"situational: drafts check failed ({e})")
     try:
-        n = len(intake.list_intake(status="new"))
+        # limit must be explicit: list_intake defaults to 25, which silently
+        # caps the "waiting for triage" count at 25 no matter how big the pile.
+        n = len(intake.list_intake(status="new", limit=200))
         if n:
             waiting.append(f"{n} intake item{'s' if n != 1 else ''} waiting for triage")
     except Exception as e:

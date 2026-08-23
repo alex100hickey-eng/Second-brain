@@ -328,6 +328,50 @@ def test_training_orders_and_sleep_guard():
           guard is not None and "9:00am" in guard["title"])
 
 
+def test_intake_orders():
+    print("\n=== intake obligations reach the day, ranked by weight not recency ===")
+    _reset()
+    import intake as intake_mod
+
+    def ev(text, typ="ask", due=None, sender="Coach"):
+        return {"event": {"sender": sender, "source": "gmail",
+                          "items": [{"type": typ, "text": text, "due": due}]}}
+
+    rows = [
+        ev("asked Alex whether he prefers a window or aisle seat"),   # chatter
+        ev("Complete the NCAA Student-Athlete Statement form"),       # real
+        ev("Registration deadline for Math Placement Exam retake"),   # decided against
+        ev("Sign up for PHED 171-100 Varsity Basketball (Men)"),      # real
+        ev("Team dinner was fun", typ="info"),                        # not actionable
+    ]
+    saved = intake_mod.list_intake
+    intake_mod.list_intake = lambda status="new", limit=25: rows
+    try:
+        got = daily_orders._intake_orders(TODAY)
+        titles = " | ".join(o["title"] for _t, o in got)
+        check("a real obligation reaches the day", "NCAA Student-Athlete" in titles)
+        check("so does a second one", "PHED 171" in titles)
+        check("chatter never takes an order slot", "window or aisle" not in titles)
+        check("non-actionable info is skipped", "Team dinner" not in titles)
+        # The standing-decision guard: Alex chose not to sit the placement exam,
+        # and the registrar keeps emailing about it. Re-raising it is nagging.
+        check("a decision Alex already killed never resurfaces",
+              "Placement Exam" not in titles)
+        check("capped so a neglected inbox can't own the day", len(got) <= 3)
+        # Ball-flavored obligations land in the ball pillar, not life.
+        ncaa = next((o for _t, o in got if "NCAA" in o["title"]), None)
+        check("athletics obligations route to the ball pillar",
+              ncaa is not None and ncaa["pillar"] == "ball")
+        # Dedupe: five near-identical reminders about one thing = one slot.
+        dupes = [ev(f"Complete outstanding Healthy Roster information now ({i})")
+                 for i in range(5)]
+        intake_mod.list_intake = lambda status="new", limit=25: dupes
+        got2 = daily_orders._intake_orders(TODAY)
+        check("near-duplicate reminders collapse to one order", len(got2) == 1)
+    finally:
+        intake_mod.list_intake = saved
+
+
 def test_multiline_obligation_routing():
     print("\n=== a school word on one line must not swallow the rest of the day ===")
     _reset()
@@ -495,6 +539,7 @@ if __name__ == "__main__":
         test_failsoft_school_absent_and_supabase_down()
         test_local_tz_discipline()
         test_training_orders_and_sleep_guard()
+        test_intake_orders()
         test_multiline_obligation_routing()
         test_grid_derived_window_and_bedtime()
         test_brief_and_evening_lines()
