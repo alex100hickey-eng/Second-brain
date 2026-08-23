@@ -76,11 +76,26 @@ def _now_iso() -> str:
 LOCAL_TZ = ZoneInfo("America/New_York")
 
 
-# Words whose meaning depends on when the message was written — the ones that
-# go wrong when a scan happens a day late.
-_RELATIVE_WORD_RE = re.compile(
-    r"\b(tonight|tomorrow|today|this (morning|afternoon|evening|weekend)|"
-    r"tmrw|later today)\b", re.I)
+# Words whose meaning depends on when the message was written, mapped to how
+# many days AFTER the send date they can legitimately land. "tonight" means the
+# same evening — resolving it to the next day is the bug; "tomorrow" is
+# supposed to be +1. A single shared threshold got this wrong in one direction
+# or the other, so each word carries its own.
+_RELATIVE_MAX_SHIFT = (
+    (re.compile(r"\b(tonight|today|this (morning|afternoon|evening)|later today)\b", re.I), 0),
+    (re.compile(r"\b(tomorrow|tmrw|tmw)\b", re.I), 1),
+    (re.compile(r"\bthis (weekend|week)\b", re.I), 7),
+)
+
+
+def _max_date_shift(text: str):
+    """Largest defensible gap in days between send date and due date, or None
+    when the text carries no time-relative word at all."""
+    best = None
+    for pattern, allowed in _RELATIVE_MAX_SHIFT:
+        if pattern.search(text or ""):
+            best = allowed if best is None else max(best, allowed)
+    return best
 
 
 def _to_local(ts):
@@ -306,9 +321,10 @@ def extract_items(source: str, sender: str, text: str, when: str = "") -> list:
         # the wrong day and the item would nudge about something already over.
         # Drop the date rather than the item — the obligation may still be real,
         # it just no longer gets to claim a time it can't support.
-        if due and sent_local and _RELATIVE_WORD_RE.search(it["text"]):
+        allowed = _max_date_shift(it["text"]) if (due and sent_local) else None
+        if allowed is not None:
             d = _to_local(due)
-            if d and (d.date() - sent_local.date()).days > 1:
+            if d and (d.date() - sent_local.date()).days > allowed:
                 due = None
         clean.append({"type": typ, "text": it["text"].strip()[:400], "due": due})
     return clean[:6]

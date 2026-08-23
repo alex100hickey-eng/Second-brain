@@ -109,6 +109,27 @@ def test_no_addressbook():
           "Mac node" in contacts.describe("+13049067033"))
 
 
+def test_relative_shift_limits():
+    print("\n=== 6. each relative word gets its own defensible shift ===")
+    import intake
+    # "tonight" from a Saturday-8pm message means SATURDAY. Resolving it to
+    # Sunday is the live bug that buzzed Alex about the previous night's event;
+    # a single shared threshold of +1 let it through because +1 is correct for
+    # "tomorrow".
+    check("tonight may not move off the send day",
+          intake._max_date_shift("practice tonight at 9") == 0)
+    check("today may not move either",
+          intake._max_date_shift("finish it today") == 0)
+    check("tomorrow is allowed exactly one day",
+          intake._max_date_shift("lifting tomorrow at 10") == 1)
+    check("this weekend gets a week of slack",
+          intake._max_date_shift("free this weekend?") == 7)
+    check("an absolute date has no relative word to bound",
+          intake._max_date_shift("exam on Sep 11") is None)
+    check("the widest word wins when several appear",
+          intake._max_date_shift("tonight or maybe this weekend") == 7)
+
+
 def test_when_words_day_accuracy():
     print("\n=== 5. notification wording names the right DAY ===")
     real_now = proactive._now
@@ -144,6 +165,7 @@ if __name__ == "__main__":
     test_duplicate_preference()
     test_label_and_describe()
     test_no_addressbook()
+    test_relative_shift_limits()
     test_when_words_day_accuracy()
     total, passed = len(_results), sum(_results)
     print("\n" + "=" * 48)
