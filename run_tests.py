@@ -272,6 +272,97 @@ def suite_gate(app, live):
     check("authed session can reach /api/*", r.status_code == 200)
 
 
+def suite_actions(app, live):
+    """The /do surface: the only ungated WRITE path in the app.
+
+    It exists because a notification is tapped from a lock screen, where there is
+    no session and no chance he types an access code. That makes the token the
+    whole security story, so these checks are deliberately adversarial: a forged,
+    stale, or re-scoped token must be a bare 404, and a valid one must reach
+    exactly one item and one op list. The rendering checks matter for a different
+    reason — a page that loads but shows no button is indistinguishable, from his
+    end, from a feature that never shipped."""
+    section("one-tap action links (/do/<token>)")
+    import action_links as al
+
+    os.environ["ACTION_LINK_SECRET"] = "run-tests-secret"
+    app.app.config["TESTING"] = True
+    c = app.app.test_client()
+
+    r = c.get("/do/not-a-real-token")
+    check("a garbage token is a bare 404, never a hint", r.status_code == 404)
+
+    tok = al.mint(al.KIND_TASK, "99999999", ops=("done", "snooze", "drop"))
+    r = c.get(f"/do/{tok}")
+    check("a valid token renders WITHOUT a session — the whole point",
+          r.status_code == 200)
+    html = r.get_data(as_text=True)
+    check("the page is CLARVIS, not a stray 200", "CLARVIS" in html)
+
+    expired = al.mint(al.KIND_TASK, "1", ops=("done",), ttl_days=-1)
+    check("an expired token is refused — a link is a moment, not a credential",
+          c.get(f"/do/{expired}").status_code == 404)
+
+    body, _, sig = tok.partition(".")
+    forged = body[:-4] + "AAAA." + sig
+    check("a tampered payload is refused", c.get(f"/do/{forged}").status_code == 404)
+
+    # Ops are scoped to the token, enforced server-side — not by hiding a button.
+    scoped = al.mint(al.KIND_TASK, "99999999", ops=("snooze",))
+    r = c.post(f"/do/{scoped}/act?op=drop")
+    check("an op the token never granted is refused at the endpoint",
+          r.status_code == 400)
+
+    r = c.post(f"/do/not-a-real-token/act?op=done")
+    check("acting with a garbage token is a 404, not a 500",
+          r.status_code == 404)
+
+    # The page renders every piece a person needs to act, for a real-shaped item.
+    import do_actions
+    view = {"kind": "outbox", "title": "Send the reply to coach@case.edu",
+            "why": "Ready and waiting 4h", "detail": "Subject: Re: lift times",
+            "steps": ["Open the Drafts folder.", "Read it once.", "Hit Send."],
+            "link": "https://mail.google.com/mail/u/0/#drafts",
+            "link_label": "Open Gmail Drafts", "ops": ["done", "snooze", "drop"],
+            "gone": False, "done_label": "Sent it"}
+    with app.app.test_request_context():
+        from flask import render_template
+        page = render_template("do.html", view=view, token="tok", message="")
+    check("the page names the thing", "coach@case.edu" in page)
+    check("the page says why now", "waiting 4h" in page)
+    check("the page carries the steps — instructions, not a reminder",
+          "Hit Send." in page)
+    check("the primary button starts the job in the right mailbox",
+          'href="https://mail.google.com/mail/u/0/#drafts"' in page)
+    check("the close-it button says what he actually did", ">Sent it<" in page)
+    check("'not now' is offered as a real answer", "Snooze 3h" in page)
+    check("so is 'not doing it' — an honest no beats a lying list",
+          "Not doing it" in page)
+    check("every button posts back to this token's own act endpoint",
+          'action="/do/tok/act"' in page)
+
+    gone = dict(view, gone=True, title="Already handled",
+                why="This one's closed — nothing waiting on you here.")
+    with app.app.test_request_context():
+        from flask import render_template
+        page = render_template("do.html", view=gone, token="tok", message="")
+    check("a stale tap reads as reassurance, not an error", "Already handled" in page)
+    check("…and offers no buttons to press on a closed item",
+          "Snooze 3h" not in page)
+
+    # The wiring the feature dies without.
+    check("/do is exempt from the login gate (its caller cannot log in)",
+          "do_page" in open(os.path.join(CHAT_DIR, "app.py"), encoding="utf-8").read()
+          .split("def require_login")[1][:900])
+    names = [t["name"] for t in __import__("outbox").TOOL_SCHEMAS]
+    check("the outbox tools are registered with the model",
+          all(any(t.get("name") == n for t in app.TOOLS) for n in names), str(names))
+    check("…and all have UI status labels",
+          all(n in app.TOOL_STATUS_LABELS for n in names))
+    check("the prompt tells CLARVIS to file work that needs his hand",
+          "flag_for_alex" in app.SYSTEM_PROMPT)
+
+
 def suite_loginlimit(app, live):
     section("login limiter (brute-force lockout for the internet-facing gate)")
     import login_limiter as ll
@@ -5901,6 +5992,7 @@ def suite_modules(app, live):
 SUITES = {
     "vault": suite_vault,
     "gate": suite_gate,
+    "actions": suite_actions,
     "loginlimit": suite_loginlimit,
     "toolkit": suite_toolkit,
     "pipeline": suite_pipeline,

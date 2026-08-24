@@ -36,11 +36,12 @@ class SpySender:
     def __init__(self, fail=False):
         self.sent, self.fail = [], fail
 
-    def __call__(self, topic, title, body, priority, tags):
+    def __call__(self, topic, title, body, priority, tags, click="", actions=None):
         if self.fail:
             raise RuntimeError("ntfy unreachable")
         self.sent.append({"topic": topic, "title": title, "body": body,
-                          "priority": priority, "tags": tags})
+                          "priority": priority, "tags": tags,
+                          "click": click, "actions": actions or []})
 
 
 def _reset(tracker=None, sender=None, topic="test-topic"):
@@ -145,12 +146,16 @@ def test_emoji_headers():
 
     class RealPostButNoNetwork:
         """Exercises the real header-building path without hitting the network."""
-        def __call__(self, topic, title, body, priority, tags):
+        def __call__(self, topic, title, body, priority, tags, click="", actions=None):
             import urllib.request
+            headers = {"Title": proactive._header_safe(title), "Priority": priority,
+                       "Tags": proactive._header_safe(tags),
+                       "Click": click or proactive.DEEP_LINK}
+            built = proactive._actions_header(actions)
+            if built:
+                headers["Actions"] = proactive._header_safe(built)
             req = urllib.request.Request(
-                f"{proactive.NTFY_SERVER}/{topic}", data=body.encode(),
-                headers={"Title": proactive._header_safe(title), "Priority": priority,
-                        "Tags": proactive._header_safe(tags), "Click": proactive.DEEP_LINK})
+                f"{proactive.NTFY_SERVER}/{topic}", data=body.encode(), headers=headers)
             req.header_items()  # would raise UnicodeEncodeError pre-fix
 
     sb, _ = _reset(sender=RealPostButNoNetwork())
@@ -422,6 +427,153 @@ def test_wake_and_sessions():
         proactive._today_blocks = real_blocks
 
 
+def test_actionable_nudges():
+    """The 2026-08-23 ask: a notification has to CARRY the action, not describe it.
+
+    Alex: "it would be helpful if CLARVIS could notify me things like hey, these
+    emails need to go out right now, click this button to review and send them."
+    So the checks are about what a nudge SHIPS — a tap target, buttons, and steps —
+    not just about whether it fired."""
+    print("\n=== 9. nudges carry the action ===")
+    os.environ["ACTION_LINK_SECRET"] = "test-secret-for-links"
+    tracker = FakeTracker()
+    tracker.top_by_priority = lambda limit=10: []
+    sb, spy = _reset(tracker=tracker)
+    _quiet_config_now(active=False)
+    proactive.set_config(morning_brief="", evening_review="")
+    close = (datetime.now() + timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M")
+    intake.record_raw("imessage", "a1", "Mom", "", "dentist",
+                      items=[{"type": "event", "text": "Dentist appt", "due": close}])
+    proactive.run_awareness_pass()
+    due = [s for s in spy.sent if "Dentist" in s["title"]]
+    check("a deadline nudge fires", len(due) == 1)
+    check("tapping it lands on the item's own page, not the generic dashboard",
+          due and "/do/" in due[0]["click"])
+    labels = [a["label"] for a in (due[0]["actions"] if due else [])]
+    check("it ships a Done button that closes it from the shade", "Done" in labels)
+    check("…and a Snooze button, so 'not now' is a real answer",
+          any("Snooze" in l for l in labels))
+    check("no more buttons than ntfy will render",
+          len(labels) <= proactive.MAX_ACTIONS)
+
+
+def test_missed_items():
+    """"When there's something I need to be doing that I am not." A thing whose
+    moment has passed gets its OWN nudge, worded as missed — never re-dressed as a
+    fresh deadline, which is how a real deadline stops being believed."""
+    print("\n=== 10. missed items ===")
+    tracker = FakeTracker()
+    tracker.top_by_priority = lambda limit=10: []
+    sb, spy = _reset(tracker=tracker)
+    _quiet_config_now(active=False)
+    proactive.set_config(morning_brief="", evening_review="")
+    past = (datetime.now() - timedelta(hours=6)).strftime("%Y-%m-%dT%H:%M")
+    intake.record_raw("imessage", "m1", "Coach Staley", "", "lift",
+                      items=[{"type": "task", "text": "Confirm lift time", "due": past}])
+    picture = proactive._gather()
+    check("a 6h-late item is classified missed, not due-soon",
+          any(d["ref"].startswith("intake:") for d in picture["overdue"])
+          and not picture["due_soon"])
+    proactive.run_awareness_pass()
+    missed = [s for s in spy.sent if s["title"].startswith("⚠️ Missed")]
+    check("it produces a missed nudge", len(missed) == 1)
+    check("the body says how late it is, in his words",
+          missed and "6h ago" in missed[0]["body"])
+    check("it offers an honest way out, not just 'done'",
+          missed and any("Snooze" in a["label"] for a in missed[0]["actions"]))
+
+    # Ancient items are archaeology, not reminders.
+    sb, spy = _reset(tracker=tracker)
+    ancient = (datetime.now() - timedelta(hours=proactive.OVERDUE_HOURS + 5)
+               ).strftime("%Y-%m-%dT%H:%M")
+    intake.record_raw("imessage", "m2", "x", "", "old",
+                      items=[{"type": "task", "text": "Ancient thing", "due": ancient}])
+    check("past the horizon it stops surfacing entirely",
+          proactive._gather()["overdue"] == [])
+
+    # A backlog is one fact about the day, not eight buzzes.
+    sb, spy = _reset(tracker=tracker)
+    _quiet_config_now(active=False)
+    proactive.set_config(morning_brief="", evening_review="")
+    for i in range(5):
+        intake.record_raw("imessage", f"m{i}x", "x", "", f"late {i}",
+                          items=[{"type": "task", "text": f"Late thing {i}",
+                                  "due": past}])
+    proactive.run_awareness_pass()
+    check("missed nudges are capped per pass",
+          sum(1 for s in spy.sent if s["title"].startswith("⚠️ Missed"))
+          <= proactive.OVERDUE_MAX_PER_PASS)
+
+
+def test_waiting_on_alex():
+    """The email case, end to end: a draft CLARVIS wrote is a finished thing that
+    decays in a folder until his thumb moves. It has to nudge, carry the mailbox
+    link, and close in one tap."""
+    print("\n=== 11. waiting on his hand ===")
+    import outbox
+    tracker = FakeTracker()
+    tracker.top_by_priority = lambda limit=10: []
+    sb, spy = _reset(tracker=tracker)
+    _quiet_config_now(active=False)
+    proactive.set_config(morning_brief="", evening_review="")
+    outbox.init(sb)
+    oid = outbox.add("email_draft", "Send the reply to coach@case.edu",
+                     detail="Subject: Re: lift times", steps=["Open drafts", "Send"],
+                     link="https://mail.google.com/mail/u/0/#drafts")
+    proactive.run_awareness_pass()
+    check("a just-written draft does NOT buzz — he's still in that conversation",
+          not any("Ready to send" in s["title"] for s in spy.sent))
+
+    # Age it past its quiet period, through the module's own writer.
+    outbox._write(oid, {"created": (datetime.now() - timedelta(hours=4)).isoformat()})
+    spy.sent.clear()
+    proactive.run_awareness_pass()
+    ready = [s for s in spy.sent if "Ready to send" in s["title"]]
+    check("once it has aged, it nudges", len(ready) == 1)
+    labels = [a["label"] for a in ready[0]["actions"]] if ready else []
+    check("the notification carries the button that STARTS the job",
+          "Review & send" in labels)
+    check("…and the one-tap 'Sent it' that ends it", "Sent it" in labels)
+    check("Review & send points at the mailbox, not at CLARVIS",
+          ready and any(a["url"].startswith("https://mail.google.com")
+                        for a in ready[0]["actions"]))
+    check("tapping the notification opens the item's page",
+          ready and "/do/" in ready[0]["click"])
+
+    # Closing it is the whole contract: the nudge stops.
+    outbox.close(oid, outbox.DONE)
+    spy.sent.clear()
+    proactive.run_awareness_pass(force=True)
+    check("once he says it went out, it stops nudging — forever",
+          not any("Ready to send" in s["title"] for s in spy.sent))
+
+
+def test_approval_needs_him():
+    """CLARVIS deciding it needs a human and then waiting silently is the same
+    failure as the unsent draft. It has to say so — but Approve is NOT a
+    lock-screen button: a tap on a shade is not consent."""
+    print("\n=== 12. blocked on a decision ===")
+    import json as _json
+    tracker = FakeTracker()
+    tracker.top_by_priority = lambda limit=10: []
+    sb, spy = _reset(tracker=tracker)
+    _quiet_config_now(active=False)
+    proactive.set_config(morning_brief="", evening_review="")
+    sb.table("Agent Outputs").insert({
+        "agent_name": "jarvis_pending_action",
+        "output_text": _json.dumps({"status": "pending",
+                                    "display": "Adopt tool: quiz_builder",
+                                    "action": "adopt_tool"})}).execute()
+    proactive.run_awareness_pass()
+    ask = [s for s in spy.sent if "needs your call" in s["title"]]
+    check("a pending decision reaches his phone", len(ask) == 1)
+    check("it names what is blocked",
+          ask and "quiz_builder" in ask[0]["title"] + ask[0]["body"])
+    labels = [a["label"] for a in ask[0]["actions"]] if ask else []
+    check("approve is NOT offered as a shade button", "Approve" not in labels)
+    check("it opens the page where the action is visible", labels == ["Review it"])
+
+
 # ============================================================
 if __name__ == "__main__":
     test_config()
@@ -433,6 +585,10 @@ if __name__ == "__main__":
     test_concern_caps()
     test_pileup_growth_gate()
     test_wake_and_sessions()
+    test_actionable_nudges()
+    test_missed_items()
+    test_waiting_on_alex()
+    test_approval_needs_him()
     total, passed = len(_results), sum(_results)
     print("\n" + "=" * 48)
     print(f"{passed}/{total} checks passed")

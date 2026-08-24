@@ -40,6 +40,7 @@ from flask import (
     session,
     redirect,
 )
+from urllib.parse import quote
 from anthropic import Anthropic
 from supabase import create_client
 from composio import Composio
@@ -147,6 +148,7 @@ PROPOSED_TOOLS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".
 # Neither directory above is a volume, so a Coolify redeploy wipes anything Jarvis
 # drafted for itself. draft_store mirrors drafts into Supabase and restores them at
 # boot — see its docstring for why the filesystem stays the source of truth.
+import action_links  # noqa: E402 — signed one-tap notification links
 import draft_store  # noqa: E402
 # ----------------------------------------------------
 
@@ -202,8 +204,14 @@ def require_login():
     # can't log in (the training app's sync fetch; the iPhone widget's Scriptable
     # request). Both authenticate with an unguessable token segment in the URL
     # path (constant-time compare inside the view; wrong token = bare 404).
+    # do_page/do_act are ungated for the same reason as the two above: their
+    # caller is a phone tapping a notification, which cannot log in. They
+    # authenticate with an HMAC-SIGNED, EXPIRING token in the path that grants
+    # exactly one item and one op list (action_links.py) — strictly narrower
+    # than a session, and a wrong token is a bare 404.
     if request.endpoint in ("login", "static", "api_version",
-                            "training_sync_endpoint", "api_widget"):
+                            "training_sync_endpoint", "api_widget",
+                            "do_page", "do_act"):
         return None
     if session.get("authed"):
         return None
@@ -626,6 +634,7 @@ INTERNAL_AGENT_NAMES = {
     "jarvis_draft_note",  # redeploy-survival mirror of vault_inbox/ captures (draft_store.py)
     "jarvis_tool_audit",  # cross-node tool-usage mirror (observability.on_tool_logged)
     "training_dashboard",  # training-app sync snapshot, updated in place (training_sync.py)
+    "jarvis_outbox",  # things CLARVIS prepared that wait on Alex's hand (outbox.py)
 }
 
 SYSTEM_PROMPT = """You are Alex's personal assistant — the brain of his "second brain" system.
@@ -881,8 +890,21 @@ quiet hours, a daily cap, and a never-nudge-twice key, all Alex-configurable via
 set_notification_rules. check_notifications shows settings + the recent nudge log;
 run_awareness_now runs the deadline/intake/brief decision pass; test_nudge proves the
 channel. The always-on server runs the awareness pass automatically every 15 minutes.
-Nudges are short, specific, and deep-link back to the dashboard. If Alex says he's
-getting too many (or too few) notifications, adjust the rules with him immediately.
+Nudges are short, specific, and CARRY THE ACTION: each one deep-links to a /do page
+with the item, the steps, and one-tap Done/Snooze buttons. If Alex says he's getting
+too many (or too few) notifications, adjust the rules with him immediately.
+
+WHEN SOMETHING NEEDS ALEX'S OWN HAND, FILE IT — don't just say it in chat. Chat
+scrolls away; his phone doesn't. Use flag_for_alex(title, steps, link) for anything
+only he can finish: a form to submit, a call to make, a payment to confirm, a thing
+to sign. Give the exact steps and the URL that starts step 1. It becomes a
+notification carrying those steps and stays open until he closes it. Email drafts
+file themselves this way automatically — after create_email_draft, the draft is
+tracked as waiting on him and he will be reminded until it goes out, so you never
+have to promise to remind him. list_waiting_on_alex shows the current pile;
+clear_waiting_item closes one when he says it's handled. If "Waiting on him"
+in your ambient context has an UNFINISHED BY HIM line, that is the most useful
+thing you can raise — lead with it.
 
 THE AUGUST MONEY PLAN is Alex's live priority: $1,000/month recurring by Aug 31 from
 an ad-creative service sold to DTC brands. Its execution state lives in the vault at
@@ -2372,6 +2394,12 @@ def _situational_snapshot() -> str:
         print(f"situational: due section failed ({e})")
 
     waiting = []
+    try:
+        for it in outbox.open_items(limit=20):
+            waiting.append(f"UNFINISHED BY HIM: {outbox.summary_line(it)}"
+                           + (f" — link: {it['link']}" if it.get("link") else ""))
+    except Exception as e:
+        print(f"situational: outbox check failed ({e})")
     try:
         n = len(get_pending_actions())
         if n:
@@ -4671,6 +4699,8 @@ def _dispatch_tool_call(tool_name: str, tool_input: dict) -> str:
         return daily_orders.handle_tool_call(tool_name, tool_input)
     if tool_name in ("create_email_draft", "list_email_drafts"):
         return mail_drafts.handle_tool_call(tool_name, tool_input)
+    if tool_name in ("flag_for_alex", "list_waiting_on_alex", "clear_waiting_item"):
+        return outbox.handle_tool_call(tool_name, tool_input)
     if tool_name in ("request_capability", "check_capability_requests"):
         return capability_escalation.handle_tool_call(tool_name, tool_input)
     if tool_name in ("list_generated_files", "remove_generated_file", "restore_generated_file"):
@@ -5623,6 +5653,20 @@ TOOL_STATUS_LABELS["screen_control_stop"] = "Stopping screen control…"
 # from tasks/intake/deadlines whether anything warrants reaching out via ntfy, under
 # hard respect rules (quiet hours, daily cap, never-twice keys). The worker runs on
 # the always-on server; locally the tools still work for manual runs/tests.
+# Outbox + one-tap action links: everything CLARVIS finished that still needs
+# Alex's hand, and the signed /do/<token> links a phone notification carries so
+# acting on a nudge is a tap instead of a login. do_actions gets the pending-action
+# resolver so an approval can be decided from the page it was announced on.
+import outbox  # noqa: E402
+import do_actions  # noqa: E402
+
+outbox.init(supabase, LOCAL_TZ)
+TOOLS.extend(outbox.TOOL_SCHEMAS)
+TOOL_STATUS_LABELS.update(outbox.TOOL_STATUS_LABELS)
+do_actions.init(supabase_client=supabase, intake_module=intake,
+                tracker=task_tracker.get_tracker(), outbox=outbox,
+                resolve_pending_fn=resolve_pending_action, local_tz=LOCAL_TZ)
+
 import proactive  # noqa: E402
 
 proactive.init(
@@ -5656,6 +5700,47 @@ def api_intake_act():
         return jsonify({"error": "need integer id and action accept|dismiss"}), 400
     result = intake.accept_intake(row_id) if action == "accept" else intake.dismiss_intake(row_id)
     return jsonify({"result": result})
+
+
+# ============================================================
+# /do/<token> — the action surface a notification links to.
+#
+# Ungated by design (see require_login): this is opened by a thumb on a lock
+# screen, and any auth step here is the step that makes the nudge not get done.
+# The token is signed, scoped to one item, carries its own op list, and expires
+# (action_links.py). A bad, tampered, or stale token gets a bare 404 — never a
+# hint about what it might have been.
+#
+# Two routes, deliberately: GET renders the page Alex reads, POST performs one op
+# and is ALSO the endpoint ntfy's `http` action buttons call, so "Sent it" or
+# "Done" closes the loop from the notification shade without opening anything.
+# ============================================================
+
+@app.route("/do/<token>")
+def do_page(token):
+    payload = action_links.verify(token)
+    if not payload:
+        return Response("Not found", status=404, mimetype="text/plain")
+    view = do_actions.resolve(payload)
+    return render_template("do.html", view=view, token=token,
+                           message=request.args.get("msg", "")[:200])
+
+
+@app.route("/do/<token>/act", methods=["POST"])
+def do_act(token):
+    payload = action_links.verify(token)
+    if not payload:
+        return Response("Not found", status=404, mimetype="text/plain")
+    # ntfy's http buttons carry the op in the query string; the page's own form
+    # posts it as a field. Both land here.
+    op = (request.form.get("op") or request.args.get("op") or "").strip()
+    result = do_actions.perform(payload, op)
+    _dashboard_cache["data"] = None   # a closed item must not linger in a panel
+    # A button pressed inside ntfy expects a plain response and shows nothing;
+    # a button pressed on the page expects to land back on the page.
+    if request.form.get("op"):
+        return redirect(f"/do/{token}?msg={quote(result.get('message', ''))}")
+    return jsonify(result), (200 if result.get("ok") else 400)
 
 
 # Monitoring Agent (health + cost) — lives in monitor.py, extends observability.py's

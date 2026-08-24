@@ -503,13 +503,15 @@ def accept_intake(row_id: int) -> str:
     return f"Accepted intake #{row_id} → created task(s) {names}."
 
 
-def dismiss_intake(row_id: int) -> str:
+def dismiss_intake(row_id: int, resolution: str = "") -> str:
     event = _event_row(row_id)
     if not event:
         return f"No intake event #{row_id}."
     event["status"] = "dismissed"
+    if resolution:
+        event["resolution"] = resolution[:200]
     _update_event(row_id, event)
-    return f"Dismissed intake #{row_id}."
+    return f"Dismissed intake #{row_id}." + (f" ({resolution})" if resolution else "")
 
 
 def capture_inbox(text: str, label: str = "") -> str:

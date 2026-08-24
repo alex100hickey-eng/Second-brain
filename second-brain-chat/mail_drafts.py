@@ -21,7 +21,55 @@ iCloud: no Composio connector and IMAP can't create drafts reliably — for
 iCloud replies, compose in chat for copy/paste, or reply from a Gmail account.
 """
 
+import os
+
 BODY_CAP = 20_000   # sanity ceiling; a reply email is never this long
+
+# Where "review and send it" physically happens, per account. A nudge that says
+# "you have drafts waiting" and makes him find the right mailbox is a nudge that
+# gets postponed; one that opens the drafts folder of the RIGHT account is done in
+# the tap. `authuser` picks the account by address, so it lands correctly even when
+# several Google accounts are signed in on his phone — which they always are.
+DRAFTS_URL = {
+    "personal": "https://mail.google.com/mail/u/?authuser=alex100hickey@gmail.com#drafts",
+    "studio": "https://mail.google.com/mail/u/?authuser=alexhickey@splitframestudio.com#drafts",
+}
+_SCHOOL_ADDR = os.environ.get("SCHOOL_GMAIL_ADDRESS", "").strip()
+
+
+def drafts_url(account: str) -> str:
+    if account == "school" and _SCHOOL_ADDR:
+        return f"https://mail.google.com/mail/u/?authuser={_SCHOOL_ADDR}#drafts"
+    return DRAFTS_URL.get(account, "https://mail.google.com/mail/u/0/#drafts")
+
+
+def _file_in_outbox(account: str, to: str, subject: str, body: str,
+                    draft_id: str = "") -> None:
+    """Record the draft as something WAITING ON ALEX'S HAND.
+
+    Without this, a draft is written and then forgotten by the only system that
+    knew it existed — the send gate is Alex's, so the reminder has to be too.
+    Fail-soft in every direction: the draft is already saved by the time we get
+    here, and a bookkeeping error must never make a successful draft report as a
+    failure."""
+    try:
+        import outbox
+        where = "Gmail" if account == "personal" else f"{account} Gmail"
+        outbox.add(
+            "email_draft",
+            f"Send the reply to {to.strip()}",
+            detail=f"Subject: {(subject or '(no subject)').strip()}\n\n"
+                   + (body or "").strip()[:1200],
+            link=drafts_url(account),
+            steps=[f"Open the {where} Drafts folder (button below).",
+                   "Read it once — change anything that doesn't sound like you.",
+                   "Hit Send.",
+                   "Tap 'Sent it' here so CLARVIS stops asking."],
+            account=account,
+            ref=f"gmail:{account}:{draft_id}" if draft_id else "")
+    except Exception as e:
+        print(f"mail_drafts: outbox filing skipped ({e})")
+
 
 _composio = None
 _ENTITIES = {}      # account name -> Composio entity user_id
@@ -80,12 +128,13 @@ def create_email_draft(account: str, to: str, subject: str, body: str,
     except Exception as e:
         return f"Draft creation failed: {str(e)[:200]}"
     where = account if account in ("school", "studio") else "personal"
+    _file_in_outbox(account, to, subject, body, str(draft_id or ""))
     return (f"Draft saved to the {where} Gmail Drafts folder"
             + (f" (draft id {draft_id})" if draft_id else "")
             + f", addressed to {to.strip()}"
             + (" as a reply on the existing thread" if args.get("thread_id") else "")
             + ". Alex: open Gmail, review/edit, and hit Send — nothing goes out "
-              "until you do.")
+              "until you do. I'll keep reminding you until you tell me it went out.")
 
 
 def list_email_drafts(account: str = "personal", limit: int = 5) -> str:

@@ -74,6 +74,13 @@ DUE_SOON_HOURS = 24
 # (heads-up a day out + escalation close to due). Window must stay > pass interval or a
 # reminder can fall between passes and never fire.
 TIMED_REMIND_HOURS = 0.75
+# How far back a missed thing still counts as "you were supposed to do this".
+# Past this it isn't a reminder, it's a reproach — and intake.expire_stale
+# retires past-dated rows on the same two-day horizon anyway.
+OVERDUE_HOURS = 48
+# Ceiling on missed-item nudges per pass. A backlog is ONE fact about the day,
+# not eight notifications; the rest are in the brief and on the dashboard.
+OVERDUE_MAX_PER_PASS = 2
 
 DEFAULT_CONFIG = {
     "enabled": True,
@@ -247,11 +254,47 @@ def _header_safe(value: str) -> str:
     return value.encode("utf-8").decode("latin-1")
 
 
-def _post_ntfy(topic: str, title: str, body: str, priority: str, tags: str) -> None:
+# ntfy renders up to three ACTION BUTTONS under a notification, from one header:
+#   Actions: view, Label, https://…, clear=true; http, Label, https://…, method=POST
+# `view` opens a URL; `http` fires a request from the phone WITHOUT opening anything —
+# which is the whole point of "Done" and "Sent it": the item closes from the lock
+# screen, so telling CLARVIS a thing is handled costs one tap instead of a session.
+# Commas and semicolons are the header's own separators, so labels are stripped of
+# both rather than quoted — a label is three words, and losing a comma from it costs
+# nothing next to a malformed header that renders no buttons at all.
+MAX_ACTIONS = 3
+
+
+def _action_label(text: str) -> str:
+    return (text or "").replace(",", " ").replace(";", " ").strip()[:24] or "Open"
+
+
+def _actions_header(actions) -> str:
+    """[{kind, label, url, method?, clear?}] -> one ntfy Actions header value."""
+    parts = []
+    for a in (actions or [])[:MAX_ACTIONS]:
+        url = (a.get("url") or "").strip()
+        kind = a.get("kind", "view")
+        if not url or kind not in ("view", "http"):
+            continue          # a button with no destination is worse than no button
+        bits = [kind, _action_label(a.get("label")), url]
+        if kind == "http":
+            bits.append(f"method={a.get('method', 'POST')}")
+        if a.get("clear", kind == "http"):
+            bits.append("clear=true")
+        parts.append(", ".join(bits))
+    return "; ".join(parts)
+
+
+def _post_ntfy(topic: str, title: str, body: str, priority: str, tags: str,
+               click: str = "", actions=None) -> None:
+    headers = {"Title": _header_safe(title), "Priority": priority,
+               "Tags": _header_safe(tags), "Click": click or DEEP_LINK}
+    header_actions = _actions_header(actions)
+    if header_actions:
+        headers["Actions"] = _header_safe(header_actions)
     req = urllib.request.Request(
-        f"{NTFY_SERVER}/{topic}", data=body.encode(),
-        headers={"Title": _header_safe(title), "Priority": priority,
-                 "Tags": _header_safe(tags), "Click": DEEP_LINK})
+        f"{NTFY_SERVER}/{topic}", data=body.encode(), headers=headers)
     urllib.request.urlopen(req, timeout=10, context=_SSL_CONTEXT).read()
 
 
@@ -260,7 +303,8 @@ _sender = _post_ntfy   # test seam
 
 def send_nudge(key: str, title: str, body: str, priority: str = "default",
                tags: str = "brain", force: bool = False, recurring: bool = False,
-               renudge_hours: float = None, quiet_exempt: bool = False) -> str:
+               renudge_hours: float = None, quiet_exempt: bool = False,
+               click: str = "", actions=None) -> str:
     """The ONLY door to Alex's phone. Applies every respect rule, then sends.
 
     `recurring=True` marks a daily window (morning brief) — exempt from the
@@ -269,7 +313,10 @@ def send_nudge(key: str, title: str, body: str, priority: str = "default",
     that's allowed one escalation a few hours before it's due).
     `quiet_exempt=True` skips ONLY the quiet-hours check (every other rule
     still applies) — for the wake-time brief, which by definition lands at a
-    moment quiet hours would cover. Grant it to nothing else lightly."""
+    moment quiet hours would cover. Grant it to nothing else lightly.
+    `click` overrides where TAPPING the notification lands (default: the
+    dashboard); `actions` adds up to three buttons — see _actions_header. Both
+    exist so a nudge can carry the action instead of describing it."""
     cfg = get_config()
     topic = os.environ.get("NTFY_TOPIC", "")
     st = _sent_state()
@@ -308,7 +355,7 @@ def send_nudge(key: str, title: str, body: str, priority: str = "default",
         # ledger-based rules. The returned string is the caller's audit.
         return f"Nudge skipped ({reason})."
     try:
-        _sender(topic, title, body, priority, tags)
+        _sender(topic, title, body, priority, tags, click, actions)
         st["concerns"][base] = {"n": int(concern.get("n", 0)) + 1,
                                 "last": now.isoformat()}
         st["day_sent"] = int(st.get("day_sent", 0)) + 1
@@ -333,7 +380,8 @@ def send_nudge(key: str, title: str, body: str, priority: str = "default",
 def _gather() -> dict:
     """Everything the decision rules look at. Fail-soft per source."""
     now = _now()
-    picture = {"now": now, "due_soon": [], "new_intake": 0, "open_tasks": []}
+    picture = {"now": now, "due_soon": [], "overdue": [], "new_intake": 0,
+               "open_tasks": [], "waiting": [], "approvals": []}
     try:
         for r in intake_mod.list_intake("new", limit=40):
             ev = r["event"]
@@ -362,7 +410,7 @@ def _gather() -> dict:
                 if date_only:
                     dt = dt.replace(hour=23, minute=59)
                 hours = (dt - now).total_seconds() / 3600
-                if -2 <= hours <= DUE_SOON_HOURS:
+                if -OVERDUE_HOURS <= hours <= DUE_SOON_HOURS:
                     picture["due_soon"].append(
                         {"what": item["text"], "due": dt.isoformat(),
                          "date_only": date_only, "hours": round(hours, 1),
@@ -382,7 +430,7 @@ def _gather() -> dict:
                         if dt.tzinfo is None and LOCAL_TZ:
                             dt = dt.replace(tzinfo=LOCAL_TZ)
                         hours = (dt - now).total_seconds() / 3600
-                        if -2 <= hours <= DUE_SOON_HOURS:
+                        if -OVERDUE_HOURS <= hours <= DUE_SOON_HOURS:
                             picture["due_soon"].append(
                                 {"what": title, "due": due, "hours": round(hours, 1),
                                  "ref": f"task:{t.get('id')}"})
@@ -408,12 +456,47 @@ def _gather() -> dict:
                 continue
             hours = (dt - now).total_seconds() / 3600
             window = TIMED_REMIND_HOURS if is_timed(t["due"]) else DUE_SOON_HOURS
-            if -2 <= hours <= window:
+            if -OVERDUE_HOURS <= hours <= window:
                 picture["due_soon"].append(
                     {"what": t.get("title", ""), "due": t["due"],
                      "hours": round(hours, 1), "ref": ref})
     except Exception:
         pass
+
+    # Split what's COMING from what's already MISSED. They read differently and
+    # they nudge differently: one is a heads-up, the other is "you didn't do
+    # this" — which is exactly the notification Alex said he was missing.
+    # Least-late first, because the thing missed an hour ago is the thing still
+    # worth rescuing; yesterday's is nearly archaeology.
+    picture["overdue"] = sorted((d for d in picture["due_soon"] if d["hours"] < -2),
+                                key=lambda d: d["hours"], reverse=True)
+    picture["due_soon"] = [d for d in picture["due_soon"] if d["hours"] >= -2]
+
+    # Prepared work that stops at Alex's hand — an unsent draft is not a
+    # reminder to write something, it's a finished thing decaying in a folder.
+    try:
+        import outbox
+        picture["waiting"] = outbox.nudgeable()
+    except Exception as e:
+        print(f"proactive: outbox unavailable ({e})")
+
+    # The consequential-action queue. CLARVIS asking and then waiting silently
+    # is the same failure as the draft: it decided it needs a human and then
+    # never told the human.
+    try:
+        rows = (supabase.table("Agent Outputs").select("*")
+                .eq("agent_name", "jarvis_pending_action")
+                .order("id", desc=True).limit(20).execute().data or [])
+        for r in rows:
+            try:
+                a = json.loads(r["output_text"])
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if a.get("status") == "pending":
+                picture["approvals"].append(
+                    {"id": r["id"], "display": a.get("display", "(unknown action)")})
+    except Exception as e:
+        print(f"proactive: approval queue unavailable ({e})")
     return picture
 
 
@@ -428,11 +511,11 @@ def _august_actions() -> list:
     try:
         import august_tracker
         for n in august_tracker.nudges_due():
-            out.append(send_nudge(n["key"], n["title"], n["body"],
+            page, buttons = _step_link(n)
+            out.append(send_nudge(n["key"], n["title"], n["body"], tags="calendar",
                                   priority=n.get("priority", "default"),
-                                  tags="calendar",
-                                  # Streaks clear the twice-then-silence cap.
-                                  recurring=n.get("recurring", False)))
+                                  recurring=n.get("recurring", False),  # streaks
+                                  click=page, actions=buttons))
     except Exception as e:
         if report_event:
             try:
@@ -511,6 +594,75 @@ def _when_words(hours: float, due: str, date_only: bool = False) -> str:
     return f"{dt.strftime('%a %b %-d')} {clock}"
 
 
+# ============================================================
+# Action links — turning "you should do X" into a thing he can DO from the
+# lock screen. Every helper is fail-soft and returns "" / [] on trouble: a
+# nudge with no buttons is still a nudge, a crashed pass is silence.
+# ============================================================
+
+def _step_link(nudge: dict) -> tuple:
+    """(click, buttons) for one August/money tracker nudge. Its body already
+    carries the best "do this exact thing" line in the system — this just gives
+    it somewhere to land."""
+    step_id = nudge.get("step_id") or nudge["key"].rsplit(":", 1)[-1]
+    page = _do_link("step", step_id, ops=("done",), label=nudge["title"][:80])
+    if not page:
+        return DEEP_LINK, None
+    return page, [{"kind": "view", "label": "Steps", "url": page}]
+
+
+def _ref_parts(ref: str) -> tuple:
+    """"intake:41" -> ("intake", "41"). The gather layer's ref strings and the
+    action-link kinds are deliberately the same words, so this stays a split."""
+    kind, _, rid = str(ref).partition(":")
+    return (kind or "task"), rid
+
+
+def outbox_summary(item: dict) -> str:
+    try:
+        import outbox
+        return outbox.summary_line(item)
+    except Exception:
+        return item.get("title", "")
+
+
+def _do_link(kind: str, ref: str = "", ops=(), label: str = "") -> str:
+    try:
+        import action_links
+        return action_links.url(kind, str(ref), ops=ops, label=label)
+    except Exception:
+        return ""
+
+
+def _act_link(kind: str, ref: str, op: str) -> str:
+    try:
+        import action_links
+        return action_links.act_url(kind, str(ref), op)
+    except Exception:
+        return ""
+
+
+def _item_buttons(kind: str, ref: str, open_url: str = "",
+                  open_label: str = "Open it", done_label: str = "Done") -> list:
+    """The standard three: see it, close it, defer it.
+
+    `Done` and `Snooze` are ntfy `http` buttons — they fire from the shade and
+    open nothing, which is the difference between a status CLARVIS actually has
+    and a status it only asks for. Everything Alex reports this way is a
+    decision he made with his thumb; nothing here acts on his behalf."""
+    buttons = []
+    url = open_url or _do_link(kind, ref, ops=("done", "snooze", "drop"))
+    if url:
+        buttons.append({"kind": "view", "label": open_label, "url": url})
+    done = _act_link(kind, ref, "done")
+    if done:
+        buttons.append({"kind": "http", "label": done_label, "url": done})
+    snooze = _act_link(kind, ref, "snooze")
+    if snooze:
+        buttons.append({"kind": "http", "label": "Snooze 3h", "url": snooze})
+    return buttons
+
+
 def run_awareness_pass(force: bool = False) -> str:
     """One decision cycle. Deterministic triggers, deterministic text — every
     nudge must name the thing, the source, and the next physical action."""
@@ -531,16 +683,107 @@ def run_awareness_pass(force: bool = False) -> str:
         title = (f"🔴 DUE {_w} — {d['what'][:55]}" if close
                  else f"⏰ {_w} — {d['what'][:55]}")
         ctx = _due_context(d["ref"])
+        link_kind, link_ref = _ref_parts(d["ref"])
+        page = _do_link(link_kind, link_ref, ops=("done", "snooze", "drop"),
+                        label=d["what"][:80])
         body = "\n".join(x for x in (
             d["what"],
             f"Due: {_w}",
             ctx,
-            "Do it (or drop it), then mark it done in CLARVIS so this stays quiet.",
+            ("Tap for the details and the steps; the buttons close it out."
+             if page else
+             "Do it (or drop it), then mark it done in CLARVIS so this stays quiet."),
         ) if x)
         actions.append(send_nudge(
             f"due:{d['ref']}", title, body,
             priority="high" if close else "default",
-            tags="alarm_clock", force=force, renudge_hours=6))
+            tags="alarm_clock", force=force, renudge_hours=6,
+            click=page, actions=_item_buttons(link_kind, link_ref, open_url=page,
+                                              open_label="What is this")))
+
+    # 1b. MISSED — the notification Alex was actually asking for: "there's
+    #     something I need to be doing that I'm not". Deliberately separate from
+    #     the due-soon flow: a thing whose moment has passed needs a different
+    #     sentence and a different set of buttons (do it late / reschedule /
+    #     admit it's dead), and it must never be dressed up as a fresh deadline.
+    #     Capped per pass — a backlog is one fact, not eight buzzes.
+    for d in picture["overdue"][:OVERDUE_MAX_PER_PASS]:
+        late_h = abs(d["hours"])
+        late = (f"{int(late_h)}h ago" if late_h < 24
+                else f"{int(late_h // 24)}d ago")
+        link_kind, link_ref = _ref_parts(d["ref"])
+        page = _do_link(link_kind, link_ref, ops=("done", "snooze", "drop"),
+                        label=d["what"][:80])
+        body = "\n".join(x for x in (
+            d["what"],
+            f"Was due {late}, still open.",
+            _due_context(d["ref"]),
+            "Still worth doing? Do it now. If not, drop it — an honest no is "
+            "worth more than a list that lies to you.",
+        ) if x)
+        actions.append(send_nudge(
+            f"missed:{d['ref']}", f"⚠️ Missed — {d['what'][:52]}", body,
+            priority="default", tags="warning", force=force, renudge_hours=12,
+            click=page, actions=_item_buttons(link_kind, link_ref, open_url=page,
+                                              open_label="What is this",
+                                              done_label="Did it")))
+
+    # 1c. WAITING ON YOUR HAND — finished work that stops at a gate only Alex can
+    #     open (an unsent Gmail draft, today). This is the "these emails need to
+    #     go out right now" nudge: it carries the mailbox link, the steps, and a
+    #     one-tap "Sent it" so the item closes without opening the app.
+    waiting = picture["waiting"]
+    if len(waiting) == 1:
+        it = waiting[0]
+        page = _do_link("outbox", it["id"], ops=("done", "snooze", "drop"),
+                        label=it.get("title", "")[:80])
+        buttons = []
+        if it.get("link"):
+            buttons.append({"kind": "view", "label": "Review & send",
+                            "url": it["link"]})
+        sent = _act_link("outbox", it["id"], "done")
+        if sent:
+            buttons.append({"kind": "http", "label": "Sent it", "url": sent})
+        snoozed = _act_link("outbox", it["id"], "snooze")
+        if snoozed:
+            buttons.append({"kind": "http", "label": "Snooze 3h", "url": snoozed})
+        body = "\n".join(x for x in (
+            it.get("detail", "")[:400],
+            "It's written and waiting — you just have to send it.",
+        ) if x)
+        actions.append(send_nudge(
+            f"outbox:{it['id']}", f"📤 Ready to send — {it.get('title', '')[:48]}",
+            body, priority="high", tags="outbox_tray", force=force,
+            renudge_hours=8, click=page, actions=buttons))
+    elif len(waiting) > 1:
+        page = _do_link("outbox_all", "", ops=())
+        lines = [f"• {outbox_summary(it)}" for it in waiting[:4]]
+        body = "\n".join([f"{len(waiting)} finished things are waiting on you:"]
+                          + lines + ["Each needs one action from you. Tap to run them."])
+        actions.append(send_nudge(
+            "outbox-pile", f"📤 {len(waiting)} waiting on you", body,
+            priority="high", tags="outbox_tray", force=force, recurring=True,
+            renudge_hours=8, click=page,
+            actions=[{"kind": "view", "label": "Run through them", "url": page}]))
+
+    # 1d. BLOCKED ON A DECISION. CLARVIS routes consequential actions to a queue
+    #     and then waits — which is the right gate and the wrong silence. Approve
+    #     is NOT a notification button: it opens the page and is pressed there,
+    #     with the action in front of him. A lock-screen tap is not consent.
+    if picture["approvals"]:
+        first = picture["approvals"][0]
+        n = len(picture["approvals"])
+        page = _do_link("approval", first["id"], ops=("approve", "deny"),
+                        label=first["display"][:80])
+        body = "\n".join([first["display"][:300]]
+                          + ([f"…and {n - 1} more waiting."] if n > 1 else [])
+                          + ["Nothing runs until you decide."])
+        actions.append(send_nudge(
+            f"approval:{first['id']}",
+            f"🔐 CLARVIS needs your call — {first['display'][:40]}", body,
+            priority="high", tags="lock", force=force, renudge_hours=6,
+            click=page,
+            actions=[{"kind": "view", "label": "Review it", "url": page}]))
 
     # 2. Intake pile-up. Only when the pile GREW meaningfully since the last
     #    nudge about it — a static pile he chose not to triage is not news.
@@ -601,26 +844,44 @@ def run_awareness_pass(force: bool = False) -> str:
                            else daily_orders.brief_lines(now, limit=4))
         except Exception as e:   # a composer crash must never kill the whole pass
             print(f"proactive: daily orders unavailable ({e})")
-        if not order_lines and n_open == 0 and n_intake == 0 and not picture["due_soon"]:
+        if (not order_lines and n_open == 0 and n_intake == 0
+                and not picture["due_soon"] and not picture["waiting"]
+                and not picture["approvals"] and not picture["overdue"]):
             continue   # nothing actionable — the respectful brief is no brief
-        head = list(order_lines)
+        head = []
+        # Waiting-on-you leads. It is the shortest path from "notification" to
+        # "thing finished": the work is already done, the gate is his thumb.
+        for it in picture["waiting"][:2]:
+            head.append(f"• SEND: {outbox_summary(it)[:70]}")
+        for d in picture["overdue"][:2]:
+            head.append(f"• MISSED: {d['what'][:64]}")
+        if picture["approvals"]:
+            head.append(f"• DECIDE: {picture['approvals'][0]['display'][:60]}")
+        head += list(order_lines)[:max(0, 5 - len(head))]
         for d in picture["due_soon"][:max(0, 3 - len(head))]:
             head.append(f"• {_when_words(d['hours'], d['due'], d.get('date_only', False))}: "
                         f"{d['what'][:60]}")
         for t in picture["open_tasks"][:max(0, 3 - len(head))]:
             head.append(f"• open: {t[:60]}")
         if cfg_key == "morning_brief":
+            n_wait = len(picture["waiting"]) + len(picture["approvals"])
             title = (f"{emoji} Today: {len(picture['due_soon'])} deadline(s), "
-                     f"{n_open} open")
+                     f"{n_open} open"
+                     + (f", {n_wait} waiting on you" if n_wait else ""))
             tail = ([f"…plus {n_intake} intake to triage."] if n_intake else [])
         else:
             title = f"{emoji} Still open tonight: {n_open + n_intake} thing(s)"
             tail = ["Two minutes now saves tomorrow morning."]
+        brief_click = (_do_link("outbox_all", "", ops=()) if picture["waiting"]
+                       else "")
+        brief_buttons = ([{"kind": "view", "label": "What's waiting",
+                           "url": brief_click}] if brief_click else [])
         actions.append(send_nudge(
             f"{cfg_key}:{now.strftime('%Y-%m-%d')}", title,
             "\n".join(head + tail),
             tags="sunrise" if "morning" in cfg_key else "city_sunset",
-            force=force, recurring=True, quiet_exempt=at_wake))
+            force=force, recurring=True, quiet_exempt=at_wake,
+            click=brief_click, actions=brief_buttons))
 
     # Times a 50/50 capture will fire this pass (section 5). A shooting block
     # that ends exactly when a study block starts — his Monday grid does this at

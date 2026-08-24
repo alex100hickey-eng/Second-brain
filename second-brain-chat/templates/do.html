@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>CLARVIS — {{ view.title[:40] }}</title>
+<link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32.png">
+<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+<meta name="theme-color" content="#0a0e14">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<style>
+  :root {
+    --bg:#0a0e14; --panel:#0f1520; --line:#1c2534; --text:#e7ecf5;
+    --text-dim:#6b7688; --accent:#3fd0ff; --accent-dim:#1a4a5c;
+    --warm:#ffb648; --good:#4ade80;
+  }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  body {
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+    padding:max(18px,env(safe-area-inset-top)) 16px
+            max(28px,env(safe-area-inset-bottom));
+    line-height:1.5;
+  }
+  .wrap { max-width:520px; margin:0 auto; }
+  .brand {
+    font-size:11px; letter-spacing:.18em; text-transform:uppercase;
+    color:var(--text-dim); margin-bottom:14px; display:flex;
+    align-items:center; gap:8px;
+  }
+  .dot { width:7px; height:7px; border-radius:50%; background:var(--accent);
+         box-shadow:0 0 8px var(--accent); }
+  h1 { font-size:22px; line-height:1.25; margin:0 0 8px; }
+  .why { color:var(--warm); font-size:14px; margin:0 0 18px; }
+  .card { background:var(--panel); border:1px solid var(--line);
+          border-radius:14px; padding:16px; margin-bottom:14px; }
+  .card h2 { font-size:11px; letter-spacing:.14em; text-transform:uppercase;
+             color:var(--text-dim); margin:0 0 10px; font-weight:600; }
+  pre.detail { margin:0; white-space:pre-wrap; word-wrap:break-word;
+               font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+               font-size:13px; color:var(--text); max-height:44vh; overflow:auto; }
+  ol.steps { margin:0; padding-left:20px; }
+  ol.steps li { margin-bottom:8px; font-size:15px; }
+  ol.steps li:last-child { margin-bottom:0; }
+  a.btn, button.btn {
+    display:block; width:100%; text-align:center; text-decoration:none;
+    padding:15px 16px; border-radius:12px; font-size:16px; font-weight:600;
+    border:1px solid var(--line); background:var(--panel); color:var(--text);
+    margin-bottom:10px; cursor:pointer; font-family:inherit;
+  }
+  a.primary { background:var(--accent); color:#04121a; border-color:var(--accent); }
+  button.good { border-color:var(--accent-dim); color:var(--good); }
+  .row { display:flex; gap:10px; }
+  .row button.btn { margin-bottom:10px; }
+  .msg { border-radius:12px; padding:13px 15px; margin-bottom:16px;
+         font-size:15px; border:1px solid var(--accent-dim);
+         background:rgba(63,208,255,.07); color:var(--accent); }
+  .gone { text-align:center; padding:34px 0; }
+  .gone .big { font-size:34px; margin-bottom:10px; }
+  .child { display:block; text-decoration:none; color:var(--text);
+           border:1px solid var(--line); border-radius:12px; padding:13px 14px;
+           margin-bottom:10px; background:var(--panel); }
+  .child small { color:var(--text-dim); }
+  footer { text-align:center; margin-top:22px; }
+  footer a { color:var(--text-dim); font-size:13px; text-decoration:none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="brand"><span class="dot"></span> CLARVIS</div>
+
+  {% if message %}<div class="msg">{{ message }}</div>{% endif %}
+
+  {% if view.gone %}
+    <div class="gone">
+      <div class="big">✓</div>
+      <h1>{{ view.title }}</h1>
+      <p class="why">{{ view.why }}</p>
+    </div>
+  {% else %}
+    <h1>{{ view.title }}</h1>
+    {% if view.why %}<p class="why">{{ view.why }}</p>{% endif %}
+
+    {% if view.children %}
+      <div class="card">
+        <h2>Waiting on you</h2>
+        {% for c in view.children %}
+          <a class="child" href="{{ c.url }}">
+            {{ c.title }}<br><small>{{ c.line }}</small>
+          </a>
+        {% endfor %}
+      </div>
+    {% endif %}
+
+    {% if view.detail %}
+      <div class="card">
+        <h2>What it says</h2>
+        <pre class="detail">{{ view.detail }}</pre>
+      </div>
+    {% endif %}
+
+    {% if view.steps %}
+      <div class="card">
+        <h2>Do this</h2>
+        <ol class="steps">
+          {% for s in view.steps %}<li>{{ s }}</li>{% endfor %}
+        </ol>
+      </div>
+    {% endif %}
+
+    {% if view.link %}
+      <a class="btn primary" href="{{ view.link }}" target="_blank" rel="noopener">
+        {{ view.link_label or 'Open it' }}
+      </a>
+    {% endif %}
+
+    <form method="post" action="/do/{{ token }}/act">
+      {% if 'approve' in view.ops %}
+        <button class="btn good" name="op" value="approve" type="submit">Approve</button>
+      {% endif %}
+      {% if 'deny' in view.ops %}
+        <button class="btn" name="op" value="deny" type="submit">Deny</button>
+      {% endif %}
+      {% if 'done' in view.ops %}
+        <button class="btn good" name="op" value="done" type="submit">{{ view.done_label }}</button>
+      {% endif %}
+      <div class="row">
+        {% if 'snooze' in view.ops %}
+          <button class="btn" name="op" value="snooze" type="submit">Snooze 3h</button>
+        {% endif %}
+        {% if 'drop' in view.ops %}
+          <button class="btn" name="op" value="drop" type="submit">Not doing it</button>
+        {% endif %}
+      </div>
+    </form>
+  {% endif %}
+
+  <footer><a href="/">Open CLARVIS →</a></footer>
+</div>
+</body>
+</html>
