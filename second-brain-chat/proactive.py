@@ -600,6 +600,14 @@ def _when_words(hours: float, due: str, date_only: bool = False) -> str:
 # nudge with no buttons is still a nudge, a crashed pass is silence.
 # ============================================================
 
+def _public_base() -> str:
+    try:
+        import action_links
+        return action_links.public_base()
+    except Exception:
+        return DEEP_LINK.rsplit("/", 1)[0]
+
+
 def _step_link(nudge: dict) -> tuple:
     """(click, buttons) for one August/money tracker nudge. Its body already
     carries the best "do this exact thing" line in the system — this just gives
@@ -934,13 +942,18 @@ def run_awareness_pass(force: bool = False) -> str:
                     lines = daily_orders.brief_lines(now, limit=3)
                 except Exception as e:
                     print(f"proactive: daily orders unavailable ({e})")
-            body = "\n".join(
-                [title_txt] + lines +
-                ["Open CLARVIS if you want it broken down."])
+            # A kickoff has no single item to link, so it links to the page that
+            # breaks the block down. "Open CLARVIS" was the instruction Alex was
+            # complaining about: it names an app, not a next move.
+            plan_url = f"{_public_base()}/school"
+            body = "\n".join([title_txt] + lines +
+                             ["Tap for the full breakdown."])
             actions.append(send_nudge(
                 f"session:{now.strftime('%Y-%m-%d')}:{start.strftime('%H:%M')}",
                 f"📚 Session start — {title_txt[:60]}",
-                body, tags="books", force=force, recurring=True))
+                body, tags="books", force=force, recurring=True,
+                click=plan_url,
+                actions=[{"kind": "view", "label": "Today's plan", "url": plan_url}]))
 
     # 5. 50/50 capture — at the END of a shooting block, while the numbers are
     #    still in his head. Skipped the moment today's row exists.
