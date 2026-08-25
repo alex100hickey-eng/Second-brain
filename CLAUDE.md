@@ -18,9 +18,21 @@ the hardening pass, `NEEDS_ALEX.md` what's blocked on Alex.
 - **Consequential actions route to the approval queue.** Money movement, account
   creation, external sends, and deletion go through `jarvis_pending_action` —
   structurally, because managed tasks only act via `handle_tool_call`.
-- **Alex dictates schedule-block placement.** He says when he trains, studies, or
-  works; code transcribes. Suggesting in chat is fine; writing an uninvited block
-  into the training grid is not.
+- **Alex dictates his OWN schedule-block placement — but other people's
+  commitments get written in as they surface.** Amended 2026-08-24 at his
+  direction: "there's too many curveballs to follow a strict 24/7 schedule…
+  things that pop up in my texts, like our team meeting at 4 tomorrow and our
+  conditioning after, those need to be added in as they come." The line is WHO
+  SET THE TIME:
+  - **Someone else set it** (team meeting, conditioning, practice, appointment,
+    anything with a time he didn't choose) → write it into the grid as it
+    surfaces, `this_week_only=True` so a one-off can't calcify into the
+    repeating grid, and tell him what landed with a way to undo it.
+  - **He sets it** (gym, lifting, study, work, 50/50) → still never auto-placed,
+    ever. He decides when those go, working around whatever got added. Suggesting
+    in chat is fine; writing it is not.
+  - **Classes never change.** They're permanent grid entries — don't rewrite them
+    and don't let a pop-up overwrite one.
 - **Google Calendar is permanently retired.** The training-app grid is the
   schedule. Don't re-add calendar tooling.
 
