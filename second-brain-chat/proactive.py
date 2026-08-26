@@ -414,6 +414,7 @@ def _gather() -> dict:
                     picture["due_soon"].append(
                         {"what": item["text"], "due": dt.isoformat(),
                          "date_only": date_only, "hours": round(hours, 1),
+                         "kind": (item.get("type") or "").strip().lower(),
                          "ref": f"intake:{r['id']}"})
     except Exception:
         pass
@@ -468,7 +469,12 @@ def _gather() -> dict:
     # this" — which is exactly the notification Alex said he was missing.
     # Least-late first, because the thing missed an hour ago is the thing still
     # worth rescuing; yesterday's is nearly archaeology.
-    picture["overdue"] = sorted((d for d in picture["due_soon"] if d["hours"] < -2),
+    # Attendance items (`event`: a meeting, a workout, an appointment) never go
+    # MISSED: CLARVIS can't see whether Alex showed up, and "you missed it"
+    # when he was in the room is worse than silence. Once the moment passes,
+    # attendance is assumed and the item just drops (Alex, 2026-08-26).
+    picture["overdue"] = sorted((d for d in picture["due_soon"]
+                                 if d["hours"] < -2 and d.get("kind") != "event"),
                                 key=lambda d: d["hours"], reverse=True)
     picture["due_soon"] = [d for d in picture["due_soon"] if d["hours"] >= -2]
 
@@ -698,7 +704,9 @@ def run_awareness_pass(force: bool = False) -> str:
             d["what"],
             f"Due: {_w}",
             ctx,
-            ("Tap for the details and the steps; the buttons close it out."
+            # An event needs no close-out: attendance is assumed once it passes.
+            ("" if d.get("kind") == "event" else
+             "Tap for the details and the steps; the buttons close it out."
              if page else
              "Do it (or drop it), then mark it done in CLARVIS so this stays quiet."),
         ) if x)

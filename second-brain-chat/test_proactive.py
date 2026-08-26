@@ -504,6 +504,21 @@ def test_missed_items():
           sum(1 for s in spy.sent if s["title"].startswith("⚠️ Missed"))
           <= proactive.OVERDUE_MAX_PER_PASS)
 
+    # An attendance event whose moment passed is NOT missed — CLARVIS can't see
+    # whether Alex showed up, and he doesn't report in. It just drops.
+    sb, spy = _reset(tracker=tracker)
+    _quiet_config_now(active=False)
+    proactive.set_config(morning_brief="", evening_review="")
+    intake.record_raw("imessage", "ev1", "Coach Staley", "", "team mtg",
+                      items=[{"type": "event", "text": "Team meeting, HoF room",
+                              "due": past}])
+    picture = proactive._gather()
+    check("a passed event never lands in overdue",
+          picture["overdue"] == [] and picture["due_soon"] == [])
+    proactive.run_awareness_pass()
+    check("…and produces no missed nudge",
+          not any(s["title"].startswith("⚠️ Missed") for s in spy.sent))
+
 
 def test_waiting_on_alex():
     """The email case, end to end: a draft CLARVIS wrote is a finished thing that
