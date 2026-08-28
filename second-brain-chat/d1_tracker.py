@@ -362,6 +362,7 @@ def build_player(a: dict, stats: dict, roster_season: int | None) -> dict:
         "role": role,
         "role_basis": basis,
         "sample": sample,
+        "tier": roster_tier(_f(stats.get("avgMinutes")), gp, mins),
         "injured": bool(a.get("injuries")),
         # counting + rate stats — everything Alex asked to track
         "gp": int(gp), "gs": int(_f(stats.get("gamesStarted"))),
@@ -385,6 +386,32 @@ def build_player(a: dict, stats: dict, roster_season: int | None) -> dict:
         "plus_minus": int(_f(stats.get("plusMinus"))),
         "has_stats": bool(mins),
     }
+
+
+def roster_tier(mpg: float, gp: float, minutes: float) -> str:
+    """Which door a roster spot actually represents.
+
+    "How many guards do they have" overstates the wall: a scholarship rotation
+    guard and an end-of-bench practice player occupy the same row on a roster
+    page but are nothing alike as competition. ESPN doesn't publish scholarship
+    status, so this reads it off usage, which is the honest proxy — a player who
+    dressed for a full season and still logged ~1 mpg is in the walk-on /
+    practice tier whatever his paperwork says.
+
+    An injured starter is kept out of the bottom tier by the mpg test, not by a
+    games-played floor — a games floor looked like the safe guard but did the
+    opposite, filing BC's Jack DiDonna and Will Eggemeier (1 game, 1 minute
+    each) as ordinary bench players, which is the single clearest practice-player
+    signal on any of these rosters.
+    """
+    if not gp:
+        return "unknown"
+    if mpg >= 15:
+        return "rotation"
+    if mpg >= 5:
+        return "bench"
+    # Under 5 mpg: a real role would have produced minutes somewhere by now.
+    return "end of bench" if minutes < 60 else "bench"
 
 
 def _tp_pct(stats: dict) -> float:
@@ -732,6 +759,7 @@ def deck_data() -> dict:
     Reads cache only. A cold cache returns an honest empty state rather than
     blocking the page on ~90 HTTP calls."""
     init_db()
+    me = load_me()          # read once, not once per school
     schools = []
     for s in SCHOOLS:
         snap = load_snapshot(s["key"])
@@ -743,6 +771,7 @@ def deck_data() -> dict:
             continue
         snap["pending"] = False
         snap["trend"] = score_trend(s["key"], 20)
+        snap["vs_me"] = compare_me(snap.get("guards", []), me)
         schools.append(snap)
 
     # Score first, then vacated share as the tie-break: the 0-100 clamp means
@@ -771,6 +800,7 @@ def deck_data() -> dict:
         # prose, so it disappears on its own once every program has posted.
         "stale_rosters": stale_rosters,
         "n_stale": len(stale_rosters),
+        "me": me,
         "caveat": (
             f"{len(stale_rosters)} of {len(ranked)} programs still show last "
             "season's roster, so their incoming freshmen and transfers aren't "
@@ -778,6 +808,97 @@ def deck_data() -> dict:
             "Resolves once rosters post (usually by November)."
         ) if stale_rosters else "",
     }
+
+
+# ============================================================
+# Alex's own line — the comparison that makes the table actionable
+# ============================================================
+# Kept in a committed JSON rather than the SQLite cache: the cache is
+# gitignored and gets rebuilt from ESPN, and his own numbers must survive that.
+ME_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "d1_me.json")
+
+# Metrics worth ranking him on, and which direction is good. Turnovers are the
+# only one where lower wins, and getting that backwards would quietly tell him
+# he's the best ball-handler in a room when he's the worst.
+ME_METRICS = [
+    ("tp_pct", "3P%", True), ("fg_pct", "FG%", True), ("ft_pct", "FT%", True),
+    ("ppg", "PPG", True), ("apg", "APG", True), ("rpg", "RPG", True),
+    ("spg", "STL", True), ("ast_to", "A:TO", True), ("topg", "TO", False),
+]
+
+
+def load_me() -> dict:
+    """His current stat line, or an empty shell if he hasn't set one."""
+    try:
+        with open(ME_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def save_me(**fields) -> dict:
+    """Merge fields into his line. Partial updates are the normal case —
+    he'll know his 3P% before he knows his A:TO."""
+    me = load_me()
+    for k, v in fields.items():
+        if v is None:
+            continue
+        me[k] = v
+    me["updated_at"] = datetime.now(ET).isoformat()
+    with open(ME_PATH, "w", encoding="utf-8") as f:
+        json.dump(me, f, indent=2, sort_keys=True)
+    return me
+
+
+def compare_me(guards: list[dict], me: dict | None = None,
+               min_mpg: float = 8.0) -> dict:
+    """Where his line would slot among a school's returning guards.
+
+    Compared against **returning** guards only, and only those with a real role
+    (>= min_mpg): being better than a departing senior is irrelevant, and being
+    better than an end-of-bench player is not information.
+
+    Returns a per-metric rank ("2nd of 5") plus the names he'd beat, so the
+    answer is checkable rather than a bare number.
+    """
+    me = me if me is not None else load_me()
+    pool = [g for g in guards
+            if g.get("present_at_arrival") is not False
+            and (g.get("mpg") or 0) >= min_mpg]
+    out: dict = {"has_line": False, "pool_size": len(pool), "metrics": {}}
+    if not me or not pool:
+        return out
+
+    for key, label, higher_better in ME_METRICS:
+        mine = me.get(key)
+        if mine in (None, ""):
+            continue
+        try:
+            mine = float(mine)
+        except (TypeError, ValueError):
+            continue
+        # A guard who never attempted a three shouldn't count as someone he
+        # "beat" on 3P% — a 0.0 there means no attempts, not a cold shooter.
+        vals = [(g.get("name", "?"), g.get(key))
+                for g in pool
+                if isinstance(g.get(key), (int, float))
+                and not (key == "tp_pct" and (g.get("tp_att") or 0) < 20)]
+        if not vals:
+            continue
+        better = [n for n, v in vals
+                  if (v > mine if higher_better else v < mine)]
+        beaten = [n for n, v in vals
+                  if (v < mine if higher_better else v > mine)]
+        out["has_line"] = True
+        out["metrics"][key] = {
+            "label": label, "mine": mine,
+            "rank": len(better) + 1, "of": len(vals),
+            "beats": beaten,
+            "n_beats": len(beaten),
+            "best_in_room": max((v for _, v in vals)) if higher_better
+                            else min((v for _, v in vals)),
+        }
+    return out
 
 
 def hud_summary() -> dict:
@@ -848,6 +969,12 @@ def summarize_for_chat(key: str | None = None) -> str:
     return "\n".join(lines)
 
 
+def _ordinal(n: int) -> str:
+    if 11 <= (n % 100) <= 13:
+        return f"{n}th"
+    return f"{n}{ {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th') }"
+
+
 def _school_text(s: dict, d: dict) -> str:
     sc = s.get("score") or {}
     out = [f"{s['name']} ({s.get('conference','?')}, {s.get('tier','?')}) — "
@@ -859,14 +986,30 @@ def _school_text(s: dict, d: dict) -> str:
            f"(returning quality {sc.get('returning_quality','?')}, "
            f"crowding {sc.get('crowding','?')}, "
            f"vacancy credit {sc.get('vacancy','?')})",
-           f"Staff directory: {s.get('staff','')}", "",
-           "Guards:"]
+           f"Staff directory: {s.get('staff','')}"]
+
+    vs = s.get("vs_me") or {}
+    if vs.get("has_line"):
+        out.append("")
+        out.append(f"Your line vs their returning rotation "
+                   f"({vs['pool_size']} guards at 8+ mpg):")
+        for key, _lbl, _hb in ME_METRICS:
+            m = vs["metrics"].get(key)
+            if not m:
+                continue
+            beats = (", beats " + ", ".join(m["beats"][:4])) if m["beats"] else ""
+            out.append(f"  {m['label']:<5} you {m['mine']} — "
+                       f"{_ordinal(m['rank'])} of {m['of']}"
+                       f" (room best {m['best_in_room']}){beats}")
+
+    out += ["", "Guards:"]
     for g in s.get("guards", []):
         tag = ("RETURNS" if g.get("present_at_arrival") else
                "GONE" if g.get("present_at_arrival") is False else "?")
         out.append(
             f"  {g.get('name', '?')} ({g.get('class_abbr', '?')}, "
-            f"{g.get('height', '?')}) [{tag}] {g.get('role', '?')} — "
+            f"{g.get('height', '?')}) [{tag}] "
+            f"[{g.get('tier', '?')}] {g.get('role', '?')} — "
             f"{g.get('mpg', 0)} mpg, {g.get('ppg', 0)} ppg, "
             f"{g.get('apg', 0)} apg, {g.get('topg', 0)} to, "
             f"{g.get('fg_pct', 0)}% fg, {g.get('tp_pct', 0)}% 3p, "

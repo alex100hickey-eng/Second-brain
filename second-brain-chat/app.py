@@ -1866,6 +1866,33 @@ TOOLS = [
         },
     },
     {
+        "name": "d1_set_my_line",
+        "description": (
+            "Record or update Alex's OWN basketball stat line, which the D1 "
+            "tracker then compares against the returning guards at each of his "
+            "13 target programs. Call this whenever he states any of his own "
+            "numbers ('I'm shooting 41 from three', 'averaging 14 a game') — "
+            "partial updates are normal and expected, pass only the fields he "
+            "gave. Percentages are 0-100, not 0-1."),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "tp_pct": {"type": "number", "description": "3-point %, 0-100."},
+                "fg_pct": {"type": "number", "description": "Field goal %, 0-100."},
+                "ft_pct": {"type": "number", "description": "Free throw %, 0-100."},
+                "ppg": {"type": "number"}, "apg": {"type": "number"},
+                "rpg": {"type": "number"}, "spg": {"type": "number"},
+                "topg": {"type": "number", "description": "Turnovers per game."},
+                "ast_to": {"type": "number", "description": "Assist-to-turnover ratio."},
+                "mpg": {"type": "number"},
+                "note": {"type": "string", "description": (
+                    "Context for these numbers — what level/season they're from "
+                    "(e.g. 'CWRU freshman year, through 10 games').")},
+            },
+            "required": [],
+        },
+    },
+    {
         "name": "list_tasks",
         "description": "List Alex's tracked tasks, newest-updated first. Optionally filter by status.",
         "input_schema": {
@@ -4541,6 +4568,14 @@ def _dispatch_tool_call(tool_name: str, tool_input: dict) -> str:
             note=tool_input.get("note", ""))
     if tool_name == "d1_tracker":
         return d1_tracker.summarize_for_chat(key=tool_input.get("school"))
+    if tool_name == "d1_set_my_line":
+        me = d1_tracker.save_me(**{k: v for k, v in tool_input.items()
+                                   if k != "note" or v})
+        fields = ", ".join(f"{k} {v}" for k, v in sorted(me.items())
+                           if k not in ("updated_at", "note"))
+        return (f"Saved your line: {fields}. "
+                f"The D1 tracker now ranks you against every target's "
+                f"returning guards.")
     if tool_name == "list_tasks":
         return task_tracker.tool_list_tasks(status=tool_input.get("status"))
     if tool_name == "show_task_history":
@@ -4805,6 +4840,7 @@ TOOL_STATUS_LABELS = {
     "update_task_status": "Updating that task…",
     "list_tasks": "Pulling up your tasks…",
     "d1_tracker": "Checking the guard rooms at your target schools…",
+    "d1_set_my_line": "Logging your numbers against the target list…",
     "show_task_history": "Opening that task's history…",
     "evaluate_task": "Sending that task to the council…",
     "search_memory": "Searching our past conversations…",
