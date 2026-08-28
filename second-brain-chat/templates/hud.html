@@ -76,6 +76,12 @@
   // LINKS — the consoles this system runs on
   const wLinks = widget({ width: 172, height: 92, shape: 'header', role: 'w-t1',
     title: 'Links', href: '/links', linkTitle: 'Open links' }, 302, 12);
+  // D1 TRACKER — guard depth at the 13 transfer targets. Its own tile because
+  // the recruiting decision is a season-long watch, not something he should have
+  // to remember to go looking for.
+  const wD1 = widget({ width: 214, height: 122, shape: 'header', role: 'w-l3',
+    title: 'D1 targets', href: '/d1', linkTitle: 'Open Division I tracker' },
+    52, 470);
 
   const clip = (s, n) => (s || '').length > n ? s.slice(0, n - 1) + '…' : (s || '');
   const money = v => '$' + Math.round(v || 0).toLocaleString();
@@ -104,6 +110,18 @@
         b.style.marginTop = '8px';
         return b;
       })()
+    ]);
+
+    // D1 targets — the most open guard rooms, weakest first
+    const d1 = (d && d.d1) || {};
+    HUD.fill(wD1._content, [
+      HUD.bigStat({ value: gone ? '—' : ((d1.top && d1.top[0]) ? d1.top[0].short : '—'),
+        sub: gone || `most open of ${d1.n || 0} · ${d1.arrival || ''}` }),
+      HUD.listRows({
+        empty: gone || 'No scan yet',
+        rows: (d1.top || []).slice(0, 3).map(s =>
+          [s.short, `${s.out} out / ${s.returning} back`, false])
+      })
     ]);
 
     // school mail — unread count + who

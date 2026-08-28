@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>CLARVIS · Division I Tracker</title>
+<link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32.png">
+<link rel="manifest" href="/static/manifest.json">
+<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+<meta name="theme-color" content="#010A20">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="stylesheet" href="/static/hud/hud.css?v=18">
+<style>
+  /* Scrolls rather than sitting on the fixed 1600x1000 deck, for the same
+     reason /schedule does: 13 schools x up to 15 guards x 15 stat columns is a
+     table, and a table can't live at fixed SVG panel coordinates and stay
+     readable on a phone. Palette/fonts/glow per HUD_STYLE.md via hud.css. */
+  html, body { margin: 0; min-height: 100%; }
+  body {
+    font-family: 'Share Tech Mono', ui-monospace, Menlo, monospace;
+    color: var(--hud-cyan);
+    background: radial-gradient(ellipse at 50% 0%, var(--hud-bg-center) 0%, #0a2450 42%, var(--hud-bg-edge) 100%);
+    background-attachment: fixed;
+    padding: 20px 16px 80px;
+    -webkit-text-size-adjust: 100%;
+  }
+  a { color: var(--hud-accent); }
+  .wrap { max-width: 1400px; margin: 0 auto; }
+
+  header { display: flex; align-items: flex-end; gap: 16px; flex-wrap: wrap; }
+  h1 { font-family: 'Orbitron', sans-serif; font-size: 27px; font-weight: 700;
+       letter-spacing: 0.12em; margin: 0; color: var(--hud-accent);
+       filter: var(--hud-glow-strong); text-transform: uppercase; }
+  .sub { font-size: 12px; color: var(--hud-label); filter: var(--hud-glow); }
+  .back { margin-left: auto; font-size: 11px; letter-spacing: 0.14em;
+          text-transform: uppercase; text-decoration: none;
+          border: 1px solid var(--hud-cyan-45); padding: 7px 13px;
+          filter: var(--hud-glow); }
+  .back:hover { border-color: var(--hud-accent); }
+  .rule { height: 1px; background: linear-gradient(90deg, var(--hud-cyan-70), transparent);
+          filter: var(--hud-glow); margin: 10px 0 16px; }
+
+  /* ---- top strip ---- */
+  .strip { display: flex; gap: 30px; flex-wrap: wrap; margin-bottom: 16px; }
+  .cap { font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase;
+         color: var(--hud-label); filter: var(--hud-glow); margin-bottom: 4px; }
+  .big { font-family: 'Orbitron', sans-serif; font-size: 18px; color: var(--hud-white);
+         filter: var(--hud-glow-strong); }
+
+  /* Caveat is chrome, not decoration — it changes how the ranking should be
+     read, so it sits above the list and can't be collapsed away. */
+  .caveat { border: 1px solid var(--hud-cyan-45); border-left: 3px solid var(--hud-accent);
+            background: var(--hud-fill); padding: 10px 14px; margin-bottom: 18px;
+            font-size: 11.5px; line-height: 1.55; color: var(--hud-label);
+            letter-spacing: 0.02em; }
+  .caveat b { color: var(--hud-accent); font-weight: normal; }
+
+  .controls { display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
+              margin-bottom: 14px; }
+  .btn { font-family: 'Share Tech Mono', monospace; font-size: 10px;
+         letter-spacing: 0.14em; text-transform: uppercase; cursor: pointer;
+         background: transparent; color: var(--hud-cyan);
+         border: 1px solid var(--hud-cyan-25); padding: 6px 11px;
+         filter: var(--hud-glow); }
+  .btn:hover { border-color: var(--hud-accent); }
+  .btn.on { border-color: var(--hud-accent); color: var(--hud-accent);
+            background: var(--hud-fill); }
+
+  /* ---- school rows ---- */
+  .school { border: 1px solid var(--hud-cyan-25); background: var(--hud-fill);
+            margin-bottom: 10px;
+            clip-path: polygon(12px 0, 100% 0, 100% calc(100% - 12px),
+                               calc(100% - 12px) 100%, 0 100%, 0 12px); }
+  .school.stale { border-style: dashed; }
+  .head { display: grid; grid-template-columns: 42px 1fr auto; gap: 12px;
+          align-items: center; padding: 12px 15px; cursor: pointer; }
+  .head:hover { background: rgba(79, 212, 232, 0.05); }
+  .rank { font-family: 'Orbitron', sans-serif; font-size: 22px;
+          color: var(--hud-white); filter: var(--hud-glow-strong); text-align: right; }
+  .nm { font-family: 'Orbitron', sans-serif; font-size: 15px; letter-spacing: 0.08em;
+        color: var(--hud-accent); filter: var(--hud-glow); text-transform: uppercase; }
+  .meta { font-size: 10.5px; color: var(--hud-label); margin-top: 3px;
+          letter-spacing: 0.04em; }
+  .meta .tier { color: var(--hud-cyan); }
+  .meta .flag { color: var(--hud-accent); }
+  .read { font-size: 11.5px; color: var(--hud-cyan); margin-top: 5px;
+          letter-spacing: 0.02em; line-height: 1.45; }
+
+  /* Score gauge. State is brightness + fill width only — HUD_STYLE.md forbids
+     a red/amber/green scale, and honestly a colour ramp would imply a precision
+     this model doesn't have. */
+  .gauge { width: 132px; }
+  .gnum { font-family: 'Orbitron', sans-serif; font-size: 19px;
+          color: var(--hud-white); filter: var(--hud-glow-strong); text-align: right; }
+  .glabel { font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase;
+            color: var(--hud-label); text-align: right; margin-top: 2px; }
+  .gbar { height: 4px; border: 1px solid var(--hud-cyan-45); margin-top: 6px;
+          position: relative; }
+  .gbar i { position: absolute; left: 0; top: 0; bottom: 0; display: block;
+            background: var(--hud-cyan); filter: var(--hud-glow); }
+
+  /* ---- guard table ---- */
+  .body { display: none; border-top: 1px solid var(--hud-cyan-25); padding: 12px 15px 16px; }
+  .school.open .body { display: block; }
+  .tblwrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; min-width: 940px; font-size: 11px; }
+  th { font-size: 9px; letter-spacing: 0.13em; text-transform: uppercase;
+       color: var(--hud-label); text-align: right; padding: 5px 6px;
+       border-bottom: 1px solid var(--hud-cyan-45); white-space: nowrap;
+       filter: var(--hud-glow); }
+  th.l, td.l { text-align: left; }
+  td { padding: 5px 6px; text-align: right; border-bottom: 1px solid var(--hud-cyan-12);
+       color: var(--hud-cyan); white-space: nowrap; letter-spacing: 0.02em; }
+  td.num { color: var(--hud-white); }
+  /* Departing players are the opposite of a threat, so they recede rather than
+     get a colour of their own. */
+  tr.gone td { opacity: 0.45; }
+  tr.blocker td.l b { color: var(--hud-accent); }
+  .pname { font-weight: normal; }
+  .prole { font-size: 9.5px; color: var(--hud-label); display: block; margin-top: 2px; }
+  .tag { font-size: 9px; letter-spacing: 0.1em; padding: 1px 5px;
+         border: 1px solid var(--hud-cyan-45); margin-left: 6px; }
+  .tag.out { border-style: dashed; opacity: .7; }
+
+  .foot { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 12px;
+          font-size: 10.5px; color: var(--hud-label); align-items: center; }
+  .foot a { text-decoration: none; border-bottom: 1px dotted var(--hud-cyan-45); }
+  .breakdown { font-size: 10px; color: var(--hud-label); margin-top: 8px;
+               letter-spacing: 0.03em; }
+  .empty { font-size: 12px; color: var(--hud-label); padding: 26px 4px; }
+
+  /* Phone is the primary surface for this page — he checks it away from a desk.
+     The three-column header (rank | detail | gauge) squeezes the middle column
+     to two words a line under ~680px, so the gauge drops to its own full-width
+     row and lays out horizontally instead. */
+  @media (max-width: 680px) {
+    body { padding: 16px 12px 60px; }
+    h1 { font-size: 21px; }
+    .head { grid-template-columns: 30px 1fr; gap: 10px; padding: 11px 12px; }
+    .rank { font-size: 17px; }
+    .gauge { grid-column: 2 / -1; width: auto; display: flex;
+             align-items: center; gap: 10px; }
+    .gnum { font-size: 16px; text-align: left; }
+    .glabel { margin-top: 0; text-align: left; }
+    .gbar { flex: 1; margin-top: 0; }
+    .strip { gap: 20px; }
+    .big { font-size: 15px; }
+  }
+  .legend { font-size: 10px; color: var(--hud-label); line-height: 1.6;
+            margin-top: 22px; border-top: 1px solid var(--hud-cyan-12);
+            padding-top: 12px; letter-spacing: 0.03em; }
+</style>
+</head>
+<body class="hud-body">
+<div class="wrap">
+  <header>
+    <h1>Division I Tracker</h1>
+    <a class="back" href="/hud">&larr; Deck</a>
+  </header>
+  <div class="sub" id="sub">Loading…</div>
+  <div class="rule"></div>
+
+  <div class="strip" id="strip"></div>
+  <div id="caveat"></div>
+  <div class="controls" id="controls"></div>
+  <div id="list"><div class="empty">Loading guard rooms…</div></div>
+
+  <div class="legend">
+    <b>How the score works.</b> 0 = wide-open guard room, 100 = locked down —
+    ranked for <b id="arr">2027-28</b>, the season Alex would arrive.
+    Only guards who'll <i>still be there</i> can block him, so departing seniors
+    count as vacated minutes, not competition.
+    Score = returning quality (0-55, top returner weighted double) + roster
+    crowding (0-25) &minus; a vacancy credit (up to 30) for minutes walking out.<br>
+    <b>PG/SG is derived, not official.</b> ESPN publishes only "Guard" — the
+    lead/combo/off split here is read off assists per 40 minutes and
+    assist-to-turnover ratio, and each player's row shows the numbers it was
+    read from. <b>Class years are approximate</b> where redshirts or extra
+    eligibility apply.
+  </div>
+</div>
+
+<script>
+/* Renders /api/d1. No framework — same as every other CLARVIS page. */
+const $ = s => document.querySelector(s);
+let DATA = null, SORT = 'weak', TIERF = 'all';
+
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g,
+  c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+function fmt(v, dp) {
+  if (v === null || v === undefined || v === '') return '—';
+  const n = Number(v);
+  if (!isFinite(n)) return esc(v);
+  if (n === 0) return '—';
+  return dp ? n.toFixed(dp) : String(n);
+}
+
+function guardRow(g) {
+  const gone = g.present_at_arrival === false;
+  const unknown = g.present_at_arrival === null;
+  const tag = gone ? '<span class="tag out">gone</span>'
+            : unknown ? '<span class="tag out">?</span>'
+            : '<span class="tag">returns</span>';
+  // A returning guard with a real rotation role is the thing standing between
+  // Alex and minutes — that's what the brighter name marks.
+  const blocker = !gone && (g.mpg || 0) >= 15;
+  return `<tr class="${gone ? 'gone' : ''} ${blocker ? 'blocker' : ''}">
+    <td class="l"><b class="pname">${esc(g.name)}</b>${tag}
+      <span class="prole">${esc(g.role)} · ${esc(g.role_basis)}</span></td>
+    <td>${esc(g.class_abbr || '—')}</td>
+    <td>${esc(g.height || '—')}</td>
+    <td>${fmt(g.gp)}</td><td>${fmt(g.gs)}</td>
+    <td class="num">${fmt(g.mpg, 1)}</td>
+    <td class="num">${fmt(g.ppg, 1)}</td>
+    <td class="num">${fmt(g.apg, 1)}</td>
+    <td>${fmt(g.rpg, 1)}</td>
+    <td>${fmt(g.topg, 1)}</td>
+    <td class="num">${fmt(g.ast_to, 2)}</td>
+    <td>${fmt(g.fg_pct, 1)}</td>
+    <td>${fmt(g.tp_pct, 1)}</td>
+    <td>${fmt(g.ft_pct, 1)}</td>
+    <td>${fmt(g.spg, 1)}</td>
+    <td>${fmt(g.bpg, 1)}</td>
+    <td>${fmt(g.per, 1)}</td>
+  </tr>`;
+}
+
+function schoolCard(s) {
+  const sc = s.score;
+  const pending = !sc;
+  const pct = pending ? 0 : Math.max(2, sc.score);
+  const stale = s.roster_current === false;
+  const guards = s.guards || [];
+  const ret = guards.filter(g => g.present_at_arrival !== false);
+  const out = guards.filter(g => g.present_at_arrival === false);
+
+  const rows = guards.length
+    ? guards.map(guardRow).join('')
+    : `<tr><td class="l" colspan="17">No guards listed.</td></tr>`;
+
+  return `<div class="school ${stale ? 'stale' : ''}" data-key="${esc(s.key)}">
+    <div class="head">
+      <div class="rank">${pending ? '—' : s.rank}</div>
+      <div>
+        <div class="nm">${esc(s.name)}</div>
+        <div class="meta">${esc(s.conference || '?')} ·
+          <span class="tier">${esc(s.tier || '?')}</span> ·
+          ${guards.length} guards (${ret.length} return / ${out.length} out) ·
+          roster ${esc(s.roster_season_label || '?')}
+          ${stale ? '<span class="flag">· not yet updated</span>' : ''}</div>
+        <div class="read">${esc(s.read || '')}</div>
+      </div>
+      <div class="gauge">
+        <div class="gnum">${pending ? '—' : sc.score.toFixed(1)}</div>
+        <div class="glabel">${pending ? 'pending' : 'locked-down'}</div>
+        <div class="gbar"><i style="width:${pct}%"></i></div>
+      </div>
+    </div>
+    <div class="body">
+      <div class="tblwrap"><table>
+        <thead><tr>
+          <th class="l">Guard</th><th>Cl</th><th>Ht</th><th>GP</th><th>GS</th>
+          <th>MPG</th><th>PPG</th><th>APG</th><th>RPG</th><th>TO</th>
+          <th>A:TO</th><th>FG%</th><th>3P%</th><th>FT%</th><th>STL</th>
+          <th>BLK</th><th>PER</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>
+      ${pending ? '' : `<div class="breakdown">
+        Score ${sc.score.toFixed(1)} = returning quality ${sc.returning_quality}
+        + crowding ${sc.crowding} ${sc.vacancy} vacancy credit ·
+        ${sc.n_proven_returning} returner(s) at 15+ mpg ·
+        ${sc.vacated_share}% of guard minutes vacated ·
+        lead guards: ${sc.n_lead_returning} returning, ${sc.n_lead_departing} leaving
+      </div>`}
+      <div class="foot">
+        <span>Stats shown: ${esc(s.stats_season_label || '?')} season</span>
+        <a href="${esc(s.staff || '#')}" target="_blank" rel="noopener noreferrer">Coaching staff &#8599;</a>
+        <a href="${esc(s.espn_roster || '#')}" target="_blank" rel="noopener noreferrer">ESPN roster &#8599;</a>
+      </div>
+    </div>
+  </div>`;
+}
+
+function render() {
+  const d = DATA;
+  if (!d) return;
+  $('#sub').textContent =
+    `Guard depth at ${d.schools.length} target programs · ranked for ${d.arrival_season} arrival`
+    + ` · refreshes every ${d.refresh_hours}h`;
+  $('#arr').textContent = d.arrival_season;
+
+  const ranked = d.schools.filter(s => s.score);
+  const openest = ranked[0];
+  $('#strip').innerHTML = `
+    <div><div class="cap">Weakest room</div><div class="big">${openest ? esc(openest.short) : '—'}</div></div>
+    <div><div class="cap">Ranked</div><div class="big">${d.n_ranked}</div></div>
+    <div><div class="cap">Stale rosters</div><div class="big">${d.n_stale}</div></div>
+    <div><div class="cap">Last fetch</div><div class="big">${d.last_fetch ? esc(d.last_fetch.slice(0, 16).replace('T', ' ')) : '—'}</div></div>`;
+
+  $('#caveat').innerHTML = d.caveat
+    ? `<div class="caveat"><b>Read this before trusting the order.</b> ${esc(d.caveat)}
+       Flagged rows are dashed and marked <b>not yet updated</b>.</div>` : '';
+
+  $('#controls').innerHTML = `
+    <span class="cap" style="margin:0 4px 0 0">Sort</span>
+    ${btn('weak', 'Weakest first')} ${btn('strong', 'Strongest first')}
+    ${btn('tier', 'By level')}
+    <span class="cap" style="margin:0 4px 0 14px">Level</span>
+    ${tbtn('all', 'All')} ${tbtn('high-major', 'High')}
+    ${tbtn('mid-major', 'Mid')} ${tbtn('low-major', 'Low')}`;
+
+  let list = d.schools.slice();
+  if (TIERF !== 'all') list = list.filter(s => s.tier === TIERF);
+  if (SORT === 'strong') list.reverse();
+  else if (SORT === 'tier') {
+    list.sort((a, b) => (a.tier_rank || 9) - (b.tier_rank || 9)
+                     || ((a.score ? a.score.score : 999) - (b.score ? b.score.score : 999)));
+  }
+  $('#list').innerHTML = list.length
+    ? list.map(schoolCard).join('')
+    : '<div class="empty">Nothing matches that filter.</div>';
+
+  document.querySelectorAll('.school .head').forEach(h => {
+    h.addEventListener('click', () => h.parentElement.classList.toggle('open'));
+  });
+}
+
+const btn = (k, t) => `<button class="btn ${SORT === k ? 'on' : ''}" data-sort="${k}">${t}</button>`;
+const tbtn = (k, t) => `<button class="btn ${TIERF === k ? 'on' : ''}" data-tier="${k}">${t}</button>`;
+
+document.addEventListener('click', e => {
+  const b = e.target.closest('button[data-sort], button[data-tier]');
+  if (!b) return;
+  if (b.dataset.sort) SORT = b.dataset.sort;
+  if (b.dataset.tier) TIERF = b.dataset.tier;
+  render();
+});
+
+async function load() {
+  try {
+    const r = await fetch('/api/d1');
+    DATA = await r.json();
+    render();
+  } catch (e) {
+    $('#list').innerHTML = '<div class="empty">Tracker data unavailable.</div>';
+  }
+}
+load();
+// In-season the box scores land overnight; a quiet re-poll keeps a left-open
+// tab honest without hammering anything (the API itself serves cache).
+setInterval(load, 10 * 60 * 1000);
+</script>
+</body>
+</html>

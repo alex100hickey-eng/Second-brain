@@ -72,3 +72,9 @@ scripts/capability_watcher.log
 scripts/capability_watcher.launchd.log
 # Trash for removed generated files (generated_files.py) — recoverable, never committed
 .generated_trash/
+# D1 transfer tracker cache — rebuildable from ESPN in ~80s, and it's state, not source
+second-brain-chat/d1_tracker.db
+second-brain-chat/d1_tracker.db-journal
+second-brain-chat/d1_tracker.db-wal
+second-brain-chat/d1_tracker.db-shm
+scripts/d1_refresh.log

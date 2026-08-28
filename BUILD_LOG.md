@@ -1623,3 +1623,53 @@ capability queue (note there also names the declined portions). One stray note: 
 the slug on a `mark` call before the real one, which filed one throwaway "done" row against
 a nonexistent slug (`live-school-school-...`) — harmless (no request in the queue has that
 slug, so nothing reads it), left as-is rather than risk a worse fix with no delete tool.
+
+---
+
+## 2026-08-28 — Division I transfer tracker (`/d1`)
+
+Alex is targeting a D1 transfer **after the 2026-27 season**, so he'd arrive for
+**2027-28**. New tab tracking guard depth at his 13 target programs (BU, BC,
+Harvard, Holy Cross, Northeastern, UMass, Yale, Fairfield, Sacred Heart, Le
+Moyne, Cornell, Colgate, Syracuse), ranked weakest guard room first.
+
+**The modelling decision that shaped everything:** score against the *arrival*
+season, not today. A senior averaging 18 is not a blocker — he's gone before
+Alex gets there; a quiet freshman blocks for three years. Ranking by current
+production would have pointed him at exactly the wrong schools. So
+`_present_at_arrival` gates the whole score, and departing guards count as
+*vacated minutes* (a credit) rather than competition.
+
+**Data:** ESPN's public JSON (roster + per-athlete season statistics). Three
+things bit and are now pinned by tests:
+
+- **Roster season varies by program.** On build day 6 of 13 served 2026-27 while
+  7 still served 2025-26. Class year is meaningless until normalised against the
+  roster's own season — and a stale roster has no incoming class on it, so those
+  schools rank as *more open than they are*. All three "weakest" rooms were
+  stale-roster schools, so the bias was material. Surfaced as a `caveat` +
+  per-school `roster_current` flag rather than buried; self-heals by November.
+- **Preseason rosters have no stats.** Asking season 2027 for statistics returns
+  empty for everyone, which renders as a team of guards averaging zero.
+  `_completed_season` falls back to the last played season.
+- **ESPN publishes no PG/SG split** — only "Guard". The lead/combo/off read is
+  *derived* from assists per 40 and A:TO, labelled as derived, with the numbers
+  it was read from shown on every row. Sample quality is tracked separately, so
+  a starter with a 2-game injury season (Le Moyne's Ametri Moss, 27.5 mpg) isn't
+  buried under the same "unproven" label as a 3-mpg walk-on.
+
+**Also:** ESPN's edge exact-matches User-Agent (`curl/8.4.0` → 200, a
+descriptive string → 403); python.org's macOS build needs certifi for TLS.
+
+**Surfaces:** `/d1` (own template — a 17-column guard table can't sit at fixed
+deck coordinates, same reasoning as `/schedule`), `/api/d1` (cache-first,
+refreshes on a background thread so a phone never waits on ~90 upstream calls),
+a `D1 targets` deck tile, and a `d1_tracker` chat tool. Staff-directory links per
+school — for a transfer you email the assistant/recruiting coordinator, and
+ESPN only carries head coaches.
+
+**Refresh:** `scripts/d1_refresh.py` + `com.secondbrain.d1refresh.plist`, hourly;
+the module's TTL (6h in-season, 24h off) decides what actually refetches, and a
+`d1_refresh` heartbeat makes a stalled tracker visible.
+
+**Tests:** `test_d1_tracker.py`, 78 checks. Full suite green (1041 passed).

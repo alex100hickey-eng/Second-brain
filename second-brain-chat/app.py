@@ -109,6 +109,9 @@ import school_data  # noqa: E402 — local module
 # and keeps the follow-through scorecard — see daily_orders.py.
 import daily_orders  # noqa: E402 — local module
 import training_schedule  # noqa: E402 — local module (pure snapshot parsing)
+# Guard depth at the 13 D1 programs Alex is targeting for a transfer, scored for
+# his arrival season rather than for today — see d1_tracker.py.
+import d1_tracker  # noqa: E402 — local module (stdlib-only, cached in SQLite)
 
 # Video input pipeline (ffmpeg frame sampling + local Whisper transcription +
 # Claude vision). Local module; heavy work shells out to ffmpeg/whisper-cli.
@@ -1837,6 +1840,29 @@ TOOLS = [
                 "note": {"type": "string", "description": "Optional note about why/what changed."},
             },
             "required": ["task_id", "status"],
+        },
+    },
+    {
+        "name": "d1_tracker",
+        "description": (
+            "Guard depth at the 13 Division I programs Alex is targeting for a "
+            "basketball transfer (BU, BC, Harvard, Holy Cross, Northeastern, "
+            "UMass, Yale, Fairfield, Sacred Heart, Le Moyne, Cornell, Colgate, "
+            "Syracuse). He plays PG/SG. Returns every school ranked weakest to "
+            "strongest guard room for his 2027-28 arrival season, or one "
+            "school's full guard-by-guard stat lines (PPG, APG, TO, A:TO, "
+            "FG/3P/FT%, steals, blocks, PER, minutes) with who returns and who "
+            "graduates. Use for any question about where he should transfer, "
+            "which programs need a guard, or who to contact. Reads cached data — "
+            "it does not fetch, so it's fast and safe to call."),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "school": {"type": "string", "description": (
+                    "Optional — one school (name, or short code like BU/SYR/LEM). "
+                    "Omit for the full ranked list.")},
+            },
+            "required": [],
         },
     },
     {
@@ -4513,6 +4539,8 @@ def _dispatch_tool_call(tool_name: str, tool_input: dict) -> str:
         return task_tracker.tool_update_task_status(
             task_id=tool_input["task_id"], status=tool_input["status"],
             note=tool_input.get("note", ""))
+    if tool_name == "d1_tracker":
+        return d1_tracker.summarize_for_chat(key=tool_input.get("school"))
     if tool_name == "list_tasks":
         return task_tracker.tool_list_tasks(status=tool_input.get("status"))
     if tool_name == "show_task_history":
@@ -4776,6 +4804,7 @@ TOOL_STATUS_LABELS = {
     "set_task_priority": "Setting that task's priority…",
     "update_task_status": "Updating that task…",
     "list_tasks": "Pulling up your tasks…",
+    "d1_tracker": "Checking the guard rooms at your target schools…",
     "show_task_history": "Opening that task's history…",
     "evaluate_task": "Sending that task to the council…",
     "search_memory": "Searching our past conversations…",
@@ -6083,6 +6112,56 @@ def schedule_page():
     return render_template("schedule.html")
 
 
+# Module-level guard so overlapping polls can't stack refresh threads — the page
+# polls every 10 minutes and a full refresh takes ~80 seconds.
+_d1_refreshing = threading.Event()
+
+
+# Deliberately its own function rather than another decorator stacked on
+# hud_subpage: per CLAUDE.md that pattern has broken silently three times, and
+# this page needs its own template anyway (a 17-column guard table can't sit at
+# fixed deck coordinates — same reasoning as /schedule above).
+@app.route("/d1")
+def d1_page():
+    """Division I transfer tracker — guard depth at Alex's 13 target schools."""
+    return render_template("d1.html")
+
+
+@app.route("/api/d1")
+def api_d1():
+    """Feed for the D1 tab. Serves cache; refreshes out of band when stale.
+
+    A cold or stale read must never make Alex wait on ~90 upstream calls from
+    his phone, so the fetch runs on a background thread and this returns
+    whatever is cached right now. The next poll picks up the new numbers."""
+    try:
+        data = d1_tracker.deck_data()
+    except Exception as e:
+        print(f"Warning: /api/d1 failed: {e}")
+        return jsonify({"schools": [], "n_ranked": 0, "n_pending": 0,
+                        "n_stale": 0, "caveat": "", "error": "tracker unavailable"})
+
+    try:
+        stale = [s["key"] for s in d1_tracker.SCHOOLS
+                 if d1_tracker.is_stale(s["key"])]
+    except Exception:
+        stale = []
+    if stale and not _d1_refreshing.is_set():
+        _d1_refreshing.set()
+
+        def _bg():
+            try:
+                d1_tracker.refresh_all(only_stale=True)
+            except Exception as e:
+                print(f"Warning: d1 background refresh failed: {e}")
+            finally:
+                _d1_refreshing.clear()
+
+        threading.Thread(target=_bg, daemon=True).start()
+    data["refreshing"] = bool(stale)
+    return jsonify(data)
+
+
 # Expanded views behind the HUD widgets. One template serves them — it reads
 # the page key off the URL — and every one draws the same shell (floor, lettering,
 # core reactor), so the reactor is a consistent "back to the deck" control.
@@ -6733,6 +6812,7 @@ def api_hud():
         "mail": safe(_hud_mail, {}),
         "task": safe(_hud_task, {}),
         "revenue": safe(_hud_revenue, {}),
+        "d1": safe(d1_tracker.hud_summary, {}),
         "generated_at": datetime.now(LOCAL_TZ).strftime("%-I:%M %p"),
     })
 
