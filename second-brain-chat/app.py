@@ -6063,6 +6063,41 @@ if task_manager.RUNTIME == "server" or os.environ.get("MAIL_SCAN_LOCAL", "").low
     monitor.register_worker("jarvis-mail-intake", start_mail_worker)
     print(f"Mail intake worker started (every {MAIL_SCAN_INTERVAL}s).")
 
+
+# ---- D1 tracker refresh (server node) ---------------------------------------
+# The Mac refreshes via launchd (com.secondbrain.d1refresh), but launchd doesn't
+# exist on the server — and the server is the node Alex actually reaches from his
+# phone. Without this, the deployed tab would only ever update when someone
+# opened it, which is precisely when stale numbers do the most damage.
+#
+# Wakes hourly and lets d1_tracker's own TTL decide what refetches (6h per school
+# in-season, 24h off), so most passes are a handful of SQLite reads.
+D1_REFRESH_INTERVAL = 3600
+
+
+def _d1_refresh_loop():
+    while True:
+        try:
+            d1_tracker.refresh_all(only_stale=True)
+        except Exception as e:
+            try:
+                monitor.report_event("d1-tracker", "warning",
+                                     "d1 refresh cycle failed", str(e)[:300])
+            except Exception:
+                pass
+        time.sleep(D1_REFRESH_INTERVAL)
+
+
+def start_d1_worker() -> None:
+    threading.Thread(target=_d1_refresh_loop, daemon=True,
+                     name="jarvis-d1-refresh").start()
+
+
+if task_manager.RUNTIME == "server" or os.environ.get("D1_REFRESH_LOCAL", "").lower() in ("1", "true"):
+    start_d1_worker()
+    monitor.register_worker("jarvis-d1-refresh", start_d1_worker)
+    print(f"D1 tracker refresh worker started (every {D1_REFRESH_INTERVAL}s).")
+
 # Startup self-check — verify every dependency the system needs BEFORE a request hits a
 # missing one mid-conversation. Prints a readable summary to the log and caches a structured
 # report for the dashboard/health panel. A missing REQUIRED dep prints a loud error (the app
