@@ -23,13 +23,7 @@ All committed and pushed to `main`; `3ae2498` is live on the server.
    spg, topg, ast_to, mpg, note. Percentages 0-100. Do NOT seed placeholders —
    a fake line silently produces fake rankings.
 
-2. **Staff / portal research** — workflow `wu5il5brf` was running at handoff:
-   one agent per school for coaching staff, who a transfer actually contacts,
-   and portal intake history by level. If it didn't finish, re-run from
-   `.claude/projects/.../workflows/scripts/d1-staff-and-portal-wf_22dc6dec-6a9.js`.
-   Results should be written into a committed `d1_staff.json` and surfaced in
-   the tab — "who to talk to" was part of the original ask and the tab currently
-   only links to generic staff-directory pages.
+2. **Staff / portal research is DONE** — `d1_staff.json` holds 2026-27 staff, the recruiting contact, contact route and portal intake by level for all 13, surfaced in the tab and the chat tool. Re-run the `d1-staff-and-portal` workflow when staffs turn over (every spring). Four schools still have NO identified recruiting lead: Northeastern, UMass, Cornell, Le Moyne. BC publishes no staff emails at all — questionnaire only.
 
 3. **Roster staleness resolves itself by November.** 7 of 13 still serve 2025-26
    rosters, which inflates how open they look. The caveat banner is computed, so
