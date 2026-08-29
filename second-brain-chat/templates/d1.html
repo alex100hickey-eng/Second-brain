@@ -147,6 +147,16 @@
   .vcell.top .vrank { color: var(--hud-accent); filter: var(--hud-glow); }
   .vbest { font-size: 9.5px; color: var(--hud-label); opacity: .8; margin-top: 1px; }
 
+  .contact { border: 1px solid var(--hud-cyan-25); background: var(--hud-fill);
+             padding: 10px 12px; margin-top: 12px; }
+  .crow { font-size: 11.5px; letter-spacing: 0.02em; line-height: 1.6;
+          color: var(--hud-cyan); }
+  .crow.dim { color: var(--hud-label); }
+  .crow b { color: var(--hud-accent); font-weight: normal; }
+  /* A D3 precedent is the single most decision-relevant fact on this page for
+     him, so it gets the brightest treatment the palette allows. */
+  .crow.flag { color: var(--hud-accent); filter: var(--hud-glow); }
+
   .foot { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 12px;
           font-size: 10.5px; color: var(--hud-label); align-items: center; }
   .foot a { text-decoration: none; border-bottom: 1px dotted var(--hud-cyan-45); }
@@ -288,6 +298,36 @@ const ord = n => {
   return n + ({ 1: 'st', 2: 'nd', 3: 'rd' }[n % 10] || 'th');
 };
 
+/* Who to actually email, and whether this program has ever taken someone from
+   below D1. Researched separately from the box scores because it changes on
+   coaching-change timescales, not nightly. */
+function contact(s) {
+  const st = s.staff_info;
+  if (!st || !st.head_coach) return '';
+  const recs = (st.recruiters || []).map(r =>
+    `<div class="crow"><b>${esc(r.name)}</b> — ${esc(r.title)}</div>`).join('')
+    || `<div class="crow dim">No staffer carries a portal/personnel title —
+        first contact is a judgement call among the assistants.</div>`;
+  const lv = st.levels || {};
+  const lvStr = Object.keys(lv).length
+    ? Object.keys(lv).sort().map(k => `${esc(k)} &times;${lv[k]}`).join(' · ')
+    : 'none found';
+  const d3 = (st.portal_guards_in || []).filter(g => g.from_level === 'D3');
+  return `<div class="contact">
+    <div class="vhead">Who to talk to
+      <span>researched ${esc(st.researched_at || '?')}</span></div>
+    <div class="crow dim">Head coach: <b>${esc(st.head_coach)}</b></div>
+    ${recs}
+    ${st.questionnaire_url ? `<div class="crow"><a href="${esc(st.questionnaire_url)}"
+      target="_blank" rel="noopener noreferrer">Recruit questionnaire &#8599;</a></div>` : ''}
+    <div class="crow dim">Portal guards taken from: ${lvStr}</div>
+    <div class="crow ${st.has_d3_precedent ? 'flag' : 'dim'}">
+      Takes below D1: <b>${esc((st.takes_below_d1_flag || '?').toUpperCase())}</b>${
+      d3.length ? ' — D3 precedent: ' + d3.map(g =>
+        `${esc(g.player)} (${esc(g.from_school)}, ${esc(g.year)})`).join('; ') : ''}</div>
+  </div>`;
+}
+
 function schoolCard(s) {
   const sc = s.score;
   const pending = !sc;
@@ -337,6 +377,7 @@ function schoolCard(s) {
         ${sc.vacated_share}% of guard minutes vacated ·
         lead guards: ${sc.n_lead_returning} returning, ${sc.n_lead_departing} leaving
       </div>`}
+      ${contact(s)}
       <div class="foot">
         <span>Stats shown: ${esc(s.stats_season_label || '?')} season</span>
         <a href="${esc(s.staff || '#')}" target="_blank" rel="noopener noreferrer">Coaching staff &#8599;</a>

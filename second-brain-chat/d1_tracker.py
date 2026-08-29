@@ -767,6 +767,7 @@ def deck_data() -> dict:
     blocking the page on ~90 HTTP calls."""
     init_db()
     me = load_me()          # read once, not once per school
+    staff_blob = load_staff()
     schools = []
     for s in SCHOOLS:
         snap = load_snapshot(s["key"])
@@ -774,11 +775,13 @@ def deck_data() -> dict:
             schools.append({"key": s["key"], "name": s["name"],
                             "short": s["short"], "staff": s["staff"],
                             "guards": [], "score": None, "pending": True,
+                            "staff_info": staff_for(s["key"], staff_blob),
                             "read": "Not fetched yet."})
             continue
         snap["pending"] = False
         snap["trend"] = score_trend(s["key"], 20)
         snap["vs_me"] = compare_me(snap.get("guards", []), me)
+        snap["staff_info"] = staff_for(s["key"], staff_blob)
         schools.append(snap)
 
     # Score first, then vacated share as the tie-break: the 0-100 clamp means
@@ -908,6 +911,63 @@ def compare_me(guards: list[dict], me: dict | None = None,
     return out
 
 
+# ============================================================
+# Staff + portal intake — the "who do I actually email" half
+# ============================================================
+# Researched per school (coaching staff, who runs the portal, what levels they
+# take guards from) and committed, because it changes on coaching-change
+# timescales rather than nightly like the box scores do. Re-run the
+# d1-staff-and-portal workflow to refresh it; `researched_at` says how old it is.
+STAFF_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          "d1_staff.json")
+
+# How many seasons before staff research should be treated as suspect. Staffs
+# turn over every spring; two of these thirteen changed head coach in March 2026
+# alone, which invalidated every contact anyone had for them.
+STAFF_STALE_DAYS = 240
+
+
+def load_staff() -> dict:
+    try:
+        with open(STAFF_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def staff_for(key: str, staff_blob: dict | None = None) -> dict:
+    """One school's staff/portal record, with the level counts precomputed.
+
+    `takes_below_d1` is the field that actually decides where a D3 player's
+    email is worth sending, so it's surfaced as a flag rather than left buried
+    in prose."""
+    blob = staff_blob if staff_blob is not None else load_staff()
+    rec = (blob.get("schools") or {}).get(key)
+    if not rec:
+        return {}
+    levels: dict = {}
+    for g in rec.get("portal_guards_in") or []:
+        lv = g.get("from_level", "unknown")
+        levels[lv] = levels.get(lv, 0) + 1
+    below = {k: v for k, v in levels.items()
+             if k in ("D2", "D3", "NAIA", "JUCO")}
+    recruiters = [s for s in rec.get("staff") or [] if s.get("handles_recruiting")]
+    answer = (rec.get("takes_below_d1") or "").strip().lower()
+    return {
+        **rec,
+        "levels": levels,
+        "below_d1_counts": below,
+        "n_below_d1": sum(below.values()),
+        "has_d3_precedent": levels.get("D3", 0) > 0,
+        # The prose answer leads with YES/NO/UNVERIFIED by construction.
+        "takes_below_d1_flag": ("yes" if answer.startswith("yes")
+                                else "no" if answer.startswith("no")
+                                else "unclear"),
+        "recruiters": recruiters,
+        "researched_at": blob.get("researched_at", ""),
+    }
+
+
 def hud_summary() -> dict:
     """Three lines for the deck tile. Cache-only and deliberately cheap.
 
@@ -994,6 +1054,30 @@ def _school_text(s: dict, d: dict) -> str:
            f"crowding {sc.get('crowding','?')}, "
            f"vacancy credit {sc.get('vacancy','?')})",
            f"Staff directory: {s.get('staff','')}"]
+
+    st = s.get("staff_info") or {}
+    if st:
+        out += ["", f"Head coach: {st.get('head_coach','?')}"]
+        if st.get("head_coach_status"):
+            out.append(f"  status: {st['head_coach_status'][:300]}")
+        for r in st.get("recruiters") or []:
+            out.append(f"Recruiting contact: {r.get('name')} — {r.get('title')}")
+        if not st.get("recruiters"):
+            out.append("Recruiting contact: NONE IDENTIFIED — no staffer on this "
+                       "program carries a portal/personnel title.")
+        if st.get("contact_route"):
+            out.append(f"Contact route: {st['contact_route'][:400]}")
+        if st.get("questionnaire_url"):
+            out.append(f"Questionnaire: {st['questionnaire_url']}")
+        out.append(f"Takes below-D1: {st.get('takes_below_d1_flag','?').upper()}"
+                   f"  (portal guards by level: {st.get('levels') or 'none found'})")
+        if st.get("has_d3_precedent"):
+            d3 = [g for g in st.get("portal_guards_in", [])
+                  if g.get("from_level") == "D3"]
+            out.append("  D3 PRECEDENT: " + "; ".join(
+                f"{g['player']} from {g['from_school']} ({g['year']})" for g in d3))
+        if st.get("researched_at"):
+            out.append(f"  staff data as of {st['researched_at']}")
 
     vs = s.get("vs_me") or {}
     if vs.get("has_line"):

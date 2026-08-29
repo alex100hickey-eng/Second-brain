@@ -403,6 +403,44 @@ def test_my_line_and_comparison():
         d1.ME_PATH = orig
 
 
+def test_staff_data():
+    """The 'who do I email' half — researched, committed, and shipped whole."""
+    print("\n[staff + portal intake]")
+    blob = d1.load_staff()
+    check("d1_staff.json is present and parses", bool(blob.get("schools")))
+    if not blob.get("schools"):
+        return
+    check("every target school has a staff record",
+          all(s["key"] in blob["schools"] for s in d1.SCHOOLS))
+
+    bu = d1.staff_for("bu", blob)
+    check("BU's head coach is recorded", bool(bu.get("head_coach")))
+    check("portal levels are counted", isinstance(bu.get("levels"), dict))
+    # The finding that matters most for a D3 player: BU took Alex Zakheim from
+    # Brandeis, which is D3 and in the UAA — Case Western's own conference.
+    check("BU's D3 precedent is detected", bu["has_d3_precedent"] is True)
+    check("below-D1 flag is parsed from the prose answer",
+          bu["takes_below_d1_flag"] == "yes")
+
+    bc = d1.staff_for("bc", blob)
+    check("BC is flagged as not taking below-D1",
+          bc["takes_below_d1_flag"] == "no" and bc["has_d3_precedent"] is False)
+
+    check("an unknown school returns empty, not a crash",
+          d1.staff_for("notaschool", blob) == {})
+
+    # A school with no identified recruiting lead must say so rather than
+    # silently showing nothing — that gap IS the finding for those programs.
+    no_rec = [k for k in blob["schools"]
+              if not d1.staff_for(k, blob).get("recruiters")]
+    check("schools with no identified recruiter are detectable",
+          isinstance(no_rec, list))
+
+    deck = d1.deck_data()
+    have = [s for s in deck["schools"] if (s.get("staff_info") or {}).get("head_coach")]
+    check("staff info reaches the deck payload", len(have) == len(d1.SCHOOLS))
+
+
 def test_target_list():
     print("\n[target list]")
     check("all 13 target schools are configured", len(d1.SCHOOLS) == 13)
@@ -445,6 +483,7 @@ if __name__ == "__main__":
         test_storage_and_deck()
         test_roster_tier()
         test_my_line_and_comparison()
+        test_staff_data()
         test_target_list()
         test_failsoft()
     finally:
