@@ -122,6 +122,30 @@
   .tag { font-size: 9px; letter-spacing: 0.1em; padding: 1px 5px;
          border: 1px solid var(--hud-cyan-45); margin-left: 6px; }
   .tag.out { border-style: dashed; opacity: .7; }
+  .tag.eob { border-style: dotted; opacity: .6; }
+
+  /* "vs you" — the answer to the question the raw table can't give at a glance.
+     Rank is the number that matters, so it's the bright one; his raw value and
+     the room's best sit around it as the check. State stays inside the palette
+     (brightness only, per HUD_STYLE.md) — first-in-room is brighter, not green. */
+  .vsme { border: 1px solid var(--hud-cyan-25); background: var(--hud-fill);
+          padding: 10px 12px; margin-bottom: 14px; }
+  .vhead { font-size: 10px; letter-spacing: 0.15em; text-transform: uppercase;
+           color: var(--hud-label); filter: var(--hud-glow); margin-bottom: 9px; }
+  .vhead span { text-transform: none; letter-spacing: 0.03em; opacity: .75;
+                margin-left: 8px; }
+  .vgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(84px, 1fr));
+           gap: 10px; }
+  .vcell { border-left: 1px solid var(--hud-cyan-25); padding-left: 9px; }
+  .vcell.top { border-left-color: var(--hud-accent); }
+  .vlab { font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase;
+          color: var(--hud-label); }
+  .vnum { font-family: 'Orbitron', sans-serif; font-size: 16px;
+          color: var(--hud-white); filter: var(--hud-glow-strong); margin-top: 2px; }
+  .vrank { font-size: 10.5px; color: var(--hud-cyan); margin-top: 3px;
+           letter-spacing: 0.03em; }
+  .vcell.top .vrank { color: var(--hud-accent); filter: var(--hud-glow); }
+  .vbest { font-size: 9.5px; color: var(--hud-label); opacity: .8; margin-top: 1px; }
 
   .foot { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 12px;
           font-size: 10.5px; color: var(--hud-label); align-items: center; }
@@ -206,8 +230,15 @@ function guardRow(g) {
   // A returning guard with a real rotation role is the thing standing between
   // Alex and minutes — that's what the brighter name marks.
   const blocker = !gone && (g.mpg || 0) >= 15;
+  // The tier matters as much as the stat line: a rotation guard and an
+  // end-of-bench practice player are the same roster row and nothing alike as
+  // competition. Only 'end of bench' gets its own chip — rotation and bench are
+  // already legible from the MPG column, but "this spot is a walk-on spot" is
+  // not, and it's a different door.
+  const tierChip = g.tier === 'end of bench'
+    ? '<span class="tag eob">end of bench</span>' : '';
   return `<tr class="${gone ? 'gone' : ''} ${blocker ? 'blocker' : ''}">
-    <td class="l"><b class="pname">${esc(g.name)}</b>${tag}
+    <td class="l"><b class="pname">${esc(g.name)}</b>${tag}${tierChip}
       <span class="prole">${esc(g.role)} · ${esc(g.role_basis)}</span></td>
     <td>${esc(g.class_abbr || '—')}</td>
     <td>${esc(g.height || '—')}</td>
@@ -226,6 +257,36 @@ function guardRow(g) {
     <td>${fmt(g.per, 1)}</td>
   </tr>`;
 }
+
+/* Where his own line would slot in this room. Compared against RETURNING guards
+   with a real role only — beating a departing senior or an end-of-bench guy
+   isn't information, so the pool is stated rather than left implied. */
+function vsMe(s) {
+  const v = s.vs_me;
+  if (!v || !v.has_line) return '';
+  const order = ['tp_pct', 'fg_pct', 'ft_pct', 'ppg', 'apg', 'rpg', 'spg', 'ast_to', 'topg'];
+  const cells = order.filter(k => v.metrics[k]).map(k => {
+    const m = v.metrics[k];
+    const top = m.rank === 1;
+    return `<div class="vcell${top ? ' top' : ''}">
+      <div class="vlab">${esc(m.label)}</div>
+      <div class="vnum">${m.mine}</div>
+      <div class="vrank">${ord(m.rank)} of ${m.of}</div>
+      <div class="vbest">room best ${m.best_in_room}</div>
+    </div>`;
+  }).join('');
+  if (!cells) return '';
+  return `<div class="vsme">
+    <div class="vhead">Your line vs their returning rotation
+      <span>${v.pool_size} guard${v.pool_size === 1 ? '' : 's'} at 8+ mpg, still here in ${esc(DATA.arrival_season)}</span></div>
+    <div class="vgrid">${cells}</div>
+  </div>`;
+}
+
+const ord = n => {
+  if (n % 100 >= 11 && n % 100 <= 13) return n + 'th';
+  return n + ({ 1: 'st', 2: 'nd', 3: 'rd' }[n % 10] || 'th');
+};
 
 function schoolCard(s) {
   const sc = s.score;
@@ -259,6 +320,7 @@ function schoolCard(s) {
       </div>
     </div>
     <div class="body">
+      ${vsMe(s)}
       <div class="tblwrap"><table>
         <thead><tr>
           <th class="l">Guard</th><th>Cl</th><th>Ht</th><th>GP</th><th>GS</th>
@@ -300,9 +362,16 @@ function render() {
     <div><div class="cap">Stale rosters</div><div class="big">${d.n_stale}</div></div>
     <div><div class="cap">Last fetch</div><div class="big">${d.last_fetch ? esc(d.last_fetch.slice(0, 16).replace('T', ' ')) : '—'}</div></div>`;
 
-  $('#caveat').innerHTML = d.caveat
+  const hasLine = d.me && Object.keys(d.me).some(k => k !== 'updated_at' && k !== 'note');
+  $('#caveat').innerHTML = (d.caveat
     ? `<div class="caveat"><b>Read this before trusting the order.</b> ${esc(d.caveat)}
-       Flagged rows are dashed and marked <b>not yet updated</b>.</div>` : '';
+       Flagged rows are dashed and marked <b>not yet updated</b>.</div>` : '')
+    // Say when the comparison is switched off. A feature that silently renders
+    // nothing reads as a feature that doesn't exist.
+    + (hasLine ? '' : `<div class="caveat"><b>Your own line isn't set.</b>
+       Tell CLARVIS a number — "shooting 41 from three", "averaging 14 and 4" —
+       and every school here will show where you'd slot among their returning
+       guards.</div>`);
 
   $('#controls').innerHTML = `
     <span class="cap" style="margin:0 4px 0 0">Sort</span>

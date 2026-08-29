@@ -206,6 +206,24 @@ def test_score_school():
     check("an empty guard list doesn't raise",
           d1.score_school([])["score"] == 0.0)
 
+    # Walk-ons share a roster page with rotation players and nothing else.
+    # Yale returned 6 guards of whom 3 were end-of-bench; counting all 6 as
+    # blockers scored that room as twice as closed as it actually is (32.0 vs
+    # 18.5 once corrected).
+    def eob(name):
+        return {"name": name, "mpg": 1.0, "ppg": 0.0, "apg": 0.0,
+                "present_at_arrival": True, "role": "Guard (deep bench)",
+                "tier": "end of bench"}
+    real = [g("A", 20, 8, 2, True), g("B", 18, 7, 2, True), g("C", 16, 6, 2, True)]
+    padded = real + [eob("W1"), eob("W2"), eob("W3")]
+    s_real, s_padded = d1.score_school(real), d1.score_school(padded)
+    check("walk-ons don't inflate crowding",
+          s_real["crowding"] == s_padded["crowding"])
+    check("...and are counted separately from blockers",
+          s_padded["n_blocking"] == 3 and s_padded["n_walkons_returning"] == 3)
+    check("a room padded with walk-ons doesn't outscore the same real room",
+          s_padded["score"] == s_real["score"])
+
     # A star returner must outweigh several replaceable bodies, or the ranking
     # would tell Alex a room with an all-conference PG is the easy one.
     star = [g("Star", 34, 20, 6, True, "Lead guard (PG)")]
@@ -288,6 +306,103 @@ def test_storage_and_deck():
         d1.DB_PATH = orig
 
 
+def test_roster_tier():
+    """Which door a roster spot represents — rotation vs the walk-on tier."""
+    print("\n[roster tier]")
+    check("a 34.7-mpg starter is rotation", d1.roster_tier(34.7, 30, 1041) == "rotation")
+    check("an 8-mpg reserve is bench", d1.roster_tier(8.0, 30, 240) == "bench")
+    # BC's Jack DiDonna / Will Eggemeier: 1 game, 1 minute. The first cut gated
+    # this tier on 10+ games played and filed them as ordinary bench players —
+    # the clearest practice-player signal on any of these rosters, missed.
+    check("1 game at 1 minute is end of bench",
+          d1.roster_tier(1.0, 1, 1) == "end of bench")
+    check("a full season at 1.5 mpg is end of bench",
+          d1.roster_tier(1.5, 28, 42) == "end of bench")
+    # An injured starter must not fall into the bottom tier — mpg is what keeps
+    # him out of it, which is why the games floor was the wrong guard.
+    check("an injured starter (27.5 mpg, 2 gp) stays rotation",
+          d1.roster_tier(27.5, 2, 55) == "rotation")
+    check("no games played is unknown, not end of bench",
+          d1.roster_tier(0, 0, 0) == "unknown")
+
+
+def test_my_line_and_comparison():
+    """His own line, and where it slots against a room."""
+    print("\n[my line + comparison]")
+    fd, path = tempfile.mkstemp(suffix=".json")
+    os.close(fd)
+    os.unlink(path)                      # start absent, like a fresh install
+    _tmpfiles.append(path)
+    orig = d1.ME_PATH
+    d1.ME_PATH = path
+    try:
+        check("no line yet reads as empty", d1.load_me() == {})
+
+        d1.save_me(tp_pct=41.0, ppg=14.0)
+        check("a line round-trips", d1.load_me()["tp_pct"] == 41.0)
+        # Partial updates are the normal case — he'll know his 3P% before his A:TO.
+        d1.save_me(apg=4.0)
+        me = d1.load_me()
+        check("a partial update merges rather than replaces",
+              me["tp_pct"] == 41.0 and me["apg"] == 4.0)
+        check("None values are ignored, not written",
+              "spg" not in d1.save_me(spg=None))
+        check("updated_at is stamped", bool(me.get("updated_at")))
+
+        room = [
+            {"name": "Starter", "mpg": 34.0, "tp_pct": 31.5, "ppg": 15.8,
+             "apg": 2.7, "tp_att": 200, "present_at_arrival": True},
+            {"name": "Chucker", "mpg": 30.0, "tp_pct": 22.6, "ppg": 12.4,
+             "apg": 1.3, "tp_att": 150, "present_at_arrival": True},
+            {"name": "Shooter", "mpg": 21.0, "tp_pct": 44.0, "ppg": 6.3,
+             "apg": 2.2, "tp_att": 120, "present_at_arrival": True},
+            # Excluded: he's gone before Alex arrives.
+            {"name": "DepartingStar", "mpg": 33.0, "tp_pct": 48.0, "ppg": 20.0,
+             "apg": 6.0, "tp_att": 180, "present_at_arrival": False},
+            # Excluded: not a real role.
+            {"name": "WalkOn", "mpg": 1.0, "tp_pct": 0.0, "ppg": 0.0,
+             "apg": 0.0, "tp_att": 0, "present_at_arrival": True},
+        ]
+        v = d1.compare_me(room)
+        check("comparison pool is returning guards with a real role",
+              v["pool_size"] == 3)
+        tp = v["metrics"]["tp_pct"]
+        check("41% ranks 2nd behind the 44% shooter", tp["rank"] == 2)
+        check("...and beats the two who shoot worse",
+              sorted(tp["beats"]) == ["Chucker", "Starter"])
+        check("a departing star doesn't count against him",
+              "DepartingStar" not in tp["beats"] and tp["of"] == 3)
+        check("room best is reported for context", tp["best_in_room"] == 44.0)
+
+        # Turnovers are the one metric where lower wins; getting the direction
+        # backwards would tell him he's the best ball-handler when he's the worst.
+        d1.save_me(topg=1.0)
+        room_to = [{"name": "Careless", "mpg": 30.0, "topg": 3.0,
+                    "present_at_arrival": True},
+                   {"name": "Careful", "mpg": 30.0, "topg": 0.5,
+                    "present_at_arrival": True}]
+        to = d1.compare_me(room_to)["metrics"]["topg"]
+        check("fewer turnovers ranks better", to["rank"] == 2)
+        check("...beating only the careless one", to["beats"] == ["Careless"])
+
+        # A guard who never shot a three isn't someone he "out-shot".
+        room_noatt = [{"name": "NeverShoots", "mpg": 20.0, "tp_pct": 0.0,
+                       "tp_att": 3, "present_at_arrival": True},
+                      {"name": "RealShooter", "mpg": 20.0, "tp_pct": 35.0,
+                       "tp_att": 90, "present_at_arrival": True}]
+        d1.ME_PATH = path
+        tp2 = d1.compare_me(room_noatt, me={"tp_pct": 41.0})["metrics"]["tp_pct"]
+        check("a no-attempt 0.0% isn't counted as someone he beat",
+              tp2["of"] == 1 and tp2["beats"] == ["RealShooter"])
+
+        check("an empty room returns no comparison",
+              d1.compare_me([], me={"tp_pct": 41.0})["has_line"] is False)
+        check("no line means no comparison even with a full room",
+              d1.compare_me(room, me={})["has_line"] is False)
+    finally:
+        d1.ME_PATH = orig
+
+
 def test_target_list():
     print("\n[target list]")
     check("all 13 target schools are configured", len(d1.SCHOOLS) == 13)
@@ -328,6 +443,8 @@ if __name__ == "__main__":
         test_score_school()
         test_read_school()
         test_storage_and_deck()
+        test_roster_tier()
+        test_my_line_and_comparison()
         test_target_list()
         test_failsoft()
     finally:

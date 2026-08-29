@@ -466,8 +466,13 @@ def score_school(guards: list[dict]) -> dict:
     returning_quality = min(55.0, quality * 16.0)
 
     # --- crowding ----------------------------------------------------------
-    # A room of 8 returning guards is hard to crack even if none is a star.
-    crowding = min(25.0, max(0, len(returning) - 2) * 4.5)
+    # A room of 8 returning guards is hard to crack even if none is a star —
+    # but only guards who actually hold a spot count. Yale returns 6 guards of
+    # whom 3 are end-of-bench; scoring that as a 6-deep room made it look twice
+    # as blocked as it is. Walk-ons share a roster page with rotation players
+    # and nothing else.
+    blocking = [g for g in returning if g.get("tier") != "end of bench"]
+    crowding = min(25.0, max(0, len(blocking) - 2) * 4.5)
 
     # --- vacancy credit ----------------------------------------------------
     vacated_mpg = sum(g.get("mpg") or 0 for g in departing)
@@ -485,6 +490,8 @@ def score_school(guards: list[dict]) -> dict:
         "vacancy": round(vacancy, 1),
         "n_guards": len(guards),
         "n_returning": len(returning),
+        "n_blocking": len(blocking),
+        "n_walkons_returning": len(returning) - len(blocking),
         "n_departing": len(departing),
         "n_proven_returning": len(proven_returning),
         "vacated_mpg": round(vacated_mpg, 1),
