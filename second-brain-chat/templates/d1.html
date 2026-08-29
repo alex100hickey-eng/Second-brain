@@ -321,9 +321,9 @@ function contact(s) {
     ${st.questionnaire_url ? `<div class="crow"><a href="${esc(st.questionnaire_url)}"
       target="_blank" rel="noopener noreferrer">Recruit questionnaire &#8599;</a></div>` : ''}
     <div class="crow dim">Portal guards taken from: ${lvStr}</div>
-    <div class="crow ${st.has_d3_precedent ? 'flag' : 'dim'}">
+    <div class="crow ${st.has_d3_guard_precedent ? 'flag' : 'dim'}">
       Takes below D1: <b>${esc((st.takes_below_d1_flag || '?').toUpperCase())}</b>${
-      d3.length ? ' — D3 precedent: ' + d3.map(g =>
+      d3.length ? ' — D3 guard precedent: ' + d3.map(g =>
         `${esc(g.player)} (${esc(g.from_school)}, ${esc(g.year)})`).join('; ') : ''}</div>
   </div>`;
 }

@@ -418,13 +418,13 @@ def test_staff_data():
     check("portal levels are counted", isinstance(bu.get("levels"), dict))
     # The finding that matters most for a D3 player: BU took Alex Zakheim from
     # Brandeis, which is D3 and in the UAA — Case Western's own conference.
-    check("BU's D3 precedent is detected", bu["has_d3_precedent"] is True)
+    check("BU's D3 precedent is detected", bu["has_d3_guard_precedent"] is True)
     check("below-D1 flag is parsed from the prose answer",
           bu["takes_below_d1_flag"] == "yes")
 
     bc = d1.staff_for("bc", blob)
     check("BC is flagged as not taking below-D1",
-          bc["takes_below_d1_flag"] == "no" and bc["has_d3_precedent"] is False)
+          bc["takes_below_d1_flag"] == "no" and bc["has_d3_guard_precedent"] is False)
 
     check("an unknown school returns empty, not a crash",
           d1.staff_for("notaschool", blob) == {})

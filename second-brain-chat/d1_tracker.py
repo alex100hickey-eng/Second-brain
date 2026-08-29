@@ -958,7 +958,11 @@ def staff_for(key: str, staff_blob: dict | None = None) -> dict:
         "levels": levels,
         "below_d1_counts": below,
         "n_below_d1": sum(below.values()),
-        "has_d3_precedent": levels.get("D3", 0) > 0,
+        # GUARDS only — the research collected the backcourt, so a program that
+        # took a D3 forward reads False here. Yale is exactly that case (Connor
+        # May, WashU, 2026-27), and its `takes_below_d1` prose carries it. Named
+        # for guards so the UI can't imply "never taken a D3 player at all".
+        "has_d3_guard_precedent": levels.get("D3", 0) > 0,
         # The prose answer leads with YES/NO/UNVERIFIED by construction.
         "takes_below_d1_flag": ("yes" if answer.startswith("yes")
                                 else "no" if answer.startswith("no")
@@ -1071,7 +1075,7 @@ def _school_text(s: dict, d: dict) -> str:
             out.append(f"Questionnaire: {st['questionnaire_url']}")
         out.append(f"Takes below-D1: {st.get('takes_below_d1_flag','?').upper()}"
                    f"  (portal guards by level: {st.get('levels') or 'none found'})")
-        if st.get("has_d3_precedent"):
+        if st.get("has_d3_guard_precedent"):
             d3 = [g for g in st.get("portal_guards_in", [])
                   if g.get("from_level") == "D3"]
             out.append("  D3 PRECEDENT: " + "; ".join(
