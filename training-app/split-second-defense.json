@@ -1,0 +1,324 @@
+[
+ {
+  "key": "o-finish",
+  "name": "Finishing",
+  "side": "offense",
+  "description": "Drive in not knowing how it ends. The call names the finish as you gather.",
+  "setup": "Attack the rim from the wing or the slot with a live dribble. Start the drive during the countdown - the call hits at your gather, so you pick the finish in the air, not before you leave.",
+  "calls": [
+   {
+    "call": "Reverse",
+    "read": "Cross under, finish the far side.",
+    "cue": "Help steps up on the ball side.",
+    "weight": 4
+   },
+   {
+    "call": "Same foot",
+    "read": "Same foot same hand, high off the glass.",
+    "cue": "",
+    "weight": 4
+   },
+   {
+    "call": "Euro",
+    "read": "Two steps across his body, finish away.",
+    "cue": "He is late and flat-footed.",
+    "weight": 4
+   },
+   {
+    "call": "Pinoy",
+    "read": "Inside hand, hang, finish late off the wrong foot.",
+    "cue": "",
+    "weight": 3
+   },
+   {
+    "call": "Float",
+    "read": "Pull it early, float over the front rim.",
+    "cue": "Big is sitting in the paint.",
+    "weight": 4
+   },
+   {
+    "call": "Extension",
+    "read": "Full extension off one foot, reach past him.",
+    "cue": "",
+    "weight": 3
+   },
+   {
+    "call": "Hang",
+    "read": "Go up, hold it, finish after he lands.",
+    "cue": "He jumps early.",
+    "weight": 3
+   },
+   {
+    "call": "Kick",
+    "read": "Give it up - hit the corner chair.",
+    "cue": "Two bodies commit to the ball.",
+    "weight": 2
+   }
+  ],
+  "custom": true
+ },
+ {
+  "key": "o-catch",
+  "name": "Catch and Shoot",
+  "side": "offense",
+  "description": "Catch not knowing which shot it is. The call lands as the ball hits your hands.",
+  "setup": "Self-toss or spin-out to a spot beyond the arc. Move into the catch during the countdown - hop, back pedal, or off a curl. The call hits on the catch.",
+  "calls": [
+   {
+    "call": "No dip",
+    "read": "Straight up, ball never drops below the pocket.",
+    "cue": "Closeout is right there.",
+    "weight": 4
+   },
+   {
+    "call": "Sidestep",
+    "read": "Shot fake, sidestep to space, shoot.",
+    "cue": "He flies at you.",
+    "weight": 4
+   },
+   {
+    "call": "Pull up",
+    "read": "Shot fake, one dribble, pull up.",
+    "cue": "He closes hard and short.",
+    "weight": 4
+   },
+   {
+    "call": "Jab",
+    "read": "Jab him back, rise into it.",
+    "cue": "He is playing off.",
+    "weight": 3
+   },
+   {
+    "call": "Rip",
+    "read": "Rip through, one dribble, get to your shot.",
+    "cue": "He runs you off it.",
+    "weight": 3
+   },
+   {
+    "call": "Relocate",
+    "read": "Give it up, relocate one spot, catch and shoot again.",
+    "cue": "",
+    "weight": 2
+   }
+  ],
+  "custom": true
+ },
+ {
+  "key": "o-handle",
+  "name": "Handling",
+  "side": "offense",
+  "description": "Attack not knowing which counter. The call names the move once you are already moving.",
+  "setup": "Cone as the defender. Start your attack during the countdown with a live dribble at speed. The call hits one stride before you reach him.",
+  "calls": [
+   {
+    "call": "Burnsey",
+    "read": "Killer cross into the burnsey, finish.",
+    "cue": "",
+    "weight": 4
+   },
+   {
+    "call": "In and out",
+    "read": "In and out into the space behind him, go by.",
+    "cue": "He is heavy on your strong side.",
+    "weight": 4
+   },
+   {
+    "call": "Reverse through",
+    "read": "Reverse through into the euro.",
+    "cue": "He beats you to the spot.",
+    "weight": 4
+   },
+   {
+    "call": "Misdirection",
+    "read": "Misdirection through or behind, go the other way.",
+    "cue": "He commits early.",
+    "weight": 4
+   },
+   {
+    "call": "Lowman",
+    "read": "Lowman, stay low, get skinny past him.",
+    "cue": "",
+    "weight": 3
+   },
+   {
+    "call": "Snatch",
+    "read": "Snatch it back, reattack the same side.",
+    "cue": "He recovers.",
+    "weight": 3
+   },
+   {
+    "call": "Kill",
+    "read": "Kill the dribble, get into your shot.",
+    "cue": "He goes under and gives you space.",
+    "weight": 2
+   }
+  ],
+  "custom": true
+ },
+ {
+  "key": "d-onball",
+  "name": "On Ball",
+  "side": "defense",
+  "description": "Contain. Beat him to the spot, never to the man.",
+  "setup": "Two cones marking the lanes he can attack. Start in stance a mirror-distance off a third cone as the handler. The call hits as he goes.",
+  "calls": [
+   {
+    "call": "Left",
+    "read": "Beat him to the spot, hip to hip, no rise.",
+    "cue": "",
+    "weight": 4
+   },
+   {
+    "call": "Right",
+    "read": "Beat him to the spot, hip to hip, no rise.",
+    "cue": "",
+    "weight": 4
+   },
+   {
+    "call": "Cross",
+    "read": "He crosses back. Change direction without your hips coming up.",
+    "cue": "",
+    "weight": 4
+   },
+   {
+    "call": "Hesi",
+    "read": "Do not bite. Stay down, hold the gap.",
+    "cue": "He sells the stop.",
+    "weight": 3
+   },
+   {
+    "call": "Snatch",
+    "read": "He snatches back for the shot. Close the space, high hand.",
+    "cue": "",
+    "weight": 3
+   },
+   {
+    "call": "Blow by",
+    "read": "You are beat. Open the hip, run, re-plant in front.",
+    "cue": "He has your shoulder.",
+    "weight": 3
+   }
+  ],
+  "custom": true
+ },
+ {
+  "key": "d-screen",
+  "name": "Ball Screen D",
+  "side": "defense",
+  "description": "Your coverage is set before the rep. The call is what he does with the screen.",
+  "setup": "Cone as the screener at the slot, second cone as the handler. Pick your coverage before each round - over, under or ice - and say it out loud. Come into the screen during the countdown.",
+  "calls": [
+   {
+    "call": "Come off",
+    "read": "Fight over, get skinny, re-attach at his hip before he turns the corner.",
+    "cue": "",
+    "weight": 4
+   },
+   {
+    "call": "Reject",
+    "read": "He rejects it. Beat him back the other way - there is no screen to fight.",
+    "cue": "He goes away from it.",
+    "weight": 4
+   },
+   {
+    "call": "Snake",
+    "read": "He snakes back middle. Cross over the top and re-attach on the new side.",
+    "cue": "",
+    "weight": 4
+   },
+   {
+    "call": "Split",
+    "read": "Do not get split. Take the middle away, force him to one side.",
+    "cue": "He splits the two of you.",
+    "weight": 3
+   },
+   {
+    "call": "Pull up",
+    "read": "He pulls up behind it. Close the gap, high hand, do not foul.",
+    "cue": "",
+    "weight": 3
+   },
+   {
+    "call": "Re-screen",
+    "read": "He comes back to it. Reset the coverage, do not trail.",
+    "cue": "",
+    "weight": 2
+   }
+  ],
+  "custom": true
+ },
+ {
+  "key": "d-transition",
+  "name": "Transition D",
+  "side": "defense",
+  "description": "Sprint back and know who you have before you arrive.",
+  "setup": "Start at the offensive block. Two markers at the far end - one wide, one at the rim. Sprint back during the countdown. The call is what you have to take.",
+  "calls": [
+   {
+    "call": "Ball",
+    "read": "Pick up the ball. Nobody else is going to.",
+    "cue": "",
+    "weight": 4
+   },
+   {
+    "call": "Rim",
+    "read": "Protect the rim first. Build the wall, take the kick later.",
+    "cue": "",
+    "weight": 4
+   },
+   {
+    "call": "Deepest",
+    "read": "Take the deepest man, then match on the next pass.",
+    "cue": "",
+    "weight": 3
+   },
+   {
+    "call": "Match",
+    "read": "Everyone is back. Find your man and match.",
+    "cue": "",
+    "weight": 3
+   },
+   {
+    "call": "Trailer",
+    "read": "The trailer is the threat. Meet him above the break.",
+    "cue": "",
+    "weight": 2
+   }
+  ],
+  "custom": true
+ },
+ {
+  "key": "d-recover",
+  "name": "Recover and Slide",
+  "side": "defense",
+  "custom": true,
+  "description": "Reactive change of direction from a defensive shape. Your legs are already committed somewhere else when the call lands.",
+  "setup": "Start in help. Slide one direction, touch the floor, sprint back to your spot. The call hits as you arrive - go the way it says.",
+  "calls": [
+   {
+    "call": "Left",
+    "read": "Slide left with him.",
+    "cue": "",
+    "weight": 4
+   },
+   {
+    "call": "Right",
+    "read": "Slide right with him.",
+    "cue": "",
+    "weight": 4
+   },
+   {
+    "call": "Left back",
+    "read": "He goes behind you left - open the hip, run, re-plant in front.",
+    "cue": "",
+    "weight": 4
+   },
+   {
+    "call": "Right back",
+    "read": "He goes behind you right - open the hip, run, re-plant in front.",
+    "cue": "",
+    "weight": 4
+   }
+  ]
+ }
+]

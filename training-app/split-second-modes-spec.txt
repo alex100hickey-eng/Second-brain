@@ -1,0 +1,39 @@
+SPLIT SECOND - TWO MODES THAT DO NOT EXIST YET
+Spec for the session that built the app. Neither of these is a section - both are new run modes.
+
+WHY
+The call-and-read mode answers WHICH. Some defensive movement is about WHEN, and some is about
+HOW FAST. Those are different drills and the current engine cannot run either.
+
+MODE 1 - GO CUE
+A beep at an unpredictable moment while he is already moving. No spoken word, no call, no read.
+  He is sliding when the rep starts. The beep is the only information.
+  Delay to the beep must VARY REP TO REP and the range has to be wider than the current 0-3s
+  jitter. Something like 3-12 seconds, uniform, re-rolled every rep.
+  Rest between reps around 8-10 seconds, configurable - he needs to reset and start sliding again.
+  Audio must be a tone, not speech. Speech telegraphs by its own onset envelope and he wants
+  a pure startle cue.
+USED BY - Flip and Go
+  Slide in help position. On the beep, flip your hips and sprint to touch the block or the
+  backboard. That is the whole rep. Trains the hip flip and the first three steps.
+
+MODE 2 - GO CUE PLUS STOPWATCH
+Same beep, plus timing.
+  Beep fires at a varying delay, exactly as Mode 1.
+  A stopwatch STARTS on the beep.
+  He taps anywhere on the screen to STOP it when the rep is finished.
+  The time shows immediately, next to his best time for that drill.
+  Store per-drill best and last five. Beating the best is the whole point of the mode.
+  He knows the drill before it starts - curl or flare is a setup decision, not a call. So this
+  mode does not need calls at all. One drill, one movement, one time.
+USED BY - Chase
+  Cone as the off-ball screen. Set up for a curl OR a flare before the rep - you have to know
+  which to set the drill up. On the beep, chase it, get low, push through the line, finish the
+  movement, tap to stop.
+  The stopwatch is the progression. There is no level ladder on this one.
+NOTE - this mode is worth more than these two drills. Closeout Stop on the Defense page is the
+same shape and would be better timed than levelled.
+
+WHAT WORKS TODAY, NO APP CHANGE
+Recover and Slide runs as a normal section right now - four calls, Left, Right, Left back,
+Right back. Set rest to 8s or more.
