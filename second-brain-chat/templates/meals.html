@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>CLARVIS · Meal Ops</title>
+<link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32.png">
+<link rel="manifest" href="/static/manifest.json">
+<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+<meta name="theme-color" content="#010A20">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="stylesheet" href="/static/hud/hud.css?v=18">
+<style>
+  /* Scrolls rather than living on the fixed deck, same reasoning as /d1: a
+     week of meals is a list he works through ON HIS PHONE standing in line.
+     Palette/fonts/glow per HUD_STYLE.md via hud.css. */
+  html, body { margin: 0; min-height: 100%; }
+  body {
+    font-family: 'Share Tech Mono', ui-monospace, Menlo, monospace;
+    color: var(--hud-cyan);
+    background: radial-gradient(ellipse at 50% 0%, var(--hud-bg-center) 0%, #0a2450 42%, var(--hud-bg-edge) 100%);
+    background-attachment: fixed;
+    padding: 20px 16px 80px;
+    -webkit-text-size-adjust: 100%;
+  }
+  .wrap { max-width: 1100px; margin: 0 auto; }
+
+  header { display: flex; align-items: flex-end; gap: 16px; flex-wrap: wrap; }
+  h1 { font-family: 'Orbitron', sans-serif; font-size: 27px; font-weight: 700;
+       letter-spacing: 0.12em; margin: 0; color: var(--hud-accent);
+       filter: var(--hud-glow-strong); text-transform: uppercase; }
+  .sub { font-size: 12px; color: var(--hud-label); filter: var(--hud-glow); }
+  .back { margin-left: auto; font-size: 11px; letter-spacing: 0.14em;
+          text-transform: uppercase; text-decoration: none; color: var(--hud-accent);
+          border: 1px solid var(--hud-cyan-45); padding: 7px 13px;
+          filter: var(--hud-glow); }
+  .back:hover { border-color: var(--hud-accent); }
+  .rule { height: 1px; background: linear-gradient(90deg, var(--hud-cyan-70), transparent);
+          filter: var(--hud-glow); margin: 10px 0 16px; }
+
+  .cap { font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase;
+         color: var(--hud-label); filter: var(--hud-glow); margin-bottom: 6px; }
+
+  .caveat { border: 1px solid var(--hud-cyan-45); border-left: 3px solid var(--hud-accent);
+            background: var(--hud-fill); padding: 10px 14px; margin-bottom: 14px;
+            font-size: 11.5px; line-height: 1.55; color: var(--hud-label);
+            letter-spacing: 0.02em; }
+  .caveat b { color: var(--hud-accent); font-weight: normal; }
+
+  .panel { border: 1px solid var(--hud-cyan-25); background: var(--hud-fill);
+           padding: 12px 14px 14px; margin-bottom: 14px;
+           clip-path: polygon(12px 0, 100% 0, 100% calc(100% - 12px),
+                              calc(100% - 12px) 100%, 0 100%, 0 12px); }
+
+  /* ---- today's plan: big tap rows ---- */
+  .slot { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center;
+          border: 1px solid var(--hud-cyan-25); padding: 12px 13px; margin: 8px 0;
+          cursor: pointer; -webkit-tap-highlight-color: transparent; }
+  .slot:hover { border-color: var(--hud-accent); background: rgba(79,212,232,0.05); }
+  .slot.done { opacity: 0.5; }
+  .slot .nm { font-family: 'Orbitron', sans-serif; font-size: 14px; letter-spacing: 0.08em;
+              color: var(--hud-accent); filter: var(--hud-glow); text-transform: uppercase; }
+  .slot .meta { font-size: 10.5px; color: var(--hud-label); margin-top: 4px;
+                letter-spacing: 0.04em; }
+  .slot .meta .open { color: var(--hud-cyan); }
+  .pips { display: flex; gap: 6px; align-items: center; }
+  .pip { width: 14px; height: 14px; border: 1px solid var(--hud-cyan-70);
+         filter: var(--hud-glow); transform: rotate(45deg); }
+  .pip.f { background: var(--hud-cyan); }
+  .tapnote { font-size: 9.5px; color: var(--hud-label); letter-spacing: 0.1em;
+             text-transform: uppercase; margin-top: 8px; opacity: 0.8; }
+
+  .btn { font-family: 'Share Tech Mono', monospace; font-size: 10px;
+         letter-spacing: 0.14em; text-transform: uppercase; cursor: pointer;
+         background: transparent; color: var(--hud-cyan);
+         border: 1px solid var(--hud-cyan-25); padding: 7px 12px;
+         filter: var(--hud-glow); }
+  .btn:hover { border-color: var(--hud-accent); }
+  select { font-family: 'Share Tech Mono', monospace; font-size: 11px;
+           background: transparent; color: var(--hud-cyan);
+           border: 1px solid var(--hud-cyan-25); padding: 7px 8px; max-width: 100%; }
+  select option { background: #041530; color: #4fd4e8; }
+  .otherrow { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 10px; }
+
+  /* ---- pool gauges ---- */
+  .pools { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+  .pool { border-left: 1px solid var(--hud-cyan-25); padding-left: 10px; }
+  .pnum { font-family: 'Orbitron', sans-serif; font-size: 20px; color: var(--hud-white);
+          filter: var(--hud-glow-strong); }
+  .pnum small { font-size: 11px; color: var(--hud-cyan); }
+  .plab { font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase;
+          color: var(--hud-label); margin-top: 2px; }
+  .pbar { height: 4px; border: 1px solid var(--hud-cyan-45); margin-top: 6px; position: relative; }
+  .pbar i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--hud-cyan);
+            filter: var(--hud-glow); }
+  .psub { font-size: 9.5px; color: var(--hud-label); margin-top: 4px; letter-spacing: 0.04em; }
+
+  /* ---- week strip ---- */
+  .days { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+  .day { border: 1px solid var(--hud-cyan-12); padding: 8px 4px; text-align: center; }
+  .day.today { border-color: var(--hud-accent); }
+  .day.past { opacity: 0.55; }
+  .dname { font-size: 9px; letter-spacing: 0.12em; color: var(--hud-label); }
+  .dnum { font-family: 'Orbitron', sans-serif; font-size: 15px; color: var(--hud-white);
+          filter: var(--hud-glow-strong); margin-top: 4px; }
+  .dnum small { font-size: 9px; color: var(--hud-label); }
+
+  /* ---- status strip + log ---- */
+  .strip { display: flex; gap: 26px; flex-wrap: wrap; }
+  .big { font-family: 'Orbitron', sans-serif; font-size: 18px; color: var(--hud-white);
+         filter: var(--hud-glow-strong); }
+  .big small { font-size: 10px; color: var(--hud-cyan); }
+  .lrow { display: flex; gap: 10px; font-size: 11px; letter-spacing: 0.02em;
+          padding: 5px 0; border-bottom: 1px solid var(--hud-cyan-12);
+          color: var(--hud-cyan); align-items: baseline; }
+  .lrow .t { color: var(--hud-label); min-width: 86px; }
+  .lrow .p { font-size: 9px; border: 1px solid var(--hud-cyan-45); padding: 1px 5px;
+             letter-spacing: 0.1em; }
+  .lrow .n { color: var(--hud-label); font-size: 10px; }
+  .msg { font-size: 11px; color: var(--hud-accent); filter: var(--hud-glow);
+         margin-top: 8px; white-space: pre-line; letter-spacing: 0.02em; min-height: 14px; }
+  .legend { font-size: 10px; color: var(--hud-label); line-height: 1.6;
+            margin-top: 20px; border-top: 1px solid var(--hud-cyan-12);
+            padding-top: 12px; letter-spacing: 0.03em; }
+  .empty { font-size: 12px; color: var(--hud-label); padding: 18px 4px; }
+
+  @media (max-width: 680px) {
+    body { padding: 16px 12px 60px; }
+    h1 { font-size: 21px; }
+    .days { gap: 4px; }
+    .pools { grid-template-columns: repeat(2, 1fr); }
+  }
+</style>
+</head>
+<body class="hud-body">
+<div class="wrap">
+  <header>
+    <h1>Meal Ops</h1>
+    <a class="back" href="/hud">&larr; Deck</a>
+  </header>
+  <div class="sub" id="sub">Loading…</div>
+  <div class="rule"></div>
+
+  <div id="warn"></div>
+
+  <div class="panel">
+    <div class="cap" id="todaycap">Today</div>
+    <div id="plan"><div class="empty">Loading…</div></div>
+    <div class="tapnote">Tap a row when you swipe · nothing is placed for you</div>
+    <div class="otherrow">
+      <select id="otherspot"></select>
+      <button class="btn" id="otherbtn">Log other spot</button>
+      <button class="btn" id="undobtn">Undo last</button>
+    </div>
+    <div class="msg" id="msg"></div>
+  </div>
+
+  <div class="panel">
+    <div class="cap">Swipe pools — week of <span id="weekof"></span></div>
+    <div class="pools" id="pools"></div>
+  </div>
+
+  <div class="panel">
+    <div class="cap">Week</div>
+    <div class="days" id="days"></div>
+  </div>
+
+  <div class="panel">
+    <div class="cap">Zero-dollar telemetry</div>
+    <div class="strip" id="strip"></div>
+    <div class="otherrow">
+      <button class="btn" id="ccbtn">Log CaseCash spend</button>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="cap">Recent swipes</div>
+    <div id="log"><div class="empty">Nothing logged yet.</div></div>
+  </div>
+
+  <div class="legend" id="legend"></div>
+</div>
+
+<script>
+/* Renders /api/meals. No framework — same as every other CLARVIS page.
+   POSTs return {ok, message, deck} so the page re-renders atomically. */
+const $ = s => document.querySelector(s);
+let DECK = null, BUSY = false;
+
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g,
+  c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+function pips(done, count) {
+  let h = '';
+  for (let i = 0; i < count; i++) h += `<span class="pip ${i < done ? 'f' : ''}"></span>`;
+  return h;
+}
+
+function render() {
+  const d = DECK;
+  if (!d) return;
+  $('#sub').textContent =
+    `Universal plan · ${d.today.name} ${d.today.date} · updated ${d.generated_at}`;
+  $('#todaycap').textContent = `Today — ${d.today.name}`;
+  $('#weekof').textContent = d.week_of;
+
+  $('#warn').innerHTML = (d.warnings || []).map(w =>
+    `<div class="caveat"><b>Cap check.</b> ${esc(w)}</div>`).join('');
+
+  $('#plan').innerHTML = (d.today_plan || []).map(r => {
+    const done = r.done >= r.count;
+    const state = done ? 'done for today'
+      : r.open_now ? `<span class="open">open now</span> · ${esc(r.window)}`
+      : esc(r.window);
+    return `<div class="slot ${done ? 'done' : ''}" data-spot="${esc(r.spot)}">
+      <div>
+        <div class="nm">${esc(r.label)}</div>
+        <div class="meta">${esc(r.pool_short)} · ${state}</div>
+      </div>
+      <div class="pips">${pips(r.done, r.count)}</div>
+    </div>`;
+  }).join('') || '<div class="empty">No template for today.</div>';
+
+  $('#pools').innerHTML = (d.pools || []).map(p => {
+    if (p.weekly === null) {
+      return `<div class="pool">
+        <div class="pnum">&#8734;<small> · ${d.commons_week} this wk</small></div>
+        <div class="plab">${esc(p.label)} (fallback)</div>
+        <div class="psub">unlimited — the goal is 0 of these</div>
+      </div>`;
+    }
+    const pct = Math.min(100, Math.round(p.used_week / p.weekly * 100));
+    return `<div class="pool">
+      <div class="pnum">${p.left_week}<small> / ${p.weekly} left</small></div>
+      <div class="plab">${esc(p.label)}</div>
+      <div class="pbar"><i style="width:${pct}%"></i></div>
+      <div class="psub">today ${p.used_today}/${p.daily} · projects ${p.projected}/${p.weekly}</div>
+    </div>`;
+  }).join('');
+
+  $('#days').innerHTML = (d.week || []).map(w =>
+    `<div class="day ${w.is_today ? 'today' : ''} ${w.is_past ? 'past' : ''}">
+      <div class="dname">${esc(w.short)}</div>
+      <div class="dnum">${w.logged}<small>/${w.planned}</small></div>
+    </div>`).join('');
+
+  const cc = d.casecash || {};
+  $('#strip').innerHTML = `
+    <div><div class="cap">Commons fallbacks</div>
+      <div class="big">${d.commons_week}<small> this wk</small></div></div>
+    <div><div class="cap">Fridge runs</div>
+      <div class="big">${d.fridge_runs}<small> spartie/wk</small></div></div>
+    <div><div class="cap">CaseCash</div>
+      <div class="big">$${(cc.left == null ? 0 : cc.left).toFixed(2)}<small> · $${(cc.per_week || 0).toFixed(2)}/wk guide</small></div></div>
+    <div><div class="cap">Slack left in the plan</div>
+      <div class="big" style="font-size:12px">${(d.slack || []).map(esc).join('<br>') || '—'}</div></div>`;
+
+  $('#log').innerHTML = (d.log_tail || []).map(e =>
+    `<div class="lrow"><span class="t">${esc(e.when)}</span>
+      <span class="p">${esc(e.pool_short)}</span>
+      <span>${esc(e.label)}</span>
+      ${e.note ? `<span class="n">— ${esc(e.note)}</span>` : ''}</div>`).join('')
+    || '<div class="empty">Nothing logged yet.</div>';
+
+  const opts = (d.spots || []).slice().sort((a, b) => a.label.localeCompare(b.label));
+  $('#otherspot').innerHTML = opts.map(s =>
+    `<option value="${esc(s.key)}">${esc(s.label)} · ${esc(s.pool_short)} · ${esc(s.window)}</option>`).join('');
+
+  $('#legend').innerHTML = '<b>Assumptions.</b> ' + (d.assumptions || []).map(esc).join(' ');
+}
+
+async function post(url, body) {
+  if (BUSY) return;
+  BUSY = true;
+  try {
+    const r = await fetch(url, { method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body || {}) });
+    if (r.status === 401 || r.redirected) { location = '/login'; return; }
+    const j = await r.json();
+    if (j.deck) { DECK = j.deck; render(); }
+    $('#msg').textContent = j.message || '';
+  } catch (e) {
+    $('#msg').textContent = 'Could not reach CLARVIS — not logged.';
+  } finally { BUSY = false; }
+}
+
+document.addEventListener('click', e => {
+  const slot = e.target.closest('.slot[data-spot]');
+  if (slot) post('/api/meals/log', { spot: slot.dataset.spot });
+});
+$('#otherbtn').addEventListener('click', () =>
+  post('/api/meals/log', { spot: $('#otherspot').value }));
+$('#undobtn').addEventListener('click', () => post('/api/meals/undo', {}));
+$('#ccbtn').addEventListener('click', () => {
+  const amt = prompt('CaseCash spent ($):');
+  if (!amt) return;
+  const note = prompt('What for? (optional)') || '';
+  post('/api/meals/casecash', { amount: parseFloat(amt), note });
+});
+
+async function load() {
+  try {
+    const r = await fetch('/api/meals');
+    if (r.status === 401 || r.redirected) { location = '/login'; return; }
+    DECK = await r.json();
+    render();
+  } catch (e) {
+    $('#plan').innerHTML = '<div class="empty">Tracker unavailable.</div>';
+  }
+}
+load();
+// Counters shift when he logs from chat or another device — a quiet re-poll
+// keeps a left-open tab honest.
+setInterval(load, 5 * 60 * 1000);
+</script>
+</body>
+</html>

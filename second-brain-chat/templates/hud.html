@@ -82,6 +82,12 @@
   const wD1 = widget({ width: 214, height: 122, shape: 'header', role: 'w-l3',
     title: 'D1 targets', href: '/d1', linkTitle: 'Open Division I tracker' },
     52, 470);
+  // MEAL OPS — his dictated week vs the Universal plan's swipe pools. The
+  // commons are unlimited-but-bad, so the tile watches the LIMITED pools that
+  // pay for the food he actually wants (zero-dollar goal).
+  const wMeals = widget({ width: 214, height: 122, shape: 'header', role: 'w-r4',
+    title: 'Meal ops', href: '/meals', linkTitle: 'Open meal tracker' },
+    1300, 462);
 
   const clip = (s, n) => (s || '').length > n ? s.slice(0, n - 1) + '…' : (s || '');
   const money = v => '$' + Math.round(v || 0).toLocaleString();
@@ -121,6 +127,19 @@
         empty: gone || 'No scan yet',
         rows: (d1.top || []).slice(0, 3).map(s =>
           [s.short, `${s.out} out / ${s.returning} back`, false])
+      })
+    ]);
+
+    // Meal ops — today's dictated plan progress + the tightest swipe pools
+    const me = (d && d.meals) || {};
+    HUD.fill(wMeals._content, [
+      HUD.bigStat({ value: gone ? '—' : `${me.today_done || 0}/${me.today_planned || 0}`,
+        sub: gone || `today's meals · ${me.commons_week || 0} commons fallback` }),
+      HUD.listRows({
+        empty: gone || 'No swipes yet',
+        rows: (me.pools || []).slice()
+          .sort((a, b) => (a.left ?? 99) - (b.left ?? 99)).slice(0, 3)
+          .map(p => [p.short, `${p.left} left / ${p.weekly} wk`, p.left === 0])
       })
     ]);
 

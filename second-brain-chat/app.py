@@ -112,6 +112,9 @@ import training_schedule  # noqa: E402 — local module (pure snapshot parsing)
 # Guard depth at the 13 D1 programs Alex is targeting for a transfer, scored for
 # his arrival season rather than for today — see d1_tracker.py.
 import d1_tracker  # noqa: E402 — local module (stdlib-only, cached in SQLite)
+# Meal swipes: his dictated daily template vs the Universal plan's six pool
+# caps, so eating at the good spots never hits a wall — see meal_tracker.py.
+import meal_tracker  # noqa: E402 — local module (one Supabase row for state)
 
 # Video input pipeline (ffmpeg frame sampling + local Whisper transcription +
 # Claude vision). Local module; heavy work shells out to ffmpeg/whisper-cli.
@@ -4752,6 +4755,8 @@ def _dispatch_tool_call(tool_name: str, tool_input: dict) -> str:
         return mail_reader.handle_tool_call(tool_name, tool_input)
     if tool_name in training_sync.TOOL_NAMES:
         return training_sync.handle_tool_call(tool_name, tool_input)
+    if tool_name in meal_tracker.TOOL_NAMES:
+        return meal_tracker.handle_tool_call(tool_name, tool_input)
     if tool_name in school_data.TOOL_NAMES:
         return school_data.handle_tool_call(tool_name, tool_input)
     if tool_name in school_grades.TOOL_NAMES:
@@ -5517,6 +5522,11 @@ TOOLS.extend(training_sync.TOOL_SCHEMAS)
 TOOL_STATUS_LABELS.update(training_sync.TOOL_STATUS_LABELS)
 training_sync.init(supabase, on_update=_training_data_changed)
 
+# Meal swipe tracker: log/undo/status/casecash tools + the /meals page.
+TOOLS.extend(meal_tracker.TOOL_SCHEMAS)
+TOOL_STATUS_LABELS.update(meal_tracker.TOOL_STATUS_LABELS)
+meal_tracker.init(supabase)
+
 # School data: class times + due-date/pace brief off the vault's School/*.csv —
 # read-only except review-log.csv, the spaced-repetition ledger log_study_review
 # appends to (local node only; the server vault is a pull mirror, so the runtime
@@ -6233,6 +6243,38 @@ def api_d1():
     return jsonify(data)
 
 
+@app.route("/meals")
+def meals_page():
+    """Meal swipe tracker — his dictated week vs the Universal plan's caps."""
+    return render_template("meals.html")
+
+
+@app.route("/api/meals")
+def api_meals():
+    try:
+        return jsonify(meal_tracker.deck_data())
+    except Exception as e:
+        print(f"Warning: /api/meals failed: {e}")
+        return jsonify({"error": "temporarily unavailable", "detail": str(e)}), 503
+
+
+@app.route("/api/meals/log", methods=["POST"])
+def api_meals_log():
+    b = request.get_json(silent=True) or {}
+    return jsonify(meal_tracker.api_log(b.get("spot", ""), note=b.get("note", "")))
+
+
+@app.route("/api/meals/undo", methods=["POST"])
+def api_meals_undo():
+    return jsonify(meal_tracker.api_undo())
+
+
+@app.route("/api/meals/casecash", methods=["POST"])
+def api_meals_casecash():
+    b = request.get_json(silent=True) or {}
+    return jsonify(meal_tracker.api_casecash(b.get("amount"), note=b.get("note", "")))
+
+
 # Expanded views behind the HUD widgets. One template serves them — it reads
 # the page key off the URL — and every one draws the same shell (floor, lettering,
 # core reactor), so the reactor is a consistent "back to the deck" control.
@@ -6884,6 +6926,7 @@ def api_hud():
         "task": safe(_hud_task, {}),
         "revenue": safe(_hud_revenue, {}),
         "d1": safe(d1_tracker.hud_summary, {}),
+        "meals": safe(meal_tracker.hud_summary, {}),
         "generated_at": datetime.now(LOCAL_TZ).strftime("%-I:%M %p"),
     })
 
