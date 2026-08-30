@@ -602,6 +602,14 @@ def _mutate(apply_fn, label: str) -> str:
         summary, err = apply_fn(new_snap.setdefault("keys", {}))
         if err:
             return err
+        if len(json.dumps(new_snap)) > MAX_SNAPSHOT_BYTES:
+            # The /training-sync route rejects app pushes over this cap, so a
+            # server-side write that grows past it would leave devices unable to
+            # push their own edits back — sync would break, not just this write.
+            return (f"That change would push the app's data over its "
+                    f"{MAX_SNAPSHOT_BYTES // 1000}KB sync limit, and the app "
+                    "could no longer push edits back. Nothing was written — "
+                    "trim what's being added.")
         new_snap["rev"] = _new_rev()
         _state["undo"].append({"snapshot": current, "label": label})
         del _state["undo"][:-UNDO_DEPTH]
@@ -1106,6 +1114,108 @@ def fifty_fifty_trend(limit: int = 10) -> str:
     return "\n".join(lines)
 
 
+# ---- library page write-back ------------------------------------------------
+#
+# The scoring layer (miss lines, moves on the NOW: L__ level ladders, appended
+# log rows) needs CLARVIS to edit library PAGES, not just the grid and day
+# cards. Two deliberately narrow tools rather than a page CRUD surface: an
+# exact-substring body edit that must match uniquely (so a loose old_text can't
+# silently clobber prose), and a table-row append. No page create, rename, or
+# delete — the library is Alex's content and those stay his by-hand decisions.
+
+def _find_library_page(keys, category: str, page: str):
+    """(lib, page_dict, err) — exact case-insensitive category + title match
+    against the RAW workoutLibrary.v2 dict (numeric category keys)."""
+    lib = _decode(keys, "workoutLibrary.v2")
+    cats = training_schedule.LIBRARY_CATS
+    want_cat = (category or "").strip().lower()
+    idx = next((i for i, c in enumerate(cats) if c.lower() == want_cat), None)
+    if idx is None:
+        return lib, None, f"No library category {category!r}. Categories: " + ", ".join(cats)
+    pages = (lib.get(str(idx)) or {}).get("pages") or []
+    want = (page or "").strip().lower()
+    pg = next((p for p in pages if isinstance(p, dict)
+               and str(p.get("title", "")).strip().lower() == want), None)
+    if pg is None:
+        titles = ", ".join(str(p.get("title", "?")) for p in pages if isinstance(p, dict))
+        return lib, None, f"No page {page!r} in {cats[idx]}. Pages: {titles or '(none)'}"
+    return lib, pg, ""
+
+
+def _clip(s: str, n: int = 90) -> str:
+    s = str(s)
+    return s if len(s) <= n else s[: n - 1] + "…"
+
+
+def edit_library_page(category: str, page: str, old_text: str, new_text: str) -> str:
+    """Replace one exact, unique occurrence of old_text in a library page body."""
+    old, new = str(old_text or ""), str(new_text or "")
+    if not old.strip():
+        return "old_text is empty — give the exact text to replace."
+    if old == new:
+        return "old_text and new_text are identical — nothing would change."
+
+    def apply(keys):
+        lib, pg, err = _find_library_page(keys, category, page)
+        if err:
+            return "", err
+        title = str(pg.get("title", page))
+        if pg.get("type") == "table":
+            return "", (f"{title!r} is a table page — use append_library_log_row "
+                        "for tables. This tool edits text pages.")
+        body = pg.get("body") or ""
+        n = body.count(old)
+        if n == 0:
+            return "", (f"That exact text isn't on {title!r}. Read the page with "
+                        "get_workout_library and copy it verbatim — whitespace "
+                        "and line breaks count.")
+        if n > 1:
+            return "", (f"That text appears {n} times on {title!r} — include more "
+                        "surrounding text so the match is unique.")
+        pg["body"] = body.replace(old, new, 1)
+        _encode(keys, "workoutLibrary.v2", lib)
+        verb = "Removed from" if not new.strip() else "Edited"
+        return f"{verb} {title!r}: {_clip(old)!r} → {_clip(new)!r}", ""
+
+    return _mutate(apply, f"library edit: {page}")
+
+
+def append_library_log_row(category: str, page: str, values: list) -> str:
+    """Append one row to a type=table library page (fills the first blank
+    pre-seeded row, like the app itself — else appends at the end)."""
+    vals = [str(v) for v in (values or [])]
+    if not any(v.strip() for v in vals):
+        return "values is empty — give the row's cells in column order."
+
+    def apply(keys):
+        lib, pg, err = _find_library_page(keys, category, page)
+        if err:
+            return "", err
+        title = str(pg.get("title", page))
+        if pg.get("type") != "table":
+            return "", (f"{title!r} is a text page, not a table — use "
+                        "edit_library_page for text pages.")
+        cols = [str(c) for c in (pg.get("columns") or [])]
+        if cols and len(vals) > len(cols):
+            return "", (f"{len(vals)} values for {len(cols)} columns "
+                        f"({', '.join(cols)}) — give at most one value per "
+                        "column, in order.")
+        entry = vals + [""] * (len(cols) - len(vals)) if cols else vals
+        rows = pg.get("rows") or []
+        for row in rows:
+            if isinstance(row, list) and not any((c or "").strip() for c in row):
+                row[:] = entry
+                break
+        else:
+            rows.append(entry)
+            pg["rows"] = rows
+        _encode(keys, "workoutLibrary.v2", lib)
+        head = f" ({', '.join(cols)})" if cols else ""
+        return f"Logged into {title!r}{head}: " + " | ".join(entry), ""
+
+    return _mutate(apply, f"log row: {page}")
+
+
 def get_training_sync_url() -> str:
     out = (
         "Training-app sync URL (paste into the app's Sync dialog on each device):\n"
@@ -1312,10 +1422,53 @@ TOOL_SCHEMAS = [
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
     {
+        "name": "edit_library_page",
+        "description": (
+            "Change text on ONE page of Alex's workout library — a level move "
+            "('NOW: L2' → 'NOW: L3'), a number or line he asked to correct, "
+            "marking a TO BUILD item done. old_text must match the page body "
+            "EXACTLY (whitespace included) and exactly once; read the page with "
+            "get_workout_library first and copy verbatim. The library is HIS "
+            "content: only make edits he asked for or already agreed to, and "
+            "never remove content without his say-so. He can say 'undo that'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "category": {"type": "string", "description": "Library category, e.g. 'Good Drills', 'Court movement'."},
+                "page": {"type": "string", "description": "Exact page title within the category."},
+                "old_text": {"type": "string", "description": "Exact existing text to replace (must occur exactly once)."},
+                "new_text": {"type": "string", "description": "Replacement text. Empty deletes the matched text — only when he asked."},
+            },
+            "required": ["category", "page", "old_text", "new_text"],
+        },
+    },
+    {
+        "name": "append_library_log_row",
+        "description": (
+            "Add one row to a LOG table page in Alex's workout library (LOG - "
+            "Good Drills, LOG - Passing, LOG - Movement + Defense, the lift "
+            "logs…) the moment he reports a result. values go in the table's "
+            "column order; missing trailing cells stay blank. For 50/50 numbers "
+            "keep using log_5050."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "category": {"type": "string", "description": "Library category the table lives in."},
+                "page": {"type": "string", "description": "Exact table-page title, e.g. 'LOG - Good Drills'."},
+                "values": {"type": "array", "items": {"type": "string"},
+                           "description": "Cell values in column order."},
+            },
+            "required": ["category", "page", "values"],
+        },
+    },
+    {
         "name": "undo_training_edit",
         "description": (
-            "Reverse the last change made to Alex's training app (schedule block or "
-            "workout card). Use when he says 'undo that' or 'put it back'."
+            "Reverse the last change made to Alex's training app (schedule block, "
+            "workout card, or library page). Use when he says 'undo that' or 'put "
+            "it back'."
         ),
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
@@ -1352,6 +1505,8 @@ TOOL_STATUS_LABELS = {
     "set_workout_card": "Rewriting that workout card…",
     "log_5050": "Logging your shooting numbers…",
     "get_5050_trend": "Pulling your shooting trend…",
+    "edit_library_page": "Editing that library page…",
+    "append_library_log_row": "Adding the log row…",
     "undo_training_edit": "Putting that back…",
 }
 
@@ -1386,6 +1541,13 @@ def handle_tool_call(tool_name: str, tool_input: dict) -> str:
                         tool_input.get("when", ""))
     if tool_name == "get_5050_trend":
         return fifty_fifty_trend()
+    if tool_name == "edit_library_page":
+        return edit_library_page(tool_input.get("category", ""), tool_input.get("page", ""),
+                                 tool_input.get("old_text", ""), tool_input.get("new_text", ""))
+    if tool_name == "append_library_log_row":
+        return append_library_log_row(tool_input.get("category", ""),
+                                      tool_input.get("page", ""),
+                                      tool_input.get("values") or [])
     if tool_name == "undo_training_edit":
         return undo_training_edit()
     return f"Unknown tool: {tool_name}"

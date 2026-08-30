@@ -332,6 +332,142 @@ def test_set_big_obligation_lifecycle():
 
 
 # ============================================================
+def _reset_with_library():
+    """Fresh state seeded with a small workoutLibrary.v2: one text page with a
+    level ladder (Good Drills) and one LOG table (Court movement)."""
+    training_sync._state.update({
+        "loaded": False, "row_id": None, "snapshot": None, "saved_at": None,
+        "dirty": False, "next_hydrate_at": 0.0, "next_persist_at": 0.0, "undo": [],
+    })
+    sb = FakeSB()
+    training_sync.init(sb)
+    keys = {}
+    lib = {
+        "1": {"sel": 0, "pages": [
+            {"title": "Good Handling",
+             "body": "CRAWL SPIN FINISH\nNOW: L2\n\nWALL TAPS\nNOW: L2\n"},
+        ]},
+        "6": {"sel": 0, "pages": [
+            {"title": "LOG - Movement + Defense", "type": "table",
+             "columns": ["Date", "Drill", "Level", "Notes"],
+             "rows": [["", "", "", ""], ["", "", "", ""]]},
+        ]},
+    }
+    training_sync._encode(keys, "workoutLibrary.v2", lib)
+    err = training_sync.store_snapshot({"rev": "seed", "keys": keys})
+    check("library seed stored cleanly", err == "")
+    return sb
+
+
+def _library_page(cat_idx, title):
+    snap = training_sync.get_snapshot()
+    lib = training_sync._decode(snap["keys"], "workoutLibrary.v2")
+    return next(p for p in lib[cat_idx]["pages"] if p["title"] == title)
+
+
+def test_edit_library_page():
+    print("\n=== edit_library_page: unique-match body edits ===")
+    _reset_with_library()
+    out = training_sync.edit_library_page(
+        "Good Drills", "Good Handling", "CRAWL SPIN FINISH\nNOW: L2", "CRAWL SPIN FINISH\nNOW: L3")
+    check("edit reports itself", "Edited 'Good Handling'" in out)
+    check("devices/undo boilerplate present", "undo that" in out)
+    body = _library_page("1", "Good Handling")["body"]
+    check("level moved on the page", "CRAWL SPIN FINISH\nNOW: L3" in body)
+    check("other ladder untouched", "WALL TAPS\nNOW: L2" in body)
+    rev = training_sync.get_snapshot()["rev"]
+    check("new rev minted", rev != "seed")
+
+    out = training_sync.edit_library_page("Good Drills", "Good Handling", "NOW: L2", "NOW: L4")
+    check("ambiguous before the edit? no — now unique after L3 move", "Edited" in out)
+    _reset_with_library()
+    out = training_sync.edit_library_page("Good Drills", "Good Handling", "NOW: L2", "NOW: L3")
+    check("ambiguous match refused with count", "appears 2 times" in out)
+    check("nothing written on refusal", training_sync.get_snapshot()["rev"] == "seed")
+    out = training_sync.edit_library_page("Good Drills", "Good Handling", "NOT ON PAGE", "x")
+    check("missing text refused, points at verbatim read", "isn't on 'Good Handling'" in out)
+    out = training_sync.edit_library_page("Good Drills", "Nope Page", "a", "b")
+    check("unknown page lists real pages", "No page 'Nope Page'" in out and "Good Handling" in out)
+    out = training_sync.edit_library_page("Wrong Cat", "Good Handling", "a", "b")
+    check("unknown category lists categories", "No library category" in out and "Good Drills" in out)
+    out = training_sync.edit_library_page("Court movement", "LOG - Movement + Defense", "a", "b")
+    check("table page redirected to row tool", "append_library_log_row" in out)
+    out = training_sync.edit_library_page("Good Drills", "Good Handling", "", "x")
+    check("empty old_text refused", "old_text is empty" in out)
+    out = training_sync.edit_library_page("Good Drills", "Good Handling", "same", "same")
+    check("no-op refused", "identical" in out)
+
+
+def test_append_library_log_row():
+    print("\n=== append_library_log_row: table rows ===")
+    _reset_with_library()
+    out = training_sync.append_library_log_row(
+        "Court movement", "LOG - Movement + Defense", ["8/30", "Flip and Go", "L2"])
+    check("append reports row + headers", "Logged into" in out and "Date, Drill, Level" in out)
+    page = _library_page("6", "LOG - Movement + Defense")
+    check("first blank row filled, padded to columns",
+          page["rows"][0] == ["8/30", "Flip and Go", "L2", ""])
+    check("second blank row still blank", page["rows"][1] == ["", "", "", ""])
+    training_sync.append_library_log_row(
+        "Court movement", "LOG - Movement + Defense", ["8/31", "Chase", "L1", "slow"])
+    training_sync.append_library_log_row(
+        "Court movement", "LOG - Movement + Defense", ["9/1", "Closeout", "L3"])
+    page = _library_page("6", "LOG - Movement + Defense")
+    check("blanks exhausted then appends", len(page["rows"]) == 3
+          and page["rows"][2][0] == "9/1")
+    out = training_sync.append_library_log_row(
+        "Court movement", "LOG - Movement + Defense", ["a", "b", "c", "d", "e"])
+    check("too many cells refused with column names", "5 values for 4 columns" in out)
+    out = training_sync.append_library_log_row("Good Drills", "Good Handling", ["x"])
+    check("text page redirected to edit tool", "edit_library_page" in out)
+    out = training_sync.append_library_log_row("Court movement", "LOG - Movement + Defense", [])
+    check("empty values refused", "values is empty" in out)
+
+
+def test_library_undo_and_size_cap():
+    print("\n=== library writes: undo + snapshot size cap ===")
+    _reset_with_library()
+    training_sync.edit_library_page("Good Drills", "Good Handling",
+                                    "CRAWL SPIN FINISH\nNOW: L2", "CRAWL SPIN FINISH\nNOW: L3")
+    out = training_sync.undo_training_edit()
+    check("undo names the library edit", "library edit" in out)
+    body = _library_page("1", "Good Handling")["body"]
+    check("undo restored the old level", "CRAWL SPIN FINISH\nNOW: L2" in body)
+
+    real_cap = training_sync.MAX_SNAPSHOT_BYTES
+    training_sync.MAX_SNAPSHOT_BYTES = 2_000
+    try:
+        out = training_sync.edit_library_page(
+            "Good Drills", "Good Handling", "WALL TAPS", "W" * 5_000)
+        check("over-cap write refused, names the limit", "sync limit" in out)
+        body = _library_page("1", "Good Handling")["body"]
+        check("page untouched after refusal", "WALL TAPS" in body and "W" * 100 not in body)
+    finally:
+        training_sync.MAX_SNAPSHOT_BYTES = real_cap
+
+
+def test_library_tools_wired():
+    print("\n=== library tools: schemas + dispatch wiring ===")
+    check("both tools in TOOL_NAMES",
+          "edit_library_page" in training_sync.TOOL_NAMES
+          and "append_library_log_row" in training_sync.TOOL_NAMES)
+    check("both tools have status labels",
+          "edit_library_page" in training_sync.TOOL_STATUS_LABELS
+          and "append_library_log_row" in training_sync.TOOL_STATUS_LABELS)
+    _reset_with_library()
+    out = training_sync.handle_tool_call(
+        "edit_library_page",
+        {"category": "Good Drills", "page": "Good Handling",
+         "old_text": "WALL TAPS", "new_text": "WALL TAPS (both hands)"})
+    check("dispatch reaches edit_library_page", "Edited 'Good Handling'" in out)
+    out = training_sync.handle_tool_call(
+        "append_library_log_row",
+        {"category": "Court movement", "page": "LOG - Movement + Defense",
+         "values": ["8/30", "Flip and Go", "L2"]})
+    check("dispatch reaches append_library_log_row", "Logged into" in out)
+
+
+# ============================================================
 if __name__ == "__main__":
     test_batch_populates_multiple_blocks()
     test_batch_mixed_valid_and_invalid()
@@ -345,6 +481,10 @@ if __name__ == "__main__":
     test_once_layer_failsoft_on_junk()
     test_edit_schedule_this_week_only()
     test_set_big_obligation_lifecycle()
+    test_edit_library_page()
+    test_append_library_log_row()
+    test_library_undo_and_size_cap()
+    test_library_tools_wired()
     total, passed = len(_results), sum(_results)
     print("\n" + "=" * 48)
     print(f"{passed}/{total} checks passed")
