@@ -760,8 +760,9 @@ asks what to do ("what's next", "good morning", "what do I need to do"), call
 get_daily_orders and LEAD with the single top order and its why — a ranked list he can
 execute without thinking, not a status dump. get_study_plan is the school detail behind it
 (per-course lead windows, what the next class needs, quiz pointers, exam runway).
-In the evening, ask for the scorecard ONCE and log_scorecard what he says — streaks make
-slippage visible, and a broken streak is information, not a scolding. The moment he
+The nightly scorecard is a four-toggle page the evening nudge carries — never open a
+conversation just to ask for it; if he volunteers how the day went, log_scorecard it.
+Streaks make slippage visible, and a broken streak is information, not a scolding. The moment he
 mentions sending outreach, call log_outreach_send so the +3d/+7d follow-up clock starts;
 get_scorecard shows the trend. Two lines you never cross, no matter how he asks: never
 draft anything he submits for a grade (ECON, ACCT, AIQS and MATH all ban AI on submitted
@@ -6081,6 +6082,7 @@ monitor.register_worker("jarvis-job-worker", start_job_worker)
 # own monitor check); state lives in Supabase (container FS is ephemeral) via
 # intake's generic state rows. Locally this stays manual (run_scout tool).
 def _daily_scout_loop():
+    observability.set_trigger("agent")
     while True:
         try:
             if monitor.is_agent_allowed("expansion_pipeline"):
@@ -6113,6 +6115,7 @@ if task_manager.RUNTIME == "server" or os.environ.get("SCOUT_DAILY_LOCAL", "").l
 # TTLs, see retention.py). Same hourly-wake/once-per-day shape as the scout scheduler;
 # runs in the small hours so it never competes with anything Alex is doing.
 def _daily_retention_loop():
+    observability.set_trigger("agent")
     while True:
         try:
             st = intake._load_state("retention:daily")
@@ -6203,6 +6206,17 @@ def _prospect_reply_pass() -> str:
     return "; ".join(h["brand"] for h in hits)
 
 
+def _outbox_sent_pass() -> str:
+    """Close outbox items whose Gmail draft is no longer in Drafts. Rides the
+    15-minute mail worker: the same poll that reads the mailbox can see that
+    the draft CLARVIS wrote has gone out, so "tell me when you sent it" stops
+    being the only way an item ever closes."""
+    import outbox
+    import mail_drafts
+    closed = outbox.sweep_sent(mail_drafts.draft_ids)
+    return f"closed {len(closed)}" if closed else "nothing sent"
+
+
 def _mail_scan_pass() -> dict:
     """One sweep of every configured mail account. Returns {account: result}."""
     results = {}
@@ -6222,6 +6236,7 @@ def _mail_scan_pass() -> dict:
     if icloud_intake._configured():
         _try("icloud", lambda: icloud_intake.scan_icloud(days=2))
     _try("prospect_replies", _prospect_reply_pass)
+    _try("outbox_sent", _outbox_sent_pass)
     # Beat even when individual accounts failed — those already report their own
     # warnings above. This heartbeat answers a different question: is the WORKER
     # still making passes at all? (2h staleness on a 15-min cadence.)
@@ -6232,10 +6247,12 @@ def _mail_scan_pass() -> dict:
 
 
 def _mail_intake_loop():
+    observability.set_trigger("agent")   # this thread is never Alex typing
     while True:
         try:
             if monitor.is_agent_allowed("intake"):
-                _mail_scan_pass()
+                with observability.feature("intake"):
+                    _mail_scan_pass()
         except Exception as e:
             try:
                 monitor.report_event("mail-intake", "warning", "mail scan cycle failed", str(e)[:300])
@@ -6270,6 +6287,7 @@ D1_REFRESH_INTERVAL = 3600
 
 
 def _d1_refresh_loop():
+    observability.set_trigger("agent")
     while True:
         try:
             d1_tracker.refresh_all(only_stale=True)
@@ -6964,7 +6982,20 @@ def _learnings_capability_brief(limit: int = 60) -> str:
     return "\n".join(out)
 
 
-def _generate_learnings(today: str) -> dict:
+def _generate_learnings(today: str, recent=None) -> dict:
+    # What the last few cards already used — the model has no memory between
+    # days and served the same song and the same money tip two days running.
+    avoid = []
+    for c in recent or []:
+        if not isinstance(c, dict):
+            continue
+        for k, f in (("song", "title"), ("vocab", "word"), ("money_tip", "title"),
+                     ("quote", "text"), ("opportunity", "title"), ("verse", "reference")):
+            v = (c.get(k) or {}).get(f) if isinstance(c.get(k), dict) else None
+            if v:
+                avoid.append(f"{k}: {str(v)[:60]}")
+    avoid_text = ("\n\nAlready used on recent days — pick something DIFFERENT for each:\n- "
+                  + "\n- ".join(avoid[:24])) if avoid else ""
     prompt = (
         "Produce Alex's daily learning card as STRICT JSON — no prose, no code fences.\n"
         "Return an object matching this EXACT structure. Every value shown as \"\" is a "
@@ -6992,7 +7023,8 @@ def _generate_learnings(today: str) -> dict:
         "No get-rich-quick schemes, no MLM, no crypto speculation.\n\n"
         "Keep every string tight: under ~220 characters each, except 'body' fields which "
         "may run to ~320. Write plainly, second person, no hype.\n\n"
-        f"Today is {today}. Vary your picks from what you'd choose on any other date.\n\n"
+        f"Today is {today}. Vary your picks from what you'd choose on any other date."
+        f"{avoid_text}\n\n"
         f"CLARVIS's real capabilities:\n{_learnings_capability_brief()}"
     )
     resp = claude.messages.create(
@@ -7039,7 +7071,14 @@ def get_daily_learnings(force: bool = False) -> dict:
                 continue
             if d.get("date") == today and not force:
                 return d
-        card = _generate_learnings(today)
+        recent = []
+        for r in rows:
+            try:
+                recent.append(json.loads(r["output_text"]))
+            except (json.JSONDecodeError, TypeError):
+                pass
+        with observability.feature("learnings"):
+            card = _generate_learnings(today, recent=recent)
         supabase.table("Agent Outputs").insert(
             {"agent_name": LEARNINGS_AGENT, "output_text": json.dumps(card)}).execute()
         return card

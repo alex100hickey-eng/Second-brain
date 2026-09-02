@@ -428,7 +428,8 @@ def _pace_courses():
     out = []
     for c in sorted(courses, key=lambda c: c.get("course") or ""):
         code = (c.get("course") or "").strip()
-        nxt = [d for d in (cmap.get(code) or []) if d > today][:2]
+        # Distinct dates: CSDS lists its lecture and lab on the same Wednesday.
+        nxt = sorted({d for d in (cmap.get(code) or []) if d > today})[:2]
         if len(nxt) < 2:   # no map (or term over): fall back to the calendar week
             nxt = [today + timedelta(days=2), today + timedelta(days=7)]
         out.append((code, nxt))

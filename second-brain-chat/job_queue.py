@@ -189,6 +189,11 @@ def start_job_worker(queue: JobQueue, handlers: dict, is_allowed=None,
     - report_event(component, level, message, detail) : monitor incident log.
     """
     def loop():
+        try:
+            import observability
+            observability.set_trigger("agent")   # queued work is never Alex typing
+        except Exception:
+            observability = None
         while True:
             try:
                 job = queue.claim_next()
@@ -204,7 +209,11 @@ def start_job_worker(queue: JobQueue, handlers: dict, is_allowed=None,
                     else:
                         try:
                             params = json.loads(job["params"] or "{}")
-                            result = handler(params)
+                            if observability is not None:
+                                with observability.feature(f"job:{jtype}"):
+                                    result = handler(params)
+                            else:
+                                result = handler(params)
                             queue.mark_done(job["id"], result)
                         except Exception as e:
                             queue.mark_failed(job["id"],

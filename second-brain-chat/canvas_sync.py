@@ -302,6 +302,38 @@ if __name__ == "__main__":
                     timeout=30, capture_output=True)
             except Exception:
                 pass      # a heartbeat must never fail the sync it reports on
+        # The Friday content sweep writes .canvas_sweep_heartbeat when it
+        # finishes. It runs inside the Claude Code app, which has no launchd-style
+        # liveness, so this 30-minute tick is the only thing positioned to notice
+        # it silently stopped (app closed, SSO expired, laptop away). One incident
+        # per day, and only once the first run was due.
+        try:
+            hb = os.path.join(root, ".canvas_sweep_heartbeat")
+            marker = os.path.join(root, ".canvas_sweep_alerted")
+            today_s = datetime.now().strftime("%Y-%m-%d")
+            age_days = None
+            if os.path.exists(hb):
+                age_days = (datetime.now()
+                            - datetime.fromtimestamp(os.path.getmtime(hb))).days
+            first_due = datetime(2026, 9, 5)
+            stale = ((age_days is None and datetime.now() > first_due)
+                     or (age_days is not None and age_days > 8))
+            already = (os.path.exists(marker)
+                       and open(marker).read().strip() == today_s)
+            if stale and not already:
+                subprocess.run(
+                    [sys.executable, os.path.join(root, "scripts", "report_event.py"),
+                     "canvas-sweep", "warning", "weekly Canvas sweep has not completed",
+                     (f"last heartbeat {age_days}d ago" if age_days is not None
+                      else "never completed")
+                     + " — open the Claude Code app, log in to Canvas in the Browser "
+                       "pane, and run friday-canvas-sweep"],
+                    timeout=30, capture_output=True)
+                with open(marker, "w") as f:
+                    f.write(today_s)
+                result["sweep_alert"] = "raised"
+        except Exception:
+            pass
         print(f"[{datetime.now().strftime('%Y-%m-%dT%H:%M:%S')}]",
               json.dumps(result))
     else:

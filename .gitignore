@@ -79,3 +79,5 @@ second-brain-chat/d1_tracker.db-wal
 second-brain-chat/d1_tracker.db-shm
 scripts/d1_refresh.log
 .canvas_status/
+.canvas_sweep_heartbeat
+.canvas_sweep_alerted

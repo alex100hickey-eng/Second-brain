@@ -59,6 +59,12 @@ Basketball items were parked on your call.
   in EXAM READINESS, DO NEXT names MATH first. Sundays 7 PM you get a one-page
   "where did you get to" with one tap per course.
 - The money-step "Done" button on notification pages now actually banks the step.
+- Outbox items close themselves: when a draft CLARVIS wrote leaves Gmail Drafts (you sent
+  or discarded it), the 15-minute mail poll closes the item — no more "tell me it went out".
+- Grades the nightly Canvas sync captures (e.g. 9/10 on an APQ) flow into the grade engine
+  on their own; grade_projection stops being empty once the sync has run.
+- Two task rows memory already knew were done (course pack in hand; Krause office-hour days)
+  were closed so they stop counting in the backlog.
 - The Mac node restarts itself when the code moves; a sleeping Mac no longer raises
   "subsystem down" alarms; the $50 budget now sees both nodes.
 

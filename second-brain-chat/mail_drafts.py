@@ -164,6 +164,30 @@ def list_email_drafts(account: str = "personal", limit: int = 5) -> str:
     return "\n".join(lines)
 
 
+def draft_ids(account: str, cap: int = 100):
+    """Set of draft ids currently in the account's Drafts folder, or None when
+    the answer isn't trustworthy (account not wired, call failed, or the folder
+    holds at least a full page — "unknown" must never read as "gone"). Used by
+    outbox.sweep_sent to notice that a draft CLARVIS wrote has LEFT Drafts —
+    sent or discarded, either way no longer waiting on Alex's hand."""
+    if account not in _ENTITIES or _composio is None:
+        return None
+    try:
+        result = _composio.tools.execute(
+            "GMAIL_LIST_DRAFTS", user_id=_ENTITIES[account],
+            dangerously_skip_version_check=True,
+            arguments={"max_results": cap, "verbose": False})
+        if isinstance(result, dict) and result.get("successful") is False:
+            return None
+        d = result.get("data", result) if isinstance(result, dict) else {}
+        drafts = d.get("drafts") or d.get("items") or []
+    except Exception:
+        return None
+    if not isinstance(drafts, list) or len(drafts) >= cap:
+        return None
+    return {str(dr.get("id")) for dr in drafts if isinstance(dr, dict) and dr.get("id")}
+
+
 TOOL_SCHEMAS = [
     {"name": "create_email_draft",
      "description": "Write a reply/new email as a DRAFT in Alex's real Gmail Drafts "

@@ -29,6 +29,7 @@ Design stances carried over from school_data.py, deliberately:
 
 import csv
 import os
+import re
 from datetime import datetime
 
 import school_data
@@ -92,6 +93,34 @@ def scores(course: str = "") -> list:
                     "item": (r.get("item") or "").strip(), "score": got,
                     "out_of": total, "pct": 100.0 * got / total,
                     "date": (r.get("date") or "").strip()})
+    # Grades the nightly Canvas status sync writes into assignments.csv ("9/10")
+    # count too — that column is the only grade input that fills itself. Labels
+    # are matched to the rubric by title, then by type; an unmatched label
+    # counts toward nothing rather than being guessed.
+    seen = {(s["course"], s["item"].strip().lower()) for s in out}
+    comps_by_course = rubric()
+    for r in school_data._load("assignments.csv"):
+        code = (r.get("course") or "").strip()
+        if not code or (want and want not in code.lower()):
+            continue
+        m = re.match(r"^\s*([0-9.]+)\s*/\s*([0-9.]+)\s*$", r.get("grade") or "")
+        if not m:
+            continue
+        got, total = float(m.group(1)), float(m.group(2))
+        if not total:
+            continue
+        title = (r.get("title") or "").strip()
+        if (code, title.lower()) in seen:
+            continue
+        comps = comps_by_course.get(code, [])
+        c = (_match_component(title, comps)
+             or _match_component((r.get("type") or "").strip(), comps))
+        if not c:
+            continue
+        out.append({"course": code, "component": c["component"], "item": title,
+                    "score": got, "out_of": total, "pct": 100.0 * got / total,
+                    "date": (r.get("submitted_date") or r.get("due_date") or "").strip()[:10],
+                    "source": "assignments.csv"})
     return out
 
 

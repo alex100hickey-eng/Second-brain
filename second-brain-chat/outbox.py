@@ -172,6 +172,40 @@ def close(item_id: int, status: str = DONE, note: str = "") -> dict | None:
                             "closed": _now().isoformat()})
 
 
+def sweep_sent(draft_ids_fn) -> list:
+    """Close open email items whose Gmail draft has left the Drafts folder.
+
+    The no-send gate means CLARVIS never learns an email went out unless Alex
+    says so — and he doesn't say so (the advisor reply was nudged twice after
+    it had gone). The mailbox itself is readable: if the draft an item filed
+    (ref "gmail:<account>:<draft id>") is no longer in Drafts, it was sent or
+    discarded, and either way it stopped waiting on his hand.
+    `draft_ids_fn(account)` returns a set of ids, or None for "don't know" —
+    and None never closes anything. Returns the item ids closed."""
+    by_account = {}
+    for it in open_items(limit=60, include_snoozed=True):
+        ref = str(it.get("ref") or "")
+        parts = ref.split(":", 2)
+        if len(parts) != 3 or parts[0] != "gmail" or not parts[2]:
+            continue
+        by_account.setdefault(parts[1], []).append((it, parts[2]))
+    closed = []
+    for account, items in by_account.items():
+        try:
+            present = draft_ids_fn(account)
+        except Exception:
+            present = None
+        if not isinstance(present, (set, frozenset)):
+            continue
+        for it, draft_id in items:
+            if draft_id in present:
+                continue
+            if close(it["id"], note="draft left Gmail Drafts (sent or discarded) — "
+                                    "closed automatically") is not None:
+                closed.append(it["id"])
+    return closed
+
+
 def snooze(item_id: int, hours: float = 3) -> dict | None:
     """"Not now" without losing the item. Snoozing is the honest answer most of
     the time, and an assistant that only offers done/never trains him to lie."""
