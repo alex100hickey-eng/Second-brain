@@ -375,6 +375,18 @@ routine lines are the hook — do not rewrite his routine without asking.
 - `training-app/README.md` refreshed; `PENDING_SCORING_SPEC.json` stamped `_STATUS: SUPERSEDED` (its
   targets were deleted 8/31 — never apply it).
 
-**Where it stopped:** waiting for him to read the NERVOUS SYSTEM page and say what is wrong with it.
-Next question to ask, one only: does the BETWEEN reset cue (wipe hands / pull jersey) match what he
-actually does, or does he already have one.
+**Late evening — the team assigned a lift program (found by reading his school mail on his
+"you can find most stuff about me in my texts and emails").** Coach Rocco Mitolo (S&C), email
+"New Lifts" 2026-09-02 3:20 PM, unread by Alex at the time: **3 lifts/week Sun–Sat, never two in
+a day, never more than 2 days in a row**, first-years on his first-year sheet (Google Sheet, login
+only — could not read it), numbers into his own sheet + a Google Form the same day, 1 day this
+week, Rocco in the weight room Mon/Wed 8:30–~10 (not Labor Day), **retest the week of 10/15**.
+His strength-test numbers (tested Mon 8/31: **squat 335 / bench 285 / clean 205**, his own text that night) are now written on the Rules page's TEAM TEST line (rev after `c4ca20b93e804e25`). This collides with the
+app's lift week (Mon heavy lower / Tue upper system / Thu heavy upper / Fri lower lengthened +
+Sun/Wed jumps). Written to NEEDS_ALEX as item 1. **Nothing on the lift pages was changed.**
+
+**Where it stopped / the ONE question to ask next:** which three days are the team's lifts, and
+what happens to his own four loaded days (replace, merge, or stack). That outranks the NERVOUS
+SYSTEM read-through and the reset-cue question — the team program starts full-bore next week.
+Also filed for him: intake 17013 (hedged pre-practice reminder), 17015 (three unsent professor
+drafts), outbox 16792 closed (advisor reply was sent 9/1).

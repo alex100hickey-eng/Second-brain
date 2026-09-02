@@ -12,6 +12,63 @@ is still yours to do.
 
 ---
 
+## 🏀📬 2026-09-02 (Wed evening) — from your texts + emails; 5 things are yours
+
+You said "optimize whatever you can" and "you can find most stuff about me in my texts and
+emails." I read the last two weeks of all three mailboxes (read-only, nothing sent) and fixed
+what I could. These five need you.
+
+1. **Coach Rocco assigned the team lift program today (3:20 PM email "New Lifts" — UNREAD).**
+   Rules: **3 lifts a week, Sun–Sat**, on your own time; **never two in one day, never more
+   than 2 days in a row**; first-years start on his first-year sheet (link in the email);
+   write your numbers into your own copy of the sheet and submit the **Google Form the same
+   day** you lift; do 1 day of it THIS week; he is in the weight room **Mon + Wed 8:30–~10**
+   (not Labor Day); **retest the week of 10/15**. Your strength-test ranks are in his sheet —
+   the Rules page in your app now has a `TEAM TEST: squat / bench / clean` line to write them on.
+   **The collision:** your app runs Mon heavy lower · Tue upper system · Thu heavy upper ·
+   Fri lower lengthened, plus Sun/Wed jump days. His three lifts plus your four is seven
+   loaded days. That is the ONE question for the basketball system next: which three days are
+   his, and what happens to yours. I will not touch your lift pages until you say.
+2. **Three professor emails are still unsent drafts** (school Gmail Drafts, from Aug 23–24):
+   AIQS travel conflicts + office hours (Dr. N's absence policy makes this the urgent one),
+   ACCT office-hours conflict, and a superseded AIQS duplicate. `courses.csv` wrongly says
+   "email sent." One nudge is filed (intake 17015). Send or delete them.
+3. **Verify you are cleared to practice.** Emily Randall (8/22) said no NCAA practice/games
+   until the sickle-cell result is submitted; Quest activated your account 8/26; nothing in
+   any mailbox since. Healthy Roster reminders stopped 8/26, which may mean it went through.
+   One line to CLARVIS ("cleared" / "not yet") settles it.
+4. **Firebase is warning you every 1–2 days that `training-app-2194d-default-rtdb` has
+   insecure rules** — the old training-app database is open to anyone with the URL. Your
+   devices sync to CLARVIS now, so it is a leftover. Firebase console → that project →
+   Realtime Database → Rules → set `read` and `write` to `false` (or delete the database).
+   Two minutes, security setting, yours only.
+5. **Basketball, two reads for you, no deadline:** the new **NERVOUS SYSTEM – Hot and Cold**
+   page (Group workouts tab) — the mental-side tool from Monday's conversation, written on
+   your "do whatever you think"; and one contradiction in your own pages: Practice Intentions
+   says pick ONE, PRACTICE – TRANSITION AND READS says pick TWO.
+
+**From your texts (open loops, no nudges filed — your call):** Mom asked you (8/30) to email
+CWRU's massage/stretch-therapy program and you said you would that night — nothing sent; Dad
+asked (8/30) whether you need new ankle braces — unanswered; Haley said she'd buy the ~Oct 4
+Cleveland flight after class 9/2 — not confirmed; Grandma's flight-cost refund (you asked Mom
+8/29) — no resolution seen. Also: your 8/31 test numbers (**335 / 285 / 205**) are now written on
+the Rules page's TEAM TEST line, and CLARVIS's people profile went from 1 person to 17 (coaches,
+family, Haley, Evan, teammates, mentors) so it can follow your texts.
+
+**Resolved by reading, nothing for you:** Van Oosten meeting was confirmed for today 5:00
+(outbox item closed); flights ARE booked (Avelo XP440 CLE→HVN Fri 4:30 PM, Amtrak to Boston,
+JetBlue back Mon 7:15 AM — all in intake); the three Splitframe first-touch emails went out
+Mon 9/1 (Gunner, Diggs, Fable Pets) and the tracker knows, so follow-ups fire Sep 4 + Sep 8;
+Teamworks compliance reminders stopped 8/22; GitHub token valid; Stripe live since 8/23.
+
+**What I changed today (all reversible):** training-app library — 14 pages pointed at LOG
+tables deleted 8/31 and the A/B letter rotations had nowhere to live; every one now has an
+inline `LAST RUN` / blanks line on its own page (rev `be94b1b67314cec0`, backup in the
+session scratchpad); NERVOUS SYSTEM page added; TO BUILD refreshed. CLARVIS `697acf8`
+(live on both nodes): the day's ball order names the real work again instead of
+"Vitamins · Movement · Good Handles" every day. One hedged reminder before the Sep 8 practice
+(intake 17013). Claude Code memory consolidated 49 → 33 files.
+
 ## 🔧 2026-09-02 (Wed) — audit follow-through shipped; 3 things are yours
 
 Everything below is live after the next deploy (`/api/version` shows the commit).
