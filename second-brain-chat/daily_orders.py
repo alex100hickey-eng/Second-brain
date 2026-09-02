@@ -491,7 +491,27 @@ def _money_orders(today: date) -> list:
 _GENERIC_BULLETS = ("warmup", "50/50", "mobility", "cars", "crawls")
 
 
-def _card_headline(card: str) -> str:
+def _shared_bullets(cards: dict) -> set:
+    """Bullets that appear on EVERY card of the week, lower-cased.
+
+    Derived from the cards themselves rather than a hardcoded list: the 8/31
+    rebuild turned the shared opener from "Warmup / 50/50" into "Vitamins /
+    Movement / Good Handles / Reads", and the static list above silently
+    stopped matching — every day's headline read "Vitamins · Movement · Good
+    Handles" (systems audit, 2026-09-02). A list that has to be edited by hand
+    is wrong the moment Alex re-dictates his week; the intersection is not."""
+    sets = []
+    for card in (cards or {}).values():
+        b = {ln.strip().lstrip("-•*").strip().lower()
+             for ln in (card or "").splitlines() if ln.strip()}
+        if b:
+            sets.append(b)
+    if len(sets) < 2:
+        return set()
+    return set.intersection(*sets)
+
+
+def _card_headline(card: str, all_cards: dict = None) -> str:
     """The DIFFERENTIATING work on a workout card, as a one-line order title.
 
     Skips the bullets common to every card so the title names what makes today
@@ -499,8 +519,8 @@ def _card_headline(card: str) -> str:
     bullets if a card is nothing but the common ones."""
     bullets = [ln.strip().lstrip("-•*").strip()
                for ln in (card or "").splitlines() if ln.strip()]
-    distinct = [b for b in bullets
-                if b.strip().lower() not in _GENERIC_BULLETS]
+    generic = set(_GENERIC_BULLETS) | _shared_bullets(all_cards)
+    distinct = [b for b in bullets if b.strip().lower() not in generic]
     return " · ".join((distinct or bullets)[:3])
 
 
@@ -551,7 +571,7 @@ def _training_orders(now: datetime, today: date) -> list:
     card = (p.get("workouts") or {}).get(training_schedule.day_index(today), "")
     windows = _training_windows(p, today)
     if card:
-        head = _card_headline(card)
+        head = _card_headline(card, p.get("workouts"))
         out.append((_T_TRAINING, _order("ball",
                    f"{windows}: {head}" if windows else head,
                    "written on today's card", windows or "today")))

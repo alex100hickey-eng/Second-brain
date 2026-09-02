@@ -12,12 +12,15 @@ the synced snapshot, not in this file** — the pages are his own content, so th
 `DEFAULTS`. `index.html` seeds a fresh install; the live library is the source of truth and is
 read/written at `/training-sync/<token>/trainingDashboard.json`.
 
-Read `TO BUILD` (Court movement tab) first — it is the authoritative record of what is agreed
-and not yet built, and it is maintained in the app rather than here.
+**Read `HANDOFF.md` in this folder first** — the whole working agreement, current state, every
+correction Alex has made, and where the conversation stopped. Then `TO BUILD` (Court movement tab
+in the app) — the running record of what is agreed and not yet built, maintained in the app.
 
-Shape of the current day: Vitamins, Movement, two Good Handles drills, Good Shooting or Good
-Finishing, Closer, Passing (5x/wk), a bag package, Defense, the lift, 50/50. Mornings alternate
-Finishing Sun/Wed/Fri and Shooting the other four.
+Shape of the current day (2026-09-02): MORNING Vitamins, Movement A/B/C, two Good Handles drills,
+Good Shooting or Good Finishing (Finishing Sun/Wed/Fri, Shooting the other four). AFTERNOON
+Passing (Thu–Sun), the day's block (Dribble Bag ×4 / On The Move ×3), Reads (daily, scored in
+Split Second), Defense (Sun/Tue/Thu/Sat), the lift, Recording (Sun/Mon/Fri/Sat), 50/50 nightly.
+The Closer was deleted 2026-08-31 on Alex's order — do not resurrect it.
 
 Three modes, and they are Alex's model not mine:
 - **Vitamins** — daily floor, unscored.
@@ -35,10 +38,12 @@ Files added here alongside the app:
   its exact custom-drill shape.
 - `split-second-modes-spec.txt` — spec for two engine modes that do not exist yet (a tone-based
   GO CUE at a varying delay, and the same plus a stopwatch he taps to stop).
-- `PENDING_SCORING_SPEC.json` — a full scoring-layer design, 56 page edits, deliberately UNAPPLIED.
-  It assumes CLARVIS can write library pages. **It cannot** — it can read the library and write the
-  schedule grid and day cards only. That missing write-back is the fork the whole scoring layer
-  waits on.
+- `PENDING_SCORING_SPEC.json` — **SUPERSEDED 2026-09-02, never apply it.** A scoring-layer design
+  from 2026-08-30 whose targets (the Closer, Reps Transition, Bag off Screens, the LOG tables,
+  Good Passing…) were deleted or rebuilt on 2026-08-31. The scoring it wanted now exists in a
+  different shape: Reads scored in Split Second, On The Move bars, 50/50 fixed spots, inline
+  `___` blanks on every page. Kept only as history. (CLARVIS *can* write library pages since
+  commit `7ad257f` — `edit_library_page` / `append_library_log_row` in `training_sync.py`.)
 
 App version 8 (2026-08-27) rebuilt the lift program:
 

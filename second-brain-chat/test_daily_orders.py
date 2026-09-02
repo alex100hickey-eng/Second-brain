@@ -572,6 +572,37 @@ def test_grid_derived_window_and_bedtime():
           guard2 and "11:00pm" in guard2["title"])
 
 
+def test_headline_derives_shared_bullets():
+    print("\n=== headline: shared bullets come from the cards, not a hardcoded list ===")
+    _reset()
+    today_col = training_schedule.day_index(TODAY)
+    # The 8/31 rebuild: every card opens Vitamins / Movement / Good Handles and
+    # closes Reads / 50-50 — none of which the static _GENERIC_BULLETS knows.
+    opener = "- Vitamins\n- Movement\n- Good Handles\n- Reads\n- 50/50"
+    cards = {str(c): opener for c in range(7)}
+    cards[str(today_col)] = ("- Vitamins\n- Movement\n- Good Handles\n- Good Finishing\n"
+                             "- Dribble Bag - Half B\n- Reads\n- Defense\n- 50/50")
+    _seed_training(workouts=cards)
+    card = next((o for o in daily_orders.compose()["orders"] if o["pillar"] == "ball"), None)
+    check("bullets on every card are skipped even when the static list doesn't know them",
+          bool(card) and "Vitamins" not in card["title"] and "Movement" not in card["title"]
+          and "Good Handles" not in card["title"])
+    check("headline names what makes today today",
+          bool(card) and "Good Finishing" in card["title"]
+          and "Dribble Bag - Half B" in card["title"])
+    # One seeded card → nothing to intersect → the headline must not go blank.
+    _reset()
+    _seed_training(workouts={str(today_col): "- Vitamins\n- Good Shooting"})
+    card2 = next((o for o in daily_orders.compose()["orders"] if o["pillar"] == "ball"), None)
+    check("single card: no intersection, headline still names the work",
+          bool(card2) and "Good Shooting" in card2["title"])
+    shared = daily_orders._shared_bullets({"0": "- A\n- B", "1": "- a\n- C"})
+    check("_shared_bullets is case-insensitive and exact", shared == {"a"})
+    check("a card that is ONLY shared bullets still gets a headline",
+          daily_orders._card_headline("- Vitamins\n- Reads", {"0": "- Vitamins\n- Reads",
+                                                             "1": "- Vitamins\n- Reads"}) != "")
+
+
 def test_brief_and_evening_lines():
     print("\n=== brief_lines / evening_lines shapes ===")
     _, vault = _reset()
@@ -675,6 +706,7 @@ if __name__ == "__main__":
         test_intake_orders()
         test_multiline_obligation_routing()
         test_grid_derived_window_and_bedtime()
+        test_headline_derives_shared_bullets()
         test_brief_and_evening_lines()
         test_tool_surface()
         test_string_study_plan_items()
