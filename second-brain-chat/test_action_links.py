@@ -288,8 +288,46 @@ def test_outbox_failsoft():
     check("a broken store still fails soft on write", outbox.add("x", "y") is None)
 
 
+def test_capture_pages():
+    print("\n=== capture pages: scorecard + pace ===")
+    import action_links as al
+    import do_actions
+    import school_state
+    import json
+    from datetime import date as _date
+    tok = al.mint(al.KIND_SCORECARD, "2026-09-02", ops=("log",), label="Tonight")
+    p = al.verify(tok)
+    check("scorecard token mints and verifies",
+          bool(p) and p["k"] == "scorecard" and al.allows(p, "log"))
+    check("a scorecard token cannot be replayed as drop", not al.allows(p, "drop"))
+    view = do_actions.resolve(p)
+    toggles = [f for f in view.get("form", []) if f.get("type") == "toggle"]
+    check("scorecard page renders four pillar toggles", len(toggles) == 4 and "log" in view["ops"])
+    tok2 = al.mint(al.KIND_PACE, "2026-09-06", ops=("log",))
+    p2 = al.verify(tok2)
+    d1, d2 = _date(2026, 9, 9), _date(2026, 9, 11)
+    real_courses, real_record = do_actions._pace_courses, school_state.record_prepared
+    saved = {}
+    do_actions._pace_courses = lambda: [("MATH120", [d1, d2]), ("ECON103", [d1, d2])]
+    school_state.record_prepared = lambda c: (saved.update(c), c)[1]
+    try:
+        view2 = do_actions.resolve(p2)
+        choices = [f for f in view2.get("form", []) if f.get("type") == "choice"]
+        check("pace page has one choice row per course", len(choices) == 2)
+        res = do_actions.perform(p2, "log", form={"pace_MATH120": "+2", "pace_ECON103": "same"})
+        check("pace submit records +2 as the second upcoming class",
+              bool(res.get("ok")) and saved.get("MATH120") == d2.isoformat())
+        check("… and 'same' as today", saved.get("ECON103") == do_actions._now().date().isoformat())
+        check("the old money-step Done is no longer a no-op message",
+              "tick it in the vault" not in json.dumps(do_actions.perform(
+                  al.verify(al.mint(al.KIND_STEP, "no-such-step", ops=("done",))), "done")))
+    finally:
+        do_actions._pace_courses = real_courses
+        school_state.record_prepared = real_record
+
+
 for t in (test_signing, test_urls, test_actions_header, test_perform_gating,
-          test_resolve_views, test_outbox, test_outbox_failsoft):
+          test_resolve_views, test_outbox, test_outbox_failsoft, test_capture_pages):
     t()
 
 print("\n" + "=" * 48)

@@ -78,3 +78,4 @@ second-brain-chat/d1_tracker.db-journal
 second-brain-chat/d1_tracker.db-wal
 second-brain-chat/d1_tracker.db-shm
 scripts/d1_refresh.log
+.canvas_status/

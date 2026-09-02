@@ -83,3 +83,44 @@ the hardening pass, `NEEDS_ALEX.md` what's blocked on Alex.
   off an event that already happens — that's why the person profile and the
   50/50 capture work and the old memory tool didn't.
 - Never keep a live `.git` directory inside an iCloud folder.
+
+## Added 2026-09-02 (systems audit follow-through)
+
+- **`JARVIS_TEST=1` is test mode.** `run_tests.py` sets it before importing the
+  app; app.py turns the tool-audit mirror, note capture → draft store, incident
+  rows, draft rehydration and every background loop into no-ops. Before this the
+  "offline" suite wrote ~60 rows per run into production Supabase (audit rows
+  tagged as Alex's own use, fixture draft notes, login lockouts) and rehydrated
+  130+ fixture notes into `vault_inbox/`. Keep new writers behind `TEST_MODE`.
+- **The return channel is the notification shade, not chat.** Alex types into
+  CLARVIS about once a day. Any capture that needs him to say something in chat
+  will sit empty (scorecard, 50/50, mark_prepared, reviews, grades all did). Put
+  capture on a signed `/do` page (`action_links` kinds `scorecard`, `pace`;
+  forms post `op=log`) or derive it from data that already flows.
+- **Phone decisions reach the vault through `school_state.py`.** The server
+  records `school:prepared` / `school:done` state rows; the Mac applies them to
+  the CSVs on canvas_sync's 30-minute tick (`school_state.apply_to_vault`).
+  Never write the vault from the server.
+- **Nightly `canvas-status-sync` scheduled task** (9:35 PM, Claude Code app)
+  reads `/api/v1/courses/<id>/students/submissions?student_ids[]=self` through
+  the logged-in Browser pane (no token — the CWRU rule stands) and runs
+  `scripts/apply_canvas_status.py`, the only thing that flips assignments.csv
+  rows to submitted/graded. It needs the pane's SSO session alive.
+- **Pace floors.** `school_status.effective_prepared` assumes attendance (a
+  lecture that passed is a lecture he sat in → prepared through today) and
+  counts submitted readings/APQs/homework. PACE reads "+0d under target" between
+  check-ins, never "-6d BEHIND" from decay alone.
+- **Ranked day rules (daily_orders.compose).** Overdue > 3 days is backlog: it
+  takes no slots and is summarised in one line. Due tomorrow ranks with graded
+  work (ACCT APQs lock at class start). Each assignment appears once. Past-due
+  open rows are "verify" lines for two days, then silent.
+- **Nudge rules.** `due:` and `missed:` on one item are one concern. Canvas
+  notification deadlines never go MISSED (unobservable). Mail from Alex's own
+  addresses is never extracted. Items assignments.csv owns (course + due date)
+  never nudge from intake. Calendar lines matching away/travel/flight/trip
+  silence session kickoffs and the 50/50 capture for that date.
+- **Local node self-restarts** when `git rev-parse HEAD` moves (launchd
+  KeepAlive); set `JARVIS_AUTORESTART=0` to hold it. It also beats `mac-awake`
+  so the monitor treats a sleeping Mac as one fact, not four incidents.
+- **Budget** now sums both nodes' `usage:<YYYY-MM>:<node>` rollups; the local
+  SQLite ledger is only a fallback.

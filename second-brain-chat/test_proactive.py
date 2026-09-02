@@ -297,13 +297,13 @@ def test_concern_caps():
     _quiet_config_now(active=False)
     proactive.send_nudge("due:task:9", "T", "B", renudge_hours=6)
     st = proactive._sent_state()
-    st["concerns"]["due:task:9"]["last"] = (
+    st["concerns"][proactive._base_key("due:task:9")]["last"] = (
         datetime.now() - timedelta(hours=7)).isoformat()
     proactive._save_sent_state(st)
     out = proactive.send_nudge("due:task:9", "T", "B", renudge_hours=6)
     check("deadline escalation within the day", out.startswith("Nudge sent"))
     st = proactive._sent_state()
-    st["concerns"]["due:task:9"]["last"] = (
+    st["concerns"][proactive._base_key("due:task:9")]["last"] = (
         datetime.now() - timedelta(hours=7)).isoformat()
     proactive._save_sent_state(st)
     out = proactive.send_nudge("due:task:9", "T", "B", renudge_hours=6)
@@ -349,6 +349,59 @@ def test_pileup_growth_gate():
     proactive.run_awareness_pass()
     check("grown pile re-nudges once",
           sum(1 for s in spy.sent if "triage" in s["title"]) == 2)
+
+
+def test_one_concern_and_away_days():
+    print("\n=== due+missed are ONE concern; away days silence block pings; "
+          "Canvas deadlines never go MISSED ===")
+    check("due: and missed: collapse to one concern",
+          proactive._base_key("due:intake:5") == "item:intake:5"
+          and proactive._base_key("missed:intake:5:2026-09-01") == "item:intake:5")
+    check("other keys are untouched", proactive._base_key("outbox:12") == "outbox:12")
+    now = datetime.now()
+
+    def blk(h, m, title, dur_min=30):
+        s = now.replace(hour=h, minute=m, second=0, microsecond=0)
+        return {"title": title, "start": s, "end": s + timedelta(minutes=dur_min)}
+
+    tracker = FakeTracker()
+    tracker.top_by_priority = lambda limit=10: []
+    real_blocks, real_away = proactive._today_blocks, proactive._away_on
+    try:
+        sb, spy = _reset(tracker=tracker)
+        proactive.set_config(morning_brief="", evening_review="")
+        _quiet_config_now(active=False)
+        proactive._today_blocks = lambda n: [blk(n.hour, n.minute, "Class review + study 1:50–2:40")]
+        proactive._away_on = lambda d: True
+        proactive.run_awareness_pass()
+        check("an away day silences the session kickoff",
+              not any("Session start" in s["title"] for s in spy.sent))
+        sb, spy = _reset(tracker=tracker)
+        proactive.set_config(morning_brief="", evening_review="")
+        _quiet_config_now(active=False)
+        proactive._away_on = lambda d: False
+        proactive.run_awareness_pass()
+        check("… and a normal day still pings", any("Session start" in s["title"] for s in spy.sent))
+    finally:
+        proactive._today_blocks, proactive._away_on = real_blocks, real_away
+    check("_away_on reads the calendar words", bool(proactive._AWAY_RE.search("AWAY — Boston"))
+          and bool(proactive._AWAY_RE.search("Flying back 7:15 AM"))
+          and not proactive._AWAY_RE.search("MATH Test 1 (in class)"))
+    sb, spy = _reset(tracker=tracker)
+    past = (proactive._now() - timedelta(hours=5)).isoformat()
+    intake._insert_event({"source": "gmail_school", "source_ref": "cv-1",
+                          "sender": "\"Foundations of Accounting I\" <notifications@instructure.com>",
+                          "ts": past, "preview": "…", "status": "new",
+                          "items": [{"type": "deadline", "text": "Homework 2 due by 11:59 PM", "due": past}]})
+    intake._insert_event({"source": "gmail", "source_ref": "own-1",
+                          "sender": "Alex Hickey <alexhickey@splitframestudio.com>",
+                          "ts": past, "preview": "…", "status": "new",
+                          "items": [{"type": "commitment", "text": "get the first outreach batch moving", "due": past}]})
+    pic = proactive._gather()
+    check("a Canvas deadline never lands in MISSED",
+          not any("Homework 2" in d["what"] for d in pic["overdue"]))
+    check("his own sent mail never lands in due-soon or MISSED",
+          not any("outreach batch" in d["what"] for d in pic["overdue"] + pic["due_soon"]))
 
 
 def test_wake_and_sessions():
@@ -604,6 +657,7 @@ if __name__ == "__main__":
     test_missed_items()
     test_waiting_on_alex()
     test_approval_needs_him()
+    test_one_concern_and_away_days()
     total, passed = len(_results), sum(_results)
     print("\n" + "=" * 48)
     print(f"{passed}/{total} checks passed")

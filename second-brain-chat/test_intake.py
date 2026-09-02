@@ -144,6 +144,38 @@ ACTION_JSON = json.dumps([
 
 
 # ============================================================
+def test_own_mail_and_stale_asks():
+    print("\n=== own mail is not an obligation; undated asks expire; commitments don't ===")
+    from datetime import timedelta as _td
+    sb = _reset(claude=FakeClaude(ACTION_JSON))
+    r = intake.record_raw("gmail", "own-1", "Alex Hickey <alexhickey@splitframestudio.com>",
+                          "2026-07-22", "Subject: sunday setup\nThree things I want moving")
+    check("mail from Alex's own address is never extracted",
+          r == {"recorded": False, "reason": "own message"})
+    check("_is_own_address matches any of his addresses",
+          intake._is_own_address("alex100hickey@gmail.com")
+          and intake._is_own_address("Alexander Hickey <AJH384@case.edu>"))
+    check("… and nobody else", not intake._is_own_address("Mom <mom@example.com>"))
+    r2 = intake.record_raw("imessage", "own-2", "Alex", "2026-07-22", "note to self: call the dentist")
+    check("an iMessage from a plain name is unaffected", bool(r2.get("recorded")))
+    today = intake._local_now().date()
+    old_ts, fresh_ts = (today - _td(days=20)).isoformat(), (today - _td(days=3)).isoformat()
+    intake._insert_event({"source": "gmail", "source_ref": "sec-1", "sender": "Supabase <noreply@supabase.io>",
+                          "ts": old_ts, "preview": "…", "status": "new",
+                          "items": [{"type": "ask", "text": "Review the new security advisory", "due": None}]})
+    intake._insert_event({"source": "gmail", "source_ref": "sec-2", "sender": "Coach",
+                          "ts": fresh_ts, "preview": "…", "status": "new",
+                          "items": [{"type": "ask", "text": "Send your jersey size", "due": None}]})
+    intake._insert_event({"source": "gmail", "source_ref": "sec-3", "sender": "NCAA",
+                          "ts": old_ts, "preview": "…", "status": "new",
+                          "items": [{"type": "commitment", "text": "Complete the NCAA statement", "due": None}]})
+    n = intake.expire_stale()
+    st = {e["event"].get("source_ref"): e["event"].get("status", "new") for e in _events(sb)}
+    check("a 20-day-old undated ask expires", n >= 1 and st.get("sec-1") == "expired")
+    check("a 3-day-old ask stays", st.get("sec-2") == "new")
+    check("an undated commitment never auto-expires", st.get("sec-3") == "new")
+
+
 def test_record_and_dedupe():
     print("\n=== 1. record_raw: dedupe + noise filter + retry ordering ===")
     sb = _reset(claude=FakeClaude(ACTION_JSON))
@@ -452,6 +484,7 @@ if __name__ == "__main__":
     test_icloud_scan_summary()
     test_attributed_decode()
     test_imessage_safety()
+    test_own_mail_and_stale_asks()
     total, passed = len(_results), sum(_results)
     print("\n" + "=" * 48)
     print(f"{passed}/{total} checks passed")

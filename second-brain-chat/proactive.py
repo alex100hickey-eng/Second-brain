@@ -169,6 +169,12 @@ def _base_key(key: str) -> str:
     prev = None
     while prev != key:
         prev, key = key, _DATE_SUFFIX.sub("", key)
+    # "due:intake:16410" and "missed:intake:16410" are ONE concern — the same
+    # obligation before and after its moment. As separate concerns one item
+    # earned two heads-ups AND two missed alerts (plus two brief lines).
+    for prefix in ("due:", "missed:"):
+        if key.startswith(prefix):
+            return "item:" + key[len(prefix):]
     return key
 
 
@@ -208,6 +214,41 @@ def _in_quiet_hours(cfg: dict) -> bool:
 
 _WAKE_RE = _re.compile(r"^\s*wake\b", _re.I)
 _SESSION_RE = _re.compile(r"study|review", _re.I)
+_AWAY_RE = _re.compile(r"\b(away|travel(?:ing|ling)?|flight|flying|trip|out of town|off campus)\b", _re.I)
+
+
+def _own_sender(sender: str) -> bool:
+    try:
+        return bool(intake_mod._is_own_address(sender))
+    except Exception:
+        return False
+
+
+def _csv_owns(text: str, due) -> bool:
+    """assignments.csv already tracks it (same course, same due date) — the CSV
+    is the copy that learns "submitted", so the mail copy stays quiet."""
+    try:
+        import school_data
+        return bool(school_data.csv_owns(text, due))
+    except Exception:
+        return False
+
+
+def _away_on(day) -> bool:
+    """Is Alex away that day, per the training-app calendar? Intake knew about
+    his Labor Day flights for two days while the grid kept every gym kickoff
+    and the 50/50 capture firing on schedule; a calendar line that says away /
+    travel / flight now silences the block-driven pings for that date."""
+    try:
+        import training_sync
+        import training_schedule
+        p = training_sync.parsed()
+        if not p:
+            return False
+        return any(_AWAY_RE.search(t or "")
+                   for t in training_schedule.obligations_for_date(p, day))
+    except Exception:
+        return False
 # 50/50 is Alex's one hard shooting metric. Its log sat empty for weeks not
 # because the tool was missing but because nothing asked at the moment he had
 # the numbers in his head — so this fires at the block's END, not its start.
@@ -386,6 +427,12 @@ def _gather() -> dict:
         for r in intake_mod.list_intake("new", limit=40):
             ev = r["event"]
             picture["new_intake"] += 1
+            if _own_sender(ev.get("sender") or ""):
+                continue   # his own note-to-self is not a deadline someone set
+            # A Canvas notification is a deadline CLARVIS can never watch him
+            # meet; the ICS-synced CSV row is the copy that learns "submitted".
+            # Such items may get a heads-up, never a "you missed it".
+            unobservable = "instructure" in (ev.get("sender") or "").lower()
             for item in ev.get("items", []):
                 due = item.get("due")
                 if not due:
@@ -411,10 +458,13 @@ def _gather() -> dict:
                     dt = dt.replace(hour=23, minute=59)
                 hours = (dt - now).total_seconds() / 3600
                 if -OVERDUE_HOURS <= hours <= DUE_SOON_HOURS:
+                    if _csv_owns(item.get("text") or "", dt.date()):
+                        continue   # assignments.csv surfaces it and knows if it's done
                     picture["due_soon"].append(
                         {"what": item["text"], "due": dt.isoformat(),
                          "date_only": date_only, "hours": round(hours, 1),
                          "kind": (item.get("type") or "").strip().lower(),
+                         "unobservable": unobservable,
                          "ref": f"intake:{r['id']}"})
     except Exception:
         pass
@@ -474,7 +524,8 @@ def _gather() -> dict:
     # when he was in the room is worse than silence. Once the moment passes,
     # attendance is assumed and the item just drops (Alex, 2026-08-26).
     picture["overdue"] = sorted((d for d in picture["due_soon"]
-                                 if d["hours"] < -2 and d.get("kind") != "event"),
+                                 if d["hours"] < -2 and d.get("kind") != "event"
+                                 and not d.get("unobservable")),
                                 key=lambda d: d["hours"], reverse=True)
     picture["due_soon"] = [d for d in picture["due_soon"] if d["hours"] >= -2]
 
@@ -892,6 +943,15 @@ def run_awareness_pass(force: bool = False) -> str:
                        else "")
         brief_buttons = ([{"kind": "view", "label": "What's waiting",
                            "url": brief_click}] if brief_click else [])
+        if cfg_key == "evening_review":
+            # The scorecard is a page with four toggles, not a question that
+            # needs typing back — every chat-only capture loop sat at zero.
+            card = _do_link("scorecard", now.strftime("%Y-%m-%d"), ops=("log",),
+                            label="Tonight's scorecard")
+            if card:
+                brief_click = card
+                brief_buttons = ([{"kind": "view", "label": "Scorecard (4 taps)",
+                                   "url": card}] + brief_buttons)[:MAX_ACTIONS]
         actions.append(send_nudge(
             f"{cfg_key}:{now.strftime('%Y-%m-%d')}", title,
             "\n".join(head + tail),
@@ -903,6 +963,27 @@ def run_awareness_pass(force: bool = False) -> str:
     # that ends exactly when a study block starts — his Monday grid does this at
     # 8:00 PM — would buzz twice in one minute otherwise, and two notifications
     # at once is how a channel gets muted. The capture wins the tie.
+    # 3b. Sunday pace check-in — the one get-ahead input nothing can derive:
+    #     how far past the last lecture he actually prepared (MATH and AIQS
+    #     leave no submission trace). One page, one tap per course.
+    if now.weekday() == 6:
+        window_start = now.replace(hour=19, minute=0, second=0, microsecond=0)
+        if window_start <= now < window_start + timedelta(minutes=PASS_INTERVAL // 60 + 20):
+            page = _do_link("pace", now.strftime("%Y-%m-%d"), ops=("log",),
+                            label="Where did you get to this week?")
+            if page:
+                actions.append(send_nudge(
+                    f"pace:{now.strftime('%Y-%m-%d')}",
+                    "📚 Sunday: where did you get to, per course?",
+                    "One tap per course — caught up / +1 class / +2 classes ahead. "
+                    "It sets next week's targets and keeps PACE honest.",
+                    tags="books", force=force, recurring=True, click=page,
+                    actions=[{"kind": "view", "label": "Open the 5 rows", "url": page}]))
+
+    # Away days (calendar says travel/flight/trip): the grid still holds every
+    # gym and study block, but he is not in them. Block-driven pings stay quiet.
+    away_today = _away_on(now.date())
+
     _5050_ends = {ev["end"].strftime("%H:%M") for ev in today_blocks
                   if _5050_RE.search(ev.get("title") or "")
                   and ev["end"].date() == now.date()}
@@ -912,7 +993,7 @@ def run_awareness_pass(force: bool = False) -> str:
     #    title mentions study or review gets one ping as its window opens.
     #    Keys carry date+clock so each block is its own concern (one send per
     #    block per day; a day's second session is a different key).
-    if cfg.get("session_nudges", True):
+    if cfg.get("session_nudges", True) and not away_today:
         for ev in today_blocks:
             title_txt = (ev.get("title") or "").strip()
             if not _SESSION_RE.search(title_txt):
@@ -965,7 +1046,7 @@ def run_awareness_pass(force: bool = False) -> str:
 
     # 5. 50/50 capture — at the END of a shooting block, while the numbers are
     #    still in his head. Skipped the moment today's row exists.
-    if cfg.get("session_nudges", True):
+    if cfg.get("session_nudges", True) and not away_today:
         for ev in today_blocks:
             if not _5050_RE.search(ev.get("title") or ""):
                 continue

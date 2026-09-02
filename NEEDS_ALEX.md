@@ -12,6 +12,215 @@ is still yours to do.
 
 ---
 
+## 🔧 2026-09-02 (Wed) — audit follow-through shipped; 3 things are yours
+
+Everything below is live after the next deploy (`/api/version` shows the commit).
+Basketball items were parked on your call.
+
+1. **Log in to Canvas once in the Mac's Browser pane** (canvas.case.edu). Two
+   scheduled tasks now read Canvas through that logged-in pane, no token: a nightly
+   **canvas-status-sync** (9:35 PM) that flips assignments.csv rows to submitted/graded
+   so finished work stops showing as open, and the Friday content sweep. The pane's
+   SSO session expired today, so neither can run until you log in. You will get one
+   phone alert if it is still logged out tonight.
+2. **Evening review: on or off?** It has been OFF since Aug 25 (`evening_review: ""`).
+   The nightly scorecard is now a 4-tap page the evening nudge carries, so turning it
+   back on costs one notification a night. Say "evening review at 9:00 pm" (or any
+   time) and it's on; say nothing and it stays off.
+3. **Excel Prep 1 is due Fri 9/4 11:59 PM and you leave ~1:30 PM.** Thursday night
+   is the slot. Drop/Add (WileyPlus decision) also closes Friday.
+
+**What I wrote into your data (all reversible):**
+- Training-app calendar: Fri 9/4 "AWAY from ~1:30 PM (Avelo ~4:30 PM)", Sat/Sun
+  "AWAY — Boston", Mon 9/7 "Flying back — JetBlue 7:15 AM". Any calendar line
+  containing away/travel/flight/trip now silences the gym/study kickoffs and the 50/50
+  ping for that day. Backup: `.canvas_status/bigObligations_backup_2026-09-02.json`.
+  To undo: clear those four days in the app's Calendar.
+- Weekend Map W2 re-cut as an away weekend (clear Friday before the train; Labor Day
+  afternoon is the work window).
+- **Canvas moved the whole CSDS project spine a week EARLIER** (ICS sync 09:42):
+  Proposal Fri Oct 23 · Update Fri Nov 6 · Final Report + Reflection **Sun Nov 29**
+  (Thanksgiving Sunday) · Presentation **Mon Nov 30 12:30 PM**. assignments.csv,
+  curriculum.csv, courses.csv and the Weekend Map (W8-W16) now agree. From now on a
+  moved deadline pushes a phone alert.
+- The 3 AIQS paper rows and 2 CSDS report/presentation rows were typed "exam"; now
+  paper/project (they were earning exam-runway orders while MATH Test 1 got none).
+- 132 test-fixture "draft notes" retagged out of the way and their files removed from
+  vault_inbox (the suite used to write into production; it no longer can).
+
+**What changed in how CLARVIS talks to you:**
+- The ranked day no longer fills with stale overdue items: anything more than 3 days
+  overdue becomes ONE "Backlog: N items" line; tomorrow's dues rank with graded work;
+  each assignment appears once; a just-passed open row is a "verify" line for 2 days.
+- One item = one concern (due + missed together, max 2 touches). Canvas emails never
+  say "Missed" (CLARVIS can't see you submit). Your own sent mail is never extracted.
+  Undated asks expire after 14 days untriaged.
+- PACE reads honestly: attendance is assumed, submitted work counts, MATH's tests show
+  in EXAM READINESS, DO NEXT names MATH first. Sundays 7 PM you get a one-page
+  "where did you get to" with one tap per course.
+- The money-step "Done" button on notification pages now actually banks the step.
+- The Mac node restarts itself when the code moves; a sleeping Mac no longer raises
+  "subsystem down" alarms; the $50 budget now sees both nodes.
+
+## 💰 2026-08-30 (Sun) — SEND IS UNBLOCKED. 3 decisions, then Monday is 10 minutes.
+
+**Why the send slipped twice: there are no recipient email addresses.**
+*(Correction: this was NOT a new discovery — `contact_finder.py` records finding the
+exact same gap on 2026-08-24. The proper fix was written then and has never run,
+because it needs a free `HUNTER_API_KEY` that was never obtained. The gap stayed
+open for six days behind a five-minute signup.)*
+
+**THE ONE ACTION THAT ACTUALLY CLOSES THIS: get a Hunter key.** hunter.io free tier,
+25 domain searches/month, a wave is 3. Key goes in `second-brain-chat/.env` as
+`HUNTER_API_KEY`, restart, then say "fill contacts for wave 1" — you get named,
+verified contacts instead of help desks. 5 minutes.
+
+Interim fallback added today:
+`email` + `email_source` columns added, and all three Wave 1 brands populated from
+their live sites (Diggs `help@diggs.pet` · Fable Pets `help@fablepets.com` ·
+Gunner `info@gunner.com`, each verified on the site 2026-08-30).
+
+**Ready to go, nothing left to write:**
+- `Money/SEND SHEET — Mon Sep 1, 11:15.md` — addresses + all three emails, paste-ready
+- `Money/Clients/followups-wave1-2026-08-30.md` — FU1 (Wed Sep 3) and FU2 (Mon Sep 8)
+  for all three brands, written. The sequence is what converts; it didn't exist before.
+
+**THREE DECISIONS — 15 minutes, and they must exist before a founder can reply:**
+1. **Refund guarantee — keep or strike?** (call-card flags it: decide before, never
+   live). Recommendation: **KEEP for the first three calls.** Costs nothing until a
+   teardown actually lands flat, it's the sharpest answer to "you're 19," strike later
+   with zero downside.
+2. **Your two numbers.** Ranges are $500-750 drop / $750-1,250 retainer.
+   Recommendation: **$650 drop, $950/mo.** Write them down; never invent on a call.
+3. **What "spec pack" means when they say yes.** All three emails promise a free spec
+   pack. `splitframe-sample-pack.pdf` is real and good — but it's built for *Portland
+   Pet Food Company*, so it's a sample, not theirs. Recommendation: **send the Portland
+   pack same hour as proof, offer theirs within 48h** (ad_creative_pipeline.py builds it).
+
+**This week, not Monday: finish Stripe.** Still "Continue setting up your Stripe
+account" since 8/24. Doesn't block the send; completely blocks the close — the call
+card says invoice within 2 hours of hanging up, and right now you cannot invoice anyone.
+
+**Known gap, not urgent:** 46 of the 49 qualified brands still have no email address.
+Waves 2-4 need the same lookup before they're sendable. Say the word and it gets done
+in a batch.
+
+## 🏀 2026-08-30 — FLAG DEC 4-6 TO JARVIS NOW (basketball away game Dec 5)
+
+Alex reported an **away game Sat Dec 5**, which makes **Fri Dec 4 a travel day**. That
+collides with the single heaviest academic day of the semester, and one item on it is
+close to unrecoverable:
+
+**Fri Dec 4** — *last day of instruction, hard University cutoff, no extension possible:*
+- **ACCT: MP Presentation + Team Evaluations** ← the real problem. In-person GROUP
+  presentation. ACCT group projects are **12% with ZERO drops**, and the syllabus allows
+  no makeup without a **University-sanctioned absence**. Varsity travel normally qualifies,
+  but courses.csv already carries the standing instruction: *"flag basketball travel early."*
+  Teammates are also depending on the date — this is not a solo reschedule.
+- ACCT HW Day 27 (Make or Buy & Discontinued Ops) + HW Day 28 (Sales Mix)
+- ECON HW 5: The Basic Tools of Finance
+- AIQS last class (workshop reflections + course evals — "bring a device")
+
+**Sun Dec 6** — if the trip returns late, this stack lands on a travel-tired Sunday:
+- **AIQS Writing Folder** (replaces the final — single PDF) + Experience Portfolio
+- **CSDS Final Project Report** + Project Reflection
+- ACCT 10-K / MP Discussion + Team Member Evaluation
+
+**Action (do it in the first half of September, not November):** email Jarvis with the
+basketball travel dates and ask how he wants the MP Presentation handled — present early,
+present remotely, or have the group cover it. Asking in September reads as responsible;
+asking in December reads as a scramble. Same email can flag any other travel dates once
+the season schedule is published.
+
+**Still unknown:** the full game schedule isn't in the vault. Get it from the team and
+we can diff the whole season against every deadline in one pass.
+
+
+## 💰 2026-08-29 (Sat) — Wave 1 rebooted for Monday. Three tasks, ~30 min total.
+
+Week one of classes ate the money lane whole — zero sends since the warmup email
+last Sunday, verified against the tracker CSV and the studio mailbox. Nothing is
+damaged (the 8/21 mail-tester 10/10 stands; a quiet domain is not a burned one),
+but the $1k-by-Aug-31 target is officially out of reach — September is now the
+selling month, and the Oct 15 kill-criteria checkpoint is the real horizon.
+
+The Monday-morning friction has been removed for you: all three Wave 1 brands'
+public Ad Library pages were re-pulled TODAY and the drafts regenerated against
+that evidence — no "check their ads first" homework left. Yours:
+
+1. **Today + Sunday: 2 warmup sends each day** from the studio mailbox
+   (~5 min/day, phone). Drafts ready: `Money/warmup-drafts-2026-08-29.md`.
+   Reply from the gmail side each time.
+2. **Sunday evening: skim the 3 drafts, put them in your voice** (~10 min):
+   `Money/Clients/outreach-drafts-wave1-2026-08-29.md` — Diggs, Fable Pets,
+   Gunner Kennels. Every ad claim in them was verified live this morning.
+3. **Monday 11:15-11:30: send all three** from the studio mailbox, then tell
+   CLARVIS "sent wave 1" — the tracker logs itself.
+
+**One decision to make before a founder can call back** (do it whenever this
+weekend, 2 min): the call card's open question — keep or strike the teardown
+refund guarantee ("if the teardown tells you nothing new, kill it and I'll refund
+it"). Recommendation: **keep it for the first three calls.** It's the sharpest
+answer you have to "you're 19," it costs nothing until a teardown actually lands
+flat, and you can strike it later with zero downside. Say the word and the call
+card gets updated.
+
+After Monday the rhythm is **Mon/Wed/Fri, 11:15, 3-5 sends** — at that pace all
+22 wave-1 brands are contacted by mid-September with follow-ups on schedule.
+Fresh drafts for each next batch get regenerated the evening before (ask CLARVIS
+or Claude Code to "prep the next 3" — it's one tool call now).
+
+## 🟢 2026-08-27 — get-ahead system is live; 3 things are yours
+
+Canvas got swept today (CSDS101 published — full 16-week schedule imported; AIQS
+paper prompts archived; MATH problem lists through Test 2 captured). Lead targets
+raised to your "1-2 weeks ahead" standard; the weekend sprint is in
+`School/Get-Ahead Playbook.md` (vault). Yours:
+
+1. **Verify ACCT Day-1 HW went in** — due Thu 8/27 10:00 AM: name tag + physical
+   photo info card handed in, AND the Google Student Info Form
+   (https://forms.gle/VuyvjAy8KDEjahsJ7). Zero-late-work course; if anything is
+   missing, email Jarvis today.
+2. **Pick your 10-K group + company in Canvas NOW — it's first come, first
+   serve.** ACCT's own project brief says "the sooner you do this, the better
+   your selection choices"; anyone unselected by Fri Sep 11 gets auto-assigned
+   a company AND a group. Canvas → ACCT 100 → Groups, add your name under a
+   company. Max 4 per group. This is a free advantage that expires.
+   (Files are all downloaded — that item is closed.)
+
+4. ~~Click "Run now" on `friday-canvas-sweep`~~ — **DONE**: the sweep ran on
+   schedule 2026-08-28 3:10 PM, Canvas SSO held, no prompts. It runs weekly now.
+3. **Pick your AIQS presentation slot BEFORE Fri Sep 4 class** (sign-up opens
+   that day; slots #1-12 run Sep 16→Nov 16). Avoid Oct 5-9 and Nov 16-23 —
+   those are exam-collision weeks.
+
+## 🟠 2026-08-28 — Friday Canvas sweep: 3 things are yours
+
+Sweep ran clean (15 files imported; nothing silently revised in MATH/CSDS). This
+weekend's list is cut into `School/Weekend Map — Fall 2026.md` under **Cut
+2026-08-28**. What needs *you*:
+
+1. **Three ACCT items are showing 1 day OVERDUE in the brief** — Day 1 Homework
+   (Introduction), Day 2 APQ, and Day 2 Reading (Ch.1 LO 1-2), all due Thu 8/27.
+   These are almost certainly done and just not marked in the vault (nothing marks
+   them but you). Open Canvas → ACCT 100 → Grades, confirm all three submitted,
+   and say so — I'll flip them to done. **If any actually didn't go in, email
+   Jarvis tonight**: this is the zero-late-work course.
+2. **Two ACCT tasks from Jarvis's Friday announcement that live nowhere else**
+   (no Canvas due date, so the deadline sync can't see them):
+   **finish the last three in-class problems on the Day 2 handout** — he goes over
+   them Tuesday and they are Exam-1 material — and **bring your index card to
+   Tuesday's class**. The handout is now in the vault at
+   `Courses/ACCT100/Handouts/Day 2 Handout — Financial Information.pdf`.
+3. **Start Excel Prep 1 this weekend** (due Fri Sep 4). His words: it takes a
+   while, start early. Needs desktop Excel 365 installed — UTech can do it if
+   yours isn't working yet.
+
+Still open from last week, both time-sensitive and both unchanged:
+**pick your 10-K group + company in Canvas** (first come, first serve — auto-assigned
+if you're unselected by Sep 11) and **pick your AIQS presentation slot before Fri
+Sep 4 class** (sign-up happens in the room).
+
 ## ✅ DONE 2026-08-22 — studio mailbox connected
 
 `alex-studio` is live: CLARVIS reads alexhickey@splitframestudio.com directly
@@ -112,16 +321,16 @@ longer compounding" straight through those eleven silent days. Suite 815 → 829
    be **deleted**, not sent — it joins the stale-drafts bin in item 7.
 2. ~~**The 14-brand call**~~ ✅ DECIDED 2026-08-14 — you delegated it ("up to you"),
    so the under-150 rule was applied. See the table below for the record.
-3. **Stripe — the account EXISTS, it just isn't activated.** Corrected 2026-08-20:
-   `dashboard.stripe.com` already has a "Splitframe Studio" account and you're signed
-   in, but it sits in **Sandbox/test mode** (`sk_test_` keys, "Verify your business"
-   banner, no payouts). So there is nothing to *register* — the remaining work is
-   **Activate Payments**: category (use **Consulting services**), business description,
-   sole prop, SSN/DOB identity check, personal checking for payouts, then set the
-   payout schedule. Afterwards **switch the dashboard out of Sandbox and re-copy the
-   LIVE keys** — anything wired to the test keys collects nothing. ~15 min, all of it
-   yours (Claude never enters SSN/bank/ID). This is the only thing between a "yes"
-   and money landing, and Wave 1 goes out 08-21.
+3. ~~**Stripe — activate payments.**~~ ✅ DONE — verified 2026-08-24 12:05 in the
+   live dashboard, not from this file. Account status shows **"No active tasks to
+   complete"**; Capabilities lists **Payments** and **Payouts** as Active (only
+   Cartes Bancaires is paused, which is a French card network and irrelevant);
+   the publishable key is `pk_live_`; and a default USD payout bank is attached
+   (Fidelity Investments via UMB, ••••9416). Business address is filled in.
+   **Nothing here is blocked on you.** The 08-20 entry that said "Sandbox/test
+   mode, ~15 min, all of it yours" was stale and sent Alex to a finished task on
+   08-24 — re-verify against the dashboard before ever re-opening this item.
+
 4. **The call card's open question** — vault [[call-card]]: keep or strike the
    teardown refund guarantee. Decide it now, not on a live call.
 5. ~~**Postmaster Tools**~~ ✅ CHECKED 2026-08-14 — domain **Verified** since Aug 1.

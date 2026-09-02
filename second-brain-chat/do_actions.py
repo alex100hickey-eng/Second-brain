@@ -77,7 +77,7 @@ def resolve(payload: dict) -> dict:
     kind, ref = payload.get("k"), payload.get("r", "")
     view = {"kind": kind, "ref": ref, "title": "", "why": "", "detail": "",
             "steps": [], "link": "", "link_label": "", "ops": list(payload.get("o") or []),
-            "gone": False, "done_label": "Mark it done"}
+            "gone": False, "done_label": "Mark it done", "form": []}
     try:
         if kind == al.KIND_OUTBOX:
             _resolve_outbox(view, ref)
@@ -91,6 +91,10 @@ def resolve(payload: dict) -> dict:
             _resolve_approval(view, ref)
         elif kind == al.KIND_STEP:
             _resolve_step(view, ref)
+        elif kind == al.KIND_SCORECARD:
+            _resolve_scorecard(view, ref)
+        elif kind == al.KIND_PACE:
+            _resolve_pace(view, ref)
     except Exception as e:
         print(f"do_actions: resolve failed ({e})")
         view["title"] = view["title"] or payload.get("l") or "Open CLARVIS"
@@ -239,7 +243,7 @@ def _resolve_step(view, ref):
 # WRITE — the one-tap ops
 # ============================================================
 
-def perform(payload: dict, op: str) -> dict:
+def perform(payload: dict, op: str, form=None) -> dict:
     """Run one op. Returns {ok, message}. Refuses anything the token didn't grant."""
     if not al.allows(payload, op):
         return {"ok": False, "message": "That link doesn't allow this action."}
@@ -254,7 +258,11 @@ def perform(payload: dict, op: str) -> dict:
         if kind == al.KIND_APPROVAL:
             return _do_approval(ref, op)
         if kind == al.KIND_STEP:
-            return {"ok": True, "message": "Noted — tick it in the vault to bank it."}
+            return _do_step(ref, op)
+        if kind == al.KIND_SCORECARD:
+            return _do_scorecard(ref, op, form or {})
+        if kind == al.KIND_PACE:
+            return _do_pace(ref, op, form or {})
     except Exception as e:
         print(f"do_actions: perform failed ({e})")
         return {"ok": False, "message": f"Couldn't do that: {str(e)[:120]}"}
@@ -325,3 +333,149 @@ def _do_approval(ref, op):
     return {"ok": bool(res.get("ok")),
             "message": (f"{op.title()}d." if res.get("ok")
                         else res.get("error", "Couldn't record that."))}
+
+
+# ============================================================
+# Money-plan steps — the Done button used to write NOTHING ("Noted — tick it in
+# the vault"), so a step tapped done on 08-18 kept re-nudging as "N d LATE" for
+# two weeks. mark_done records it in the shared state row (both nodes read it)
+# and the Mac ticks the vault checkbox on its next maintenance tick.
+# ============================================================
+
+def _do_step(ref, op):
+    if op != "done":
+        return {"ok": False, "message": "Unknown action."}
+    try:
+        import august_tracker
+        r = august_tracker.mark_done(str(ref))
+    except Exception as e:
+        return {"ok": False, "message": f"Couldn't record it: {str(e)[:120]}"}
+    if not r.get("ok"):
+        return {"ok": False, "message": r.get("error", "No such step.")}
+    if r.get("already"):
+        return {"ok": True, "message": f"Already banked: {r.get('step', ref)}."}
+    tail = ""
+    if r.get("unblocked"):
+        tail = " Unblocked: " + "; ".join(r["unblocked"][:3]) + "."
+    return {"ok": True, "message": f"Banked: {r.get('step', ref)}.{tail}"}
+
+
+# ============================================================
+# Capture pages — the two inputs the system genuinely cannot derive, reduced to
+# taps. Every chat-only capture tool (scorecard, mark_prepared, reviews, grades)
+# had zero entries after two weeks of classes: the return channel to CLARVIS is
+# not chat, it is the notification shade and the page it opens.
+# ============================================================
+
+_PILLARS = (("school", "School — did the day's work get done?"),
+            ("ball", "Ball — trained as planned?"),
+            ("money", "Money — moved the outreach?"),
+            ("sleep", "Sleep — lights out on time?"))
+
+
+def _resolve_scorecard(view, ref):
+    view["title"] = f"Scorecard — {ref}"
+    view["done_label"] = "Log tonight"
+    view["why"] = "Four taps. A streak only counts days that were logged."
+    streak = ""
+    try:
+        import daily_orders
+        s = daily_orders._streaks()
+        streak = " · ".join(f"{p} {n}d" for p, n in s.items())
+    except Exception:
+        pass
+    if streak:
+        view["detail"] = f"Streaks: {streak}"
+    view["form"] = [{"type": "toggle", "name": p, "label": label, "checked": False}
+                    for p, label in _PILLARS]
+    view["form"].append({"type": "text", "name": "note",
+                         "label": "One line about today (optional)"})
+    view["ops"] = [o for o in view.get("ops") or [] if o == "log"] or ["log"]
+
+
+def _do_scorecard(ref, op, form):
+    if op != "log":
+        return {"ok": False, "message": "Unknown action."}
+    try:
+        import daily_orders
+    except Exception as e:
+        return {"ok": False, "message": f"Scorecard unavailable: {str(e)[:100]}"}
+    pillars = {p: (str(form.get(p) or "").strip().lower() in ("1", "on", "true", "yes"))
+               for p, _ in _PILLARS}
+    note = str(form.get("note") or "").strip()[:240] or "logged from the phone"
+    try:
+        msg = daily_orders.log_scorecard(note, pillars)
+    except Exception as e:
+        return {"ok": False, "message": f"Couldn't log it: {str(e)[:120]}"}
+    hit = ", ".join(p for p, v in pillars.items() if v) or "nothing ticked"
+    return {"ok": True, "message": f"Logged: {hit}. {msg}"[:300]}
+
+
+_PACE_CHOICES = (("same", "caught up (through today)"),
+                 ("+1", "+1 class ahead"),
+                 ("+2", "+2 classes ahead"))
+
+
+def _pace_courses():
+    """[(code, next_dates[0:3])] for every prep course, from the class-day map."""
+    import school_data
+    from datetime import timedelta
+    courses = [c for c in (school_data._load("courses.csv") or [])
+               if school_data._lead_days(c) > 0]
+    curriculum = school_data._load("curriculum.csv") or []
+    cmap = school_data._class_day_map(courses, curriculum)
+    today = _now().date()
+    out = []
+    for c in sorted(courses, key=lambda c: c.get("course") or ""):
+        code = (c.get("course") or "").strip()
+        nxt = [d for d in (cmap.get(code) or []) if d > today][:2]
+        if len(nxt) < 2:   # no map (or term over): fall back to the calendar week
+            nxt = [today + timedelta(days=2), today + timedelta(days=7)]
+        out.append((code, nxt))
+    return out
+
+
+def _resolve_pace(view, ref):
+    view["title"] = "Where did you get to this week?"
+    view["done_label"] = "Set my pace"
+    view["why"] = ("Per course: caught up means prepared through today; +1 / +2 "
+                   "means you already worked the next one or two lectures.")
+    try:
+        rows = _pace_courses()
+    except Exception as e:
+        view["why"] = f"Couldn't load the courses ({str(e)[:80]})."
+        return
+    for code, nxt in rows:
+        opts = []
+        for value, label in _PACE_CHOICES:
+            if value == "+1":
+                label = f"+1 class (through {nxt[0].strftime('%a %b')} {nxt[0].day})"
+            elif value == "+2":
+                label = f"+2 classes (through {nxt[1].strftime('%a %b')} {nxt[1].day})"
+            opts.append({"value": value, "label": label, "checked": value == "same"})
+        view["form"].append({"type": "choice", "name": f"pace_{code}", "label": code,
+                             "options": opts})
+    view["ops"] = ["log"]
+
+
+def _do_pace(ref, op, form):
+    if op != "log":
+        return {"ok": False, "message": "Unknown action."}
+    try:
+        import school_state
+        rows = _pace_courses()
+    except Exception as e:
+        return {"ok": False, "message": f"Pace unavailable: {str(e)[:100]}"}
+    today = _now().date()
+    set_to = {}
+    for code, nxt in rows:
+        choice = str(form.get(f"pace_{code}") or "same").strip()
+        d = {"same": today, "+1": nxt[0], "+2": nxt[1]}.get(choice, today)
+        set_to[code] = d.isoformat()
+    try:
+        school_state.record_prepared(set_to)
+    except Exception as e:
+        return {"ok": False, "message": f"Couldn't save it: {str(e)[:120]}"}
+    shown = ", ".join(f"{c} → {d[5:]}" for c, d in set_to.items())
+    return {"ok": True, "message": f"Pace set: {shown}. The Mac writes it to courses.csv "
+                                   "on its next tick (≤30 min)."}

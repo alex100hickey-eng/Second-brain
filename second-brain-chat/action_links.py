@@ -44,13 +44,16 @@ KIND_OUTBOX = "outbox"      # something CLARVIS prepared, waiting on Alex's hand
 KIND_OUTBOX_ALL = "outbox_all"   # the whole waiting pile, one page
 KIND_APPROVAL = "approval"  # the consequential-action queue (ref = row id)
 KIND_STEP = "step"          # an August/money tracker step (ref = step id)
+KIND_SCORECARD = "scorecard"  # the nightly four-toggle scorecard (ref = ISO date)
+KIND_PACE = "pace"          # Sunday "where did you get to" per course (ref = ISO date)
 
 VALID_KINDS = (KIND_INTAKE, KIND_TASK, KIND_OUTBOX, KIND_OUTBOX_ALL,
-               KIND_APPROVAL, KIND_STEP)
+               KIND_APPROVAL, KIND_STEP, KIND_SCORECARD, KIND_PACE)
 
 # Operations a token may authorise. A token carries only the ops its nudge offered,
-# so a "mark done" link can never be replayed into a "drop it".
-VALID_OPS = ("done", "snooze", "drop", "approve", "deny", "sent")
+# so a "mark done" link can never be replayed into a "drop it". `log` is the form
+# submit on the capture pages (scorecard, pace) — it records what Alex tapped.
+VALID_OPS = ("done", "snooze", "drop", "approve", "deny", "sent", "log")
 
 DEFAULT_TTL_DAYS = 14
 

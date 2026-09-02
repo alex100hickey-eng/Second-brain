@@ -371,6 +371,35 @@ def _row_is_exam(r) -> bool:
                                      + (r.get("topic") or "")))
 
 
+_REVIEW_RE = re.compile(r"\breview\b", re.IGNORECASE)
+
+
+def _row_is_real_exam(r) -> bool:
+    """An exam row that is actually the exam — "Finish Ch 1 + Test 1 review" is
+    prep, and treating it as a test day blanked the MATH quiz pointer on the
+    review days and made review days count as exams in the study plan."""
+    text = (r.get("deliverable") or "") + " " + (r.get("topic") or "")
+    return _row_is_exam(r) and not _REVIEW_RE.search(text)
+
+
+def _rows_cover_meetings(dated_days, weekdays) -> bool:
+    """Do a course's dated curriculum rows plausibly list EVERY meeting?
+
+    AIQS lists all 40-odd meetings, so its rows ARE the class-day map. MATH
+    lists one row per section with estimated dates and long gaps, so once it
+    gained dated rows it silently switched off the weekday generator and the
+    daily-quiz pointer went dark on any weekday without a row (Fri Sep 4, Wed
+    Sep 9, everything after Oct 9). Rows win only when they cover most of the
+    weekday meetings inside their own span."""
+    days = sorted(set(dated_days))
+    if not days or not weekdays:
+        return True
+    start, end = days[0], days[-1]
+    expected = sum(1 for i in range((end - start).days + 1)
+                   if (start + timedelta(days=i)).weekday() in weekdays)
+    return expected == 0 or len(days) >= 0.6 * expected
+
+
 def _class_day_map(courses, curriculum):
     """{code: sorted class-meeting dates} for every study course (lead > 0)."""
     dated = {}          # code -> [(date, row)] with parseable dates
@@ -390,7 +419,9 @@ def _class_day_map(courses, curriculum):
         topical = [d for d, r in rows
                    if not (r.get("topic") or "").strip().startswith("(")
                    and not _row_is_exam(r)]
-        if topical:
+        weekdays = {wd for comp in (meets_components(c.get("meets", "")) or [])
+                    for wd in (comp["weekdays"] or [])}
+        if topical and _rows_cover_meetings(topical, weekdays):
             # AIQS style — meetings are every non-paren-topic row.
             days[code] = sorted(d for d, r in rows
                                 if not (r.get("topic") or "").strip().startswith("("))
@@ -463,6 +494,43 @@ def _quiz_pointer(for_date, class_days, exam_days):
             return (f"MATH quiz next class covers {_fmt_day(prior[-1])}'s material — "
                     "this week's Canvas problem list"), False
     return None, False
+
+
+def csv_owns(text: str, due=None) -> bool:
+    """Does assignments.csv already track this obligation?
+
+    An email-extracted item ("Homework 2 due for Foundations of Accounting I by
+    11:59 PM Monday 8/31") and the ICS-synced CSV row are the same homework
+    seen through two windows. The CSV is the one that learns it was submitted,
+    so when both the course (code or title) is named and a row of that course
+    carries the same due date, the CSV owns it and the mail copy must not nudge
+    or rank on its own. Deliberately strict — no date match, no ownership."""
+    if not text or not due:
+        return False
+    try:
+        due_iso = due.isoformat()[:10] if hasattr(due, "isoformat") else str(due)[:10]
+    except Exception:
+        return False
+    low = text.lower()
+    courses = _load("courses.csv") or []
+    hits = set()
+    for c in courses:
+        code = (c.get("course") or "").strip()
+        if not code:
+            continue
+        names = {code.lower(), (c.get("code") or "").strip().lower(),
+                 (c.get("title") or "").strip().lower()}
+        names.discard("")
+        if any(n in low for n in names):
+            hits.add(code.lower())
+    if not hits:
+        return False
+    for r in _load("assignments.csv") or []:
+        if (r.get("course") or "").strip().lower() not in hits:
+            continue
+        if (r.get("due_date") or "").strip()[:10] == due_iso:
+            return True
+    return False
 
 
 def courses_meeting_on(d=None) -> list:
@@ -577,16 +645,22 @@ def study_plan_data(for_date=None) -> dict:
         lead = _lead_days(c)
         due_soon = [_assignment_line(d, r) for d, r in open_rows
                     if for_date <= d <= for_date + timedelta(days=lead)]
+        # Open rows whose date just passed. Nothing marks a CSV row done on its
+        # own, so these are almost always submitted-and-unmarked; they surface
+        # as "verify" for two days, then fall silent instead of nagging.
+        lapsed = [_assignment_line(d, r) for d, r in open_rows
+                  if for_date - timedelta(days=2) <= d < for_date]
         # ACCT APQs/readings due at class start (10:00) T-split to the class
         # date itself, so "on or before" naturally counts them for that class.
         before_next = [_assignment_line(d, r) for d, r in open_rows
                        if next_class and for_date <= d <= next_class]
         pointer, quiz_today = None, False
         if code == "MATH120":
-            exam_days = {d for d, r in cur_rows if _row_is_exam(r)}
+            exam_days = {d for d, r in cur_rows if _row_is_real_exam(r)}
             pointer, quiz_today = _quiz_pointer(for_date, cdays, exam_days)
         per_course[code] = {
             "due_soon": due_soon,
+            "lapsed": lapsed,
             "before_next_class": before_next,
             "next_class": next_class.isoformat() if next_class else None,
             "quiz_pointer": pointer,
@@ -607,6 +681,8 @@ def study_plan_data(for_date=None) -> dict:
         for s in pc["before_next_class"][:6]:
             if s not in shown:
                 lines.append(f"  before next class: {s}")
+        for s in (pc.get("lapsed") or [])[:3]:
+            lines.append(f"  past due, unverified: {s}")
         if pc["quiz_pointer"]:
             lines.append(f"  {pc['quiz_pointer']}")
         if not pc["due_soon"] and not pc["before_next_class"] and not pc["quiz_pointer"]:
@@ -694,9 +770,13 @@ def _canonical_course(course: str):
     return (matches[0].get("course") or want).strip(), None
 
 
-def _next_review_exams(assignments, for_date):
+def _next_review_exams(assignments, for_date, curriculum=None):
     """{course_lower: (date, row)} — next OPEN exam-ish deadline per course,
-    using school_status's wider set (quiz included) since reviews anchor to it."""
+    using school_status's wider set (quiz included) since reviews anchor to it.
+
+    Syllabus exams count too: MATH's tests exist only in curriculum.csv (Canvas
+    carries no due dates for that course), so an assignments-only read anchored
+    MATH reviews to nothing nine days before Test 1."""
     out = {}
     for r in assignments:
         if (r.get("type") or "").strip().lower() not in _REVIEW_EXAM_TYPES:
@@ -708,6 +788,22 @@ def _next_review_exams(assignments, for_date):
             key = (r.get("course") or "").strip().lower()
             if key not in out or d < out[key][0]:
                 out[key] = (d, r)
+    if curriculum is None:
+        try:
+            curriculum = _load("curriculum.csv")
+        except Exception:
+            curriculum = []
+    for r in curriculum or []:
+        code = (r.get("course") or "").strip()
+        if not code or code.upper() == "AIQS100" or not _row_is_real_exam(r):
+            continue
+        d = _parse_date(r.get("date"))
+        if d and d >= for_date:
+            key = code.lower()
+            if key not in out or d < out[key][0]:
+                name = (r.get("deliverable") or "").strip() or (r.get("topic") or "").strip()
+                out[key] = (d, {"course": code, "title": name, "type": "exam",
+                                "due_date": d.isoformat(), "status": "open"})
     return out
 
 

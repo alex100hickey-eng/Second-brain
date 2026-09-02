@@ -37,6 +37,9 @@ PRICING_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__fi
 # (tool, trigger, ok, ms) -> None that writes a compact Supabase row. Module stays
 # stdlib-only and Supabase-unaware, same pattern as note_capture.on_capture.
 on_tool_logged = None
+# Same shape for model usage: app.py accumulates (feature, cost) into a per-node
+# monthly rollup row in Supabase so the budget gate can see BOTH nodes' spend.
+on_usage_logged = None
 
 
 def _now():
@@ -201,6 +204,11 @@ class Observability:
                      int(cache_read), int(cache_write), cost),
                 )
                 self._conn.commit()
+            if on_usage_logged is not None:
+                try:
+                    on_usage_logged(feature, trigger, model, cost)
+                except Exception:
+                    pass
             return cost
         except Exception as e:
             print(f"observability: log_usage failed: {e}")

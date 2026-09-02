@@ -221,6 +221,79 @@ def test_ranking_deadlines_first():
           [o["rank"] for o in res["orders"]] == list(range(1, len(res["orders"]) + 1)))
 
 
+def test_age_decay_backlog_and_dedupe():
+    print("\n=== compose: stale overdue → ONE backlog line; tomorrow ranks with graded work; "
+          "no duplicate school orders; lapsed rows are verify lines ===")
+    _, vault = _reset()
+    stale = [{"id": 100 + i, "title": f"Old chore {i}", "status": "idea",
+              "due": (TODAY - timedelta(days=10)).isoformat()} for i in range(10)]
+    _stub_tracker(stale)
+    tmrw = TODAY + timedelta(days=1)
+    tail = f" — due {tmrw.strftime('%a %b')} {tmrw.day}"
+    _fake_plan(
+        per_course={
+            "ACCT100": {
+                "due_soon": ["Day 4 APQ (assignment)" + tail,
+                             {"title": "Day 9 Reading", "due": (TODAY + timedelta(days=6)).isoformat()}],
+                "before_next_class": ["Day 4 APQ (assignment)" + tail],
+                "lapsed": [{"title": "Day 3 Reading", "due": (TODAY - timedelta(days=1)).isoformat()}],
+                "next_class": tmrw.isoformat(), "quiz_pointer": None,
+            },
+            "MATH120": {"due_soon": [], "before_next_class": [], "next_class": tmrw.isoformat(),
+                        "quiz_pointer": "TODAY'S MATH quiz covers Mon's material", "quiz_today": True},
+        },
+        exams=[])
+    res = daily_orders.compose()
+    titles = [o["title"] for o in res["orders"]]
+    check("orders capped at 8", len(res["orders"]) <= 8)
+    check("today's graded quiz survives a 10-item stale backlog",
+          any("MATH quiz" in t for t in titles))
+    check("an item due tomorrow ranks in the top three",
+          any("Day 4 APQ" in t for t in titles[:3]))
+    backlog = [o for o in res["orders"] if o["title"].startswith("Backlog:")]
+    check("stale overdue collapses to exactly one backlog line naming the count",
+          len(backlog) == 1 and "10" in backlog[0]["title"])
+    check("stale tasks take no slots of their own", not any("Old chore" in t for t in titles))
+    check("the same assignment is emitted once, not twice",
+          sum(1 for t in titles if "Day 4 APQ" in t) == 1)
+    lapsed = [o for o in res["orders"] if "Day 3 Reading" in o["title"]]
+    check("a just-lapsed row is a verify line, not a deadline",
+          bool(lapsed) and lapsed[0]["when"] == "verify")
+    # A fresh overdue item (yesterday) is still a real deadline, not backlog.
+    _stub_tracker([{"id": 7, "title": "Email Jarvis about travel", "status": "idea",
+                    "due": (TODAY - timedelta(days=1)).isoformat()}])
+    res2 = daily_orders.compose()
+    check("an item overdue by one day stays a tier-0 deadline",
+          res2["orders"] and "Email Jarvis" in res2["orders"][0]["title"])
+    # Intake: owned-by-CSV and own-sender items never become orders.
+    import school_data as _sd
+    real_owns = getattr(_sd, "csv_owns", None)
+    _sd.csv_owns = lambda text, due: "Homework 2" in text
+    real_list = intake.list_intake
+    intake.list_intake = lambda status="new", limit=200: [
+        {"id": 1, "event": {"sender": "notifications@instructure.com", "items": [
+            {"type": "deadline", "text": "Homework 2 due for Foundations of Accounting I",
+             "due": (TODAY - timedelta(days=1)).isoformat()}]}},
+        {"id": 2, "event": {"sender": "Alex Hickey <alexhickey@splitframestudio.com>", "items": [
+            {"type": "commitment", "text": "Alex wants to get the first outreach batch moving",
+             "due": (TODAY - timedelta(days=1)).isoformat()}]}},
+        {"id": 3, "event": {"sender": "Quest <noreply@questdiagnostics.com>", "items": [
+            {"type": "deadline", "text": "Create a MyQuest account to see the results",
+             "due": (TODAY - timedelta(days=1)).isoformat()}]}},
+    ]
+    try:
+        got = [o["title"] for _t, o in daily_orders._intake_orders(TODAY)]
+        check("a CSV-owned Canvas deadline is not an intake order",
+              not any("Homework 2" in t for t in got))
+        check("Alex's own sent mail is not an intake order",
+              not any("outreach batch" in t for t in got))
+        check("a real third-party deadline still is", any("MyQuest" in t for t in got))
+    finally:
+        intake.list_intake = real_list
+        if real_owns is not None:
+            _sd.csv_owns = real_owns
+
+
 def test_elif_undercount_fix():
     print("\n=== follow-ups: 9-day-old send with neither follow-up → BOTH stages due ===")
     _, vault = _reset()
@@ -605,6 +678,7 @@ if __name__ == "__main__":
         test_brief_and_evening_lines()
         test_tool_surface()
         test_string_study_plan_items()
+        test_age_decay_backlog_and_dedupe()
     finally:
         for d in _tmpdirs:
             shutil.rmtree(d, ignore_errors=True)

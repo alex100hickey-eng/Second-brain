@@ -121,12 +121,20 @@ def budget_config() -> dict:
 # SYSTEM EVENTS — the shared log other components report into.
 # ============================================================
 
+# Set by app.py in test mode (JARVIS_TEST). A module flag rather than an env
+# check so the standalone module tests, which run under the same environment
+# but wire their own fake client, still see their events recorded.
+TEST_MODE = False
+
+
 def report_event(component: str, level: str, message: str, detail: str = "") -> None:
     """Shared incident/notice log. Fail-soft: a logging hiccup must never break the
     thing being reported on. Call this from an except block — a couple of lines,
     not a rewrite (see task_manager._managed_worker / app.py's _task_worker)."""
     if level not in ("info", "warning", "error", "critical"):
         level = "info"
+    if TEST_MODE:
+        return   # the suite's own lockouts/timeouts are not incidents
     try:
         supabase.table("Agent Outputs").insert(
             {"agent_name": "system_event", "output_text": json.dumps({
@@ -208,6 +216,15 @@ def beat(name: str, stale_after_s: int, note: str = "") -> None:
         pass
 
 
+# Heartbeats that only ever beat from the Mac. When the laptop sleeps they all go
+# quiet at once — one fact, not four incidents (three "subsystem down" pushes in a
+# week were exactly this). The local node beats "mac-awake" every two minutes.
+MAC_ORIGIN = {"vault-sync-mac", "canvas-sync", "d1_refresh", "capability-watcher",
+              "mac-awake"}
+MAC_ASLEEP_AFTER_S = 15 * 60        # no mac-awake beat for this long = lid closed
+MAC_OFFLINE_AFTER_S = 26 * 3600     # … and after this long it is a real incident
+
+
 def check_heartbeats() -> list:
     """Stale-heartbeat incidents. Reads every heartbeat:* row — no hardcoded list,
     so a future subsystem gets monitored by simply calling beat()."""
@@ -228,7 +245,7 @@ def check_heartbeats() -> list:
                     .limit(100).execute().data or [])
     except Exception:
         return []
-    incidents, seen = [], set()
+    incidents, seen, ages = [], set(), {}
     now = datetime.now(ZoneInfo("America/New_York"))
     for row in rows:
         try:
@@ -247,6 +264,7 @@ def check_heartbeats() -> list:
             age_s = (now - datetime.fromisoformat(beat_at)).total_seconds()
         except ValueError:
             continue
+        ages[name] = age_s
         if age_s > float(stale_after):
             hours = age_s / 3600
             incidents.append({
@@ -254,6 +272,16 @@ def check_heartbeats() -> list:
                 "message": (f"'{name}' has produced nothing for {hours:.1f}h "
                             f"(expected within {float(stale_after) / 3600:.1f}h)."),
                 "key": key,
+            })
+    mac_age = ages.get("mac-awake")
+    if mac_age is not None and mac_age > MAC_ASLEEP_AFTER_S:
+        incidents = [i for i in incidents if i["component"] not in MAC_ORIGIN]
+        if mac_age > MAC_OFFLINE_AFTER_S:
+            incidents.append({
+                "type": "heartbeat_stale", "component": "mac-node", "level": "error",
+                "message": (f"The Mac node has been offline for {mac_age / 3600:.1f}h — "
+                            "every Mac-side sync (vault, Canvas, D1) is paused with it."),
+                "key": "heartbeat:mac-awake",
             })
     return incidents
 
@@ -465,10 +493,49 @@ def _observability():
     return observability.get_observability()
 
 
+def _cluster_month_spend():
+    """Month-to-date spend summed over every node's usage rollup (state rows
+    `usage:<YYYY-MM>:<node>`, flushed by app.py every few minutes), or None when
+    no rollup exists yet. The local SQLite ledger only ever saw ONE node, and the
+    server's copy dies with its container on every redeploy — so the $50 cap was
+    being enforced against a number that reset to zero each deploy."""
+    try:
+        import intake
+        month = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m")
+        rows = (supabase.table("Agent Outputs").select("output_text")
+                .eq("agent_name", intake.STATE_AGENT)
+                .ilike("output_text", f'%"key": "usage:{month}:%')
+                .order("id", desc=True).limit(20).execute().data or [])
+    except Exception:
+        return None
+    seen, total, by_feature = set(), 0.0, {}
+    for row in rows:
+        try:
+            d = json.loads(row["output_text"])
+        except (json.JSONDecodeError, TypeError):
+            continue
+        key = str(d.get("key", ""))
+        if not key.startswith(f"usage:{month}:") or key in seen:
+            continue
+        seen.add(key)
+        total += float(d.get("cost") or 0)
+        for f, c in (d.get("by_feature") or {}).items():
+            by_feature[f] = by_feature.get(f, 0.0) + float(c or 0)
+    if not seen:
+        return None
+    return {"cost": round(total, 4), "nodes": len(seen),
+            "by_feature": [{"feature": f, "cost": round(c, 4)}
+                           for f, c in sorted(by_feature.items(), key=lambda t: -t[1])]}
+
+
 def spend_vs_budget() -> dict:
     cfg = budget_config()
     budget = float(cfg.get("monthly_budget_usd", 0)) or 0.0001  # avoid /0 on a misconfigured 0
     monthly = _observability().monthly_summary()
+    cluster = _cluster_month_spend()
+    if cluster and cluster["cost"] >= monthly.get("cost", 0.0):
+        monthly = {**monthly, "cost": cluster["cost"], "by_feature": cluster["by_feature"],
+                   "nodes": cluster["nodes"]}
     spend = monthly.get("cost", 0.0)
     pct = spend / budget
 

@@ -584,6 +584,71 @@ out = school_data.log_study_review_tool("ECON103", "Anything", 3)
 check("logger refuses to invent a School dir in a missing vault",
       "School folder not found" in out)
 
+# ---- MATH-shaped class-day map, review rows, lapsed rows, csv_owns, exam union --
+
+print("class-day map / lapsed / csv_owns / exam union")
+
+tmp2 = tempfile.mkdtemp(prefix="school-data-test2-")
+school2 = os.path.join(tmp2, "School")
+os.makedirs(school2)
+_today = date.today()
+_mon = _today - timedelta(days=_today.weekday())     # this week's Monday
+
+
+def _iso(d):
+    return d.isoformat()
+
+
+with open(os.path.join(school2, "courses.csv"), "w", encoding="utf-8") as f:
+    f.write("course,code,title,instructor,meets,term,lead_target_days,"
+            "prepared_through,syllabus_status,notes\n"
+            f"MATH120,MATH 120,Elem Functions,,MWF 9:20-10:10AM Olin 305,Fall 2026,14,{_iso(_mon)},imported,\n"
+            f"ECON103,ECON 103,Prin of Macroeconomics,,TuTh 11:30AM-12:45PM PBL 201,Fall 2026,10,{_iso(_mon)},imported,\n")
+with open(os.path.join(school2, "curriculum.csv"), "w", encoding="utf-8") as f:
+    f.write("course,week,date,topic,readings,lecture_ref,deliverable,prepared,notes\n")
+    for w in range(6):     # one MATH section per week: rows cover ~1/3 of the MWF meetings
+        f.write(f"MATH120,{w + 1},{_iso(_mon + timedelta(days=7 * w))},§1.{w + 1} (title TBC),,,,,ESTIMATED\n")
+    f.write(f"MATH120,3,{_iso(_mon + timedelta(days=16))},Finish Ch 1 + Test 1 review,,,,,\n")
+    f.write(f"MATH120,3,{_iso(_mon + timedelta(days=18))},TEST 1 (in class),,,TEST 1,,\n")
+    for w in range(6):     # ECON has lecture_refs: real meeting rows that bound the term
+        f.write(f"ECON103,{w + 1},{_iso(_mon + timedelta(days=7 * w + 1))},Topic {w},,class {w + 1},,,\n")
+with open(os.path.join(school2, "assignments.csv"), "w", encoding="utf-8") as f:
+    f.write("course,title,type,due_date,weight_pct,est_hours,actual_hours,status,"
+            "topic,source,submitted_date,grade,notes\n"
+            f"ECON103,HW 2,homework,{_iso(_today - timedelta(days=1))},,,,open,,canvas:event-assignment-1,,,\n"
+            f"ECON103,HW 3,homework,{_iso(_today + timedelta(days=5))},,,,open,,canvas:event-assignment-2,,,\n")
+with open(os.path.join(school2, "review-log.csv"), "w", encoding="utf-8") as f:
+    f.write("course,topic,last_reviewed,confidence,next_due,times_reviewed,notes\n")
+school_data.init(tmp2)
+
+_courses2 = school_data._load("courses.csv")
+_cur2 = school_data._load("curriculum.csv")
+_cmap = school_data._class_day_map(_courses2, _cur2)
+_math_days = _cmap.get("MATH120") or []
+check("sparse dated rows do NOT switch MATH off the weekday generator", len(_math_days) > 6)
+check("generated MATH days are Mon/Wed/Fri only", all(d.weekday() in (0, 2, 4) for d in _math_days))
+_fri = _mon + timedelta(days=11)          # a Friday with no MATH row of its own
+_plan_fri = school_data.study_plan_data(_fri)
+check("Friday quiz pointer is lit on a row-less class day",
+      bool((_plan_fri["per_course"].get("MATH120") or {}).get("quiz_pointer")))
+_plan_rev = school_data.study_plan_data(_mon + timedelta(days=16))
+check("a 'Test 1 review' row is a class day, not an exam day",
+      bool((_plan_rev["per_course"].get("MATH120") or {}).get("quiz_pointer")))
+_plan_today = school_data.study_plan_data(_today)
+check("an open row that just passed surfaces as lapsed, not overdue",
+      any("HW 2" in s for s in (_plan_today["per_course"].get("ECON103") or {}).get("lapsed", []))
+      and any("past due, unverified" in ln for ln in _plan_today["lines"]))
+check("csv_owns: course named + same due date", school_data.csv_owns(
+    "HW 2 due for Prin of Macroeconomics by 11:59 PM", _today - timedelta(days=1)))
+check("csv_owns: same course, different date → not owned", not school_data.csv_owns(
+    "HW 2 due for Prin of Macroeconomics by 11:59 PM", _today + timedelta(days=2)))
+check("csv_owns: no course named → not owned", not school_data.csv_owns(
+    "Homework 2 due by 11:59 PM", _today - timedelta(days=1)))
+_nre = school_data._next_review_exams(school_data._load("assignments.csv"), _today, _cur2)
+check("syllabus-only MATH test anchors reviews", "math120" in _nre
+      and _nre["math120"][1].get("title", "").upper().startswith("TEST 1"))
+shutil.rmtree(tmp2, ignore_errors=True)
+
 school_data.init(tmp)  # restore for cleanliness
 
 shutil.rmtree(tmp, ignore_errors=True)

@@ -50,6 +50,14 @@ import tempfile
 import threading
 import subprocess
 
+# The suite imports the LIVE app module. Without this flag that import wired the
+# real Supabase client into the tool-audit mirror, note capture and incident
+# reporting, so every run wrote ~60 rows of fixtures into production (52 audit
+# rows tagged as Alex's own tool use, 6 draft notes, a login-lockout event) and
+# rehydrated 130+ fixture notes into vault_inbox/. app.py reads JARVIS_TEST and
+# turns those writers into no-ops.
+os.environ.setdefault("JARVIS_TEST", "1")
+
 # Patterns that indicate ACTUAL mouse/keyboard control code — real imports or attribute
 # calls, NOT the mere mention of a library name in a docstring or safety rule (our safety
 # text legitimately says things like "no pyautogui-style control"). Screen-watch is

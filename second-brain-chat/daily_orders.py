@@ -63,6 +63,14 @@ _T_MONEY = 2      # follow-ups due, warmup streak, send-log gaps
 _T_TRAINING = 3   # today's card, practice, calendar big stuff
 _T_PREP = 4       # before-next-class reading, quiz pointers, future dues
 _T_HYGIENE = 5    # 50/50 logging, sleep guard
+_T_BACKLOG = 6    # overdue items older than STALE_OVERDUE_DAYS — see compose()
+
+# An overdue item stays a tier-0 "deadline" for this many days. After that it
+# is backlog: still real, but it must not outrank tomorrow's graded work. On
+# 2026-09-02 twelve stale tier-0 items (task rows from Aug 24-28, a money step
+# from Aug 18) filled all eight slots and cut the day's graded MATH quiz, the
+# Test 1 runway and an APQ that locks at class start the next morning.
+STALE_OVERDUE_DAYS = 3
 
 # Obligation routing: practice/lift/meeting text belongs to ball; school-shaped
 # text is already owned by the study plan (double-listing it would burn slots).
@@ -188,6 +196,46 @@ def _item_points(it):
     return None
 
 
+_TYPE_SUFFIX_RE = re.compile(r"\s*\((?:reading|assignment|homework|quiz|exam|project|paper|test)\)\s*$",
+                             re.IGNORECASE)
+_WAS_DUE_RE = re.compile(r"was due (\d{4}-\d{2}-\d{2})")
+
+
+def _norm_title(text: str) -> str:
+    """Identity of a study-plan item across its two renderings (due-soon and
+    before-next-class emit the same assignment twice)."""
+    return _TYPE_SUFFIX_RE.sub("", _DUE_TAIL_RE.sub("", text or "")).strip().lower()
+
+
+def _is_stale_overdue(tier: int, order: dict, today: date) -> bool:
+    if tier != _T_DEADLINE:
+        return False
+    m = _WAS_DUE_RE.search(order.get("why") or "")
+    if not m:
+        return False
+    d = _parse_iso_date(m.group(1))
+    return bool(d) and (today - d).days > STALE_OVERDUE_DAYS
+
+
+def _csv_owns(text: str, due) -> bool:
+    """True when assignments.csv already tracks this obligation (same course,
+    same due date). The CSV knows submitted/open; an email never does — this is
+    how a Canvas notification for an already-submitted homework kept ranking as
+    an overdue 'life' order."""
+    try:
+        import school_data
+        return bool(school_data.csv_owns(text, due))
+    except Exception:
+        return False
+
+
+def _own_sender(src: str) -> bool:
+    try:
+        return bool(intake._is_own_address(src))
+    except Exception:
+        return False
+
+
 def _school_orders(today: date) -> list:
     """(tier, order) pairs from the study plan. Overdue/due-today carry the
     points at stake; everything else is prep with its date."""
@@ -206,6 +254,7 @@ def _school_orders(today: date) -> list:
         pass
 
     per_course = plan.get("per_course") or {}
+    shown = set()   # one order per assignment, whichever list names it first
     for code in sorted(per_course):
         info = per_course[code] or {}
         next_class = info.get("next_class")
@@ -215,6 +264,10 @@ def _school_orders(today: date) -> list:
                 text = _DUE_TAIL_RE.sub("", text).strip()
             if not text:
                 continue
+            key = (code, _norm_title(text))
+            if key in shown:
+                continue
+            shown.add(key)
             pts_s = f" · {pts:g} pts" if pts else ""
             if due and due < today:
                 out.append((_T_DEADLINE, _order("school", f"{code}: {text}",
@@ -222,6 +275,12 @@ def _school_orders(today: date) -> list:
             elif due == today:
                 out.append((_T_DEADLINE, _order("school", f"{code}: {text}",
                            f"due today{pts_s}", "today")))
+            elif due == today + timedelta(days=1):
+                # Tomorrow's dues are tonight's work. ACCT readings and APQs lock
+                # at class start (10:00), so ranking them as generic "prep"
+                # buried them under money backlog the evening before.
+                out.append((_T_EXAM, _order("school", f"{code}: {text}",
+                           f"due tomorrow{pts_s}", "tonight")))
             else:
                 when = f"due {due.isoformat()}" if due else "due soon"
                 out.append((_T_PREP, _order("school", f"{code}: {text}",
@@ -230,9 +289,27 @@ def _school_orders(today: date) -> list:
             text = _item_text(it)
             if not text:
                 continue
+            key = (code, _norm_title(text))
+            if key in shown:
+                continue
+            shown.add(key)
             why = (f"next class {str(next_class)[:10]}" if next_class
                    else "before next class")
             out.append((_T_PREP, _order("school", f"{code}: {text}", why, "tonight")))
+        # Past-due rows still open in the vault. Almost always done in Canvas and
+        # simply unmarked (nothing closes a CSV row on its own), so this is a
+        # "verify" line, never a red deadline — and it drops after two days.
+        for it in info.get("lapsed") or []:
+            text = _DUE_TAIL_RE.sub("", _item_text(it)).strip()
+            if not text:
+                continue
+            key = (code, _norm_title(text))
+            if key in shown:
+                continue
+            shown.add(key)
+            out.append((_T_PREP, _order("school", f"{code}: {text}",
+                       "past due, still open in the vault — confirm it went in and it clears",
+                       "verify")))
         ptr = info.get("quiz_pointer")
         if isinstance(ptr, str) and ptr.strip():
             # A quiz being GRADED TODAY is not "prep" — it ranks with the day's
@@ -589,6 +666,8 @@ def _intake_orders(today: date) -> list:
     for row in rows:
         ev = row.get("event") or {}
         src = (ev.get("sender") or ev.get("source") or "").strip()
+        if _own_sender(src):
+            continue                       # his own note-to-self is not an order
         for it in (ev.get("items") or []):
             if not isinstance(it, dict):
                 continue
@@ -598,6 +677,8 @@ def _intake_orders(today: date) -> list:
             if not text:
                 continue
             due = _parse_iso_date(str(it.get("due") or "")[:10]) if it.get("due") else None
+            if _csv_owns(text, due):
+                continue                       # assignments.csv surfaces (and closes) it
             if due and due > today + timedelta(days=14):
                 continue                       # not yet the day's business
             score = _intake_score(text, due, today)
@@ -808,7 +889,13 @@ def compose(now=None) -> dict:
     tiered += _training_orders(now, today)
     tiered += _intake_orders(today)
     tiered += _task_orders(today)
+    # Age decay: an item overdue for more than STALE_OVERDUE_DAYS stops being a
+    # "deadline" and becomes backlog, ranked below everything the day can still
+    # win. The backlog is summarised in ONE slot rather than allowed to fill eight.
+    tiered = [(_T_BACKLOG if _is_stale_overdue(t, o, today) else t, o) for t, o in tiered]
     tiered.sort(key=lambda t: t[0])  # stable — insertion order holds within a tier
+    backlog = [o for t, o in tiered if t == _T_BACKLOG]
+    tiered = [(t, o) for t, o in tiered if t != _T_BACKLOG]
     picked = tiered[:MAX_ORDERS]
     # Basketball is a goal, not filler: on a training day the cap must never
     # squeeze every ball order out behind money/school backlog. If the cut list
@@ -817,6 +904,15 @@ def compose(now=None) -> dict:
         ball = next(((t, o) for t, o in tiered if o["pillar"] == "ball"), None)
         if ball is not None:
             picked = picked[:-1] + [ball] if len(picked) >= MAX_ORDERS else picked + [ball]
+    if backlog:
+        dates = sorted(d for d in (_parse_iso_date((_WAS_DUE_RE.search(o.get("why") or "")
+                                                     or [None, ""])[1]) for o in backlog) if d)
+        oldest = f"oldest {dates[0].isoformat()}, " if dates else ""
+        summary = _order("life", f"Backlog: {len(backlog)} older overdue item(s)",
+                         f"{oldest}clear or drop them from their /do pages or in CLARVIS",
+                         "10 min when you have it")
+        picked = (picked[:-1] + [(_T_BACKLOG, summary)] if len(picked) >= MAX_ORDERS
+                  else picked + [(_T_BACKLOG, summary)])
     orders = []
     for i, (_tier, o) in enumerate(picked, 1):
         orders.append({"rank": i, **o})

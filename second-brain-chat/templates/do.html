@@ -62,6 +62,19 @@
            border:1px solid var(--line); border-radius:12px; padding:13px 14px;
            margin-bottom:10px; background:var(--panel); }
   .child small { color:var(--text-dim); }
+  label.toggle { display:flex; align-items:center; gap:12px; padding:13px 4px;
+                 border-bottom:1px solid var(--line); font-size:16px; }
+  label.toggle:last-of-type { border-bottom:0; }
+  label.toggle input { width:22px; height:22px; accent-color:var(--accent); }
+  .choice { padding:10px 4px 6px; border-bottom:1px solid var(--line); }
+  .choice:last-child { border-bottom:0; }
+  .clabel { font-size:12px; letter-spacing:.12em; text-transform:uppercase;
+            color:var(--text-dim); margin-bottom:6px; }
+  label.opt { display:flex; align-items:center; gap:10px; padding:7px 0; font-size:15px; }
+  label.opt input { width:20px; height:20px; accent-color:var(--accent); }
+  input.text { width:100%; padding:13px 14px; border-radius:12px; border:1px solid var(--line);
+               background:var(--bg); color:var(--text); font-size:16px; margin-top:10px;
+               font-family:inherit; }
   footer { text-align:center; margin-top:22px; }
   footer a { color:var(--text-dim); font-size:13px; text-decoration:none; }
 </style>
@@ -116,6 +129,26 @@
     {% endif %}
 
     <form method="post" action="/do/{{ token }}/act">
+      {% if view.form %}
+        <div class="card">
+          {% for f in view.form %}
+            {% if f.type == 'toggle' %}
+              <label class="toggle"><input type="checkbox" name="{{ f.name }}" value="1"
+                {% if f.checked %}checked{% endif %}> {{ f.label }}</label>
+            {% elif f.type == 'choice' %}
+              <div class="choice"><div class="clabel">{{ f.label }}</div>
+                {% for o in f.options %}
+                  <label class="opt"><input type="radio" name="{{ f.name }}" value="{{ o.value }}"
+                    {% if o.checked %}checked{% endif %}> {{ o.label }}</label>
+                {% endfor %}
+              </div>
+            {% elif f.type == 'text' %}
+              <input class="text" type="text" name="{{ f.name }}" placeholder="{{ f.label }}" autocomplete="off">
+            {% endif %}
+          {% endfor %}
+        </div>
+        <button class="btn good" name="op" value="log" type="submit">{{ view.done_label }}</button>
+      {% endif %}
       {% if 'approve' in view.ops %}
         <button class="btn good" name="op" value="approve" type="submit">Approve</button>
       {% endif %}

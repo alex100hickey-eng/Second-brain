@@ -1028,6 +1028,7 @@ def _claim(row_id: int, original_text: str, task: dict) -> bool:
 
 def _managed_worker(post_to_chat) -> None:
     cycle = 0
+    fails = 0
     while True:
         try:
             q = (
@@ -1069,11 +1070,24 @@ def _managed_worker(post_to_chat) -> None:
                         print(f"Warning: couldn't post managed-task result to chat: {e}")
         except Exception as e:
             print(f"Warning: managed worker cycle failed: {e}")
-            try:
-                import monitor
-                monitor.report_event("jarvis-managed-worker", "error", "worker cycle failed", str(e))
-            except Exception:
-                pass
+            fails += 1
+            # One failed poll is weather (the Mac asleep, a DNS blip, a read
+            # timeout); report once per streak, at three in a row.
+            if fails == 3:
+                try:
+                    import monitor
+                    s = str(e).lower()
+                    transient = any(w in s for w in (
+                        "timed out", "timeout", "nodename", "name resolution",
+                        "connection reset", "connection refused", "eof occurred",
+                        "remote disconnected", "network is unreachable"))
+                    monitor.report_event("jarvis-managed-worker",
+                                         "warning" if transient else "error",
+                                         "worker cycle failed 3x in a row", str(e))
+                except Exception:
+                    pass
+        else:
+            fails = 0
         cycle += 1
         time.sleep(30)
 

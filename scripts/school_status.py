@@ -18,6 +18,7 @@ Read-only. It never edits a CSV — it tells you what to do, you decide.
 import argparse
 import csv
 import os
+import re
 import sys
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -75,7 +76,7 @@ def date(s):
     return None
 
 
-def effective_prepared(course_row, curriculum, reviews):
+def effective_prepared(course_row, curriculum, reviews, assignments=None, today=None):
     """How far ahead a course is ACTUALLY prepared, derived, never guessed.
 
     courses.csv's prepared_through is hand-set and no code writes it, so on its
@@ -108,6 +109,37 @@ def effective_prepared(course_row, curriculum, reviews):
         if (r.get("prepared", "") or "").strip().lower() in ("y", "yes", "1", "true"):
             bump(d)
         elif (r.get("topic") or "").strip().lower() in reviewed:
+            bump(d)
+    # Attendance floor (Alex's rule of 2026-08-26: attendance is assumed once the
+    # moment passes). A lecture that already happened is a lecture he sat in, so
+    # the course is prepared through it whether or not anyone typed so. Without
+    # this every course read "-6d BEHIND" six days after the baseline — the exact
+    # decay the docstring above predicted, because none of the three inputs had
+    # an automatic writer. Paren rows ("(deadline — no class)") are not meetings.
+    today = today or datetime.now(LOCAL_TZ).date()
+    for r in curriculum:
+        if (r.get("course") or "").strip().lower() != code:
+            continue
+        topic = (r.get("topic") or "").strip()
+        d = date(r.get("date"))
+        if d and d <= today and not topic.startswith("("):
+            # Attending yesterday's class means being caught up TODAY, not
+            # "prepared through yesterday": between meetings the lead is 0, not
+            # -1, or every Wednesday reads BEHIND for a Tuesday course.
+            bump(today)
+    # Submission floor: a reading/APQ/homework handed in is a class prepared for.
+    # The nightly Canvas status sync flips these rows, so this is the first
+    # "ahead of the lecture" signal that needs no typing at all — and it is
+    # bounded so a whole-semester HW bank can't claim December.
+    for a in assignments or []:
+        if (a.get("course") or "").strip().lower() != code:
+            continue
+        if (a.get("status") or "").strip().lower() not in DONE:
+            continue
+        if (a.get("type") or "").strip().lower() not in ("reading", "assignment", "homework"):
+            continue
+        d = date(a.get("due_date"))
+        if d and d <= today + timedelta(days=21):
             bump(d)
     return best
 
@@ -220,7 +252,7 @@ def main():
               if int((c.get("lead_target_days") or "0").strip() or 0) > 0]:
         code = c.get("course") or c.get("code") or "?"
         target = int((c.get("lead_target_days") or "0").strip() or 0)
-        prepared = effective_prepared(c, curriculum, reviews)
+        prepared = effective_prepared(c, curriculum, reviews, assignments, today)
         if not prepared:
             print(f"  {code:<10} {color('prepared_through not set', 'dim')} "
                   f"(target: {target}d ahead)")
@@ -240,9 +272,12 @@ def main():
                if (r.get("course") or "").lower() == (code or "").lower()
                and date(r.get("date"))
                and prepared < date(r["date"]) <= gap_end
+               and not (r.get("topic") or "").strip().startswith("(")
                and (r.get("prepared", "") or "").strip().lower() not in ("y", "yes", "1", "true")]
         for r in gap[:4]:
-            print(f"       {color('→', 'dim')} {date(r['date']):%b %d}  {r.get('topic','')[:52]}")
+            est = " (est.)" if "estimat" in (r.get("notes") or "").lower() else ""
+            print(f"       {color('→', 'dim')} {date(r['date']):%b %d}  "
+                  f"{r.get('topic','')[:52]}{color(est, 'dim')}")
         if len(gap) > 4:
             print(f"       {color(f'… +{len(gap)-4} more topics', 'dim')}")
 
@@ -258,6 +293,25 @@ def main():
             key = (a.get("course") or "").lower()
             if key not in next_exam or d < next_exam[key][0]:
                 next_exam[key] = (d, a)
+    # Syllabus exams too: MATH's tests live only in curriculum.csv (Canvas carries
+    # no due dates for that course), so an assignments-only read left Test 1 out
+    # of EXAM READINESS nine days before it. Review rows are prep, not exams;
+    # AIQS has no exams at all (papers matched the regex).
+    for r in curriculum:
+        code = (r.get("course") or "").strip()
+        text = f"{r.get('deliverable') or ''} {r.get('topic') or ''}"
+        if not code or code.upper() == "AIQS100":
+            continue
+        if not re.search(r"\b(exam|test|midterm|final)\b", text, re.I) \
+                or re.search(r"\breview\b", text, re.I):
+            continue
+        d = date(r.get("date"))
+        if d and d >= today:
+            key = code.lower()
+            if key not in next_exam or d < next_exam[key][0]:
+                title = (r.get("deliverable") or "").strip() or (r.get("topic") or "").strip()
+                next_exam[key] = (d, {"course": code, "title": title, "type": "exam",
+                                      "due_date": d.isoformat(), "status": "open"})
 
     # ---------- spaced retrieval, anchored to the exam it serves ----------
     due_reviews = []
@@ -346,13 +400,24 @@ def main():
         print(f"  1. {a['course']} — {a['title']} (due {d:%b %d}, ~{hrs}h)")
     else:
         print("  1. Nothing due — use the clear runway to extend your lead")
-    behind = [c for c in courses
-              if effective_prepared(c, curriculum, reviews)
-              and (effective_prepared(c, curriculum, reviews) - today).days
-              < int((c.get("lead_target_days") or "0").strip() or 0)]
+    # Same filter as the PACE section (a 0-day target is not a prep course) and
+    # worst gap first — the old list was alphabetical and truncated, so it named
+    # the AIQS850F shell and hid MATH, the course with the 14-day target.
+    behind = []
+    for c in courses:
+        target = int((c.get("lead_target_days") or "0").strip() or 0)
+        if target <= 0:
+            continue
+        prepared = effective_prepared(c, curriculum, reviews, assignments, today)
+        if not prepared:
+            continue
+        gap = (prepared - today).days - target
+        if gap < 0:
+            behind.append((gap, c.get("course", "?")))
     if behind:
-        print(f"  2. Close the pace gap in: "
-              f"{', '.join(c.get('course','?') for c in behind[:3])}")
+        behind.sort()
+        print("  2. Close the pace gap in: "
+              + ", ".join(f"{code} ({gap:+d}d vs target)" for gap, code in behind[:5]))
     if due_reviews:
         print(f"  3. Retrieval practice: {due_reviews[0][1].get('topic','')}")
     print()

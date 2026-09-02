@@ -39,6 +39,7 @@ Wired by init() from app.py — no clients are created here (testable with fakes
 """
 
 import json
+import os
 import re
 import threading
 from datetime import datetime, timezone
@@ -364,6 +365,21 @@ _STOPWORDS = {"a", "an", "the", "to", "of", "on", "at", "in", "for", "with", "an
 # than one of these (school mail auto-forwarded to iCloud, CCs across accounts).
 _MAIL_SOURCES = {"gmail", "gmail_school", "icloud"}
 
+# Alex's own addresses. Mail he wrote himself (a note-to-self, a warmup send
+# echoed back by the studio auto-forward) is not an obligation someone placed on
+# him — extracting it turned his own "sunday setup" email into an overdue "life"
+# order that led the ranked day for a week. Extend via OWN_EMAIL_ADDRESSES.
+_OWN_ADDRESSES = {a.strip().lower() for a in (
+    "alex100hickey@gmail.com", "alexhickey@splitframestudio.com",
+    "ajh384@case.edu", "alexander.hickey@case.edu",
+    *os.environ.get("OWN_EMAIL_ADDRESSES", "").split(",")) if a.strip()}
+
+
+def _is_own_address(sender: str) -> bool:
+    m = re.search(r"[\w.+-]+@[\w-]+\.[\w.-]+", sender or "")
+    addr = (m.group(0) if m else (sender or "")).lower().strip()
+    return bool(addr) and addr in _OWN_ADDRESSES
+
 
 def _mail_fingerprint(sender: str, text: str, ts: str) -> str:
     """Identity of an email independent of WHICH account received it: sender address
@@ -396,6 +412,9 @@ def record_raw(source: str, source_ref: str, sender: str, ts: str, text: str,
         # plenty. Remember the ref so this copy is never re-extracted either.
         _remember_seen(source, [source_ref])
         return {"recorded": False, "reason": "duplicate (same email via another account)"}
+    if source in _MAIL_SOURCES and _is_own_address(sender):
+        _remember_seen(source, [source_ref])
+        return {"recorded": False, "reason": "own message"}
     if items is None:
         items = extract_items(source, sender, text, when=ts)
     if items:
@@ -472,7 +491,38 @@ def expire_stale(days: int = 2, limit: int = 200) -> int:
             ev["resolution"] = f"auto-expired {today.isoformat()}: all dates passed"
             _update_event(row["id"], ev)
             n += 1
+        elif _stale_undated_asks(ev, today):
+            ev["status"] = "expired"
+            ev["resolution"] = (f"auto-expired {today.isoformat()}: undated asks "
+                                f"untriaged for {STALE_ASK_DAYS}+ days")
+            _update_event(row["id"], ev)
+            n += 1
     return n
+
+
+# An undated `ask` that nobody accepted or dismissed for this long is not a live
+# obligation, it is inbox sediment — Supabase security notices from July were
+# still "new" in September, each one a candidate for an order slot.
+STALE_ASK_DAYS = 14
+
+
+def _stale_undated_asks(ev: dict, today) -> bool:
+    items = ev.get("items") or []
+    if not items:
+        return False
+    for it in items:
+        if not isinstance(it, dict):
+            return False
+        if (it.get("type") or "").strip().lower() not in ("ask", "info"):
+            return False
+        if str(it.get("due") or "").strip():
+            return False
+    raw = str(ev.get("ts") or ev.get("created_at") or "")[:10]
+    try:
+        when = datetime.strptime(raw, "%Y-%m-%d").date()
+    except ValueError:
+        return False
+    return (today - when).days >= STALE_ASK_DAYS
 
 
 def accept_intake(row_id: int) -> str:

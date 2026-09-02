@@ -425,13 +425,21 @@ class _ThreadLocalSupabase:
         return getattr(self._client, name)
 
 
+# Set by run_tests.py before it imports this module. In test mode nothing may
+# write to production: no tool-audit mirror, no note capture into the draft
+# store, no incident rows, no draft rehydration into vault_inbox/, no background
+# loops that call the model. The suite still exercises every code path against
+# its own fakes — this only unplugs the writers that reach the shared database.
+TEST_MODE = os.environ.get("JARVIS_TEST", "").strip().lower() in ("1", "true", "yes")
+
 supabase = _ThreadLocalSupabase(lambda: create_client(SUPABASE_URL, SUPABASE_KEY))
 composio = Composio(provider=AnthropicProvider(), api_key=COMPOSIO_API_KEY)
 
 # Restore any self-authored drafts a redeploy wiped. Existing files always win, so
 # this is a no-op on Alex's Mac where nothing was lost in the first place.
 draft_store.init(supabase)
-note_capture.on_capture = lambda name, md: draft_store.save(draft_store.KIND_NOTE, name, md)
+note_capture.on_capture = ((lambda name, md: None) if TEST_MODE else
+                           (lambda name, md: draft_store.save(draft_store.KIND_NOTE, name, md)))
 
 # Cross-node tool-audit mirror: every log_tool also writes a compact Supabase row
 # tagged with which node it ran on. This is what makes usage audits two-eyed — the
@@ -442,6 +450,8 @@ retention.init(supabase)
 
 
 def _mirror_tool_audit(tool: str, trigger: str, ok: bool, ms: int) -> None:
+    if TEST_MODE:
+        return   # a test run is not usage; it used to masquerade as Alex's own
     def _write():
         try:
             supabase.table("Agent Outputs").insert({
@@ -456,7 +466,71 @@ def _mirror_tool_audit(tool: str, trigger: str, ok: bool, ms: int) -> None:
 
 
 observability.on_tool_logged = _mirror_tool_audit
+
+
+# Cross-node usage rollup. The budget gate (monitor.spend_vs_budget) read a
+# per-node SQLite ledger that the server loses on every redeploy, so the $50/mo
+# cap was enforced against a number that kept resetting to zero. Model calls
+# accumulate here in memory and flush to ONE state row per node per month
+# (`usage:<YYYY-MM>:<node>`) every few minutes — cheap, and both nodes' rows
+# sum to the real figure.
+_USAGE_ACC = {"cost": 0.0, "calls": 0, "by_feature": {}}
+_USAGE_LOCK = threading.Lock()
+
+
+def _accumulate_usage(feature: str, trigger: str, model: str, cost: float) -> None:
+    if TEST_MODE:
+        return
+    with _USAGE_LOCK:
+        _USAGE_ACC["cost"] += float(cost or 0)
+        _USAGE_ACC["calls"] += 1
+        f = feature or "chat"
+        _USAGE_ACC["by_feature"][f] = _USAGE_ACC["by_feature"].get(f, 0.0) + float(cost or 0)
+
+
+def _flush_usage_rollup() -> None:
+    with _USAGE_LOCK:
+        if not _USAGE_ACC["calls"]:
+            return
+        pending = {"cost": _USAGE_ACC["cost"], "calls": _USAGE_ACC["calls"],
+                   "by_feature": dict(_USAGE_ACC["by_feature"])}
+        _USAGE_ACC["cost"], _USAGE_ACC["calls"], _USAGE_ACC["by_feature"] = 0.0, 0, {}
+    try:
+        import intake
+        import task_manager
+        month = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m")
+        key = f"usage:{month}:{getattr(task_manager, 'RUNTIME', 'local')}"
+        st = intake._load_state(key)
+        st["cost"] = round(float(st.get("cost") or 0) + pending["cost"], 6)
+        st["calls"] = int(st.get("calls") or 0) + pending["calls"]
+        bf = st.get("by_feature") if isinstance(st.get("by_feature"), dict) else {}
+        for f, c in pending["by_feature"].items():
+            bf[f] = round(float(bf.get(f) or 0) + c, 6)
+        st["by_feature"] = bf
+        st["updated_at"] = datetime.now(timezone.utc).isoformat()
+        intake._save_state(st)
+    except Exception as e:
+        # Put it back rather than lose it; the next flush retries.
+        with _USAGE_LOCK:
+            _USAGE_ACC["cost"] += pending["cost"]
+            _USAGE_ACC["calls"] += pending["calls"]
+            for f, c in pending["by_feature"].items():
+                _USAGE_ACC["by_feature"][f] = _USAGE_ACC["by_feature"].get(f, 0.0) + c
+        print(f"usage rollup: flush failed ({e})")
+
+
+def _usage_flush_loop() -> None:
+    while True:
+        time.sleep(300)
+        _flush_usage_rollup()
+
+
+observability.on_usage_logged = _accumulate_usage
+if not TEST_MODE:
+    threading.Thread(target=_usage_flush_loop, daemon=True, name="jarvis-usage-rollup").start()
 try:
+    if TEST_MODE:
+        raise RuntimeError("test mode: no draft rehydration")
     _restored = (draft_store.rehydrate(draft_store.KIND_AGENT, AGENTS_DIR)
                  + draft_store.rehydrate(draft_store.KIND_TOOL, PROPOSED_TOOLS_DIR)
                  + draft_store.rehydrate(draft_store.KIND_NOTE, note_capture.INBOX_DIR, ".md"))
@@ -4326,8 +4400,19 @@ def _claim_task(row_id: int, original_text: str, task: dict) -> bool:
     return bool(result.data)
 
 
+def _transient_error(e) -> bool:
+    """Network weather, not a code defect: the Mac sleeping, a DNS blip, a
+    Supabase read timeout. 27 of the last 40 system events were these."""
+    s = str(e).lower()
+    return any(w in s for w in ("timed out", "timeout", "nodename", "name resolution",
+                                "connection reset", "connection refused", "eof occurred",
+                                "remote disconnected", "temporarily unavailable",
+                                "network is unreachable"))
+
+
 def _task_worker() -> None:
     cycle = 0
+    fails = 0
     while True:
         try:
             q = (
@@ -4357,10 +4442,18 @@ def _task_worker() -> None:
                     print(f"Background task {row['id']} finished: {task['status']}")
         except Exception as e:
             print(f"Warning: task worker cycle failed: {e}")
-            try:
-                monitor.report_event("jarvis-task-worker", "error", "worker cycle failed", str(e))
-            except Exception:
-                pass
+            fails += 1
+            # One failed poll is weather; report once per streak, at three in a
+            # row, as a warning when the cause is the network rather than code.
+            if fails == 3:
+                try:
+                    monitor.report_event("jarvis-task-worker",
+                                         "warning" if _transient_error(e) else "error",
+                                         "worker cycle failed 3x in a row", str(e))
+                except Exception:
+                    pass
+        else:
+            fails = 0
         cycle += 1
         time.sleep(30)
 
@@ -5376,7 +5469,8 @@ def get_home_data() -> dict:
 # Start the background-task worker. Under gunicorn (one worker process) this is
 # one thread; under the local dev server the reloader may import the module twice,
 # but the compare-and-swap claim in _claim_task makes duplicate workers harmless.
-start_task_worker()
+if not TEST_MODE:
+    start_task_worker()
 
 # Task Manager subsystem (Prompter + Guardrail Council + managed worker) —
 # lives in task_manager.py, shares this app's client objects and tool loop.
@@ -5393,7 +5487,8 @@ task_manager.init(
     excluded_tools=BACKGROUND_EXCLUDED_TOOLS,
 )
 TOOLS.extend(task_manager.TOOL_SCHEMAS)
-task_manager.start_managed_worker(post_to_chat=save_chat_message)
+if not TEST_MODE:
+    task_manager.start_managed_worker(post_to_chat=save_chat_message)
 
 # Self-Expanding Pipeline (Scout → Council → Applicator) — lives in
 # expansion_pipeline.py, reuses this app's council (_council_call/_log_council),
@@ -5809,7 +5904,7 @@ def do_act(token):
     # ntfy's http buttons carry the op in the query string; the page's own form
     # posts it as a field. Both land here.
     op = (request.form.get("op") or request.args.get("op") or "").strip()
-    result = do_actions.perform(payload, op)
+    result = do_actions.perform(payload, op, form=request.form)
     _dashboard_cache["data"] = None   # a closed item must not linger in a panel
     # A button pressed inside ntfy expects a plain response and shows nothing;
     # a button pressed on the page expects to land back on the page.
@@ -5825,11 +5920,13 @@ import monitor  # noqa: E402 — needs claude/supabase/health above to exist fir
 
 monitor.init(supabase_client=supabase, claude_client=claude,
             post_to_chat_fn=save_chat_message, health_mod=health)
+monitor.TEST_MODE = TEST_MODE
 monitor.register_worker("jarvis-managed-worker",
                         lambda: task_manager.start_managed_worker(post_to_chat=save_chat_message))
 monitor.register_worker("jarvis-task-worker", start_task_worker)
 TOOLS.extend(monitor.TOOL_SCHEMAS)
-monitor.start_monitor(post_to_chat_fn=save_chat_message)
+if not TEST_MODE:
+    monitor.start_monitor(post_to_chat_fn=save_chat_message)
 
 # iMessage → intake watcher: HOME NODE ONLY. available() is False wherever
 # ~/Library/Messages/chat.db can't be read (i.e. the server container), so this
@@ -5840,8 +5937,8 @@ def _restart_imessage_watcher():
                                   is_agent_allowed_fn=monitor.is_agent_allowed)
 
 
-if imessage_intake.start_watcher(report_event_fn=monitor.report_event,
-                                 is_agent_allowed_fn=monitor.is_agent_allowed):
+if not TEST_MODE and imessage_intake.start_watcher(report_event_fn=monitor.report_event,
+                                                   is_agent_allowed_fn=monitor.is_agent_allowed):
     monitor.register_worker("jarvis-imessage-intake", _restart_imessage_watcher)
     print("iMessage intake watcher started (home node).")
 else:
@@ -5858,6 +5955,50 @@ if task_manager.RUNTIME == "server" or os.environ.get("PROACTIVE_LOCAL", "").low
     print("Proactive awareness worker started.")
 else:
     print("Proactive awareness worker manual-only on this node (server runs it always-on).")
+
+
+# Mac-node maintenance. (1) Restart when the checkout moves on: this node only
+# ever restarted by hand, so it ran 15 commits behind for days while being the
+# one node allowed to write the vault; launchd's KeepAlive brings it back on the
+# new code in seconds. (2) Tick vault checkboxes for money steps marked done from
+# the phone. (3) A "the Mac is awake" heartbeat so the monitor can tell a closed
+# laptop lid from a dead subsystem (see monitor.check_heartbeats).
+def _local_maintenance_loop():
+    import subprocess
+    here = os.path.dirname(os.path.abspath(__file__))
+    while True:
+        try:
+            if os.environ.get("JARVIS_AUTORESTART", "1").strip().lower() not in ("0", "false", "no"):
+                r = subprocess.run(["git", "rev-parse", "HEAD"], cwd=here,
+                                   capture_output=True, text=True, timeout=10)
+                head = r.stdout.strip()[:12] if r.returncode == 0 else ""
+                if head and RUNNING_COMMIT not in ("", "unknown") and head != RUNNING_COMMIT:
+                    busy = False
+                    try:
+                        busy = bool(getattr(task_manager, "running_count", lambda: 0)())
+                    except Exception:
+                        busy = False
+                    if not busy:
+                        print(f"Local node: checkout moved {RUNNING_COMMIT} → {head}; "
+                              "exiting so launchd restarts on the new code.", flush=True)
+                        os._exit(0)
+        except Exception as e:
+            print(f"local maintenance: restart check failed ({e})")
+        try:
+            import august_tracker
+            august_tracker.reconcile_vault()
+        except Exception:
+            pass
+        try:
+            monitor.beat("mac-awake", stale_after_s=26 * 3600, note="Mac node alive")
+        except Exception:
+            pass
+        time.sleep(120)
+
+
+if task_manager.RUNTIME == "local" and not TEST_MODE:
+    threading.Thread(target=_local_maintenance_loop, daemon=True,
+                     name="jarvis-local-maintenance").start()
 
 # ============================================================
 # BACKGROUND JOB QUEUE — long-running work (website builds, data synthesis) runs on a
@@ -5946,8 +6087,12 @@ def _daily_scout_loop():
                 st = intake._load_state("scout:daily")
                 last = st.get("last_run", "")
                 today = datetime.now(LOCAL_TZ).strftime("%Y-%m-%d")
-                if last != today and datetime.now(LOCAL_TZ).hour >= 6:  # after 6am local
-                    JOB_QUEUE.enqueue("scout", {"cap": 8}, label="daily expansion scout")
+                # Weekly (Mondays), not daily: 196 findings sat unreviewed after a
+                # month of daily runs, and the completion posts were most of the
+                # chat's traffic. Nothing consumes the stream faster than weekly.
+                if (last != today and datetime.now(LOCAL_TZ).hour >= 6
+                        and datetime.now(LOCAL_TZ).weekday() == 0):
+                    JOB_QUEUE.enqueue("scout", {"cap": 8}, label="weekly expansion scout")
                     st["last_run"] = today
                     intake._save_state(st)
         except Exception as e:
@@ -5959,7 +6104,8 @@ def _daily_scout_loop():
 
 
 if task_manager.RUNTIME == "server" or os.environ.get("SCOUT_DAILY_LOCAL", "").lower() in ("1", "true"):
-    threading.Thread(target=_daily_scout_loop, daemon=True, name="jarvis-daily-scout").start()
+    if not TEST_MODE:
+        threading.Thread(target=_daily_scout_loop, daemon=True, name="jarvis-daily-scout").start()
     print("Daily expansion-scout scheduler started.")
 
 
@@ -5989,7 +6135,8 @@ def _daily_retention_loop():
 
 
 if task_manager.RUNTIME == "server" or os.environ.get("RETENTION_LOCAL", "").lower() in ("1", "true"):
-    threading.Thread(target=_daily_retention_loop, daemon=True, name="jarvis-retention").start()
+    if not TEST_MODE:
+        threading.Thread(target=_daily_retention_loop, daemon=True, name="jarvis-retention").start()
     print("Daily retention sweep scheduler started.")
 
 
@@ -6098,7 +6245,8 @@ def _mail_intake_loop():
 
 
 def start_mail_worker() -> None:
-    threading.Thread(target=_mail_intake_loop, daemon=True, name="jarvis-mail-intake").start()
+    if not TEST_MODE:
+        threading.Thread(target=_mail_intake_loop, daemon=True, name="jarvis-mail-intake").start()
 
 
 # Runs on the always-on server; locally opt-in via MAIL_SCAN_LOCAL=1 so the Mac
@@ -6135,8 +6283,9 @@ def _d1_refresh_loop():
 
 
 def start_d1_worker() -> None:
-    threading.Thread(target=_d1_refresh_loop, daemon=True,
-                     name="jarvis-d1-refresh").start()
+    if not TEST_MODE:
+        threading.Thread(target=_d1_refresh_loop, daemon=True,
+                         name="jarvis-d1-refresh").start()
 
 
 if task_manager.RUNTIME == "server" or os.environ.get("D1_REFRESH_LOCAL", "").lower() in ("1", "true"):

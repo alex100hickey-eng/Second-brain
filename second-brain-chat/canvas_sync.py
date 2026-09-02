@@ -49,13 +49,17 @@ FETCH_TIMEOUT = 20
 # convention for feed items, so a missing bracket means a personal/manual event.
 _COURSE_RE = re.compile(r"^(?P<title>.*?)\s*\[(?P<course>[A-Z]{2,5}\s?\d{2,4}[A-Z]?)\]\s*$")
 
-_TYPE_HINTS = [  # first match wins, purely cosmetic for the csv's `type` column
+_TYPE_HINTS = [  # first match wins — the `type` column drives exam runways/readiness
     (re.compile(r"\bquiz\b", re.I), "quiz"),
-    (re.compile(r"\bexam|midterm|final\b", re.I), "exam"),
+    # Papers, reports and presentations BEFORE exams: the old `\bexam|midterm|final\b`
+    # (precedence bug — the \b only bound the outer words) typed "Final Paper
+    # Outline", "Final Project Report" and "Final Project Presentation" as exams,
+    # so CSDS reports earned exam-runway orders while MATH's real tests did not.
+    (re.compile(r"\b(paper|essay|notecards?|outline|bibliograph\w*|portfolio|folder)\b", re.I), "paper"),
+    (re.compile(r"\b(report|presentation|project|proposal|reflection)\b", re.I), "project"),
+    (re.compile(r"\b(exam|midterm|final)\b", re.I), "exam"),
     (re.compile(r"\breading\b", re.I), "reading"),
     (re.compile(r"\b(hw|homework|problem set|pset)\b", re.I), "homework"),
-    (re.compile(r"\bproject\b", re.I), "project"),
-    (re.compile(r"\bpaper|essay\b", re.I), "paper"),
 ]
 
 
@@ -156,6 +160,7 @@ def sync(vault_dir: str = DEFAULT_VAULT, ics_text: str = None, tz=None) -> dict:
     by_uid = {r["source"][len("canvas:"):]: r for r in rows
               if (r.get("source") or "").startswith("canvas:")}
     added = updated = unchanged = skipped = 0
+    moves = []   # (course, title, old_due, new_due) — a moved deadline is news
     # Which courses gained rows, so a course going live is visible instead of
     # arriving as an anonymous bump in the "added" count.
     per_course, had_rows = {}, {(r.get("course") or "").strip()
@@ -173,6 +178,7 @@ def sync(vault_dir: str = DEFAULT_VAULT, ics_text: str = None, tz=None) -> dict:
             added += 1
             per_course[ev["course"]] = per_course.get(ev["course"], 0) + 1
         elif old.get("due_date") != ev["due"]:
+            moves.append((ev["course"], ev["title"], old.get("due_date") or "", ev["due"]))
             old["due_date"] = ev["due"]   # professor moved it; feed wins for its rows
             updated += 1
         else:
@@ -190,7 +196,35 @@ def sync(vault_dir: str = DEFAULT_VAULT, ics_text: str = None, tz=None) -> dict:
     newly_live = sorted(c for c in per_course if c not in had_rows)
     return {"added": added, "updated": updated, "unchanged": unchanged,
             "skipped_no_course": skipped, "error": "",
-            "per_course": per_course, "newly_live": newly_live}
+            "per_course": per_course, "newly_live": newly_live,
+            "moves": [{"course": c, "title": t, "from": a, "to": b} for c, t, a, b in moves]}
+
+
+def _notify_moves(moves: list) -> str:
+    """One push when the feed moves deadlines. On 2026-09-02 five CSDS project
+    dates moved a week EARLIER and the only trace was `"updated": 5` in a log
+    nothing reads — while the Weekend Map, curriculum.csv and the memory notes
+    kept planning around the old dates."""
+    topic = os.environ.get("NTFY_TOPIC", "").strip()
+    if not topic or not moves:
+        return "no topic" if moves else ""
+    lines = [f"{m['course']}: {m['title'][:40]} — {m['from'][:10]} → {m['to'][:10]}"
+             for m in moves[:8]]
+    if len(moves) > 8:
+        lines.append(f"…and {len(moves) - 8} more")
+    body = "\n".join(lines) + ("\nassignments.csv is updated; the Weekend Map and "
+                               "curriculum notes still say the old dates — ask CLARVIS "
+                               "or Claude Code to re-cut them.")
+    req = urllib.request.Request(
+        f"{os.environ.get('NTFY_SERVER', 'https://ntfy.sh')}/{topic}",
+        data=body.encode("utf-8"),
+        headers={"Title": f"Canvas moved {len(moves)} deadline(s)", "Tags": "calendar",
+                 "Priority": "default"})
+    try:
+        urllib.request.urlopen(req, timeout=10)
+        return f"notified: {len(moves)} move(s)"
+    except Exception as e:            # a failed push must never fail the sync
+        return f"notify failed: {e}"
 
 
 def _notify_newly_live(courses: list) -> str:
@@ -224,6 +258,16 @@ if __name__ == "__main__":
         result = sync()
         if result.get("newly_live"):
             result["notify"] = _notify_newly_live(result["newly_live"])
+        if result.get("moves"):
+            result["notify_moves"] = _notify_moves(result["moves"])
+        # Apply the phone's one-tap decisions (prepared-through, done flags) to the
+        # CSVs — this script is the Mac's 30-minute tick, and the Mac is the only
+        # node allowed to write the vault.
+        try:
+            import school_state
+            result["applied_state"] = school_state.apply_to_vault()
+        except Exception as e:
+            result["applied_state"] = f"skipped: {e}"
         # Heartbeat: a sync that finds nothing looks identical to a sync that
         # never ran, and canvas_sync had no beat, no event, and a log nothing
         # reads — its last recorded line was a fetch timeout nobody saw. Both a
