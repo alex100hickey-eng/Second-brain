@@ -169,11 +169,15 @@ def test_own_mail_and_stale_asks():
     intake._insert_event({"source": "gmail", "source_ref": "sec-3", "sender": "NCAA",
                           "ts": old_ts, "preview": "…", "status": "new",
                           "items": [{"type": "commitment", "text": "Complete the NCAA statement", "due": None}]})
+    intake._insert_event({"source": "icloud", "source_ref": "sec-4", "sender": "Jon Schwartz <jxs1341@case.edu>",
+                          "ts": old_ts, "preview": "…", "status": "new",
+                          "items": [{"type": "ask", "text": "Fill out the Sports Information Form", "due": None}]})
     n = intake.expire_stale()
     st = {e["event"].get("source_ref"): e["event"].get("status", "new") for e in _events(sb)}
-    check("a 20-day-old undated ask expires", n >= 1 and st.get("sec-1") == "expired")
+    check("a 20-day-old undated ask from an automated sender expires", n >= 1 and st.get("sec-1") == "expired")
     check("a 3-day-old ask stays", st.get("sec-2") == "new")
     check("an undated commitment never auto-expires", st.get("sec-3") == "new")
+    check("a person's undated ask never auto-expires, however old", st.get("sec-4") == "new")
 
 
 def test_record_and_dedupe():

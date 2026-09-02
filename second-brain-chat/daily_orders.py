@@ -229,6 +229,21 @@ def _csv_owns(text: str, due) -> bool:
         return False
 
 
+def _item_weight(code: str, text: str) -> float:
+    """What this item is worth as a percent of the final grade, via the rubric
+    (0.0 when the label matches no component). The satisficing number: an APQ
+    is 0.4%, a MATH test is 15%. It belongs on the order, not in a tool Alex
+    would have to ask for."""
+    try:
+        import school_grades
+        return float(school_grades.item_weight(code, text) or 0.0)
+    except Exception:
+        return 0.0
+
+
+_DONE_STATUSES = {"submitted", "graded", "done", "complete", "completed"}
+
+
 def _own_sender(src: str) -> bool:
     try:
         return bool(intake._is_own_address(src))
@@ -269,6 +284,10 @@ def _school_orders(today: date) -> list:
                 continue
             shown.add(key)
             pts_s = f" · {pts:g} pts" if pts else ""
+            if not pts:
+                w = _item_weight(code, text)
+                if w >= 0.05:
+                    pts_s = f" · ≈{w:.1f}% of grade"
             if due and due < today:
                 out.append((_T_DEADLINE, _order("school", f"{code}: {text}",
                            f"was due {due.isoformat()}{pts_s}", "today")))
@@ -329,10 +348,24 @@ def _school_orders(today: date) -> list:
             days_out = (d - today).days if d else None
         if days_out is None or not (0 <= days_out <= 10):
             continue
-        out.append((_T_EXAM, _order(
-            "school",
-            f"{ex.get('course', '?')} {ex.get('name', 'exam')} — start/continue runway",
-            f"exam {ex.get('date')}, {days_out}d out", "daily")))
+        rw = ex.get("runway") or {}
+        course, name = ex.get("course", "?"), ex.get("name", "exam")
+        if rw.get("today"):
+            # The syllabus's own rows for this exam, split over the days left —
+            # a runway that names tonight's sections instead of "continue".
+            out.append((_T_EXAM, _order(
+                "school", f"{course} {name} runway: " + "; ".join(rw["today"])[:110],
+                f"exam {ex.get('date')}, {days_out}d out, {rw.get('left')} prep day(s) left",
+                "tonight")))
+        elif rw:
+            out.append((_T_EXAM, _order(
+                "school", f"{course} {name} runway: light day"
+                + (f" — next {rw['next']}" if rw.get("next") else ""),
+                f"exam {ex.get('date')}, {days_out}d out", "daily")))
+        else:
+            out.append((_T_EXAM, _order(
+                "school", f"{course} {name} — start/continue runway",
+                f"exam {ex.get('date')}, {days_out}d out", "daily")))
     return out
 
 
@@ -771,11 +804,67 @@ def _order(pillar: str, title: str, why: str, when: str) -> dict:
 # scorecard + streaks
 # ---------------------------------------------------------------------------
 
+def _derived_pillars(day: date, assignments=None) -> dict:
+    """Evidence the day produced on its own, so streaks fill without typing:
+    school = every assignment due that day is closed (False once the day has
+    passed with one still open), money = a send logged that day, ball = a 50/50
+    row. A day with no evidence stays absent — the rule that an unlogged day
+    breaks a streak is unchanged; this only adds days the data can vouch for."""
+    out = {}
+    iso = day.isoformat()
+    try:
+        if assignments is None:
+            import school_data
+            assignments = school_data._load("assignments.csv") or []
+        due = [r for r in assignments if (r.get("due_date") or "")[:10] == iso]
+        if due:
+            if all((r.get("status") or "").strip().lower() in _DONE_STATUSES for r in due):
+                out["school"] = True
+            elif day < _now().date():
+                out["school"] = False
+    except Exception:
+        pass
+    try:
+        if any(iso in (dates or []) for dates in _sends().values()):
+            out["money"] = True
+    except Exception:
+        pass
+    try:
+        if training_sync.logged_5050_on(datetime.combine(day, time(12, 0), tzinfo=LOCAL_TZ)):
+            out["ball"] = True
+    except Exception:
+        pass
+    return out
+
+
+def _with_derived(days: dict, span: int = 14) -> dict:
+    """Scorecard days merged with derived evidence for the last `span` days.
+    A logged answer always beats the derived one."""
+    merged = {k: dict(v) if isinstance(v, dict) else v for k, v in days.items()}
+    try:
+        import school_data
+        assignments = school_data._load("assignments.csv") or []
+    except Exception:
+        assignments = []
+    today = _now().date()
+    for i in range(span):
+        d = today - timedelta(days=i)
+        der = _derived_pillars(d, assignments)
+        if not der:
+            continue
+        entry = merged.get(d.isoformat()) or {"note": "", "pillars": {}}
+        pillars = dict(der)
+        pillars.update(entry.get("pillars") or {})
+        merged[d.isoformat()] = {**entry, "pillars": pillars}
+    return merged
+
+
 def _streaks(days: dict = None) -> dict:
     """Consecutive days each pillar was logged TRUE, counting back from the most
     recent logged day. A missing day breaks the streak — an unlogged day is an
-    unearned day, and streaks that survive gaps aren't streaks."""
-    days = _scorecard_days() if days is None else days
+    unearned day, and streaks that survive gaps aren't streaks. Evidence the
+    data holds (submissions, sends, 50/50 rows) fills days he never typed."""
+    days = _with_derived(_scorecard_days()) if days is None else days
     out = {p: 0 for p in PILLARS}
     dates = sorted((d for d in (_parse_iso_date(k) for k in days) if d), reverse=True)
     if not dates:

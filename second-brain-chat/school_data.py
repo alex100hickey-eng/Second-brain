@@ -173,8 +173,17 @@ def parse_meets(meets: str):
 # ---------------------------------------------------------------------------
 
 def _load(name):
-    path = os.path.join(_SCHOOL_DIR or "", name)
-    if not _SCHOOL_DIR or not os.path.exists(path):
+    if not _SCHOOL_DIR:
+        return []
+    path = os.path.join(_SCHOOL_DIR, name)
+    if not os.path.isfile(path) and not name.endswith(".csv"):
+        # courses_meeting_on / session_targets asked for "courses" (no
+        # extension) and silently got [] — so "review MATH120 (today's class →
+        # next class's quiz)" never once reached a session kickoff. isfile, not
+        # exists: on the Mac's case-insensitive disk "courses" also names the
+        # Courses/ FOLDER, which is exactly what shadowed the CSV in the vault.
+        path = path + ".csv"
+    if not os.path.isfile(path):
         return []
     try:
         with open(path, newline="", encoding="utf-8") as f:
@@ -496,6 +505,164 @@ def _quiz_pointer(for_date, class_days, exam_days):
     return None, False
 
 
+_AWAY_RE = re.compile(r"\b(away|travel(?:ing|ling)?|flight|flying|trip|out of town|off campus)\b",
+                      re.IGNORECASE)
+
+
+def away_dates(start, end) -> set:
+    """Dates in [start, end] the training-app calendar marks as away/travel."""
+    try:
+        import training_schedule
+        import training_sync
+        p = training_sync.parsed()
+        if not p:
+            return set()
+        out, d = set(), start
+        while d <= end:
+            if any(_AWAY_RE.search(t or "")
+                   for t in training_schedule.obligations_for_date(p, d)):
+                out.add(d)
+            d += timedelta(days=1)
+        return out
+    except Exception:
+        return set()
+
+
+def _runway_label(r) -> str:
+    topic = (r.get("topic") or "").strip()
+    readings = (r.get("readings") or "").strip()
+    short = re.split(r"\s+[—–-]\s+", topic, 1)[0].strip()
+    short = re.sub(r"\s*\(title TBC[^)]*\)", "", short).strip()
+    # A class row titled "QUIZ 1 on 1.1 + new material" is, for runway
+    # purposes, the section its list belongs to.
+    sec = re.search(r"§?(\d+\.\d+)", readings)
+    if sec and re.match(r"quiz", short, re.IGNORECASE):
+        short = f"§{sec.group(1)}"
+    m = re.search(r"suggested:\s*(.+)$", readings, re.IGNORECASE)
+    if m:
+        return f"{short} — {m.group(1).strip()}"[:80]
+    return short[:60]
+
+
+def exam_runway(code, curriculum, exam_date, today, away=None):
+    """Split everything an exam covers across the days left before it.
+
+    Scope = the course's dated curriculum rows since the previous exam
+    (meetings and review days; never paren rows or the exam itself), in
+    syllabus order. Days = today … the day before the exam, minus away days.
+    Item j lands on day (j * days) // items, so a short list spreads out and a
+    long one stacks. Structural only: every item is the syllabus's own row
+    with its own suggested list — nothing is invented. Returns
+    {"today": [...], "left": n, "next": "…" | None} or None."""
+    rows = sorted(_course_curriculum(curriculum, code), key=lambda t: t[0])
+    prev = [d for d, r in rows if _row_is_real_exam(r) and d < exam_date]
+    start = max(prev) if prev else None
+    scope = [r for d, r in rows
+             if (start is None or d > start) and d < exam_date
+             and not (r.get("topic") or "").strip().startswith("(")
+             and not _row_is_real_exam(r)]
+    if not scope or exam_date <= today:
+        return None
+    days, d = [], today
+    while d < exam_date:
+        if d not in (away or set()):
+            days.append(d)
+        d += timedelta(days=1)
+    if not days:
+        return None
+    k, n = len(scope), len(days)
+    per_day = [[] for _ in days]
+    for j, r in enumerate(scope):
+        per_day[(j * n) // k].append(_runway_label(r))
+    nxt = next(((days[i], per_day[i]) for i in range(1, n) if per_day[i]), None)
+    return {"today": per_day[0], "left": n,
+            "next": (f"{_fmt_day(nxt[0])}: {'; '.join(nxt[1])[:70]}" if nxt else None)}
+
+
+def _clock_minutes(t: str) -> int:
+    m = re.match(r"\s*(\d{1,2}):(\d{2})\s*(AM|PM)?", t or "", re.IGNORECASE)
+    if not m:
+        return 24 * 60
+    h, mi = int(m.group(1)), int(m.group(2))
+    ap = (m.group(3) or "").upper()
+    if ap == "PM" and h != 12:
+        h += 12
+    if ap == "AM" and h == 12:
+        h = 0
+    return h * 60 + mi
+
+
+def classes_line(d=None) -> str:
+    """'MATH 9:20 Sears 439 · AIQS 10:25 Crawford A13 · lab CSDS 6:30 Olin 304'
+    for the courses meeting on d — the morning brief's first line, so a moved
+    room (MATH → Sears 439) reaches his phone instead of living in a CSV note."""
+    d = d or datetime.now(LOCAL_TZ).date()
+    parts = []
+    for c in _load("courses.csv") or []:
+        code = (c.get("course") or "").strip()
+        for comp in meets_components(c.get("meets") or "") or []:
+            if not comp.get("weekdays") or d.weekday() not in comp["weekdays"]:
+                continue
+            start = re.sub(r"\s*(AM|PM)$", "", comp.get("start") or "", flags=re.IGNORECASE)
+            lab = "lab " if (comp.get("label") or "").lower().startswith("lab") else ""
+            loc = comp.get("loc") or ""
+            parts.append((_clock_minutes(comp.get("start") or ""),
+                          f"{lab}{code[:4]} {start} {loc}".strip()))
+    return " · ".join(p for _, p in sorted(parts))
+
+
+_WEEKEND_MAP = "Weekend Map — Fall 2026.md"
+
+
+def weekend_plan(d=None, limit: int = 5) -> list:
+    """Lines from the Weekend Map for the weekend containing d (Fri–Sun): the
+    clear-the-board line, the latest Cut block's bullets, then get-ahead
+    bullets. The Friday sweep writes the map into the vault; the grid is blank
+    on weekends so nothing else would carry the plan to his phone."""
+    d = d or datetime.now(LOCAL_TZ).date()
+    fri = d - timedelta(days=(d.weekday() - 4) % 7)
+    path = os.path.join(_SCHOOL_DIR or "", _WEEKEND_MAP)
+    try:
+        text = open(path, encoding="utf-8").read()
+    except OSError:
+        return []
+    hdr = f"Fri {fri.strftime('%b')} {fri.day} "
+    section = None
+    for chunk in re.split(r"(?m)^## ", text)[1:]:
+        if chunk.split("\n", 1)[0].find(hdr) >= 0:
+            section = chunk
+            break
+    if not section:
+        return []
+    out, cut, focus, mode = [], [], [], None
+    for raw in section.splitlines()[1:]:
+        line = raw.strip()
+        if not line:
+            continue
+        if line.startswith("**Cut "):
+            cut, mode = [], "cut"       # the latest cut block wins
+            tail = re.sub(r"^\*\*[^*]+\*\*\s*", "", line).strip()
+            if tail:
+                cut.append(tail)
+        elif line.startswith("**Get-ahead focus"):
+            mode = "focus"
+        elif line.startswith("**"):
+            # Any labelled paragraph ("Clear the board…", "On the plane…",
+            # "Mon Sep 7…") is a line worth carrying; Watch/Front-load are not.
+            mode = None
+            m = re.match(r"^\*\*([^*]+?):?\*\*\s*(.*)$", line)
+            if m and not re.match(r"(watch|front-load|re-cut)", m.group(1), re.IGNORECASE):
+                label = re.sub(r"\s*\(.*?\)\s*", " ", m.group(1)).strip()
+                label = "Clear" if label.lower().startswith("clear") else label
+                out.append(f"{label}: {m.group(2)}" if m.group(2) else label)
+        elif line.startswith("- ") and mode == "cut":
+            cut.append(line[2:])
+        elif line.startswith("- ") and mode == "focus":
+            focus.append(line[2:])
+    lines = out[:1] + cut[:3] + out[1:3] + focus[:2]
+    return [re.sub(r"\*\*", "", ln)[:160] for ln in lines][:limit]
+
+
 def csv_owns(text: str, due=None) -> bool:
     """Does assignments.csv already track this obligation?
 
@@ -668,6 +835,18 @@ def study_plan_data(for_date=None) -> dict:
         }
 
     exams = _collect_exams(courses, curriculum, assignments, for_date)
+    # A concrete runway for anything inside two weeks: the syllabus rows the
+    # exam covers, split across the days left (away days skipped).
+    if exams:
+        horizon = max(_parse_date(e["date"]) for e in exams) or for_date
+        away = away_dates(for_date, horizon)
+        for e in exams:
+            ed = _parse_date(e["date"])
+            if ed and 0 < (ed - for_date).days <= 14:
+                try:
+                    e["runway"] = exam_runway(e["course"], curriculum, ed, for_date, away)
+                except Exception:
+                    e["runway"] = None
 
     lines = [f"STUDY PLAN — {_fmt_day(for_date)} ({for_date.isoformat()})"]
     for code, pc in per_course.items():
@@ -696,6 +875,11 @@ def study_plan_data(for_date=None) -> dict:
         for e in exams:
             lines.append(f"  {e['course']} {e['name']} — "
                          f"{_fmt_day(_parse_date(e['date']))} ({e['days_out']}d out)")
+            rw = e.get("runway") or {}
+            if rw.get("today"):
+                lines.append(f"    runway today: {'; '.join(rw['today'])[:120]}")
+            elif rw.get("next"):
+                lines.append(f"    runway: light day — next {rw['next']}")
 
     return {"date": for_date.isoformat(), "lines": lines,
             "per_course": per_course, "exams": exams, "unknown": unknown,
@@ -1020,13 +1204,11 @@ def session_targets(block_start=None, for_date=None) -> list:
                 continue
             start = comp.get("start") or ""
             if block_start is not None and start:
-                try:
-                    h, m = (int(x) for x in start.split(":")[:2])
-                    if (h, m) >= (block_start.hour, block_start.minute):
-                        continue          # class hasn't happened yet
-                except ValueError:
-                    pass
-            met.append((start or "99:99", code))
+                # "9:20 AM" — the old int() split choked on the meridiem and
+                # fell through, so a 1 PM block was told to review a 4 PM class.
+                if _clock_minutes(start) >= block_start.hour * 60 + block_start.minute:
+                    continue          # class hasn't happened yet
+            met.append((_clock_minutes(start), code))
             break
     for _, code in sorted(set(met)):
         if code in seen:

@@ -65,6 +65,23 @@ Basketball items were parked on your call.
   on their own; grade_projection stops being empty once the sync has run.
 - Two task rows memory already knew were done (course pack in hand; Krause office-hour days)
   were closed so they stop counting in the backlog.
+
+**Third pass (same evening):**
+- The morning brief now opens with today's classes and rooms — and the training-app grid
+  finally says MATH is in **Sears 439** (it still walked you to Olin 305).
+- Session pings now lead with "review MATH120 (today's class → next class's quiz)" when a
+  class just met. They never did: the helper loaded "courses" and got the Courses/ folder.
+- Exam orders are concrete: "MATH120 Test 1 runway: §1.4 — #3,7,11…" — the syllabus rows
+  the test covers, split over the days left, skipping away days. Orders show what an item
+  is worth ("≈0.4% of grade").
+- Saturday 9 AM you get the weekend's plan from the Weekend Map (this Saturday: the
+  away-weekend cut). Streaks now count days the data can vouch for (all dues closed,
+  a logged send, a 50/50 row) without you typing.
+- The nightly Canvas pass also reads announcements and files anything actionable into
+  intake, so "bring your index card Tuesday" nudges like an email would.
+- A person's undated ask never auto-expires (only automated senders' do); the Nov 25 game,
+  the Thanksgiving flight and the moved CSDS report/presentation are on the app calendar.
+- `scripts/rot_check.py` runs inside the Friday sweep and flags anything decaying.
 - The Mac node restarts itself when the code moves; a sleeping Mac no longer raises
   "subsystem down" alarms; the $50 budget now sees both nodes.
 

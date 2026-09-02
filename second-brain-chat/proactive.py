@@ -929,6 +929,16 @@ def run_awareness_pass(force: bool = False) -> str:
                 and not picture["approvals"] and not picture["overdue"]):
             continue   # nothing actionable — the respectful brief is no brief
         head = []
+        if cfg_key == "morning_brief":
+            # Today's classes with rooms, first — a moved room (MATH → Sears
+            # 439) otherwise lives only in a CSV note.
+            try:
+                import school_data
+                cl = school_data.classes_line(now.date())
+                if cl:
+                    head.append(f"• Classes: {cl[:90]}")
+            except Exception:
+                pass
         # Waiting-on-you leads. It is the shortest path from "notification" to
         # "thing finished": the work is already done, the gate is his thumb.
         for it in picture["waiting"][:2]:
@@ -937,7 +947,7 @@ def run_awareness_pass(force: bool = False) -> str:
             head.append(f"• MISSED: {d['what'][:64]}")
         if picture["approvals"]:
             head.append(f"• DECIDE: {picture['approvals'][0]['display'][:60]}")
-        head += list(order_lines)[:max(0, 5 - len(head))]
+        head += list(order_lines)[:max(0, 6 - len(head))]
         for d in picture["due_soon"][:max(0, 3 - len(head))]:
             head.append(f"• {_when_words(d['hours'], d['due'], d.get('date_only', False))}: "
                         f"{d['what'][:60]}")
@@ -992,6 +1002,26 @@ def run_awareness_pass(force: bool = False) -> str:
                     "It sets next week's targets and keeps PACE honest.",
                     tags="books", force=force, recurring=True, click=page,
                     actions=[{"kind": "view", "label": "Open the 5 rows", "url": page}]))
+
+    # 3c. Saturday 9:00: the weekend's plan from the Weekend Map. The Friday
+    #     sweep cuts it into the vault; the grid is blank on weekends, so no
+    #     kickoff would ever carry it to his phone.
+    if now.weekday() == 5:
+        window_start = now.replace(hour=9, minute=0, second=0, microsecond=0)
+        if window_start <= now < window_start + timedelta(minutes=PASS_INTERVAL // 60 + 20):
+            lines = []
+            try:
+                import school_data
+                lines = school_data.weekend_plan(now.date())
+            except Exception as e:
+                print(f"proactive: weekend plan unavailable ({e})")
+            if lines:
+                plan_url = f"{_public_base()}/school"
+                actions.append(send_nudge(
+                    f"weekend:{now.strftime('%Y-%m-%d')}", "📅 This weekend's plan",
+                    "\n".join(f"• {ln}" for ln in lines[:5]),
+                    tags="calendar", force=force, recurring=True, click=plan_url,
+                    actions=[{"kind": "view", "label": "Today's plan", "url": plan_url}]))
 
     # Away days (calendar says travel/flight/trip): the grid still holds every
     # gym and study block, but he is not in them. Block-driven pings stay quiet.

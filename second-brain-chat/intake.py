@@ -500,15 +500,22 @@ def expire_stale(days: int = 2, limit: int = 200) -> int:
     return n
 
 
-# An undated `ask` that nobody accepted or dismissed for this long is not a live
-# obligation, it is inbox sediment — Supabase security notices from July were
-# still "new" in September, each one a candidate for an order slot.
+# An undated `ask` from an AUTOMATED sender that nobody accepted or dismissed
+# for this long is not a live obligation, it is inbox sediment — Supabase
+# security notices from July were still "new" in September, each one a
+# candidate for an order slot. A person's ask (the team's sports-information
+# form, Dad's "call me") never auto-expires: only Alex can say it's dead.
 STALE_ASK_DAYS = 14
+_AUTOMATED_SENDER_RE = re.compile(
+    r"(no-?reply|do-?not-?reply|notifications?@|newsletter|support@|info@|mailer|marketing|"
+    r"billing@|alerts?@|updates?@)", re.IGNORECASE)
 
 
 def _stale_undated_asks(ev: dict, today) -> bool:
     items = ev.get("items") or []
     if not items:
+        return False
+    if not _AUTOMATED_SENDER_RE.search(ev.get("sender") or ""):
         return False
     for it in items:
         if not isinstance(it, dict):

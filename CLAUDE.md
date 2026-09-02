@@ -124,3 +124,11 @@ the hardening pass, `NEEDS_ALEX.md` what's blocked on Alex.
   so the monitor treats a sleeping Mac as one fact, not four incidents.
 - **Budget** now sums both nodes' `usage:<YYYY-MM>:<node>` rollups; the local
   SQLite ledger is only a fallback.
+- **Weekend Map is a machine-read file.** `school_data.weekend_plan()` pushes the
+  current weekend's "**Clear the board…:**" line, the newest "**Cut …:**" bullets and
+  the "**Get-ahead focus:**" bullets to the phone Saturday 9 AM — keep those labels.
+- **Exam runways read `curriculum.csv` `readings`** ("… — suggested: #…"): put each
+  section's problem list there and the runway names it.
+- **`school_data._load` is case-insensitive-safe**: the vault's `Courses/` folder
+  shadowed `courses` for weeks (macOS matches case-insensitively). Use isfile.
+- **`scripts/rot_check.py`** is the decay detector; the Friday sweep runs it.
