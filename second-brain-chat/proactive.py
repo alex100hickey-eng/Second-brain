@@ -183,6 +183,19 @@ def _sent_state() -> dict:
     {"concerns": {base: {"n": int, "last": iso}}, "day": "YYYY-MM-DD", "day_sent": int}"""
     st = intake_mod._load_state(SENT_KEY)
     st.setdefault("concerns", {})
+    # Fold legacy per-prefix concerns (due:X / missed:X) into the merged item:X
+    # key, adding their counts, so an item that already used its touches before
+    # the merge does not start again from zero.
+    merged = {}
+    for k, v in list(st["concerns"].items()):
+        nk = _base_key(k)
+        if nk == k:
+            continue
+        cur = merged.get(nk) or st["concerns"].get(nk) or {}
+        merged[nk] = {"n": int(cur.get("n", 0)) + int((v or {}).get("n", 0)),
+                      "last": max(str(cur.get("last") or ""), str((v or {}).get("last") or ""))}
+        st["concerns"].pop(k, None)
+    st["concerns"].update(merged)
     today = _now().strftime("%Y-%m-%d")
     if st.get("day") != today:            # midnight rollover resets the daily cap
         st["day"], st["day_sent"] = today, 0

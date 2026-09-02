@@ -358,6 +358,16 @@ def test_one_concern_and_away_days():
           proactive._base_key("due:intake:5") == "item:intake:5"
           and proactive._base_key("missed:intake:5:2026-09-01") == "item:intake:5")
     check("other keys are untouched", proactive._base_key("outbox:12") == "outbox:12")
+    # Legacy ledger entries fold into the merged key with their counts summed.
+    sb0, _ = _reset()
+    st = intake._load_state(proactive.SENT_KEY)
+    st["concerns"] = {"due:intake:5": {"n": 2, "last": "2026-09-01T10:00:00"},
+                      "missed:intake:5": {"n": 1, "last": "2026-09-02T00:00:00"}}
+    intake._save_state(st)
+    folded = proactive._sent_state()["concerns"]
+    check("legacy due:/missed: counts fold into one item: concern",
+          folded.get("item:intake:5", {}).get("n") == 3 and "due:intake:5" not in folded
+          and folded["item:intake:5"]["last"].startswith("2026-09-02"))
     now = datetime.now()
 
     def blk(h, m, title, dur_min=30):
