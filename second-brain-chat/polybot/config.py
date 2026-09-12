@@ -130,7 +130,7 @@ class Config:
     dead_bucket_min_bid: float = 0.03      # weather_obs: only sell dead buckets bid >= this
     model_update_min_shift: float = 0.10   # weather_model_update: probability shift that counts
     bucket_sum_min_net_cents: float = 1.0  # bucket_sum: net after fees must exceed this
-    hourly_rule_discount_f: float = 1.0    # offshore hourly-max rule reads this many °F under the daily max
+    hourly_rule_discount_f: float = 0.0    # offshore hourly-max rule discount; backtest fit 2026-09-12 (208 city-days) says 0.0, not the 1.0 assumed
     leadlag_move_cents: float = 3.0
     leadlag_window_s: int = 120
     leadlag_follow_ratio: float = 0.5
