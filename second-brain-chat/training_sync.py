@@ -189,9 +189,28 @@ def _persist_locked() -> str:
                        "undo": _state["undo"]})
     if len(body) > MAX_ROW_BYTES:
         # Undo history is the disposable part — never let it push the live
-        # snapshot past what the row can hold.
-        body = json.dumps({"snapshot": _state["snapshot"],
-                           "saved_at": _state["saved_at"], "undo": []})
+        # snapshot past what the row can hold. But drop the OLDEST entries one
+        # at a time and keep whatever still fits, instead of wiping the lot.
+        #
+        # This module was written when a snapshot was ~18KB, so three full
+        # snapshots of history fit easily. The library has since grown to
+        # ~113KB: snapshot + 1 undo is ~226KB and fits, snapshot + 2 is ~339KB
+        # and did not — so the SECOND edit in a session silently threw away the
+        # undo for the first one while _mutate went on telling him "say 'undo
+        # that' to reverse it". Discovered 2026-09-12 after two library edits in
+        # a row left undo empty. Losing the oldest history is fine; losing all
+        # of it without saying so is not.
+        kept = list(_state["undo"])
+        while kept:
+            kept.pop(0)
+            body = json.dumps({"snapshot": _state["snapshot"],
+                               "saved_at": _state["saved_at"], "undo": kept})
+            if len(body) <= MAX_ROW_BYTES:
+                break
+        else:
+            body = json.dumps({"snapshot": _state["snapshot"],
+                               "saved_at": _state["saved_at"], "undo": []})
+        _state["undo"] = kept
     try:
         if _state["row_id"] is not None:
             _supabase.table("Agent Outputs").update({"output_text": body}).eq(
@@ -616,6 +635,9 @@ def _mutate(apply_fn, label: str) -> str:
         _state["snapshot"] = new_snap
         _state["saved_at"] = datetime.now(LOCAL_TZ).isoformat()
         perr = _persist_locked()
+        # _persist_locked drops undo history it cannot fit in the row. Never
+        # promise an undo that is not actually there.
+        undoable = bool(_state["undo"])
     if _on_update is not None:
         try:
             _on_update()
@@ -623,8 +645,12 @@ def _mutate(apply_fn, label: str) -> str:
             pass
     tail = ("\n\nNote: saved here and pushed to his devices, but the durable copy "
             "failed to write (" + perr[:120] + ") — it will retry.") if perr else ""
-    return (summary + "\n\nHis devices pick this up within about 8 seconds. Say "
-            "'undo that' to reverse it." + tail)
+    undo_line = ("Say 'undo that' to reverse it." if undoable else
+                 "NOTE: this library is too large to also store undo history, so "
+                 "'undo that' will NOT bring this back — say so plainly rather "
+                 "than offering it.")
+    return (summary + "\n\nHis devices pick this up within about 8 seconds. "
+            + undo_line + tail)
 
 
 def _apply_span_to(store: dict, col: int, s_slot: int, e_slot: int, label: str):

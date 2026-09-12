@@ -446,6 +446,40 @@ def test_library_undo_and_size_cap():
         training_sync.MAX_SNAPSHOT_BYTES = real_cap
 
 
+def test_undo_history_trims_instead_of_vanishing():
+    print("\n=== a row too small for undo keeps what fits and says what it lost ===")
+    _reset_with_library()
+    # Real 2026-09-12 failure: the module was written when a snapshot was ~18KB,
+    # so three of them fit in the row alongside the live copy. The library grew
+    # to ~113KB — snapshot + 1 undo fit, snapshot + 2 did not — so the SECOND
+    # edit of a session silently wiped the undo for the first while the reply
+    # still said "say 'undo that' to reverse it". Losing the oldest history is
+    # fine. Losing all of it, quietly, while promising otherwise, is not.
+    real_cap = training_sync.MAX_ROW_BYTES
+    try:
+        training_sync.MAX_ROW_BYTES = 10_000_000        # roomy: undo survives
+        out1 = training_sync.edit_library_page(
+            "Good Drills", "Good Handling",
+            "CRAWL SPIN FINISH\nNOW: L2", "CRAWL SPIN FINISH\nNOW: L3")
+        check("a write that keeps undo offers it", "undo that" in out1)
+        check("and one entry is stored", len(training_sync._state["undo"]) == 1)
+
+        # Now make the row too small to hold ANY history.
+        training_sync.MAX_ROW_BYTES = 1
+        out2 = training_sync.edit_library_page(
+            "Good Drills", "Good Handling",
+            "CRAWL SPIN FINISH\nNOW: L3", "CRAWL SPIN FINISH\nNOW: L4")
+        check("the edit itself still lands", "Edited" in out2)
+        check("undo history is gone", training_sync._state["undo"] == [])
+        check("and the reply does NOT offer undo", "Say 'undo that'" not in out2)
+        check("it says plainly that undo will not work",
+              "will NOT bring this back" in out2)
+        body = _library_page("1", "Good Handling")["body"]
+        check("the page holds the newest edit", "CRAWL SPIN FINISH\nNOW: L4" in body)
+    finally:
+        training_sync.MAX_ROW_BYTES = real_cap
+
+
 def test_library_tools_wired():
     print("\n=== library tools: schemas + dispatch wiring ===")
     check("both tools in TOOL_NAMES",
@@ -484,6 +518,7 @@ if __name__ == "__main__":
     test_edit_library_page()
     test_append_library_log_row()
     test_library_undo_and_size_cap()
+    test_undo_history_trims_instead_of_vanishing()
     test_library_tools_wired()
     total, passed = len(_results), sum(_results)
     print("\n" + "=" * 48)
