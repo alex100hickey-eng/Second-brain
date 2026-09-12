@@ -58,7 +58,9 @@ def post_order(ledger, today: str | None = None) -> list:
                      "platform": v["platform"], "campaign": (camp or {}).get("name", "?"), "ends": rules["ends"] or "9999-12-31",
                      "per_day": int(rules["per_day"] or 3), "score": float(clip.get("score") or 0),
                      "seconds": float(clip.get("duration_s") or 0), "line": v.get("text_hook") or ""})
-    rows.sort(key=lambda r: (r["ends"], -r["score"], r["variant"]))
+    # soonest deadline, then score; among equals the sub-45 s clip first (completion rate drives reach)
+    rows.sort(key=lambda r: (r["ends"], -r["score"], r["seconds"] > 45, r["variant"]))
+    rows = _interleave_lines(rows)
     seen = {}
     for r in rows:
         n = seen.get(r["campaign"], 0)
@@ -66,6 +68,18 @@ def post_order(ledger, today: str | None = None) -> list:
         seen[r["campaign"]] = n + 1
         r["days_left"] = None if r["ends"] == "9999-12-31" else (datetime.strptime(r["ends"], "%Y-%m-%d") - datetime.strptime(today, "%Y-%m-%d")).days
     return rows
+
+
+def _interleave_lines(rows: list) -> list:
+    """Keep the ranking but never let two consecutive posts of a campaign carry the same caption line:
+    a run of identical openers reads as spam to viewers and to TikTok."""
+    out, pending = [], list(rows)
+    while pending:
+        prev = next((r for r in reversed(out) if r["campaign"] == pending[0]["campaign"]), None)
+        pick = next((r for r in pending if r["campaign"] != pending[0]["campaign"] or prev is None or r["line"] != prev["line"]), pending[0])
+        pending.remove(pick)
+        out.append(pick)
+    return out
 
 
 def format_post_order(rows: list) -> str:

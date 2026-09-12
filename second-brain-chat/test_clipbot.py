@@ -447,3 +447,15 @@ def test_refresh_urlless_repolls_then_gives_up():
     r.refresh_urlless(max_tries=2)
     assert led.clip(b)["status"] == "skipped" and Client.calls == 3
     assert r.refresh_urlless(max_tries=2) == 0                  # nothing pending: no call
+
+
+def test_post_order_interleaves_caption_lines():
+    led = _ledger()
+    a = led.add_campaign("A", rules={"ends": "2026-09-24"})
+    sa = led.add_source(a, "/a.mp4", "a", 10, 10)
+    for i, (score, line) in enumerate([(99, "same"), (99, "same"), (99, "same"), (90, "other"), (80, "third")]):
+        cid = led.add_clip(sa, {"clip_id": f"c{i}", "title": line, "score": score, "duration_s": 30})
+        vid = led.add_variant(cid, "tiktok", f"/v/{i}.mp4", "", line)
+        led.update_variant(vid, staged_path=f"/r/{i}.mp4", status="staged")
+    lines = [r["line"] for r in posting.post_order(led, today="2026-09-12")]
+    assert lines == ["same", "other", "same", "third", "same"]
