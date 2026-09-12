@@ -244,6 +244,18 @@ def _item_weight(code: str, text: str) -> float:
 _DONE_STATUSES = {"submitted", "graded", "done", "complete", "completed"}
 
 
+def _ungraded(row) -> bool:
+    """school_data.ungraded: weight_pct 0 = Canvas not_graded prep (ACCT "Day N
+    Reading" WileyPlus links). Nothing to hand in, so an open one past its date
+    is not a missed deadline — it must neither take an order slot nor flip a
+    day's derived school pillar to False."""
+    try:
+        import school_data
+        return bool(school_data.ungraded(row))
+    except Exception:
+        return False
+
+
 def _own_sender(src: str) -> bool:
     try:
         return bool(intake._is_own_address(src))
@@ -270,6 +282,9 @@ def _school_orders(today: date) -> list:
 
     per_course = plan.get("per_course") or {}
     shown = set()   # one order per assignment, whichever list names it first
+    # per_course[code]["prep"] (not-graded reading for the next class) is
+    # deliberately never read here: it is a study-plan hint, not an order —
+    # it takes no slot and no nudge is ever composed from it.
     for code in sorted(per_course):
         info = per_course[code] or {}
         next_class = info.get("next_class")
@@ -679,6 +694,30 @@ _INTAKE_TRIVIAL = ("window or aisle", "seat", "let him know", "asked alex whethe
 _INTAKE_DECIDED_AGAINST = ("placement exam",)
 
 
+# A passed `deadline` is sometimes dead and sometimes not, and the difference is
+# in the text, not the date. "Vote before polls close at 11:59 PM on Wed Sep 9"
+# and "Exam on Friday, September 11" name the moment they are about: once it is
+# behind him, reading them again only reports something that already happened —
+# yet on 2026-09-12 those two led the ranked day, above the shooting card.
+# "Create a MyQuest account to see the results" carries a due date too, but the
+# date is the extractor's metadata, not a cutoff; that obligation still stands.
+# So: drop a passed deadline only when its own words fix it to a clock time or a
+# calendar day. Anything vaguer keeps its slot — and `ask` / `commitment` items
+# keep theirs unconditionally, because nobody stops owing the sports-information
+# form just because a Friday went by. intake.expire_stale retires these rows for
+# good, but it runs at 20:00 and wants the date >2 days past, so without this a
+# dead moment could lead the list for three straight mornings.
+_CLOCK_RE = re.compile(r"\b\d{1,2}(?::\d{2})?\s*[ap]\.?m\.?\b|\b\d{1,2}:\d{2}\b", re.I)
+_CALENDAR_RE = re.compile(
+    r"\b(?:mon|tues|wednes|thurs|fri|satur|sun)day\b|"
+    r"\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2}\b", re.I)
+
+
+def _names_a_moment(text: str) -> bool:
+    """True when the item's own words pin it to a time or a calendar day."""
+    return bool(_CLOCK_RE.search(text) or _CALENDAR_RE.search(text))
+
+
 def _intake_score(text: str, due, today: date) -> int:
     low = text.lower()
     if any(w in low for w in _INTAKE_DECIDED_AGAINST):
@@ -724,7 +763,8 @@ def _intake_orders(today: date) -> list:
         for it in (ev.get("items") or []):
             if not isinstance(it, dict):
                 continue
-            if (it.get("type") or "").strip().lower() not in _INTAKE_ACTIONABLE:
+            kind = (it.get("type") or "").strip().lower()
+            if kind not in _INTAKE_ACTIONABLE:
                 continue
             text = str(it.get("text") or "").strip()
             if not text:
@@ -734,6 +774,8 @@ def _intake_orders(today: date) -> list:
                 continue                       # assignments.csv surfaces (and closes) it
             if due and due > today + timedelta(days=14):
                 continue                       # not yet the day's business
+            if kind == "deadline" and due and due < today and _names_a_moment(text):
+                continue    # the moment is gone — see _names_a_moment.
             score = _intake_score(text, due, today)
             if score <= 0:
                 continue
@@ -836,7 +878,8 @@ def _derived_pillars(day: date, assignments=None) -> dict:
         if assignments is None:
             import school_data
             assignments = school_data._load("assignments.csv") or []
-        due = [r for r in assignments if (r.get("due_date") or "")[:10] == iso]
+        due = [r for r in assignments if (r.get("due_date") or "")[:10] == iso
+               and not _ungraded(r)]
         if due:
             if all((r.get("status") or "").strip().lower() in _DONE_STATUSES for r in due):
                 out["school"] = True

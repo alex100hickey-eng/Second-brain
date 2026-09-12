@@ -14,6 +14,7 @@ Supabase, with no model call. The Friday sweep runs it and repeats the ⚠ lines
 
 import csv
 import json
+import ssl
 import os
 import re
 import subprocess
@@ -78,7 +79,16 @@ def check_vault(today):
     (warn if stale else ok)(f"prepared_through untouched >9d: {', '.join(stale)}" if stale
                             else "prepared_through moved within 9 days for every course")
     asg = _rows("assignments.csv") or []
+
+    def _ungraded(r):
+        # weight_pct 0 = Canvas not_graded prep (ACCT "Day N Reading"): nothing
+        # to submit, so it stays "open" forever by design — not a sync failure.
+        try:
+            return float((r.get("weight_pct") or "").strip()) == 0
+        except ValueError:
+            return False
     past_open = [r for r in asg if (r.get("status") or "").lower() not in DONE
+                 and not _ungraded(r)
                  and (r.get("due_date") or "")[:10] < (today - timedelta(days=2)).isoformat()
                  and (r.get("due_date") or "")]
     (warn if past_open else ok)(
@@ -172,26 +182,48 @@ def check_supabase(now_utc):
 
 
 def check_nodes():
+    # The Mac's Python has no CA bundle wired into urllib's default context, so
+    # every HTTPS probe here raised CERTIFICATE_VERIFY_FAILED and this check
+    # reported the server dead on every single run while it was serving fine.
+    # A health check that cries wolf daily is worse than no health check.
+    try:
+        import certifi
+        _CTX = ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        _CTX = ssl.create_default_context()
+
     def ver(url):
         for _ in range(2):                      # one retry: the first hit can be slow
             try:
-                with urllib.request.urlopen(url, timeout=15) as r:
+                kw = {"context": _CTX} if url.startswith("https") else {}
+                with urllib.request.urlopen(url, timeout=15, **kw) as r:
                     return json.load(r).get("commit", "?")
             except Exception:
                 continue
         return None
     srv, loc = ver(SERVER + "/api/version"), ver("http://localhost:5001/api/version")
-    try:
-        head = subprocess.run(["git", "rev-parse", "--short=12", "HEAD"], cwd=ROOT,
-                              capture_output=True, text=True, timeout=10).stdout.strip()
-    except Exception:
-        head = "?"
+
+    def _rev(ref):
+        try:
+            return subprocess.run(["git", "rev-parse", "--short=12", ref], cwd=ROOT,
+                                  capture_output=True, text=True, timeout=10).stdout.strip()
+        except Exception:
+            return "?"
+    head = _rev("HEAD")
+    # Coolify deploys origin/main. Comparing the server to LOCAL head called a
+    # healthy deploy "pending" for as long as anything sat unpushed — and right
+    # now eleven commits do.
+    pushed = _rev("origin/main") or head
     if srv is None:
         warn("server /api/version unreachable")
-    elif srv != head:
-        warn(f"server runs {srv}, HEAD is {head} — deploy pending or failed")
+    elif srv != pushed:
+        warn(f"server runs {srv}, origin/main is {pushed} — deploy pending or failed")
     else:
-        ok(f"server on HEAD {head}")
+        ok(f"server on origin/main {pushed}")
+    if head and pushed and head != pushed:
+        n = subprocess.run(["git", "rev-list", "--count", "origin/main..HEAD"], cwd=ROOT,
+                           capture_output=True, text=True).stdout.strip() or "?"
+        warn(f"{n} local commit(s) never pushed — the server cannot be running them")
     if loc is None:
         warn("local node not answering on :5001")
     elif loc != head:

@@ -504,6 +504,45 @@ def test_intake_orders():
         intake_mod.list_intake = saved
 
 
+def test_passed_deadline_is_not_an_order():
+    print("\n=== a moment that already passed is not the day's first order ===")
+    _reset()
+    import intake as intake_mod
+
+    def ev(text, typ, due, sender="mailer@campusgroups.com"):
+        return {"event": {"sender": sender, "source": "gmail_school",
+                          "items": [{"type": typ, "text": text, "due": due}]}}
+
+    gone = (TODAY - timedelta(days=1)).isoformat()
+    rows = [
+        # Real shape from 2026-09-12: these three led the ranked day while the
+        # shooting card sat at #4. Every one of them was already unactionable.
+        ev("Vote for 2030 Class Officers before polls close at 11:59 PM", "deadline", gone),
+        ev("Exam on Friday, September 11, 2026", "deadline", gone),
+        # An obligation keeps its slot even with the date behind it — nobody
+        # stops owing the sports-information form because a Friday went by.
+        ev("Fill out the CWRU Men's Basketball Sports Information Form",
+           "ask", gone, sender="Jon Schwartz"),
+        ev("Alex wants to set the lift schedule around practice", "commitment", gone,
+           sender="Alex"),
+    ]
+    saved = intake_mod.list_intake
+    intake_mod.list_intake = lambda status="new", limit=25: rows
+    try:
+        titles = " | ".join(o["title"] for _t, o in daily_orders._intake_orders(TODAY))
+        check("a passed deadline takes no order slot", "Vote for 2030" not in titles)
+        check("neither does an exam that already happened", "Exam on Friday" not in titles)
+        check("a passed ask is still an obligation", "Sports Information" in titles)
+        check("a passed commitment is still an obligation", "lift schedule" in titles)
+        # A deadline still ahead of him must be untouched by the new guard.
+        soon = [ev("Roommate agreement due", "deadline", TODAY.isoformat())]
+        intake_mod.list_intake = lambda status="new", limit=25: soon
+        live = " | ".join(o["title"] for _t, o in daily_orders._intake_orders(TODAY))
+        check("a deadline due today still leads the day", "Roommate agreement" in live)
+    finally:
+        intake_mod.list_intake = saved
+
+
 def test_multiline_obligation_routing():
     print("\n=== a school word on one line must not swallow the rest of the day ===")
     _reset()
@@ -692,6 +731,37 @@ def test_string_study_plan_items():
           bool(today_titles) and "due Sat" not in today_titles[0])
 
 
+def test_ungraded_prep_takes_no_slot():
+    """Canvas not_graded prep (ACCT "Day N Reading", weight_pct 0). The study
+    plan carries it only as a `prep` hint; the ranked day must never turn it
+    into an order, and an open one past its date must not break the derived
+    school streak — it is not a missed deadline, there was nothing to submit."""
+    print("\n=== ungraded prep: no order, no slot, no broken school streak ===")
+    _, vault = _reset()
+    tmrw = TODAY + timedelta(days=1)
+    _fake_plan(per_course={"ACCT100": {
+        "due_soon": [], "before_next_class": [], "lapsed": [],
+        "prep": [f"Day 4 Reading: Ch. 2 LO 2 — for {tmrw.strftime('%a %b')} {tmrw.day}"],
+        "next_class": tmrw.isoformat(), "quiz_pointer": None}})
+    res = daily_orders.compose()
+    check("a prep-only plan composes no school order",
+          not any(o["pillar"] == "school" for o in res["orders"]))
+    check("the prep title appears nowhere in the day",
+          not any("Day 4 Reading" in o["title"] for o in res["orders"]))
+    yday = TODAY - timedelta(days=1)
+    rows = [{"course": "ACCT100", "title": "Day 3 APQ", "due_date": f"{yday.isoformat()}T10:00",
+             "weight_pct": "", "status": "submitted"},
+            {"course": "ACCT100", "title": "Day 3 Reading", "due_date": f"{yday.isoformat()}T10:00",
+             "weight_pct": "0", "status": "open"}]
+    check("an open ungraded reading does not flip the school pillar to False",
+          daily_orders._derived_pillars(yday, rows).get("school") is True)
+    check("a day with only ungraded prep has no school evidence either way",
+          "school" not in daily_orders._derived_pillars(yday, [rows[1]]))
+    rows[0]["status"] = "open"
+    check("a graded row still open past its day is still a miss",
+          daily_orders._derived_pillars(yday, rows).get("school") is False)
+
+
 # ============================================================
 if __name__ == "__main__":
     try:
@@ -704,6 +774,7 @@ if __name__ == "__main__":
         test_training_orders_and_sleep_guard()
         test_task_orders()
         test_intake_orders()
+        test_passed_deadline_is_not_an_order()
         test_multiline_obligation_routing()
         test_grid_derived_window_and_bedtime()
         test_headline_derives_shared_bullets()
@@ -711,6 +782,7 @@ if __name__ == "__main__":
         test_tool_surface()
         test_string_study_plan_items()
         test_age_decay_backlog_and_dedupe()
+        test_ungraded_prep_takes_no_slot()
     finally:
         for d in _tmpdirs:
             shutil.rmtree(d, ignore_errors=True)
