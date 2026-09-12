@@ -318,6 +318,57 @@ class Runner:
             n += 1
         return n
 
+    def refresh_urlless(self, max_tries: int = 6) -> int:
+        """OpusClip lists some clips before their export exists (no HD or preview url, 0 s). Re-poll the
+        project and the collection export a bounded number of times, then mark them skipped so they stop
+        sitting in 'new' forever."""
+        pending = [c for c in self.ledger.clips("new") if not c["hd_url"] and not c["preview_url"]]
+        if not pending or not self.client.available:
+            return 0
+        fixed = 0
+        by_src = {}
+        for c in pending:
+            by_src.setdefault(c["source_id"], []).append(c)
+        for sid, cs in by_src.items():
+            src = next((x for x in self.ledger.sources() if x["id"] == sid), None)
+            pid = (src or {}).get("opus_project_id")
+            if not pid:
+                continue
+            tries = int(self.ledger.get_kv(f"urlfix:{sid}", 0) or 0) + 1
+            self.ledger.set_kv(f"urlfix:{sid}", tries)
+            found = {}
+            try:
+                found = {c["clip_id"]: c for c in self.client.clips(pid)}
+            except Exception as exc:
+                self.log(f"  re-poll {pid}: {exc}")
+            missing = []
+            for c in cs:
+                fresh = found.get(c["opus_clip_id"]) or {}
+                if fresh.get("hd_url") or fresh.get("preview_url"):
+                    self.ledger.update_clip(c["id"], hd_url=fresh.get("hd_url") or "", preview_url=fresh.get("preview_url") or "",
+                                            duration_s=fresh.get("duration_s") or c["duration_s"],
+                                            score=fresh.get("score") or c["score"])
+                    fixed += 1
+                else:
+                    missing.append(c)
+            if missing and tries <= max_tries:
+                try:
+                    hd = self.client.hd_urls_via_collection(pid, [c["opus_clip_id"] for c in missing])
+                except Exception as exc:
+                    hd = {}
+                    self.log(f"  HD export retry via collection failed for {pid}: {exc}")
+                for c in missing:
+                    if hd.get(c["opus_clip_id"]):
+                        self.ledger.update_clip(c["id"], hd_url=hd[c["opus_clip_id"]])
+                        fixed += 1
+            elif missing:
+                for c in missing:
+                    self.ledger.update_clip(c["id"], status="skipped")
+                self.log(f"  gave up on {len(missing)} url-less clip(s) from source #{sid} after {tries} re-polls")
+        if fixed:
+            self.log(f"  re-poll filled urls for {fixed} clip(s)")
+        return fixed
+
     def download_new(self) -> int:
         n = 0
         for c in self.ledger.clips("new"):
@@ -414,6 +465,7 @@ class Runner:
 
     def process(self) -> dict:
         counts = {"submitted": self.submit_queued(), "clipped": self.poll_submitted(),
+                  "refreshed": self.refresh_urlless(),
                   "downloaded": self.download_new(), "variants": self.transform_downloaded(),
                   "staged": self.stage_made()}
         if counts["staged"]:

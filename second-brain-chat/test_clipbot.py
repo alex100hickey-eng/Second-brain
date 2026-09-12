@@ -417,3 +417,32 @@ def test_fit_text_shrinks_before_truncating():
     assert size < 62 and "…" not in wrapped and wrapped.count("\n") <= 2
     size, wrapped = transform.fit_text("word " * 40)
     assert size == 42 and wrapped.endswith("…") and wrapped.count("\n") == 3
+
+
+def test_refresh_urlless_repolls_then_gives_up():
+    led = _ledger()
+    cid = led.add_campaign("C")
+    sid = led.add_source(cid, "/x.mp4", "x", 10, 10)
+    led.update_source(sid, status="clipped", opus_project_id="P1")
+    a = led.add_clip(sid, {"clip_id": "a", "title": "a"})       # no urls yet
+    b = led.add_clip(sid, {"clip_id": "b", "title": "b"})
+
+    class Client:
+        available = True
+        calls = 0
+
+        def clips(self, pid):
+            Client.calls += 1
+            return [{"clip_id": "a", "hd_url": "https://hd/a.mp4", "preview_url": "", "duration_s": 41, "score": 77}]
+
+        def hd_urls_via_collection(self, pid, ids):
+            return {}
+
+    r = Runner(config.Config(), led, Client(), log=lambda *_: None)
+    assert r.refresh_urlless(max_tries=2) == 1
+    assert led.clip(a)["hd_url"] == "https://hd/a.mp4" and led.clip(a)["duration_s"] == 41 and led.clip(b)["status"] == "new"
+    r.refresh_urlless(max_tries=2)
+    assert led.clip(b)["status"] == "new"                       # try 2 still allowed
+    r.refresh_urlless(max_tries=2)
+    assert led.clip(b)["status"] == "skipped" and Client.calls == 3
+    assert r.refresh_urlless(max_tries=2) == 0                  # nothing pending: no call
