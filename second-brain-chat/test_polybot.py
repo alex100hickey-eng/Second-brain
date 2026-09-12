@@ -8,6 +8,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import pytest
+import requests
 
 from polybot import calibration, config, fees
 from polybot.feeds import offshore, weather
@@ -430,3 +431,40 @@ def test_config_roundtrip(tmp_path):
     back = config.load(p)
     assert back.mode("weather_lock") == "signal" and back.caps.sports_enabled and back.mode("leadlag") == "paper"
     assert back.favorites_band == (0.85, 0.95)
+
+
+def test_open_meteo_cache_and_429_cooldown(monkeypatch):
+    from polybot.feeds import weather
+    calls = []
+
+    class R:
+        def __init__(self, status):
+            self.status_code = status
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise requests.HTTPError(f"{self.status_code} Client Error")
+
+        def json(self):
+            return {"daily": {"time": ["2026-09-13"], "temperature_2m_max_gfs025_member01": [80.0],
+                              "temperature_2m_min_gfs025_member01": [60.0]}}
+
+    statuses = [200, 200, 429, 200]
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        calls.append((url, params["latitude"]))
+        return R(statuses[len(calls) - 1])
+
+    monkeypatch.setattr(weather._session, "get", fake_get)
+    monkeypatch.setattr(weather, "_CACHE", {})
+    monkeypatch.setattr(weather, "_OM_COOLDOWN_UNTIL", 0.0)
+    a = weather.ensemble_daily(40.7, -74.0, "America/New_York")        # network
+    b = weather.ensemble_daily(40.7, -74.0, "America/New_York")        # cache: the 'low' scan reuses the 'high' answer
+    assert a == b and len(calls) == 1 and a["2026-09-13"]["max"] == [80.0]
+    weather.ensemble_daily(41.9, -87.6, "America/Chicago")              # a different city: network
+    with pytest.raises(requests.HTTPError):
+        weather.ensemble_daily(34.0, -118.2, "America/Los_Angeles")     # 429 → cooldown starts
+    with pytest.raises(RuntimeError, match="cooling down"):
+        weather.ensemble_daily(29.7, -95.4, "America/Chicago")          # no network call during cooldown
+    assert len(calls) == 3
+    assert weather.ensemble_daily(41.9, -87.6, "America/Chicago") == a # cached city still answers in cooldown

@@ -21,10 +21,35 @@ TIMEOUT = 25
 _session = requests.Session()
 
 
+_CACHE: dict = {}            # (url, params) -> (fetched_at, json); Open-Meteo answers are reused for CACHE_TTL_S
+_OM_COOLDOWN_UNTIL = 0.0     # after a 429, skip Open-Meteo for OM_COOLDOWN_S instead of hammering 60 more times
+CACHE_TTL_S = 20 * 60
+OM_COOLDOWN_S = 10 * 60
+
+
 def _get(url, params=None, headers=None):
+    global _OM_COOLDOWN_UNTIL
+    import time as _time
+    is_om = "open-meteo.com" in url
+    key = (url, tuple(sorted((params or {}).items())))
+    now = _time.time()
+    if is_om:
+        hit = _CACHE.get(key)
+        if hit and now - hit[0] < CACHE_TTL_S:
+            return hit[1]
+        if now < _OM_COOLDOWN_UNTIL:
+            raise RuntimeError(f"Open-Meteo cooling down after a 429 ({int(_OM_COOLDOWN_UNTIL - now)}s left)")
     r = _session.get(url, params=params, headers=headers or {}, timeout=TIMEOUT)
+    if is_om and r.status_code == 429:
+        _OM_COOLDOWN_UNTIL = now + OM_COOLDOWN_S
     r.raise_for_status()
-    return r.json()
+    data = r.json()
+    if is_om:
+        _CACHE[key] = (now, data)
+        if len(_CACHE) > 500:
+            for k in sorted(_CACHE, key=lambda k: _CACHE[k][0])[:100]:
+                _CACHE.pop(k, None)
+    return data
 
 
 # ---- model ensemble --------------------------------------------------------------------------
