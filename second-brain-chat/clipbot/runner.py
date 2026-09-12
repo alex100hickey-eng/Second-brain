@@ -178,6 +178,8 @@ class Runner:
             self.ledger.update_source(sid, status="queued", error="OPUSCLIP_API_KEY not set")
             self.log(f"queued source #{sid} ({credits} credits) — waiting for OPUSCLIP_API_KEY")
             return sid
+        # Claim it before the (minutes-long) upload, or the loop's queue sweep submits it a second time.
+        self.ledger.update_source(sid, status="submitting", error="")
         return self._submit(sid, camp, locator, path, title, credits)
 
     def _ingest_direct(self, camp, path: str, title: str, minutes: float) -> int:
@@ -216,10 +218,15 @@ class Runner:
 
     def submit_queued(self) -> int:
         n = 0
+        for s in self.ledger.sources("submitting"):          # an upload that died mid-way (crash, reboot)
+            if time.time() - float(s.get("updated") or 0) > 3 * 3600:
+                self.ledger.update_source(s["id"], status="queued", error="upload did not finish; retrying")
+                self.log(f"  source #{s['id']} stuck in submitting for 3h+ — back to queued")
         for s in self.ledger.sources("queued"):
             if not self.client.available:
                 break
             camp = self.ledger.campaign(s["campaign_id"])
+            self.ledger.update_source(s["id"], status="submitting", error="")
             try:
                 usage = self.client.usage()
             except Exception:

@@ -271,7 +271,7 @@ class Ledger:
         expected = sum((p["qualified_views"] or p["views"] or 0) / 1000.0 * (p["rate_per_1k"] or 0) for p in posts)
         return {
             "campaigns": n("SELECT COUNT(*) FROM campaigns WHERE status='active'"),
-            "sources": {s: n("SELECT COUNT(*) FROM sources WHERE status=?", (s,)) for s in ("queued", "submitted", "clipped", "failed")},
+            "sources": {s: n("SELECT COUNT(*) FROM sources WHERE status=?", (s,)) for s in ("queued", "submitting", "submitted", "clipped", "failed")},
             "clips": {s: n("SELECT COUNT(*) FROM clips WHERE status=?", (s,)) for s in ("new", "downloaded", "transformed", "skipped", "failed")},
             "variants": {s: n("SELECT COUNT(*) FROM variants WHERE status=?", (s,)) for s in ("made", "staged", "scheduled", "posted", "skipped")},
             "posts": len(posts), "views": views, "qualified_views": qviews,

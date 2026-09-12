@@ -330,3 +330,33 @@ def test_rules_drive_durations_and_direct_ingest(tmp_path, monkeypatch):
     os.utime(f, (time.time() - 600, time.time() - 600))
     assert r2.ingest_inbox() == 1 and len(fc.created) == 1
     assert led.campaign(did)["id"] == led.sources("clipped")[-1]["campaign_id"]
+
+
+def test_ingest_claims_source_before_upload(tmp_path, monkeypatch):
+    """The loop's queue sweep must not resubmit a source whose upload is still running (that cost 10 credits once)."""
+    monkeypatch.setattr(config, "HOME", str(tmp_path / "home"))
+    led = _ledger()
+    seen = {}
+
+    class SlowClient:
+        available = True
+
+        def usage(self):
+            return None
+
+        def upload_local(self, path, log):
+            seen["status_during_upload"] = led.sources("submitting")[0]["status"]
+            seen["queued_during_upload"] = led.sources("queued")
+            return "upl"
+
+        def create_project(self, video_url, **kw):
+            return {"id": "P9"}
+
+    r = Runner(config.Config(), led, SlowClient(), log=lambda *_: None)
+    cid = r.add_campaign("C")
+    f = tmp_path / "ep.mp4"
+    f.write_bytes(b"00")
+    monkeypatch.setattr(transform, "probe_duration", lambda p: 600.0)
+    sid = r.ingest(cid, path=str(f))
+    assert seen == {"status_during_upload": "submitting", "queued_during_upload": []}
+    assert led.sources("submitted")[0]["id"] == sid and r.submit_queued() == 0
