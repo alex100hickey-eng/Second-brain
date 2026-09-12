@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import sys
 import time
+import json
 import traceback
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -26,7 +27,7 @@ from .execution import Executor
 from .feeds import offshore
 from .feeds.usvenue import USVenue
 from .ledger import Ledger
-from .paper import PaperEngine
+from .paper import PaperEngine, snapshot_history
 from .risk import RiskManager
 from .strategies.bucket_sum import BucketSum
 from .strategies.hold_favorites import HoldFavorites
@@ -56,7 +57,7 @@ class Runner:
         self.log = log
         self.us = USVenue()
         self.risk = RiskManager(self.cfg, self.ledger)
-        self.paper = PaperEngine(self.ledger)
+        self.paper = PaperEngine(self.ledger, history_fn=self._paper_history, resolution_fn=self._paper_resolution)
         self.executor = Executor(self.ledger, self.us, self.cfg, self.log)
         if self.us.available:
             bal = self.us.balance_usd()
@@ -74,6 +75,17 @@ class Runner:
             "leadlag": LeadLag(self.cfg, self.us, SeriesStore(self.ledger)),
             "maker_rewards": MakerRewards(self.cfg, self.us),
         }
+
+    # ---- paper price paths per venue ------------------------------------------------------
+    def _paper_history(self, sig):
+        if sig["venue"] == "us":
+            return snapshot_history(self.ledger, "us", sig["market"], sig["ts"] - 60)
+        return offshore.prices_history(sig["market"], since_ts=sig["ts"] - 60, fidelity=1)
+
+    def _paper_resolution(self, sig):
+        if sig["venue"] == "us":
+            return self.us.resolution(sig["market"])
+        return offshore.market_resolution(json.loads(sig["meta"] or "{}").get("market_id", ""))
 
     # ---- one signal through the gate ------------------------------------------------------
     def handle(self, sig) -> str:
@@ -110,9 +122,17 @@ class Runner:
         return mode
 
     # ---- scans -----------------------------------------------------------------------------
-    def scan_weather(self, cities=None, modules=None, date: datetime | None = None, kinds=None) -> int:
+    def scan_weather(self, cities=None, modules=None, date: datetime | None = None, kinds=None,
+                     venue: str = "offshore") -> int:
+        """venue='offshore': the paper proxy over every city. venue='us': the five Polymarket US cities on
+        the venue's own books — the only signals that can ever be sent live."""
         n = 0
-        cities = cities or (config.all_city_slugs() if self.cfg.all_cities else self.cfg.cities)
+        if venue == "us":
+            if not self.us.available:
+                return 0
+            cities = cities or [c for c in self.cfg.cities if (config.city_meta(c) or {}).get("cli_location")]
+        else:
+            cities = cities or (config.all_city_slugs() if self.cfg.all_cities else self.cfg.cities)
         kinds = kinds or tuple(self.cfg.kinds)
         wanted = [m for m in self.weather_modules if (modules is None or m in modules) and self.cfg.mode(m) != "off"]
         if not wanted:
@@ -123,21 +143,28 @@ class Runner:
             for kind in kinds:
                 try:
                     now_local = datetime.now(ZoneInfo(config.city_meta(city)["tz"]))
-                    ctx = build_ctx(city, date or now_local, kind, self.cfg, venue="offshore",
-                                    fetch={"members": [], "obs": [], "hourly": []} if light else None)
+                    fetch = {"members": [], "obs": [], "hourly": []} if light else {}
+                    if venue == "us":
+                        event = self.us.find_weather_event(city, date or now_local, kind)
+                        if event is None:
+                            if kind == "high":
+                                self.log(f"  us {city} {kind}: no market today")
+                            continue
+                        fetch["event"] = event
+                    ctx = build_ctx(city, date or now_local, kind, self.cfg, venue=venue, fetch=fetch or None)
                 except Exception as exc:
-                    self.log(f"  {city} {kind}: context error: {exc}")
+                    self.log(f"  {venue} {city} {kind}: context error: {exc}")
                     continue
                 if ctx is None:
                     if kind == "high":
-                        self.log(f"  {city} {kind}: no market today")
+                        self.log(f"  {venue} {city} {kind}: no market today")
                     continue
                 if not light:
                     probs = " ".join(f"{b.title.split('°')[0]}={p:.0%}" for b, p in zip(ctx.event.buckets, ctx.probs) if p >= 0.03)
-                    self.log(f"  {city} {ctx.date} {kind} [{ctx.station}/{ctx.rule}] running={ctx.running} n_obs={ctx.n_obs} "
+                    self.log(f"  {venue} {city} {ctx.date} {kind} [{ctx.station}/{ctx.rule}] running={ctx.running} n_obs={ctx.n_obs} "
                              f"remaining={ctx.remaining_extreme} | model {probs}")
                 for b in ctx.event.buckets:
-                    self.ledger.add_snapshot("offshore", b.yes_token, b.best_bid, b.best_ask, b.last)
+                    self.ledger.add_snapshot(venue, b.yes_token, b.best_bid, b.best_ask, b.last)
                 for name in wanted:
                     try:
                         for sig in self.weather_modules[name].scan(ctx):
@@ -171,6 +198,10 @@ class Runner:
 
     def settle(self) -> dict:
         counts = self.paper.settle_open("offshore", self.log)
+        if self.us.available:
+            us_counts = self.paper.settle_open("us", self.log)
+            for k, v in us_counts.items():
+                counts[k] = counts.get(k, 0) + v
         self.log(f"settle: {counts}")
         return counts
 
@@ -233,8 +264,12 @@ class Runner:
                 try:
                     if now.minute == 55:
                         self.scan_weather(modules=["weather_hold", "weather_obs", "weather_lock", "weather_model_update"])
+                        if self.us.available:
+                            self.scan_weather(modules=["weather_hold", "weather_obs", "weather_lock", "weather_model_update"], venue="us")
                     if now.minute % 5 == 0:
                         self.scan_weather(modules=["bucket_sum"])
+                        if self.us.available:
+                            self.scan_weather(modules=["bucket_sum"], venue="us")
                         self.scan_other(modules=["leadlag", "maker_rewards"])
                         if self.us.available:
                             self.executor.sync()
@@ -262,6 +297,7 @@ def main(argv=None):
     ap.add_argument("cmd", choices=["scan", "settle", "report", "calibrate", "status", "loop", "backtest", "pairs"])
     ap.add_argument("--city", action="append")
     ap.add_argument("--modules", nargs="*")
+    ap.add_argument("--venue", default="offshore", choices=["offshore", "us"], help="scan: which books to read")
     ap.add_argument("--days", type=int, default=1)
     ap.add_argument("--events", type=int, default=300)
     ap.add_argument("--kinds", nargs="*", default=["high"])
@@ -272,7 +308,7 @@ def main(argv=None):
     elif a.cmd == "pairs":
         print(r.build_pairs())
     elif a.cmd == "scan":
-        n = r.scan(a.city, a.modules)
+        n = r.scan(a.city, a.modules) if a.venue == "offshore" else r.scan_weather(a.city, a.modules, venue="us")
         print(f"{n} signal(s) recorded")
     elif a.cmd == "settle":
         r.settle()

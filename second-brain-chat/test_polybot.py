@@ -468,3 +468,132 @@ def test_open_meteo_cache_and_429_cooldown(monkeypatch):
         weather.ensemble_daily(29.7, -95.4, "America/Chicago")          # no network call during cooldown
     assert len(calls) == 3
     assert weather.ensemble_daily(41.9, -87.6, "America/Chicago") == a # cached city still answers in cooldown
+
+
+# ---- Polymarket US venue: shapes captured live 2026-09-12 ----------------------------------
+US_MARKET = {"id": "806288", "question": "Highest temperature in NYC on September 13?",
+             "slug": "tc-temp-nychigh-2026-09-13-gte78lt79f", "endDate": "2026-09-14T05:00:00Z",
+             "description": "Will the highest temperature recorded at Central Park (KNYC) in New York City for",
+             "status": "MARKET_STATUS_OPEN", "closed": False, "title": "78 to 79", "outcomePrices": '["0.3500","0.3600"]',
+             "bestBidQuote": {"value": "0.3500", "currency": "USD"}, "bestAskQuote": {"value": "0.3600", "currency": "USD"},
+             "feeCoefficient": 0.06}
+
+
+def _us_event():
+    def mk(slug_suffix, title, yes, bid, ask, closed=False):
+        m = dict(US_MARKET)
+        m.update({"slug": f"tc-temp-nychigh-2026-09-13-{slug_suffix}", "title": title, "outcomePrices": f'["{yes}","{1 - yes:.2f}"]',
+                  "bestBidQuote": {"value": str(bid)}, "bestAskQuote": {"value": str(ask)}, "closed": closed})
+        return m
+    return {"slug": "temp-nychigh-2026-09-13", "title": "Highest temperature in NYC on September 13?",
+            "endDate": "2026-09-13T23:59:00Z",
+            "markets": [mk("gte80lt81f", "80 to 81", 0.30, 0.29, 0.31), mk("lt78f", "77 or below", 0.05, 0.04, 0.06),
+                        mk("gte78lt79f", "78 to 79", 0.35, 0.35, 0.36), mk("gte86f", "86 or higher", 0.02, 0.01, 0.03)]}
+
+
+def test_us_bucket_titles_and_event():
+    from polybot.feeds import usvenue
+    assert usvenue.parse_us_bucket_title("77 or below") == (-math.inf, 77)
+    assert usvenue.parse_us_bucket_title("78 to 79") == (78, 79)
+    assert usvenue.parse_us_bucket_title("86 or higher") == (86, math.inf)
+    assert usvenue.us_event_slug("nyc", datetime(2026, 9, 13), "high") == "temp-nychigh-2026-09-13"
+    assert usvenue.us_event_slug("san-francisco", datetime(2026, 9, 13), "low") == "temp-sfolow-2026-09-13"
+    ev = usvenue.weather_event_from_us(_us_event(), "nyc", "high")
+    assert ev.date == "2026-09-13" and ev.station == "KNYC" and ev.rule == "cli" and ev.unit == "F" and not ev.neg_risk
+    assert [b.title for b in ev.buckets] == ["77 or below", "78 to 79", "80 to 81", "86 or higher"]
+    b = ev.buckets[1]
+    assert b.yes_token == b.market_id == "tc-temp-nychigh-2026-09-13-gte78lt79f"      # Signal.market carries the US slug
+    assert (b.best_bid, b.best_ask, b.last) == (0.35, 0.36, 0.35) and b.contains(78) and b.contains(79) and not b.contains(80)
+    assert ev.buckets[0].contains(-10) and ev.buckets[-1].contains(120)
+
+
+def test_us_venue_parses_live_shapes(monkeypatch):
+    from polybot.feeds import usvenue
+
+    class NotFoundError(Exception):
+        pass
+
+    class Markets:
+        def bbo(self, slug):
+            return {"marketData": {"marketSlug": slug, "bestBid": {"value": "0.2700", "currency": "USD"},
+                                   "bestAsk": {"value": "0.2800", "currency": "USD"}, "lastTradePx": {"value": "0.2800"},
+                                   "settlementPx": {"value": "0.0000"}, "state": "MARKET_STATE_OPEN"}}
+
+        def book(self, slug):
+            return {"marketData": {"bids": [{"px": {"value": "0.2500"}, "qty": "77.29"}, {"px": {"value": "0.2700"}, "qty": "1.0"}],
+                                   "asks": [{"px": {"value": "0.3000"}, "qty": "2"}, {"px": {"value": "0.2800"}, "qty": "5"}],
+                                   "lastTradePx": {"value": "0.28"}}}
+
+        def settlement(self, slug):
+            if slug.endswith("gte78lt79f"):
+                return {"marketData": {"settlementPx": {"value": "1.0000"}}}
+            raise NotFoundError(f"Settlement not found for market {slug}")
+
+    class Account:
+        def balances(self):
+            return {"balances": [{"currentBalance": 210.01294, "buyingPower": 210.01294, "displayedCash": 60.01294,
+                                  "bonusReservation": 150, "openOrders": 0, "availableToWithdraw": 60.01294}]}
+
+    class Portfolio:
+        def positions(self):
+            return {"positions": {}, "nextCursor": "", "eof": True, "availablePositions": []}
+
+    class Orders:
+        def list(self, *a, **k):
+            return {"orders": [{"id": "o1", "marketSlug": "x"}]}
+
+    class Events:
+        def retrieve_by_slug(self, slug):
+            if slug == "temp-nychigh-2026-09-13":
+                return _us_event()
+            raise NotFoundError(f'event with slug "{slug}" not found')
+
+    class Search:
+        def query(self, q):
+            return []
+
+    class Client:
+        markets, account, portfolio, orders, events, search = Markets(), Account(), Portfolio(), Orders(), Events(), Search()
+
+    v = usvenue.USVenue()
+    v.available, v._client = True, Client()
+    assert v.bbo("s") == (0.27, 0.28)
+    assert v.book("s") == {"bids": [(0.27, 1.0), (0.25, 77.29)], "asks": [(0.28, 5.0), (0.30, 2.0)], "last": 0.28, "tick": 0.01}
+    assert v.balance_usd() == 210.01294 and v.balance_detail()["bonusReservation"] == 150
+    assert v.positions() == [] and v.open_orders() == [{"id": "o1", "marketSlug": "x"}]
+    assert v.resolution("tc-temp-nychigh-2026-09-13-gte78lt79f") == 1 and v.resolution("tc-x-lt78f") is None
+    ev = v.find_weather_event("nyc", datetime(2026, 9, 13), "high")
+    assert ev is not None and len(ev.buckets) == 4 and ev.slug == "temp-nychigh-2026-09-13"
+    assert v.find_weather_event("nyc", datetime(2026, 9, 14), "high") is None
+
+
+def test_us_scan_records_us_signals_and_snapshots(monkeypatch):
+    from polybot import runner as runner_mod
+    from polybot.feeds import usvenue
+    from polybot.paper import snapshot_history
+    cfg, led = _cfg(), _ledger()
+    r = runner_mod.Runner(cfg, led, log=lambda *_: None)
+    ev = usvenue.weather_event_from_us(_us_event(), "nyc", "high")
+    ev.buckets[0].best_ask = 0.95   # a fat mispricing so bucket_sum has something to say: the book sums well over 1
+    ev.buckets[1].best_ask = 0.60
+    ev.buckets[2].best_ask = 0.60
+
+    class FakeUS:
+        available = True
+        why_unavailable = ""
+
+        def find_weather_event(self, city, date, kind):
+            return ev if (city, kind) == ("nyc", "high") else None
+
+        def resolution(self, slug):
+            return None
+
+    r.us = FakeUS()
+    n = r.scan_weather(cities=["nyc"], modules=["bucket_sum"], kinds=("high",), venue="us")
+    snaps = led.snapshots("us", "tc-temp-nychigh-2026-09-13-gte78lt79f", 0)
+    assert snaps and snaps[0]["bid"] == 0.35 and snaps[0]["ask"] == 0.60
+    assert snapshot_history(led, "us", "tc-temp-nychigh-2026-09-13-gte78lt79f", 0)[0][1] == pytest.approx(0.475)
+    for s in led.open_signals(venue="us"):
+        assert s["market"].startswith("tc-temp-nychigh-2026-09-13-") and s["mode"] == "paper"
+    assert n == len(led.open_signals(venue="us"))
+    assert r.scan_weather(cities=["chicago"], modules=["bucket_sum"], kinds=("high",), venue="us") == 0

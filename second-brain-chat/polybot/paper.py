@@ -82,6 +82,17 @@ def pnl_usd(sig, fill_price_yes, exit_price_yes, outcome, venue: str, category: 
     return round(gross - fee, 4), round(fee, 4)
 
 
+def snapshot_history(ledger, venue: str, market: str, since_ts: float) -> list:
+    """[(ts, yes price)] from the runner's book snapshots: the paper price path for venues with no
+    public price history (Polymarket US). Mid when both sides exist, else last."""
+    out = []
+    for r in ledger.snapshots(venue, market, since_ts):
+        p = r.get("mid") if r.get("mid") is not None else r.get("last")
+        if p is not None:
+            out.append((float(r["ts"]), float(p)))
+    return out
+
+
 class PaperEngine:
     def __init__(self, ledger, history_fn=None, resolution_fn=None, now_fn=None):
         self.ledger = ledger
