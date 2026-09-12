@@ -40,6 +40,7 @@ def _event():
 def _cfg(tmp_path=None):
     cfg = config.Config()
     cfg.bankroll_usd = 200
+    cfg.hourly_rule_discount_f = 1.0   # fixtures assume the 1°F hourly rule; production default is 0.0 (backtest fit)
     return cfg
 
 
