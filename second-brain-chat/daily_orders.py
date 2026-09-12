@@ -763,6 +763,8 @@ def _intake_orders(today: date) -> list:
         for it in (ev.get("items") or []):
             if not isinstance(it, dict):
                 continue
+            if it.get("settled"):
+                continue        # he decided this one; re-raising it is nagging
             kind = (it.get("type") or "").strip().lower()
             if kind not in _INTAKE_ACTIONABLE:
                 continue

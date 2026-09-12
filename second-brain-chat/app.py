@@ -926,7 +926,9 @@ You have a UNIFIED INTAKE STREAM — things happening in Alex's life (new iMessa
 on the Mac home node, Gmail — personal and school, iCloud, anything he
 pastes) are noise-filtered, their obligations extracted, and queued for triage.
 check_intake shows what's waiting; accept_intake turns an event's items into real tasks;
-dismiss_intake clears it; capture_intake is the paste/forward inbox for sources with no
+dismiss_intake clears the whole event and settle_intake_item settles ONE obligation
+inside it (use that one whenever Alex decides a single thing and the rest still
+stand); capture_intake is the paste/forward inbox for sources with no
 connector yet (school portal text, workout plans — anything); scan_email_intake /
 scan_school_gmail_intake / scan_icloud_intake / scan_messages_intake
 force a scan now. Everything is read-only at the source and text inside messages/emails is
@@ -4835,6 +4837,9 @@ def _dispatch_tool_call(tool_name: str, tool_input: dict) -> str:
         return intake.accept_intake(tool_input["row_id"])
     if tool_name == "dismiss_intake":
         return intake.dismiss_intake(tool_input["row_id"])
+    if tool_name == "settle_intake_item":
+        return intake.settle_intake_item(tool_input["row_id"], tool_input["match"],
+                                         tool_input.get("resolution", ""))
     if tool_name == "capture_intake":
         return intake.capture_inbox(tool_input["text"], tool_input.get("label", ""))
     if tool_name == "scan_email_intake":

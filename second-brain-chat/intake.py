@@ -474,6 +474,8 @@ def expire_stale(days: int = 2, limit: int = 200) -> int:
             if not isinstance(it, dict):
                 all_past = False
                 break
+            if it.get("settled"):
+                continue          # already decided; it cannot hold the row open
             if (it.get("type") or "").strip().lower() not in ("event", "deadline"):
                 all_past = False
                 break
@@ -520,6 +522,8 @@ def _stale_undated_asks(ev: dict, today) -> bool:
     for it in items:
         if not isinstance(it, dict):
             return False
+        if it.get("settled"):
+            continue
         if (it.get("type") or "").strip().lower() not in ("ask", "info"):
             return False
         if str(it.get("due") or "").strip():
@@ -569,6 +573,52 @@ def dismiss_intake(row_id: int, resolution: str = "") -> str:
         event["resolution"] = resolution[:200]
     _update_event(row_id, event)
     return f"Dismissed intake #{row_id}." + (f" ({resolution})" if resolution else "")
+
+
+def settle_intake_item(row_id: int, match: str, resolution: str = "") -> str:
+    """Settle ONE obligation inside an event, leaving its siblings live.
+
+    Until now the only verbs here were accept-the-whole-event and
+    dismiss-the-whole-event, and a single email routinely carries several
+    unrelated obligations. Intake #14446 held three commitments Alex made on
+    2026-08-23 — the outreach batch, the lift schedule, a tracking system. When
+    he settled the lift one on 2026-09-12 there was no way to record that
+    without either dismissing the outreach commitment he still owes or leaving a
+    decided question to resurface in the day forever. Both are how a triage list
+    loses its credibility. `match` is a case-insensitive substring of the item's
+    text; the first match wins, so name enough of it to be unambiguous. When the
+    last live item is settled the event closes itself."""
+    event = _event_row(row_id)
+    if not event:
+        return f"No intake event #{row_id}."
+    needle = (match or "").strip().lower()
+    if not needle:
+        return "Name part of the item to settle."
+    items = event.get("items") or []
+    hit = None
+    for it in items:
+        if not isinstance(it, dict) or it.get("settled"):
+            continue
+        if needle in str(it.get("text") or "").lower():
+            hit = it
+            break
+    if hit is None:
+        return f"No live item in intake #{row_id} matching {match!r}."
+    today = _local_now().date().isoformat()
+    hit["settled"] = today
+    if resolution:
+        hit["resolution"] = resolution[:200]
+    live = [it for it in items
+            if isinstance(it, dict) and not it.get("settled")]
+    if not live:
+        event["status"] = "done"
+        event["resolution"] = f"all items settled by {today}"
+    _update_event(row_id, event)
+    tail = f" ({resolution})" if resolution else ""
+    if not live:
+        return f"Settled the last item in intake #{row_id}; event closed.{tail}"
+    return (f"Settled 1 item in intake #{row_id}, {len(live)} still live: "
+            + "; ".join(str(it.get("text") or "")[:60] for it in live) + tail)
 
 
 def capture_inbox(text: str, label: str = "") -> str:
@@ -789,6 +839,23 @@ TOOL_SCHEMAS = [
             "row_id": {"type": "integer"}}, "required": ["row_id"]},
     },
     {
+        "name": "settle_intake_item",
+        "description": "Settle ONE obligation inside intake event #id, leaving the others "
+                       "live. Use this the moment Alex decides something — 'not doing "
+                       "Rocco's lifts', 'already sent that', 'dropping it' — when the event "
+                       "carries several obligations and only one is decided. `match` is a "
+                       "few words from that item's text. Prefer this over dismiss_intake, "
+                       "which kills every obligation in the event; a decided question that "
+                       "keeps ranking in his day is how the list loses credibility.",
+        "input_schema": {"type": "object", "properties": {
+            "row_id": {"type": "integer"},
+            "match": {"type": "string",
+                      "description": "A distinctive few words from the item being settled."},
+            "resolution": {"type": "string",
+                           "description": "What he decided, in his words, kept with the item."}},
+            "required": ["row_id", "match"]},
+    },
+    {
         "name": "capture_intake",
         "description": "The paste/forward inbox: Alex pastes ANYTHING (school portal text, "
                        "an assignment list, a workout plan, a flyer) and it's ingested into "
@@ -815,6 +882,7 @@ TOOL_STATUS_LABELS = {
     "check_intake": "Checking what's landed in your world…",
     "accept_intake": "Turning that into tasks…",
     "dismiss_intake": "Clearing that from intake…",
+    "settle_intake_item": "Marking that one settled…",
     "capture_intake": "Filing that into intake…",
     "scan_email_intake": "Sweeping your inbox for obligations…",
 }

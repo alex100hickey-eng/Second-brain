@@ -268,6 +268,46 @@ def test_triage():
     check("unknown id handled", "No intake event" in intake.accept_intake(99999))
 
 
+def test_settle_one_item_of_many():
+    print("\n=== 3c. settling one obligation leaves its siblings live ===")
+    sb = _reset(claude=FakeClaude(ACTION_JSON))
+    # The real shape: intake #14446 carried three commitments Alex made in one
+    # message. On 2026-09-12 he settled exactly one of them ("not doing Rocco's
+    # lifts"). Before item-level settle, recording that meant dismissing the
+    # outreach commitment he still owed or letting a decided question keep
+    # ranking in the day.
+    rid = intake.record_raw("gmail", "c1", "Alex", "2026-08-23", "three commitments",
+                            items=[
+        {"type": "commitment", "text": "Alex wants to get the first outreach batch moving",
+         "due": "2026-08-28"},
+        {"type": "commitment", "text": "Alex wants to set the lift schedule around practice",
+         "due": "2026-08-28"},
+        {"type": "commitment", "text": "Alex wants to set up a real system for tracking",
+         "due": "2026-08-28"}])["row_id"]
+
+    msg = intake.settle_intake_item(rid, "lift schedule", "not doing Rocco's lifts")
+    ev = next(e for e in _events(sb) if e["id"] == rid)["event"]
+    settled = [i for i in ev["items"] if i.get("settled")]
+    check("exactly one item is settled", len(settled) == 1)
+    check("it is the one named", "lift schedule" in settled[0]["text"])
+    check("the reason is kept with it", settled[0]["resolution"] == "not doing Rocco's lifts")
+    check("the event stays open while siblings are live", ev["status"] == "new")
+    check("the reply names what is still live", "2 still live" in msg)
+
+    check("a second settle of the same item finds nothing live",
+          "No live item" in intake.settle_intake_item(rid, "lift schedule"))
+    check("an unmatched needle is reported, not guessed",
+          "No live item" in intake.settle_intake_item(rid, "buy new sneakers"))
+    check("an empty needle is refused", "Name part" in intake.settle_intake_item(rid, "  "))
+
+    intake.settle_intake_item(rid, "outreach batch")
+    intake.settle_intake_item(rid, "system for tracking")
+    ev2 = next(e for e in _events(sb) if e["id"] == rid)["event"]
+    check("settling the last live item closes the event", ev2["status"] == "done")
+    check("closed events leave the new queue", intake.list_intake("new") == [])
+    check("unknown id handled", "No intake event" in intake.settle_intake_item(9999, "x"))
+
+
 def test_cross_message_dedupe():
     print("\n=== 3b. cross-message near-duplicate merge ===")
     sb = _reset(claude=FakeClaude(json.dumps(
@@ -480,6 +520,7 @@ if __name__ == "__main__":
     test_record_and_dedupe()
     test_extraction_hygiene()
     test_triage()
+    test_settle_one_item_of_many()
     test_cross_message_dedupe()
     test_capture_inbox()
     test_scan_gmail()

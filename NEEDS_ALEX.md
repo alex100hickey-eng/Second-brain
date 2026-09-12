@@ -33,13 +33,16 @@ Four of those 40 buried items are ball-critical and three have been open for wee
 2. **Practice clearance is still unconfirmed** (Emily Randall 8/22: no NCAA practice or
    games until the sickle-cell result is submitted; Quest activated 8/26; silence since).
    You cannot audition for anyone if you cannot practice. One line settles it.
-3. **Coach Rocco's lift program — assigned 2026-09-02, the email was unread.** Three lifts
-   a week on your own time, Google Form the same day, retest the week of 10/15. Your app
-   already runs four loaded days plus two jump days. Seven loaded days is the collision.
-   **Still parked on your call — I have not touched your lift pages.**
-4. **Your own commitment, 2026-08-23, due 8/28: "set the lift schedule around practice."**
-   Same item as #3, made by you, three weeks ago. It is the only one on this list nobody
-   else can do for you.
+3. ~~**Coach Rocco's lift program**~~ — **DECIDED 2026-09-12: not doing Rocco's lifts.**
+   His own four loaded days plus two jump days stand; seven was never going to work. The
+   lift-schedule commitment is settled in intake #14446 (its two siblings stay live), and
+   his lift pages are untouched, as they should be.
+   **What did NOT get decided:** the **retest the week of 10/15** and the same-day Google
+   Form are how the staff sees his numbers (8/31: 335 / 285 / 205). Skipping the program
+   and skipping the retest read differently to a coach. Filed as task #16, due 2026-10-15
+   — drop it only if he says so.
+4. ~~**Your own commitment, 2026-08-23: "set the lift schedule around practice."**~~
+   **Closed 2026-09-12 by the decision above.**
 
 **Due tonight:** roommate agreement, 11:59 PM (Ngwa Kapapi).
 
