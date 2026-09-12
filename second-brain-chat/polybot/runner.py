@@ -21,7 +21,9 @@ import traceback
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from . import calibration, config
+from . import backtest, calibration, config, notify, pairs
+from .execution import Executor
+from .feeds import offshore
 from .feeds.usvenue import USVenue
 from .ledger import Ledger
 from .paper import PaperEngine
@@ -55,6 +57,7 @@ class Runner:
         self.us = USVenue()
         self.risk = RiskManager(self.cfg, self.ledger)
         self.paper = PaperEngine(self.ledger)
+        self.executor = Executor(self.ledger, self.us, self.cfg, self.log)
         if self.us.available:
             bal = self.us.balance_usd()
             if bal is not None:
@@ -89,6 +92,11 @@ class Runner:
         line = (f"    {mode.upper():<6} #{sid} {sig.module} {sig.side} {sig.label} @ {sig.price:.2f} "
                 f"${sig.size_usd:.0f} edge {sig.edge_cents:.1f}c — {sig.reason}")
         self.log(line)
+        if mode == "signal":
+            notify.nudge(f"polybot: {sig.side.replace('_', ' ')} {sig.label}",
+                         f"{sig.module}: post {sig.price:.2f} for ${sig.size_usd:.0f} ({sig.contracts} contracts), "
+                         f"edge {sig.edge_cents:.1f}c. {sig.reason}. Exit: {sig.exit}.",
+                         key=f"polybot-signal-{sig.module}", log=self.log)
         if mode == "live":
             try:
                 order = self.us.place_limit(sig.market, sig.side, sig.price, sig.contracts)
@@ -102,9 +110,10 @@ class Runner:
         return mode
 
     # ---- scans -----------------------------------------------------------------------------
-    def scan_weather(self, cities=None, modules=None, date: datetime | None = None, kinds=("high",)) -> int:
+    def scan_weather(self, cities=None, modules=None, date: datetime | None = None, kinds=None) -> int:
         n = 0
-        cities = cities or self.cfg.cities
+        cities = cities or (config.all_city_slugs() if self.cfg.all_cities else self.cfg.cities)
+        kinds = kinds or tuple(self.cfg.kinds)
         wanted = [m for m in self.weather_modules if (modules is None or m in modules) and self.cfg.mode(m) != "off"]
         if not wanted:
             return 0
@@ -113,14 +122,15 @@ class Runner:
         for city in cities:
             for kind in kinds:
                 try:
-                    now_local = datetime.now(ZoneInfo(config.CITIES[city]["tz"]))
+                    now_local = datetime.now(ZoneInfo(config.city_meta(city)["tz"]))
                     ctx = build_ctx(city, date or now_local, kind, self.cfg, venue="offshore",
                                     fetch={"members": [], "obs": [], "hourly": []} if light else None)
                 except Exception as exc:
                     self.log(f"  {city} {kind}: context error: {exc}")
                     continue
                 if ctx is None:
-                    self.log(f"  {city} {kind}: no market today")
+                    if kind == "high":
+                        self.log(f"  {city} {kind}: no market today")
                     continue
                 if not light:
                     probs = " ".join(f"{b.title.split('°')[0]}={p:.0%}" for b, p in zip(ctx.event.buckets, ctx.probs) if p >= 0.03)
@@ -164,6 +174,36 @@ class Runner:
         self.log(f"settle: {counts}")
         return counts
 
+    def backtest(self, days: int = 7, cities=None, kinds=("high",)) -> str:
+        out = f"{config.ROOT}/backtest-latest.json"
+        summary = backtest.run(days, cities, kinds, self.cfg, self.log, out_path=out)
+        text = backtest.format_summary(summary)
+        self.log(text)
+        return text
+
+    def build_pairs(self) -> str:
+        """Match Polymarket US markets to offshore twins (needs the key). Writes pairs.json."""
+        if not self.us.available:
+            return f"pairs: idle — {self.us.why_unavailable}"
+        us_markets = []
+        for e in self.us.events(limit=200, active=True):
+            for m in e.get("markets", []) or []:
+                us_markets.append({"slug": m.get("slug") or e.get("slug"), "title": m.get("title") or m.get("question") or e.get("title", ""),
+                                   "end": m.get("endDate") or e.get("endDate"), "category": (e.get("category") or "").lower() or None})
+        off = []
+        for e in offshore.events_ending_within(14, limit=200):
+            cat = offshore.event_category(e)
+            for m in e.get("markets", []):
+                toks = m.get("clobTokenIds")
+                try:
+                    tok = __import__("json").loads(toks or "[]")[0]
+                except (ValueError, IndexError):
+                    continue
+                off.append({"token": tok, "title": m.get("question") or e.get("title", ""), "end": m.get("endDate") or e.get("endDate"), "category": cat})
+        found = pairs.match_pairs(us_markets, off)
+        path = pairs.save_pairs(found)
+        return f"pairs: {len(found)} matched from {len(us_markets)} US × {len(off)} offshore markets → {path}"
+
     def report(self, days: int = 1) -> str:
         text = self.ledger.report(days)
         with open(config.REPORT_PATH, "w") as f:
@@ -196,8 +236,14 @@ class Runner:
                     if now.minute % 5 == 0:
                         self.scan_weather(modules=["bucket_sum"])
                         self.scan_other(modules=["leadlag", "maker_rewards"])
+                        if self.us.available:
+                            self.executor.sync()
                     if now.minute == 20:
                         self.settle()
+                    if now.weekday() == 6 and now.hour == 4 and now.minute == 0:
+                        self.backtest(7)
+                    if now.hour == 5 and now.minute == 0 and self.us.available:
+                        self.log(self.build_pairs())
                     if now.hour in (9, 21) and now.minute == 0:
                         self.scan_other(modules=["hold_favorites"])
                     if now.hour == 7 and now.minute == 0:
@@ -213,14 +259,19 @@ class Runner:
 
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="polybot")
-    ap.add_argument("cmd", choices=["scan", "settle", "report", "calibrate", "status", "loop"])
+    ap.add_argument("cmd", choices=["scan", "settle", "report", "calibrate", "status", "loop", "backtest", "pairs"])
     ap.add_argument("--city", action="append")
     ap.add_argument("--modules", nargs="*")
     ap.add_argument("--days", type=int, default=1)
     ap.add_argument("--events", type=int, default=300)
+    ap.add_argument("--kinds", nargs="*", default=["high"])
     a = ap.parse_args(argv)
     r = Runner()
-    if a.cmd == "scan":
+    if a.cmd == "backtest":
+        print(r.backtest(a.days if a.days > 1 else 7, a.city, tuple(a.kinds)))
+    elif a.cmd == "pairs":
+        print(r.build_pairs())
+    elif a.cmd == "scan":
         n = r.scan(a.city, a.modules)
         print(f"{n} signal(s) recorded")
     elif a.cmd == "settle":

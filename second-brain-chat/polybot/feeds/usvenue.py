@@ -72,11 +72,16 @@ class USVenue:
         return self._client.portfolio.positions() if self.available else []
 
     # ---- orders (limit only) -------------------------------------------------------------
+    INTENTS = {"BUY_YES": "ORDER_INTENT_BUY_LONG", "BUY_NO": "ORDER_INTENT_BUY_SHORT",
+               "SELL_YES": "ORDER_INTENT_SELL_LONG", "SELL_NO": "ORDER_INTENT_SELL_SHORT"}
+
     def place_limit(self, slug: str, side: str, price: float, contracts: int):
-        """side: 'BUY_YES' (long) or 'BUY_NO' (short the YES contract). Limit + GTC only."""
+        """side: BUY_YES (open long) · BUY_NO (open short) · SELL_YES / SELL_NO (close). Limit + GTC only.
+        The SELL_* intent names follow the SDK's BUY_LONG/BUY_SHORT pattern and are unverified until
+        the first live take-profit; the executor logs the venue's reply either way."""
         if not self.available:
             raise RuntimeError(self.why_unavailable)
-        intent = "ORDER_INTENT_BUY_LONG" if side == "BUY_YES" else "ORDER_INTENT_BUY_SHORT"
+        intent = self.INTENTS[side]
         return self._client.orders.create({
             "marketSlug": slug,
             "intent": intent,

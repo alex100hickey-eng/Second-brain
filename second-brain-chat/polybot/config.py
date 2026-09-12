@@ -44,6 +44,54 @@ CITIES = {
     "san-francisco": {"query": "San Francisco", "tz": "America/Los_Angeles", "us_station": "KSFO", "cli_location": "SFO", "lat": 37.619, "lon": -122.375},
 }
 
+# Every city the offshore venue runs daily temperature markets for (Sep 2026 search). Only the five
+# above exist on Polymarket US; the rest are paper-proxy signal volume and backtest data.
+# slug: (tz, lat, lon, ICAO used when the market description names no station)
+OFFSHORE_CITIES = {
+    "ankara":       ("Europe/Istanbul",     40.128,  32.995, "LTAC"),
+    "atlanta":      ("America/New_York",    33.640, -84.427, "KATL"),
+    "beijing":      ("Asia/Shanghai",       40.080, 116.585, "ZBAA"),
+    "busan":        ("Asia/Seoul",          35.180, 128.938, "RKPK"),
+    "chengdu":      ("Asia/Shanghai",       30.579, 103.947, "ZUUU"),
+    "chongqing":    ("Asia/Shanghai",       29.719, 106.642, "ZUCK"),
+    "denver":       ("America/Denver",      39.856, -104.673, "KDEN"),
+    "helsinki":     ("Europe/Helsinki",     60.317,  24.963, "EFHK"),
+    "hong-kong":    ("Asia/Hong_Kong",      22.309, 113.915, "VHHH"),
+    "kuala-lumpur": ("Asia/Kuala_Lumpur",    2.745, 101.710, "WMKK"),
+    "london":       ("Europe/London",       51.470,  -0.461, "EGLL"),
+    "madrid":       ("Europe/Madrid",       40.472,  -3.561, "LEMD"),
+    "mexico-city":  ("America/Mexico_City", 19.436, -99.072, "MMMX"),
+    "munich":       ("Europe/Berlin",       48.354,  11.786, "EDDM"),
+    "paris":        ("Europe/Paris",        49.010,   2.548, "LFPG"),
+    "seoul":        ("Asia/Seoul",          37.469, 126.451, "RKSI"),
+    "shanghai":     ("Asia/Shanghai",       31.143, 121.805, "ZSPD"),
+    "shenzhen":     ("Asia/Shanghai",       22.639, 113.811, "ZGSZ"),
+    "singapore":    ("Asia/Singapore",       1.364, 103.991, "WSSS"),
+    "taipei":       ("Asia/Taipei",         25.080, 121.232, "RCTP"),
+    "tel-aviv":     ("Asia/Jerusalem",      32.009,  34.886, "LLBG"),
+    "tokyo":        ("Asia/Tokyo",          35.553, 139.781, "RJTT"),
+    "toronto":      ("America/Toronto",     43.677, -79.631, "CYYZ"),
+    "wellington":   ("Pacific/Auckland",   -41.327, 174.805, "NZWN"),
+    "wuhan":        ("Asia/Shanghai",       30.784, 114.208, "ZHHH"),
+}
+
+
+def city_meta(slug: str) -> dict | None:
+    """Unified city record: {query, tz, lat, lon, station, us_station?, cli_location?}."""
+    if slug in CITIES:
+        m = dict(CITIES[slug])
+        m["station"] = m["us_station"]
+        return m
+    if slug in OFFSHORE_CITIES:
+        tz, lat, lon, icao = OFFSHORE_CITIES[slug]
+        return {"query": slug.replace("-", " ").title(), "tz": tz, "lat": lat, "lon": lon, "station": icao}
+    return None
+
+
+def all_city_slugs() -> list:
+    return list(CITIES) + [c for c in OFFSHORE_CITIES if c not in CITIES]
+
+
 # Observation stations the offshore descriptions have been seen to reference.
 STATIONS = {
     "KLGA": {"lat": 40.777, "lon": -73.872, "tz": "America/New_York"},
@@ -73,6 +121,8 @@ class Config:
     caps: Caps = field(default_factory=Caps)
     modes: dict = field(default_factory=lambda: {m: "paper" for m in MODULES})
     cities: list = field(default_factory=lambda: list(CITIES))
+    all_cities: bool = True                # paper on every offshore city (28) instead of the US five
+    kinds: list = field(default_factory=lambda: ["high", "low"])
     bankroll_usd: float = 200.0            # overwritten by the live balance when the US key exists
     edge_min_cents: float = 6.0            # weather_hold / hold_favorites entry edge
     take_profit_cents: float = 3.0         # resting sell above entry on hold modules

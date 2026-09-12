@@ -165,6 +165,113 @@ def test_adjust_probs_with_observations():
     assert not [s for s in WeatherHold(_cfg()).scan(ctx) if s.side == "BUY_YES" and "84" in s.label]
 
 
+def test_low_market_adjust_and_lock():
+    from polybot.strategies.weather import adjust_probs_with_obs
+    titles = ["59°F or below", "60-61°F", "62-63°F", "64-65°F", "66°F or higher"]
+    buckets = [_bucket(t, 0.10, 0.12, f"l{i}") for i, t in enumerate(titles)]
+    raw = [0.1, 0.5, 0.3, 0.1, 0.0]
+    # running min 63 so far; the model says the rest of the day stays above 65 → 64-65 and 66+ cannot be the low
+    adj = adjust_probs_with_obs(raw, buckets, running=63, remaining=66.0, kind="low")
+    by = dict(zip(titles, adj))
+    assert by["64-65°F"] == 0.0 and by["66°F or higher"] == 0.0 and by["62-63°F"] > 0.5
+    ev = WeatherEvent("lowest-temperature-in-nyc-on-september-12-2026", "nyc", "2026-09-12", "KLGA", "hourly", "F", buckets, True, "")
+    obs = [("2026-09-12T09:51:00+00:00", 63), ("2026-09-12T12:51:00+00:00", 64), ("2026-09-12T13:51:00+00:00", 66)]
+    hourly = [("2026-09-12T11:00", 68.0), ("2026-09-12T15:00", 74.0), ("2026-09-12T23:00", 67.0)]
+    ctx = build_ctx("nyc", datetime(2026, 9, 12, tzinfo=ZoneInfo("America/New_York")), "low", _cfg(), venue="offshore",
+                    fetch={"event": ev, "members": [62.4] * 10, "obs": obs, "hourly": hourly})
+    assert ctx.running == 63 and ctx.remaining_extreme == 67.0
+    locked, winner = lock_state(ctx)
+    assert locked and winner.title == "62-63°F"
+    sigs = WeatherLock(_cfg()).scan(ctx)
+    assert sigs and sigs[0].side == "BUY_YES" and sigs[0].label.endswith("62-63°F")
+
+
+def test_station_parsing_and_city_registry():
+    assert offshore.station_from_description("https://www.wunderground.com/history/daily/gb/london/EGLL/date/2026-9-11") == "EGLL"
+    assert offshore.station_from_description("readings at the airport station (RJTT) in Tokyo") == "RJTT"
+    assert offshore.station_from_description("nothing here") is None
+    assert config.city_meta("london")["station"] == "EGLL" and config.city_meta("nyc")["station"] == "KNYC"
+    assert config.city_meta("atlantis") is None and len(config.all_city_slugs()) == 30   # 5 US + 25 offshore-only
+
+
+def test_backtest_replay_offline():
+    from polybot import backtest
+    ev = _event()
+    ev.date, ev.slug = "2026-09-11", "highest-temperature-in-nyc-on-september-11-2026"
+    tz = ZoneInfo("America/New_York")
+    day0 = datetime(2026, 9, 11, tzinfo=tz).timestamp()
+    for b in ev.buckets:
+        b.outcome = 1 if b.title == "80-81°F" else 0
+    # 80-81 trades at 12c all morning, jumps to 85c at 16:00 after the observation, resolves YES
+    hist = {b.yes_token: [(day0 + h * 3600, 0.02) for h in range(6, 24)] for b in ev.buckets}
+    hist[ev.buckets[6].yes_token] = [(day0 + h * 3600, 0.12 if h < 16 else 0.85) for h in range(6, 24)]
+    hist[ev.buckets[5].yes_token] = [(day0 + h * 3600, 0.60 if h < 16 else 0.05) for h in range(6, 24)]
+    obs = [(datetime(2026, 9, 11, h, 51, tzinfo=tz).astimezone(ZoneInfo("UTC")).isoformat(), t)
+           for h, t in ((8, 70), (10, 74), (12, 78), (14, 80), (15, 81), (16, 80), (17, 79), (18, 77))]
+    hourly = [(f"2026-09-11T{h:02d}:00", t) for h, t in ((9, 72.0), (12, 77.0), (15, 79.0), (18, 76.0), (21, 72.0))]
+    day = {"city": "nyc", "date": "2026-09-11", "kind": "high", "tz": "America/New_York", "station": "KLGA",
+           "rule": "hourly", "event": ev, "winner": "80-81°F", "histories": hist, "obs": obs,
+           "members": [81.6] * 5 + [79.6] * 2, "hourly": hourly, "unit": "F"}
+    assert backtest.price_at(hist[ev.buckets[6].yes_token], day0 + 10 * 3600) == 0.12
+    res = backtest.replay_day(day, _cfg(), log=lambda *_: None)
+    mods = {s["module"] for s in res["signals"]}
+    assert "weather_hold" in mods and "weather_obs" in mods and "weather_lock" in mods
+    hold = next(s for s in res["signals"] if s["module"] == "weather_hold" and s["bucket"] == "80-81°F" and s["side"] == "BUY_YES")
+    assert hold["filled"] and hold["pnl"] > 0                      # bought ~13c, resolved YES
+    lock = next(s for s in res["signals"] if s["module"] == "weather_lock")
+    assert lock["bucket"] == "80-81°F" and lock["outcome"] == 1
+    assert set(res["discount_scores"]) == {"0.0", "0.5", "1.0", "1.5"}
+    summary = backtest.summarize(res["signals"], {"hourly": [res["discount_scores"]]}, 1)
+    assert summary["modules"]["weather_hold"]["net"] > 0 and "weather_lock" in backtest.format_summary(summary)
+
+
+def test_pairs_matching():
+    from polybot import pairs
+    us = [{"slug": "fed-cut-sep", "title": "Will the Fed cut rates in September?", "end": "2026-09-17T18:00:00Z"},
+          {"slug": "nfl-kc-phi", "title": "Chiefs vs Eagles", "end": "2026-09-14T20:00:00Z", "category": "sports"}]
+    off = [{"token": "t1", "title": "Fed cuts rates in September?", "end": "2026-09-17T20:00:00Z", "category": "economics"},
+           {"token": "t2", "title": "Will the Fed cut rates in December?", "end": "2026-12-10T20:00:00Z", "category": "economics"},
+           {"token": "t3", "title": "Chiefs vs. Eagles", "end": "2026-09-14T20:00:00Z", "category": "sports"}]
+    got = pairs.match_pairs(us, off)
+    assert [(g["us_slug"], g["offshore_token"], g["category"]) for g in got] == [("fed-cut-sep", "t1", "economics"), ("nfl-kc-phi", "t3", "sports")]
+    assert pairs.match_pairs([{"slug": "x", "title": "Bitcoin above 100k", "end": None}], off) == []
+
+
+def test_executor_sync_with_fake_venue():
+    from polybot.execution import Executor
+    led, cfg = _ledger(), _cfg()
+    cfg.modes["weather_hold"] = "live"
+
+    class Venue:
+        available = True
+        def __init__(self): self.calls = []
+        def open_orders(self): return [{"id": "o-resting"}]
+        def positions(self): return [{"marketSlug": "mkt-filled", "quantity": 20}]
+        def cancel(self, oid, slug): self.calls.append(("cancel", oid, slug))
+        def cancel_all(self): self.calls.append(("cancel_all",))
+        def place_limit(self, slug, side, price, n): self.calls.append(("place", slug, side, price, n)); return {"id": "o-tp"}
+
+    v = Venue()
+    ex = Executor(led, v, cfg, log=lambda *_: None)
+    now = time.time()
+    s_filled = led.add_signal(Signal("weather_hold", "us", "mkt-filled", "f", "BUY_YES", 0.20, 10, 9, "r", exit="tp:0.03", ts=now), "live")
+    led.add_order(s_filled, "us", "mkt-filled", "BUY_YES", 0.20, 50, "sent", venue_order_id="o-filled")
+    s_stale = led.add_signal(Signal("weather_hold", "us", "mkt-stale", "s", "BUY_YES", 0.50, 10, 9, "r", ts=now - 90000, horizon_hours=24), "live")
+    led.add_order(s_stale, "us", "mkt-stale", "BUY_YES", 0.50, 20, "sent", venue_order_id="o-resting")
+    s_gone = led.add_signal(Signal("weather_hold", "us", "mkt-gone", "g", "BUY_YES", 0.50, 10, 9, "r", ts=now), "live")
+    led.add_order(s_gone, "us", "mkt-gone", "BUY_YES", 0.50, 20, "sent", venue_order_id="o-gone")
+    counts = ex.sync()
+    assert counts == {"filled": 1, "cancelled": 2, "tp_placed": 1, "open": 0}
+    assert led.paper_row(s_filled)["status"] == "filled" and led.last_order(s_filled)["status"] == "sent-tp"
+    assert ("place", "mkt-filled", "SELL_YES", 0.23, 50) in v.calls and ("cancel", "o-resting", "mkt-stale") in v.calls
+    assert led.last_order(s_stale)["status"] == "cancelled" and led.last_order(s_gone)["status"] == "gone"
+    open(config.KILL_PATH, "w").close()
+    try:
+        assert ex.sync() == {"filled": 0, "cancelled": 0, "tp_placed": 0, "open": 0} and ("cancel_all",) in v.calls
+    finally:
+        os.remove(config.KILL_PATH)
+
+
 def test_weather_model_update_uses_last_run():
     cfg, led = _cfg(), _ledger()
     mod = WeatherModelUpdate(cfg, led)

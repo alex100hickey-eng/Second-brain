@@ -20,6 +20,7 @@ or OpusClip's own /api-usage says the monthly cap cannot cover it.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 import time
@@ -32,6 +33,74 @@ from .ledger import Ledger
 from .opus_api import OpusClient, estimate_credits, normalize_clips, project_id_from
 
 ET = ZoneInfo("America/New_York")
+
+
+def parse_urls_file(path: str) -> list:
+    """`urls.txt` lines: `<url> <minutes>` (minutes required: credits are charged per source minute)."""
+    out = []
+    try:
+        with open(path) as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) >= 2 and parts[0].startswith("http"):
+                    try:
+                        out.append((parts[0], float(parts[1])))
+                    except ValueError:
+                        continue
+    except OSError:
+        pass
+    return out
+
+
+HOOK_SCRIPT = """RECORD THESE (Voice Memos → share → Save to Files → this folder). One line per file, 2-4 seconds,
+energy up, no music. Name the file like the line: wait_for_this_part.m4a. Delete this file when done.
+
+wait for this part
+nobody talks about this
+this is the moment
+watch what happens next
+you need to hear this
+this changed my mind
+the ending is crazy
+listen to this
+this is actually insane
+hold on for the end
+this is the part
+you will not believe this
+I had to clip this
+this one is different
+pay attention here
+this is why
+here is the thing
+wait until the end
+this is wild
+he actually said this
+this is the best part
+watch his reaction
+this is too good
+I keep coming back to this
+this is the one
+you have to see this
+this got me
+this is important
+do not skip this
+this is the answer
+"""
+
+
+def write_hook_script(hooks_dir: str = config.HOOKS_DIR) -> str | None:
+    """Drop a RECORD_THESE.txt into the hooks folder if it is empty, so Alex knows what to record."""
+    try:
+        os.makedirs(hooks_dir, exist_ok=True)
+        has_audio = any(n.lower().endswith(config.AUDIO_EXT) for n in os.listdir(hooks_dir))
+        path = os.path.join(hooks_dir, "RECORD_THESE.txt")
+        if not has_audio and not os.path.exists(path):
+            with open(path, "w") as f:
+                f.write(HOOK_SCRIPT)
+            return path
+    except OSError:
+        pass
+    return None
 
 
 def can_spend(ledger: Ledger, cfg: config.Config, credits: int, usage: dict | None) -> tuple:
@@ -55,15 +124,24 @@ class Runner:
         self.client = client or OpusClient()
         self.log = log
         config.ensure_dirs()
+        if write_hook_script():
+            self.log(f"  wrote RECORD_THESE.txt into {config.HOOKS_DIR}")
 
     # ---- campaigns -----------------------------------------------------------------------
-    def add_campaign(self, name, marketplace="", rate=0.0, cap=0.0, hashtags="", prompt="", platforms="", notes="") -> int:
-        cid = self.ledger.add_campaign(name, marketplace, rate, cap, hashtags, prompt, platforms, notes)
-        self.log(f"campaign #{cid} {name} ({marketplace}) ${rate}/1k cap ${cap}")
+    def add_campaign(self, name, marketplace="", rate=0.0, cap=0.0, hashtags="", prompt="", platforms="", notes="",
+                     rules=None) -> int:
+        cid = self.ledger.add_campaign(name, marketplace, rate, cap, hashtags, prompt, platforms, notes, rules)
+        self.log(f"campaign #{cid} {name} ({marketplace}) ${rate}/1k cap ${cap}"
+                 + (f" rules {json.dumps(rules)}" if rules else ""))
         return cid
 
+    def _campaign_for_clip(self, clip) -> dict | None:
+        src = next((s for s in self.ledger.sources() if s["id"] == clip["source_id"]), None)
+        return self.ledger.campaign(src["campaign_id"]) if src else None
+
     # ---- ingest ----------------------------------------------------------------------------
-    def ingest(self, campaign_ref, url: str = "", path: str = "", minutes: float = 0.0, title: str = "") -> int | None:
+    def ingest(self, campaign_ref, url: str = "", path: str = "", minutes: float = 0.0, title: str = "",
+               direct: bool = False) -> int | None:
         camp = self.ledger.campaign(campaign_ref)
         if not camp:
             self.log(f"no campaign {campaign_ref!r}; add it first")
@@ -75,6 +153,11 @@ class Runner:
         if path:
             minutes = minutes or transform.probe_duration(path) / 60.0
             title = title or os.path.splitext(os.path.basename(path))[0]
+        if direct:
+            if not path:
+                self.log("direct ingest needs a local --file (a pre-cut clip, used as-is; no OpusClip, 0 credits)")
+                return None
+            return self._ingest_direct(camp, path, title, minutes)
         if not minutes:
             self.log("URL ingest needs --minutes (credits are charged per source minute)")
             return None
@@ -97,13 +180,29 @@ class Runner:
             return sid
         return self._submit(sid, camp, locator, path, title, credits)
 
+    def _ingest_direct(self, camp, path: str, title: str, minutes: float) -> int:
+        """A pre-cut clip (Vyro clip banks ship these): register source+clip as already downloaded, 0 credits."""
+        sid = self.ledger.add_source(camp["id"], path, title, minutes, 0)
+        self.ledger.update_source(sid, status="clipped", error="")
+        dur = transform.probe_duration(path)
+        cid = self.ledger.add_clip(sid, {"clip_id": f"direct-{sid}", "title": title, "score": 0, "duration_s": dur})
+        self.ledger.update_clip(cid, local_path=path, status="downloaded", duration_s=dur)
+        self.log(f"direct source #{sid} → clip #{cid} ({dur:.0f}s, 0 credits) [{camp['name']}]")
+        return sid
+
     def _submit(self, sid, camp, locator, path, title, credits) -> int:
         try:
             video_url = self.client.upload_local(path, self.log) if path else locator
             platforms = camp["platforms"] or ""
+            rules = self.ledger.rules(camp)
+            durations = rules["durations"] or self.cfg.clip_durations
+            if not rules["durations"] and (rules["min_seconds"] or rules["max_seconds"]):
+                lo = float(rules["min_seconds"] or 0)
+                hi = float(rules["max_seconds"] or 0) or max(lo + 30, 90)
+                durations = [[lo, hi]]
             resp = self.client.create_project(video_url, title=title, prompt=camp["prompt"] or "",
-                                              durations=self.cfg.clip_durations, model=self.cfg.model,
-                                              aspect=self.cfg.aspect, brand_template_id=self.cfg.brand_template_id)
+                                              durations=durations, model=self.cfg.model, aspect=self.cfg.aspect,
+                                              brand_template_id=rules["brand_template_id"] or self.cfg.brand_template_id)
             pid = project_id_from(resp)
             if not pid:
                 raise RuntimeError(f"no project id in response keys {list(resp)[:8]}")
@@ -150,15 +249,37 @@ class Runner:
                 self.log(f"created campaign '{cname}' from inbox folder — set its rate, tags and prompt")
             for fname in sorted(os.listdir(cdir)):
                 fpath = os.path.join(cdir, fname)
-                if not fname.lower().endswith(config.VIDEO_EXT) or fname.startswith("."):
+                if fname.startswith("."):
+                    continue
+                if fname.lower() == "urls.txt":
+                    for url, minutes in parse_urls_file(fpath):
+                        if not self.ledger.source_by_locator(url) and self.ingest(camp["id"], url=url, minutes=minutes) is not None:
+                            n += 1
+                    continue
+                if not fname.lower().endswith(config.VIDEO_EXT):
                     continue
                 if self.ledger.source_by_locator(fpath):
                     continue
                 if time.time() - os.path.getmtime(fpath) < 120:
                     continue  # still syncing / being written
-                if self.ingest(camp["id"], path=fpath) is not None:
+                if self.ingest(camp["id"], path=fpath, direct=bool(self.ledger.rules(camp)["direct"])) is not None:
                     n += 1
         return n
+
+    def prune(self, keep_days: int = 14) -> int:
+        """Delete HD sources and variants older than keep_days whose variants are posted or skipped."""
+        cutoff = time.time() - keep_days * 86400
+        removed = 0
+        for c in self.ledger.clips():
+            if c["created"] > cutoff or not c["local_path"]:
+                continue
+            vs = self.ledger.variants(clip_id=c["id"])
+            if vs and all(v["status"] in ("posted", "skipped") for v in vs):
+                for p in [c["local_path"]] + [v["path"] for v in vs]:
+                    if p and os.path.exists(p):
+                        os.remove(p)
+                        removed += 1
+        return removed
 
     # ---- process: poll → download → transform → stage --------------------------------------
     def poll_submitted(self) -> int:
@@ -223,14 +344,23 @@ class Runner:
             if not src or not os.path.exists(src):
                 self.ledger.update_clip(c["id"], status="failed")
                 continue
+            camp = self._campaign_for_clip(c)
+            rules = self.ledger.rules(camp)
+            dur = float(c.get("duration_s") or 0)
+            if dur and ((rules["min_seconds"] and dur < float(rules["min_seconds"]))
+                        or (rules["max_seconds"] and dur > float(rules["max_seconds"]))):
+                self.ledger.update_clip(c["id"], status="skipped")
+                self.log(f"  skipped clip #{c['id']}: {dur:.0f}s outside the brief's "
+                         f"{rules['min_seconds'] or 0:.0f}–{rules['max_seconds'] or '∞'}s window")
+                continue
             camp_platforms = self._platforms_for_clip(c)
             used_here = set()
             made = 0
             for platform in camp_platforms:
                 recipe = config.VARIANTS.get(platform, config.VARIANTS["tiktok"])
-                hook = hooks.pick(lib, uses, exclude=used_here) if lib else None
+                hook = hooks.pick(lib, uses, exclude=used_here) if (lib and rules["voice"]) else None
                 hook_len = hooks.hook_length(hook, self.cfg.hook_seconds_max) if hook else 0.0
-                text_hook = c["title"] or (hook["text"] if hook else "Watch this")
+                text_hook = (c["title"] or (hook["text"] if hook else "Watch this")) if rules["text_hook"] else ""
                 dst = os.path.join(config.HOME, "variants", f"{c['id']:05d}_{platform}.mp4")
                 try:
                     transform.make_variant(src, dst, text_hook, recipe, hook["file"] if hook else None, hook_len,
@@ -249,8 +379,7 @@ class Runner:
         return n
 
     def _platforms_for_clip(self, clip) -> list:
-        src = next((s for s in self.ledger.sources() if s["id"] == clip["source_id"]), None)
-        camp = self.ledger.campaign(src["campaign_id"]) if src else None
+        camp = self._campaign_for_clip(clip)
         if camp and camp.get("platforms"):
             return [p.strip() for p in camp["platforms"].split(",") if p.strip() in config.VARIANTS]
         return [p for p in self.cfg.platforms if p in config.VARIANTS]
@@ -372,6 +501,8 @@ def main(argv=None):
     sub.add_parser("hooks")
     sub.add_parser("loop")
     sub.add_parser("nudge")
+    pr = sub.add_parser("prune")
+    pr.add_argument("--keep-days", type=int, default=14)
     c = sub.add_parser("campaign")
     c.add_argument("verb", choices=["add", "list"])
     c.add_argument("--name")
@@ -382,12 +513,22 @@ def main(argv=None):
     c.add_argument("--prompt", default="")
     c.add_argument("--platforms", default="")
     c.add_argument("--notes", default="")
+    c.add_argument("--no-voice", action="store_true", help="brief forbids changing the audio: no voice hook")
+    c.add_argument("--no-text-hook", action="store_true", help="brief forbids added on-screen text")
+    c.add_argument("--no-extra-tags", action="store_true", help="only the campaign's hashtags, none from the clip")
+    c.add_argument("--caption", default="", help="mandatory caption line, verbatim from the brief")
+    c.add_argument("--tag", default="", help="account to tag in the caption, e.g. @adultsfx")
+    c.add_argument("--min-seconds", type=float, default=0.0)
+    c.add_argument("--max-seconds", type=float, default=0.0)
+    c.add_argument("--brand-template", default="", help="OpusClip brand template id for this campaign")
+    c.add_argument("--direct", action="store_true", help="inbox files are pre-cut clips: no OpusClip, 0 credits")
     i = sub.add_parser("ingest")
     i.add_argument("--campaign", required=True)
     i.add_argument("--url", default="")
     i.add_argument("--file", default="")
     i.add_argument("--minutes", type=float, default=0.0)
     i.add_argument("--title", default="")
+    i.add_argument("--direct", action="store_true", help="pre-cut clip: skip OpusClip, transform + stage as-is")
     p = sub.add_parser("posted")
     p.add_argument("--variant", type=int, required=True)
     p.add_argument("--url", required=True)
@@ -404,12 +545,34 @@ def main(argv=None):
     elif a.cmd == "campaign" and a.verb == "add":
         if not a.name:
             sys.exit("--name required")
-        r.add_campaign(a.name, a.marketplace, a.rate, a.cap, a.hashtags, a.prompt, a.platforms, a.notes)
+        rules = {}
+        if a.no_voice:
+            rules["voice"] = False
+        if a.no_text_hook:
+            rules["text_hook"] = False
+        if a.no_extra_tags:
+            rules["extra_tags"] = False
+        if a.caption:
+            rules["caption"] = a.caption
+        if a.tag:
+            rules["tag"] = a.tag
+        if a.min_seconds:
+            rules["min_seconds"] = a.min_seconds
+        if a.max_seconds:
+            rules["max_seconds"] = a.max_seconds
+        if a.brand_template:
+            rules["brand_template_id"] = a.brand_template
+        if a.direct:
+            rules["direct"] = True
+        r.add_campaign(a.name, a.marketplace, a.rate, a.cap, a.hashtags, a.prompt, a.platforms, a.notes, rules)
     elif a.cmd == "campaign":
         for k in r.ledger.campaigns():
-            print(f"#{k['id']} {k['name']} ({k['marketplace']}) ${k['rate_per_1k']}/1k cap ${k['cap_per_clip']} tags '{k['hashtags']}' platforms '{k['platforms'] or 'default'}'")
+            rl = {kk: v for kk, v in config.campaign_rules(k).items() if v != config.DEFAULT_RULES[kk]}
+            print(f"#{k['id']} {k['name']} ({k['marketplace']}) ${k['rate_per_1k']}/1k cap ${k['cap_per_clip']} "
+                  f"tags '{k['hashtags']}' platforms '{k['platforms'] or 'default'}'" + (f" rules {rl}" if rl else ""))
     elif a.cmd == "ingest":
-        r.ingest(a.campaign, url=a.url, path=os.path.expanduser(a.file) if a.file else "", minutes=a.minutes, title=a.title)
+        r.ingest(a.campaign, url=a.url, path=os.path.expanduser(a.file) if a.file else "", minutes=a.minutes,
+                 title=a.title, direct=a.direct)
     elif a.cmd == "process":
         r.process()
     elif a.cmd == "inbox":
@@ -425,6 +588,8 @@ def main(argv=None):
             print(f"{h['name']:<40} {h['text']}")
     elif a.cmd == "nudge":
         print("sent" if r.ready_nudge() else "nothing new to nudge")
+    elif a.cmd == "prune":
+        print(f"removed {r.prune(a.keep_days)} file(s)")
     elif a.cmd == "loop":
         r.loop()
 

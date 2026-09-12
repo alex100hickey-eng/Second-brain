@@ -2,6 +2,7 @@
 import os
 import subprocess
 import tempfile
+import time
 
 import pytest
 
@@ -99,6 +100,45 @@ def test_poll_keeps_going_when_score_floor_drops_everything(tmp_path, monkeypatc
     led.update_source(sid, status="submitted", opus_project_id="P1")
     assert r.poll_submitted() == 1
     assert led.sources("clipped")[0]["id"] == sid and led.clips() == []
+
+
+def test_urls_file_hook_script_next_slot(tmp_path):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from clipbot.runner import parse_urls_file, write_hook_script
+    p = tmp_path / "urls.txt"
+    p.write_text("https://drive.google.com/x 62\nnot a url 5\nhttps://youtu.be/y notanumber\nhttps://youtu.be/z 30.5\n")
+    assert parse_urls_file(str(p)) == [("https://drive.google.com/x", 62.0), ("https://youtu.be/z", 30.5)]
+    hooks_dir = tmp_path / "hooks"
+    path = write_hook_script(str(hooks_dir))
+    assert path and os.path.exists(path) and "wait for this part" in open(path).read()
+    assert write_hook_script(str(hooks_dir)) is None                # already written
+    (hooks_dir / "line.m4a").write_bytes(b"0")
+    os.remove(path)
+    assert write_hook_script(str(hooks_dir)) is None                # audio exists → no script
+    z = ZoneInfo("America/New_York")
+    assert posting.next_slot("tiktok", datetime(2026, 9, 12, 10, 0, tzinfo=z)).hour == 19
+    assert posting.next_slot("tiktok", datetime(2026, 9, 12, 20, 0, tzinfo=z)).day == 13
+
+
+def test_prune_removes_only_finished_old_clips(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(config, "READY_DIR", str(tmp_path / "ready"))
+    monkeypatch.setattr(config, "HOOKS_DIR", str(tmp_path / "hooks"))
+    monkeypatch.setattr(config, "INBOX_DIR", str(tmp_path / "inbox"))
+    led = _ledger()
+    r = Runner(config.Config(), led, OpusClient(api_key=None), log=lambda *_: None)
+    cid = led.add_campaign("X")
+    sid = led.add_source(cid, "u", "t", 10, 10)
+    old = led.add_clip(sid, {"clip_id": "c1", "title": "old"})
+    hd = tmp_path / "old.mp4"; hd.write_bytes(b"0")
+    var = tmp_path / "old_tiktok.mp4"; var.write_bytes(b"0")
+    led.update_clip(old, local_path=str(hd), status="transformed")
+    vid = led.add_variant(old, "tiktok", str(var))
+    led.conn.execute("UPDATE clips SET created=? WHERE id=?", (1.0, old)); led.conn.commit()
+    assert r.prune(14) == 0 and hd.exists()                           # variant not posted yet
+    led.mark_posted(vid, "https://x")
+    assert r.prune(14) == 2 and not hd.exists() and not var.exists()
 
 
 def test_can_spend_governor():
@@ -204,3 +244,89 @@ def test_ffmpeg_smoke(tmp_path):
     probe = subprocess.run([transform.FFPROBE, "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height",
                             "-of", "csv=p=0", dst], capture_output=True, text=True, check=True).stdout.strip()
     assert probe == "1080,1920"
+
+
+def test_rules_caption_and_defaults():
+    camp = {"name": "FX Adults S2", "marketplace": "vyro", "rate_per_1k": 2.0, "cap_per_clip": 1000,
+            "hashtags": "#adults #fxpartner",
+            "rules": '{"extra_tags": false, "caption": "Watch Adults season 2 on FXX | Hulu", "tag": "@adultsfx",'
+                     ' "voice": false, "min_seconds": 30}'}
+    clip = {"title": "The group chat leak", "hashtags": ["#funny", "#lol"], "score": 80, "duration_s": 40}
+    title, body = posting.build_caption("tiktok", clip, camp, "nobody prepares you for this")
+    assert title == "The group chat leak"
+    assert body == "nobody prepares you for this\n\nWatch Adults season 2 on FXX | Hulu\n\n@adultsfx #adults #fxpartner"
+    rules = config.campaign_rules(camp)
+    assert rules["voice"] is False and rules["text_hook"] is True and rules["min_seconds"] == 30
+    assert config.campaign_rules({"rules": "not json"})["extra_tags"] is True and config.campaign_rules(None)["tag"] == ""
+    led = _ledger()
+    cid = led.add_campaign("X", rules={"direct": True, "bogus": 1})
+    r = led.rules(led.campaign(cid))
+    assert r["direct"] is True and "bogus" not in r
+    # a DB from before per-campaign rules gets the column on open
+    import sqlite3
+    fd, path = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    c = sqlite3.connect(path)
+    c.execute("CREATE TABLE campaigns (id INTEGER PRIMARY KEY, name TEXT UNIQUE, created REAL)")
+    c.commit()
+    c.close()
+    assert "rules" in {row[1] for row in Ledger(path).conn.execute("PRAGMA table_info(campaigns)")}
+
+
+def test_rules_drive_durations_and_direct_ingest(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(config, "READY_DIR", str(tmp_path / "ready"))
+    monkeypatch.setattr(config, "HOOKS_DIR", str(tmp_path / "hooks"))
+    monkeypatch.setattr(config, "INBOX_DIR", str(tmp_path / "inbox"))
+    led = _ledger()
+
+    class FakeClient:
+        available = True
+
+        def __init__(self):
+            self.created = []
+
+        def usage(self):
+            return None
+
+        def upload_local(self, path, log):
+            return "upl-1"
+
+        def create_project(self, video_url, **kw):
+            self.created.append((video_url, kw))
+            return {"id": "P1"}
+
+    fc = FakeClient()
+    r = Runner(config.Config(), led, fc, log=lambda *_: None)
+    cid = r.add_campaign("FX Adults S2", "vyro", 2.0, 1000, "#adults", "chaotic friend-group moments", "tiktok",
+                         rules={"min_seconds": 30, "max_seconds": 120, "voice": False, "brand_template_id": "tpl-x"})
+    r.ingest(cid, url="https://example.com/ep.mp4", minutes=12)
+    url, kw = fc.created[0]
+    assert url == "https://example.com/ep.mp4" and kw["durations"] == [[30.0, 120.0]] and kw["brand_template_id"] == "tpl-x"
+    # direct ingest of a pre-cut clip: no OpusClip call, 0 credits, clip lands as downloaded
+    src = tmp_path / "E6 1 Titled.mp4"
+    src.write_bytes(b"00")
+    monkeypatch.setattr(transform, "probe_duration", lambda p: 84.0)
+    sid = r.ingest(cid, path=str(src), direct=True)
+    assert len(fc.created) == 1 and led.sources("clipped")[0]["id"] == sid and led.credits_this_week() == 12
+    clip = led.clips("downloaded")[0]
+    assert clip["duration_s"] == 84.0 and clip["title"] == "E6 1 Titled"
+    # transform honours the window: a 12 s clip is skipped; the 84 s one is made with no voice hook, text card kept
+    short = led.add_clip(sid, {"clip_id": "s", "title": "short", "duration_s": 12})
+    led.update_clip(short, local_path=str(src), status="downloaded", duration_s=12)
+    made = []
+    monkeypatch.setattr(transform, "make_variant",
+                        lambda s, d, text, recipe, ha=None, hl=0.0, ts=2.8, log=None: made.append((text, ha)) or d)
+    r.transform_downloaded()
+    assert led.clip(short)["status"] == "skipped" and led.clip(clip["id"])["status"] == "transformed"
+    assert made == [("E6 1 Titled", None)]
+    # inbox folder for a direct campaign routes through the same path
+    r2 = Runner(config.Config(), led, fc, log=lambda *_: None)
+    did = r2.add_campaign("The Shards E6-7", "vyro", 2.0, 1000, "#TheShards", "", "tiktok", rules={"direct": True})
+    d = tmp_path / "inbox" / "The Shards E6-7"
+    d.mkdir(parents=True)
+    f = d / "E7 2 Titled.mp4"
+    f.write_bytes(b"00")
+    os.utime(f, (time.time() - 600, time.time() - 600))
+    assert r2.ingest_inbox() == 1 and len(fc.created) == 1
+    assert led.campaign(did)["id"] == led.sources("clipped")[-1]["campaign_id"]

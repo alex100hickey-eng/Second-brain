@@ -157,6 +157,14 @@ class Ledger:
         self.conn.commit()
         return cur.lastrowid
 
+    def last_order(self, signal_id: int):
+        r = self.conn.execute("SELECT * FROM orders WHERE signal_id=? ORDER BY id DESC LIMIT 1", (signal_id,)).fetchone()
+        return dict(r) if r else None
+
+    def set_order_status(self, order_id: int, status: str) -> None:
+        self.conn.execute("UPDATE orders SET status=? WHERE id=?", (status, order_id))
+        self.conn.commit()
+
     def add_snapshot(self, venue, market, bid, ask, last=None, ts=None) -> None:
         mid = (bid + ask) / 2 if (bid is not None and ask is not None) else None
         self.conn.execute("INSERT INTO snapshots (ts, venue, market, bid, ask, mid, last) VALUES (?,?,?,?,?,?,?)",

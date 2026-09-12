@@ -19,7 +19,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from .. import config, fees
-from ..feeds import offshore, weather
+from ..feeds import metar, offshore, weather
 from .base import Signal, Strategy, size_for
 
 
@@ -47,7 +47,9 @@ def build_ctx(city: str, date: datetime, kind: str = "high", cfg: config.Config 
               venue: str = "offshore", fetch=None) -> WeatherCtx | None:
     """Assemble the shared context. `fetch` lets tests inject data: dict with event/members/obs/hourly."""
     cfg = cfg or config.load()
-    meta = config.CITIES[city]
+    meta = config.city_meta(city)
+    if meta is None:
+        return None
     tz = meta["tz"]
     fetch = fetch or {}
     event = fetch.get("event")
@@ -55,10 +57,10 @@ def build_ctx(city: str, date: datetime, kind: str = "high", cfg: config.Config 
         event = offshore.find_weather_event(city, meta["query"], date, kind)
     if event is None or not event.buckets:
         return None
-    station = event.station or meta["us_station"]
+    station = event.station or meta["station"]
     rule = event.rule
     if venue == "us":
-        station, rule = meta["us_station"], "cli"
+        station, rule = meta.get("us_station", station), "cli"
     coords = config.STATIONS.get(station, {"lat": meta["lat"], "lon": meta["lon"]})
     members = fetch.get("members")
     if members is None:
@@ -69,12 +71,16 @@ def build_ctx(city: str, date: datetime, kind: str = "high", cfg: config.Config 
     obs = fetch.get("obs")
     if obs is None:
         start, end = weather.local_day_bounds(event.date, tz)
-        obs = weather.observations(station, start.isoformat(), min(end, datetime.now(ZoneInfo(tz))).isoformat())
+        if station.startswith("K"):
+            obs = weather.observations(station, start.isoformat(), min(end, datetime.now(ZoneInfo(tz))).isoformat())
+        else:
+            hours = int((datetime.now(ZoneInfo(tz)) - start).total_seconds() // 3600) + 2
+            obs = metar.observations(station, hours=max(hours, 3), unit=event.unit)
     running, n_obs, last_local = weather.running_extreme(obs, event.date, tz, kind)
     hourly = fetch.get("hourly")
     if hourly is None:
         hourly = weather.hourly_forecast(coords["lat"], coords["lon"], tz, unit=event.unit)
-    remaining = weather.hours_remaining_max(hourly, event.date, last_local, tz) if kind == "high" else None
+    remaining = weather.hours_remaining_extreme(hourly, event.date, last_local, tz, kind)
     adjusted = adjust_probs_with_obs(probs, event.buckets, running, remaining, kind) if n_obs else list(probs)
     return WeatherCtx(city=city, date=event.date, kind=kind, venue=venue, event=event, probs=adjusted,
                       model_probs=list(probs), obs=obs, running=running, n_obs=n_obs, last_obs_local=last_local,
@@ -89,22 +95,37 @@ def adjust_probs_with_obs(probs: list, buckets, running, remaining, kind: str = 
     - a bucket entirely above max(running, model's remaining-hours max) + margin → 0
     - the rest keep their model share, renormalised; the bucket holding the running max always
       keeps at least the floor so a locked day still has a winner."""
-    if running is None or kind != "high":
+    if running is None:
         return list(probs)
-    top = max(running, remaining if remaining is not None else running)
-    ceiling = top + margin_f
     out = []
-    for b, p in zip(buckets, probs):
-        if b.hi < running or b.lo > ceiling:
-            out.append(0.0)                       # already impossible, or beyond any forecast + margin
-        elif b.contains(running):
-            out.append(max(p, floor))             # the bucket holding today's max always survives
-        elif p <= floor:
-            out.append(0.0)                       # no model support: a floor is not evidence
-        elif b.lo > top:
-            out.append(p * tail_factor)           # above both the observed max and the forecast: tail only
-        else:
-            out.append(p)
+    if kind == "high":
+        top = max(running, remaining if remaining is not None else running)
+        ceiling = top + margin_f
+        for b, p in zip(buckets, probs):
+            if b.hi < running or b.lo > ceiling:
+                out.append(0.0)                   # already impossible, or beyond any forecast + margin
+            elif b.contains(running):
+                out.append(max(p, floor))         # the bucket holding today's max always survives
+            elif p <= floor:
+                out.append(0.0)                   # no model support: a floor is not evidence
+            elif b.lo > top:
+                out.append(p * tail_factor)       # above both the observed max and the forecast: tail only
+            else:
+                out.append(p)
+    else:  # low: mirror image — the day's minimum can only fall from here
+        bottom = min(running, remaining if remaining is not None else running)
+        floor_t = bottom - margin_f
+        for b, p in zip(buckets, probs):
+            if b.lo > running or b.hi < floor_t:
+                out.append(0.0)
+            elif b.contains(running):
+                out.append(max(p, floor))
+            elif p <= floor:
+                out.append(0.0)
+            elif b.hi < bottom:
+                out.append(p * tail_factor)
+            else:
+                out.append(p)
     s = sum(out)
     if s <= 0:
         return [1.0 if b.contains(running) else 0.0 for b in buckets]
@@ -144,7 +165,8 @@ class WeatherHold(Strategy):
             if b.closed or b.best_ask is None:
                 continue
             # buckets already killed by observations are weather_obs's job, not a hold
-            if ctx.running is not None and ctx.kind == "high" and b.hi < ctx.running:
+            if ctx.running is not None and ((ctx.kind == "high" and b.hi < ctx.running) or
+                                            (ctx.kind == "low" and b.lo > ctx.running)):
                 continue
             post = _post_price_buy(b)
             if post is None:
@@ -197,20 +219,29 @@ class WeatherObs(Strategy):
 
 
 def lock_state(ctx: WeatherCtx, margin_f: float = 1.0):
-    """Is today's max locked? True when the observed peak sits at least `margin_f` above the model's
-    remaining-hours max AND the last two observations are falling. Returns (locked, winner_bucket)."""
-    if ctx.kind != "high" or ctx.running is None or ctx.n_obs < 3 or ctx.remaining_extreme is None:
-        return False, None
-    if ctx.remaining_extreme > ctx.running - margin_f:
+    """Is today's extreme locked? High: the observed peak sits at least `margin_f` above the model's
+    remaining-hours max and the last observations are falling. Low: the observed minimum sits at
+    least `margin_f` below the remaining-hours min and observations are rising. Returns (locked, winner)."""
+    if ctx.running is None or ctx.n_obs < 3 or ctx.remaining_extreme is None:
         return False, None
     temps = [t for _, t in ctx.obs[-3:]]
-    if len(temps) < 3 or not (temps[-1] <= temps[-2] <= temps[-3] or temps[-1] < ctx.running):
+    if len(temps) < 3:
         return False, None
+    if ctx.kind == "high":
+        if ctx.remaining_extreme > ctx.running - margin_f:
+            return False, None
+        if not (temps[-1] <= temps[-2] <= temps[-3] or temps[-1] < ctx.running):
+            return False, None
+    else:
+        if ctx.remaining_extreme < ctx.running + margin_f:
+            return False, None
+        if not (temps[-1] >= temps[-2] >= temps[-3] or temps[-1] > ctx.running):
+            return False, None
     winner = next((b for b in ctx.event.buckets if b.contains(ctx.running)), None)
     if winner is None:
         return False, None
-    # a CLI-rule venue can print 1° above the hourly running max; refuse a lock at a bucket's top edge
-    if ctx.rule == "cli" and ctx.running == winner.hi:
+    # a CLI-rule venue can print 1° beyond the hourly running extreme; refuse a lock at the bucket's edge
+    if ctx.rule == "cli" and ctx.running == (winner.hi if ctx.kind == "high" else winner.lo):
         return False, None
     return True, winner
 

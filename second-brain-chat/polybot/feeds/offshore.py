@@ -93,8 +93,15 @@ def parse_bucket_title(title: str):
 
 
 def station_from_description(desc: str) -> str | None:
-    m = re.search(r"site=([kK][a-zA-Z0-9]{3})", desc or "")
-    return m.group(1).upper() if m else None
+    """NWS 'timeseries?site=klga' → KLGA; Weather Underground 'history/daily/gb/london/EGLL' → EGLL;
+    a bare '(EGLL)' or 'station EGLL' → EGLL."""
+    d = desc or ""
+    for pat in (r"site=([A-Za-z][A-Za-z0-9]{3})\b", r"history/daily/[a-z]{2}/[^/\s]+/([A-Z]{4})\b",
+                r"\bstation\s+\(?([A-Z]{4})\)?", r"\(([A-Z]{4})\)"):
+        m = re.search(pat, d)
+        if m:
+            return m.group(1).upper()
+    return None
 
 
 def _outcome(m) -> int | None:

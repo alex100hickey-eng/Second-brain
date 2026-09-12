@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from . import config
 
@@ -22,25 +22,49 @@ def slug(text: str, n: int = 48) -> str:
 
 
 def build_caption(platform: str, clip: dict, campaign: dict, text_hook: str) -> tuple:
-    """(title, body). Title from the clip; body = hook line + campaign's required tags + clip tags."""
+    """(title, body). Title from the clip; body = hook line + the brief's mandatory line + tag + hashtags.
+
+    Campaign rules (config.DEFAULT_RULES) decide whether the clip's own hashtags are allowed and which
+    caption line / account tag the brief requires verbatim."""
+    rules = config.campaign_rules(campaign)
     title = (clip.get("title") or text_hook or "Clip").strip()[: config.TITLE_LIMIT]
     required = [t if t.startswith("#") else f"#{t}" for t in (campaign.get("hashtags") or "").split() if t]
     clip_tags = clip.get("hashtags") or []
     if isinstance(clip_tags, str):
         clip_tags = clip_tags.split()
-    clip_tags = [t if t.startswith("#") else f"#{t}" for t in clip_tags][:5]
+    clip_tags = [t if t.startswith("#") else f"#{t}" for t in clip_tags][:5] if rules["extra_tags"] else []
     seen, tags = set(), []
     for t in required + clip_tags:
         if t.lower() not in seen:
             seen.add(t.lower())
             tags.append(t)
-    body = f"{text_hook.strip()}\n\n{' '.join(tags)}".strip()
+    tagline = " ".join(x for x in [(rules["tag"] or "").strip(), " ".join(tags)] if x)
+    parts = [(text_hook or "").strip(), (rules["caption"] or "").strip(), tagline]
+    body = "\n\n".join(p for p in parts if p).strip()
     return title, body[: config.CAPTION_LIMITS.get(platform, 2000)]
+
+
+WINDOW_START_HOUR_ET = {"tiktok": 19, "shorts": 15, "reels": 11, "facebook": 12}
+
+
+def next_slot(platform: str, now: datetime | None = None, tz: str = "America/New_York") -> datetime:
+    """The next posting-window start for this platform, in Eastern time."""
+    from zoneinfo import ZoneInfo
+    z = ZoneInfo(tz)
+    now = now or datetime.now(z)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=z)
+    hour = WINDOW_START_HOUR_ET.get(platform, 12)
+    slot = now.replace(hour=hour, minute=0, second=0, microsecond=0)
+    if slot <= now:
+        slot = slot + timedelta(days=1)
+    return slot
 
 
 def caption_file_text(platform: str, title: str, body: str, campaign: dict, clip: dict, variant_id: int) -> str:
     return "\n".join([
-        f"PLATFORM: {platform}   POST WINDOW (ET): {config.POST_WINDOWS_ET.get(platform, 'any')}",
+        f"PLATFORM: {platform}   POST WINDOW (ET): {config.POST_WINDOWS_ET.get(platform, 'any')}   "
+        f"NEXT SLOT: {next_slot(platform).strftime('%a %b %-d %-I:%M %p')}",
         f"CAMPAIGN: {campaign.get('name')} ({campaign.get('marketplace') or '?'}) · ${campaign.get('rate_per_1k') or 0:.2f}/1k"
         + (f" · cap ${campaign.get('cap_per_clip'):.0f}/clip" if campaign.get("cap_per_clip") else ""),
         f"VARIANT: {variant_id}   after posting: python3 -m clipbot.runner posted --variant {variant_id} --url <post url>",

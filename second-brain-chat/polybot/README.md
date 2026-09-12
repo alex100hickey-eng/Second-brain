@@ -27,13 +27,28 @@ Alex's multi-strategy Polymarket bot. Design doc: vault `Money/Polymarket Bot �
 ```bash
 cd ~/second-brain/second-brain-chat
 python3 -m polybot.runner status
-python3 -m polybot.runner scan                 # one pass, records paper signals
+python3 -m polybot.runner scan                 # one pass over all 30 offshore cities, high + low markets
 python3 -m polybot.runner settle               # fill/close paper signals from what the market did next
 python3 -m polybot.runner report --days 7
 python3 -m polybot.runner calibrate --events 300
+python3 -m polybot.runner backtest --days 7    # replay the weather modules on real past days (also Sundays 04:00)
+python3 -m polybot.runner pairs                # match US markets to offshore twins for leadlag (needs the key)
 python3 -m polybot.runner loop                 # the schedule, forever
 ```
 Tests: `python3 -m pytest test_polybot.py -q` (no network).
+
+## The backtester
+`backtest.py` replays each city-day hour by hour with the same strategy code: real bucket price
+history (CLOB), the station's real hourly observations (METAR / NWS), and the forecasts that existed
+that morning (Open-Meteo forecast archive + previous-run hourly). Signals are paper-filled on the
+prices that followed and settled on the real outcome. It also scores the morning model probability
+of the eventual winner for several hourly-rule discounts, which is how `hourly_rule_discount_f` gets
+tuned from data. Output: `backtest-latest.json` + a summary in the log.
+
+## Live-day tools (activate with the key)
+- `execution.py` — order sync every 5 min: fills → take-profit sells, stale orders → cancel, kill file → cancel_all.
+- `pairs.py` — title/date matcher that writes `pairs.json`, the leadlag universe.
+- `notify.py` — a module in `signal` mode nudges the trade to Alex's phone instead of placing it.
 
 ## Going live (later, in order)
 1. `pip install polymarket-us`; put `POLYMARKET_KEY_ID` and `POLYMARKET_SECRET_KEY` in the server env.

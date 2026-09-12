@@ -130,8 +130,8 @@ def running_extreme(obs, date_str: str, tz: str, kind: str = "high"):
     return (max(vals) if kind == "high" else min(vals)), len(vals), last
 
 
-def hours_remaining_max(hourly, date_str: str, after_local_iso: str | None, tz: str):
-    """Max of the model's hourly forecast for the rest of the local day after `after_local_iso`."""
+def hours_remaining_extreme(hourly, date_str: str, after_local_iso: str | None, tz: str, kind: str = "high"):
+    """Max (or min) of the model's hourly forecast for the rest of the local day after `after_local_iso`."""
     vals = []
     for iso, temp in hourly:
         if temp is None or not iso.startswith(date_str):
@@ -139,7 +139,46 @@ def hours_remaining_max(hourly, date_str: str, after_local_iso: str | None, tz: 
         if after_local_iso and iso <= after_local_iso[:16]:
             continue
         vals.append(temp)
-    return max(vals) if vals else None
+    if not vals:
+        return None
+    return max(vals) if kind == "high" else min(vals)
+
+
+def hours_remaining_max(hourly, date_str: str, after_local_iso: str | None, tz: str):
+    return hours_remaining_extreme(hourly, date_str, after_local_iso, tz, "high")
+
+
+def historical_members(lat: float, lon: float, tz: str, start_date: str, end_date: str, unit: str = "F") -> dict:
+    """What the deterministic models forecast for each day, from Open-Meteo's forecast archive:
+    {date: {'max': [per-model], 'min': [per-model]}}. Thinner than the live ensemble (7 models vs ~80
+    members) but honest: these are the forecasts that existed at the time."""
+    d = _get("https://historical-forecast-api.open-meteo.com/v1/forecast", {
+        "latitude": lat, "longitude": lon, "start_date": start_date, "end_date": end_date,
+        "daily": "temperature_2m_max,temperature_2m_min",
+        "models": "ecmwf_ifs025,gfs_seamless,icon_seamless,gem_seamless,meteofrance_seamless,ukmo_seamless,jma_seamless",
+        "temperature_unit": "fahrenheit" if unit == "F" else "celsius", "timezone": tz,
+    })
+    daily = d.get("daily", {})
+    out = {}
+    for i, date in enumerate(daily.get("time", [])):
+        out[date] = {
+            "max": [daily[k][i] for k in daily if k.startswith("temperature_2m_max") and daily[k][i] is not None],
+            "min": [daily[k][i] for k in daily if k.startswith("temperature_2m_min") and daily[k][i] is not None],
+        }
+    return out
+
+
+def previous_run_hourly(lat: float, lon: float, tz: str, start_date: str, end_date: str, unit: str = "F",
+                        model: str = "ecmwf_ifs025", days_back: int = 1):
+    """Hourly temperatures as forecast `days_back` days earlier (Open-Meteo previous-runs API):
+    [(iso_local_hour, temp)] — the 'remaining hours' view a scan would have had on the day."""
+    var = f"temperature_2m_previous_day{days_back}"
+    d = _get("https://previous-runs-api.open-meteo.com/v1/forecast", {
+        "latitude": lat, "longitude": lon, "start_date": start_date, "end_date": end_date,
+        "hourly": var, "models": model, "temperature_unit": "fahrenheit" if unit == "F" else "celsius", "timezone": tz,
+    })
+    h = d.get("hourly", {})
+    return list(zip(h.get("time", []), h.get(var, [])))
 
 
 # ---- NWS daily climate report (the Polymarket US settlement source) --------------------------

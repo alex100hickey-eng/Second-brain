@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS campaigns (
     prompt TEXT DEFAULT '',          -- ClipAnything prompt aimed at the brief
     platforms TEXT DEFAULT '',       -- csv; empty = config default
     notes TEXT DEFAULT '',
+    rules TEXT DEFAULT '{}',         -- json: per-campaign brief rules (see config.DEFAULT_RULES)
     status TEXT DEFAULT 'active',
     created REAL NOT NULL
 );
@@ -95,6 +96,10 @@ class Ledger:
         self.conn = sqlite3.connect(path)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
+        cols = {r[1] for r in self.conn.execute("PRAGMA table_info(campaigns)")}
+        if "rules" not in cols:                       # DBs created before per-campaign rules existed
+            self.conn.execute("ALTER TABLE campaigns ADD COLUMN rules TEXT DEFAULT '{}'")
+            self.conn.commit()
 
     def _rows(self, q, args=()):
         return [dict(r) for r in self.conn.execute(q, args)]
@@ -105,13 +110,19 @@ class Ledger:
 
     # ---- campaigns -----------------------------------------------------------------------
     def add_campaign(self, name, marketplace="", rate_per_1k=0.0, cap_per_clip=0.0, hashtags="",
-                     prompt="", platforms="", notes="") -> int:
+                     prompt="", platforms="", notes="", rules=None) -> int:
         cur = self.conn.execute(
-            "INSERT INTO campaigns (name, marketplace, rate_per_1k, cap_per_clip, hashtags, prompt, platforms, notes, created)"
-            " VALUES (?,?,?,?,?,?,?,?,?)",
-            (name, marketplace, rate_per_1k, cap_per_clip, hashtags, prompt, platforms, notes, _now()))
+            "INSERT INTO campaigns (name, marketplace, rate_per_1k, cap_per_clip, hashtags, prompt, platforms, notes,"
+            " rules, created) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (name, marketplace, rate_per_1k, cap_per_clip, hashtags, prompt, platforms, notes,
+             json.dumps(rules or {}), _now()))
         self.conn.commit()
         return cur.lastrowid
+
+    @staticmethod
+    def rules(campaign) -> dict:
+        """Brief rules for a campaign row (dict or None), defaults filled in."""
+        return config.campaign_rules(campaign)
 
     def campaign(self, ref) -> dict | None:
         if isinstance(ref, int) or str(ref).isdigit():

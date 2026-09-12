@@ -7,3 +7,5 @@ calibration-build.log
 config.json
 pairs.json
 loop.log
+backtest-latest.json
+backtest-run.log

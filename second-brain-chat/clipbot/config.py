@@ -45,6 +45,33 @@ CAPTION_LIMITS = {"tiktok": 2200, "shorts": 4900, "reels": 2200, "facebook": 200
 TITLE_LIMIT = 95
 
 
+# Per-campaign brief rules, stored as json in campaigns.rules. Every Vyro/Whop brief differs on these.
+DEFAULT_RULES = {
+    "voice": True,          # False: no voice-hook audio (briefs that say "do not change the audio")
+    "text_hook": True,      # False: no on-screen hook card (briefs that forbid added text/subtitles)
+    "extra_tags": True,     # False: only the campaign's required hashtags, none from the clip
+    "caption": "",          # mandatory caption line the brief requires, verbatim
+    "tag": "",              # account to tag in the caption, e.g. "@adultsfx"
+    "min_seconds": 0.0,     # clips shorter than this are skipped (Vyro TV briefs: 30)
+    "max_seconds": 0.0,     # clips longer than this are skipped (0 = no cap)
+    "durations": None,      # OpusClip clipDurations override, e.g. [[30, 60]]; None = derived/min-max or config
+    "brand_template_id": "",  # OpusClip brand template for this campaign (captions on/off live there)
+    "direct": False,        # True: inbox files are pre-cut clips; skip OpusClip (0 credits), transform + stage as-is
+}
+
+
+def campaign_rules(campaign) -> dict:
+    raw = (campaign or {}).get("rules") if isinstance(campaign, dict) else None
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw or "{}")
+        except ValueError:
+            raw = {}
+    out = dict(DEFAULT_RULES)
+    out.update({k: v for k, v in (raw or {}).items() if k in DEFAULT_RULES})
+    return out
+
+
 @dataclass
 class Config:
     weekly_credit_budget: int = 300          # 5 source hours a week → 12 weeks of runway
