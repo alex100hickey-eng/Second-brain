@@ -353,7 +353,8 @@ class Runner:
                     missing.append(c)
             if missing and tries <= max_tries:
                 try:
-                    hd = self.client.hd_urls_via_collection(pid, [c["opus_clip_id"] for c in missing])
+                    hd = self.client.hd_urls_via_collection(pid, [c["opus_clip_id"] for c in missing],
+                                                            name=f"clipbot {pid} retry {tries}")
                 except Exception as exc:
                     hd = {}
                     self.log(f"  HD export retry via collection failed for {pid}: {exc}")

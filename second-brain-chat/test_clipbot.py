@@ -435,7 +435,8 @@ def test_refresh_urlless_repolls_then_gives_up():
             Client.calls += 1
             return [{"clip_id": "a", "hd_url": "https://hd/a.mp4", "preview_url": "", "duration_s": 41, "score": 77}]
 
-        def hd_urls_via_collection(self, pid, ids):
+        def hd_urls_via_collection(self, pid, ids, name=""):
+            assert name.startswith("clipbot P1 retry ")
             return {}
 
     r = Runner(config.Config(), led, Client(), log=lambda *_: None)
