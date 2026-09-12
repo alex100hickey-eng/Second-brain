@@ -12,6 +12,121 @@ is still yours to do.
 
 ---
 
+## 🔴 2026-09-12 — the four things standing between you and a D1 season
+
+You said the fire died down and you want the system finalized. I audited it instead of
+answering. What the system knows about the last three weeks:
+
+- **Scorecard: 0 days logged in 7.** school 0d · ball 0d · money 0d · sleep 0d.
+- **49 nudges sent in those same 7 days.** None logged back. The loop is open at your end.
+- **35 intake rows still `new`, oldest 2026-07-28**, holding 40 actionable items.
+- **Your last 12 commits are all polybot and clipbot.** Betting bot, clipping bot. Zero
+  ball, zero school, since Aug 30. That is where the fire went — it did not go out, it
+  went somewhere else.
+
+Four of those 40 buried items are ball-critical and three have been open for weeks:
+
+1. **CWRU MBB Sports Information Form — open 44 days** (Jon Schwartz, 2026-07-30: *"you're
+   one of two missing it"*). That form is your roster bio. It is the searchable public
+   record of you as a player, and a D1 staff's first search result. Intake caught it in
+   July and it has been sitting under dead mail ever since.
+2. **Practice clearance is still unconfirmed** (Emily Randall 8/22: no NCAA practice or
+   games until the sickle-cell result is submitted; Quest activated 8/26; silence since).
+   You cannot audition for anyone if you cannot practice. One line settles it.
+3. **Coach Rocco's lift program — assigned 2026-09-02, the email was unread.** Three lifts
+   a week on your own time, Google Form the same day, retest the week of 10/15. Your app
+   already runs four loaded days plus two jump days. Seven loaded days is the collision.
+   **Still parked on your call — I have not touched your lift pages.**
+4. **Your own commitment, 2026-08-23, due 8/28: "set the lift schedule around practice."**
+   Same item as #3, made by you, three weeks ago. It is the only one on this list nobody
+   else can do for you.
+
+**Due tonight:** roommate agreement, 11:59 PM (Ngwa Kapapi).
+
+### What I fixed today (commit 5700a87, suite 1045/0)
+
+This morning your ranked day led with a vote whose polls closed Sep 9, an exam that
+happened Sep 11, and a math test that happened Sep 11 — all three above your shooting
+card. Three dead items at the top is how a list stops getting opened, and the 0-day
+scorecard is what that looks like downstream. `_intake_orders` now drops a passed
+`deadline` whose own words pin it to a clock time or a calendar day; asks and commitments
+keep their slots, because an obligation does not expire with its date. Today's list now
+leads with the roommate agreement and your shooting card.
+
+Also: `rot_check` has been reporting your server dead on **every single run** — this Mac's
+Python has no CA bundle, so the HTTPS probe always raised CERTIFICATE_VERIFY_FAILED while
+the server was serving fine. And it compared the server to local HEAD instead of
+`origin/main`, so unpushed work read as a failed deploy. Both fixed. It now also warns
+that **12 local commits have never been pushed** (all polybot/clipbot).
+
+### The structural hole — this is the real finalization work
+
+Your architecture's stated goal is *"dominate D3 basketball (then transfer D1)."* You just
+said D1 **next season**. Next season is 2027-28; that portal opens around March 2027. Which
+means **this season, starting in about six weeks, is the audition** — and nothing in the
+system is built for an audition.
+
+`/d1` is alive and healthy (13 programs, guard depth re-scored 2026-09-11). But that is
+*scouting them*. There is no counterpart pointed the other way: no film capture, no
+per-game production log against what those staffs actually need at the guard spot, no
+contact ledger with the 13 staffs before March. The system is fully instrumented for a D3
+season and you are running a D1 campaign.
+
+That is the thing to build next, and it is blocked behind the lift question in #3.
+
+---
+
+## Canvas login needed
+
+- ~~2026-09-11 nightly sync blocked on SSO~~ **RESOLVED 2026-09-11 3:35 PM — Alex logged in; leave the Browser pane open tonight so the 9:36 PM sync inherits the session.**
+- **2026-09-11 9:36 PM — blocked again, after this afternoon's login.** The Browser
+  pane was back at login.case.edu by the time the nightly sync ran, so the 3:35 PM
+  session did not survive to tonight. Nothing was read. Next time you log in, leave
+  that Canvas tab open and the Mac awake — or expect to re-log in each evening.
+
+- **2026-09-11 — the nightly Canvas status sync could not run.** canvas.case.edu
+  redirected to login.case.edu (SSO expired), so no submissions, grades or
+  announcements were read tonight. Open the Browser pane on the Mac, go to
+  canvas.case.edu and log in once. Until then, work you have already submitted keeps
+  showing as **open** in the vault, and the school brief, ranked daily orders and
+  phone nudges will all be wrong in that direction. Last good read: 2026-09-10 10:26.
+
+- **2026-09-06 — the nightly Canvas status sync could not run again.** canvas.case.edu
+  redirected to login.case.edu (SSO expired), so no submissions, grades or
+  announcements were read tonight. Open the Browser pane on the Mac, go to
+  canvas.case.edu and log in once. Until then, work you have already submitted keeps
+  showing as **open** in the vault, and the school brief, ranked daily orders and
+  phone nudges will all be wrong in that direction. Last good read: 2026-09-03.
+
+- **2026-09-02 — the nightly Canvas status sync could not run.** canvas.case.edu
+  redirected to login.case.edu (SSO expired), so no submissions, grades or
+  announcements were read tonight. Open the Browser pane on the Mac, go to
+  canvas.case.edu and log in once. Until then, work you have already submitted keeps
+  showing as **open** in the vault — the school brief, the ranked daily orders and the
+  phone nudges will all be wrong in that direction.
+
+---
+
+## 📚 2026-09-11 (Fri 3:50 PM) — Friday sweep done by hand (the 3:10 task hung); 6 things are yours
+
+- **Tonight:** CSDS *HW: Measurements and your own computer* (10 pts, 11:59 PM) is still **unsubmitted** — the
+  page is open in the Browser pane. Confirm 3 lines in `School/Courses/CSDS101/Study/HICKEY_CSDS101_HW_Measurements.docx`
+  (0.75 km dorm→KSL · the ad-studio use-case sentence · "memory is the constraint" verdict), then upload.
+- **2 min:** NameCoach recording (CSDS *Name Pronunciation*, 2 pts, 7 days late, no lock) — the only item Canvas shows open past due.
+- **ECON attendance check:** Poll Everywhere synced to the gradebook at **80/100 after 5 classes**. Hammack's 9/9
+  announcement says errors happen and to email him with the date + what was polled. The 9/9 poll was excused by email —
+  confirm it was credited.
+- **Sunday night scorecard (10 min):** tell CLARVIS where each course actually stands — `prepared_through` has been
+  2026-08-27 on all five courses for 15 days; every PACE number in the brief is fiction until then.
+- **Parents' Sep 19–21 visit:** still unbooked — give them a yes/no (Weekend Map W4 assumes they come).
+- **Advisor (Van Oosten) reply** still sits unsent in school Gmail drafts — send it or drop it.
+
+Facts settled today (no action): 10-K M1 is fully done (the group's Sherwin-Williams 10-K PDF was uploaded Thu 11:40 AM);
+10-K M2 template is **not posted yet** (due Sep 25 — recheck at next sweep); CSDS *HW: Logic, Numbers, and Color* is
+**30 pts and bans AI outright** (prompt saved in Study/); ECON *HW 2 Data of Macro* is **100 pts, due Thu Oct 1**.
+
+---
+
 ## 🏀📬 2026-09-02 (Wed evening) — from your texts + emails; 5 things are yours
 
 You said "optimize whatever you can" and "you can find most stuff about me in my texts and
@@ -738,3 +853,8 @@ invisible code.
 - **Google Calendar stays disconnected on purpose** (your call, 08-11 — the calendar's
   contents are junk, so connecting it would feed CLARVIS bad data). Everything degrades
   gracefully without it. Not a bug, don't let anything flag it as one.
+
+## Canvas sweep 2026-09-04
+- **ACCT — the SEC 10-K instructions doc is missing.** Jarvis's Sep 3 announcement says he uploaded `SEC.Gov Instructions Finding a Company's 10K.docx` under the "Getting Started, General Admin, and Learning Resources" module. It is not there (all 10 module items checked live), and the ACCT Files listing is not student-visible to us. Ask him, or check the *Excel Information* page yourself.
+- **prepared_through is 8 days stale on all five courses** (still 2026-08-27). The Sunday scorecard ritual has never run, so every PACE/lead-target number in the brief is currently fiction. Ten minutes on the pace page fixes it — this one is yours, not the sweep's.
+- **No record of which MATH/AIQS suggested problems you have actually done.** All the Ch 1 and Ch 2 planning assumes §1.1-1.4 lists are finished. If they are not, say so before Test 1 (Fri 9/11).
