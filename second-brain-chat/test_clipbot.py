@@ -387,3 +387,33 @@ def test_hook_lines_rotate_and_card_text_has_no_emoji(tmp_path, monkeypatch):
     r.transform_downloaded()
     assert cards == ["two", "one"] and {led.clip(c1)["title"], led.clip(c2)["title"]} == {"two", "one 😭"}
     assert [v["text_hook"] for v in led.variants("made")] == ["two", "one 😭"]
+
+
+def test_post_order_ranks_deadline_then_score(tmp_path):
+    led = _ledger()
+    a = led.add_campaign("Adults", rules={"ends": "2026-09-24", "per_day": 2})
+    s = led.add_campaign("Shards", rules={"ends": "2026-09-14"})
+    sa = led.add_source(a, "/a.mp4", "a", 10, 10)
+    ss = led.add_source(s, "/s.mp4", "s", 2, 0)
+    ids = []
+    for src, score, name in ((sa, 60, "a-low"), (sa, 90, "a-high"), (sa, 70, "a-mid"), (ss, 0, "shard")):
+        cid = led.add_clip(src, {"clip_id": name, "title": name, "score": score, "duration_s": 40})
+        vid = led.add_variant(cid, "tiktok", f"/v/{name}.mp4", "", name)
+        led.update_variant(vid, staged_path=f"/r/{name}.mp4", status="staged")
+        ids.append(vid)
+    led.mark_posted(ids[0], "https://t/1")                       # posted ones drop out
+    rows = posting.post_order(led, today="2026-09-12")
+    assert [r["file"] for r in rows] == ["shard.mp4", "a-high.mp4", "a-mid.mp4"]
+    assert [r["day"] for r in rows] == [0, 0, 0] and rows[0]["days_left"] == 2
+    text = posting.format_post_order(rows)
+    assert "## Shards — TODAY · campaign ends in 2d" in text and "v2" in text and "a-low" not in text
+    path = posting.write_post_order(led, ready_dir=str(tmp_path))
+    assert path.endswith("POST ORDER.txt") and os.path.exists(path)
+
+
+def test_fit_text_shrinks_before_truncating():
+    assert transform.fit_text("wait for it") == (62, "wait for it")
+    size, wrapped = transform.fit_text("Just a group of adults who have absolutely no idea what they’re doing")
+    assert size < 62 and "…" not in wrapped and wrapped.count("\n") <= 2
+    size, wrapped = transform.fit_text("word " * 40)
+    assert size == 42 and wrapped.endswith("…") and wrapped.count("\n") == 3

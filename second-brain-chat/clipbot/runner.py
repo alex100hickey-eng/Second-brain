@@ -416,6 +416,8 @@ class Runner:
         counts = {"submitted": self.submit_queued(), "clipped": self.poll_submitted(),
                   "downloaded": self.download_new(), "variants": self.transform_downloaded(),
                   "staged": self.stage_made()}
+        if counts["staged"]:
+            posting.write_post_order(self.ledger)
         self.log(f"process: {counts}")
         return counts
 
@@ -447,6 +449,7 @@ class Runner:
         staged = self.ledger.variants("staged")
         last_seen = self.ledger.get_kv("last_nudged_variant", 0)
         fresh = [v for v in staged if v["id"] > last_seen]
+        posting.write_post_order(self.ledger)
         if not fresh:
             return False
         by = {}
@@ -511,6 +514,7 @@ def main(argv=None):
     sub.add_parser("hooks")
     sub.add_parser("loop")
     sub.add_parser("nudge")
+    sub.add_parser("plan")
     pr = sub.add_parser("prune")
     pr.add_argument("--keep-days", type=int, default=14)
     c = sub.add_parser("campaign")
@@ -533,6 +537,8 @@ def main(argv=None):
     c.add_argument("--brand-template", default="", help="OpusClip brand template id for this campaign")
     c.add_argument("--direct", action="store_true", help="inbox files are pre-cut clips: no OpusClip, 0 credits")
     c.add_argument("--hook-lines", default="", help="brief-approved lines, '|'-separated; rotate as card + caption opener")
+    c.add_argument("--ends", default="", help="campaign end date YYYY-MM-DD (post order puts the soonest first)")
+    c.add_argument("--per-day", type=int, default=0, help="clips per day for this campaign in the post order (default 3)")
     i = sub.add_parser("ingest")
     i.add_argument("--campaign", required=True)
     i.add_argument("--url", default="")
@@ -577,6 +583,10 @@ def main(argv=None):
             rules["direct"] = True
         if a.hook_lines:
             rules["hook_lines"] = [x.strip() for x in a.hook_lines.split("|") if x.strip()]
+        if a.ends:
+            rules["ends"] = a.ends
+        if a.per_day:
+            rules["per_day"] = a.per_day
         r.add_campaign(a.name, a.marketplace, a.rate, a.cap, a.hashtags, a.prompt, a.platforms, a.notes, rules)
     elif a.cmd == "campaign":
         for k in r.ledger.campaigns():
@@ -599,6 +609,9 @@ def main(argv=None):
     elif a.cmd == "hooks":
         for h in hooks.library():
             print(f"{h['name']:<40} {h['text']}")
+    elif a.cmd == "plan":
+        print(posting.format_post_order(posting.post_order(r.ledger)), end="")
+        print(f"→ {posting.write_post_order(r.ledger)}")
     elif a.cmd == "nudge":
         print("sent" if r.ready_nudge() else "nothing new to nudge")
     elif a.cmd == "prune":

@@ -51,15 +51,33 @@ def plain_text(text: str) -> str:
     return re.sub(r"\s{2,}", " ", _EMOJI.sub("", text or "")).strip()
 
 
-def render_text_png(text: str, path: str, max_width: int = 1000, font_path: str = config.FONT, size: int = 62) -> tuple:
+FIT_STEPS = ((62, 18), (54, 21), (48, 24), (42, 27))   # (font px, chars per line): shrink before truncating
+
+
+def fit_text(text: str, max_lines: int = 3) -> tuple:
+    """(font size, wrapped text). A brief's 60-character line shrinks to fit instead of ending in '…'."""
+    clean = " ".join((text or "").split())
+    for size, width in FIT_STEPS:
+        lines = textwrap.wrap(clean, width=width) or [""]
+        if len(lines) <= max_lines:
+            return size, "\n".join(lines)
+    size, width = FIT_STEPS[-1]
+    return size, wrap_text(clean, width=width, max_lines=max_lines + 1)
+
+
+def render_text_png(text: str, path: str, max_width: int = 1000, font_path: str = config.FONT, size: int = 0) -> tuple:
     """White bold text with a black stroke on a rounded translucent box. Returns (w, h)."""
     from PIL import Image, ImageDraw, ImageFont  # optional dependency, imported lazily
 
+    if size:
+        wrapped = wrap_text(text)
+    else:
+        size, wrapped = fit_text(text)
     try:
         font = ImageFont.truetype(font_path, size)
     except OSError:
         font = ImageFont.load_default(size=size)
-    lines = wrap_text(text).split("\n")
+    lines = wrapped.split("\n")
     pad, gap, stroke = 28, 10, 4
     meas = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
     boxes = [meas.textbbox((0, 0), ln, font=font, stroke_width=stroke) for ln in lines]

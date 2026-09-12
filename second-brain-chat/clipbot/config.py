@@ -58,6 +58,8 @@ DEFAULT_RULES = {
     "brand_template_id": "",  # OpusClip brand template for this campaign (captions on/off live there)
     "direct": False,        # True: inbox files are pre-cut clips; skip OpusClip (0 credits), transform + stage as-is
     "hook_lines": [],       # brief-approved caption/on-screen lines; rotate through these instead of OpusClip's titles
+    "ends": "",             # campaign end date YYYY-MM-DD; the post-order list puts the soonest deadline first
+    "per_day": 3,           # how many of this campaign's clips to post per day (a new account gets throttled past ~3)
 }
 
 

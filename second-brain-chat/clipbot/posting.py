@@ -44,6 +44,57 @@ def build_caption(platform: str, clip: dict, campaign: dict, text_hook: str) -> 
     return title, body[: config.CAPTION_LIMITS.get(platform, 2000)]
 
 
+def post_order(ledger, today: str | None = None) -> list:
+    """Staged-but-unposted variants ranked: soonest campaign deadline first, then OpusClip score.
+    Each row gets a suggested day (0 = today) from the campaign's per_day quota."""
+    today = today or datetime.now().strftime("%Y-%m-%d")
+    rows = []
+    for v in ledger.variants("staged"):
+        clip = ledger.clip(v["clip_id"]) or {}
+        src = next((s for s in ledger.sources() if s["id"] == clip.get("source_id")), None)
+        camp = ledger.campaign(src["campaign_id"]) if src else None
+        rules = config.campaign_rules(camp)
+        rows.append({"variant": v["id"], "file": os.path.basename(v["staged_path"] or v["path"] or ""),
+                     "platform": v["platform"], "campaign": (camp or {}).get("name", "?"), "ends": rules["ends"] or "9999-12-31",
+                     "per_day": int(rules["per_day"] or 3), "score": float(clip.get("score") or 0),
+                     "seconds": float(clip.get("duration_s") or 0), "line": v.get("text_hook") or ""})
+    rows.sort(key=lambda r: (r["ends"], -r["score"], r["variant"]))
+    seen = {}
+    for r in rows:
+        n = seen.get(r["campaign"], 0)
+        r["day"] = n // max(1, r["per_day"])
+        seen[r["campaign"]] = n + 1
+        r["days_left"] = None if r["ends"] == "9999-12-31" else (datetime.strptime(r["ends"], "%Y-%m-%d") - datetime.strptime(today, "%Y-%m-%d")).days
+    return rows
+
+
+def format_post_order(rows: list) -> str:
+    if not rows:
+        return "POST ORDER — nothing staged.\n"
+    out = [f"POST ORDER — {len(rows)} staged clips · written {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+           "Post in this order, top to bottom. Submit each URL on Vyro (Add Posts) the same hour, then:",
+           "  python3 -m clipbot.runner posted --variant <N> --url <post url>", ""]
+    day_names = {0: "TODAY", 1: "TOMORROW"}
+    cur = None
+    for r in rows:
+        key = (r["campaign"], r["day"])
+        if key != cur:
+            cur = key
+            left = "" if r["days_left"] is None else f" · campaign ends in {r['days_left']}d"
+            out.append(f"## {r['campaign']} — {day_names.get(r['day'], 'day +' + str(r['day']))}{left}")
+        out.append(f"  v{r['variant']:<4} {r['file']:<52} {r['platform']:<7} score {r['score']:>3.0f} · {r['seconds']:>3.0f}s"
+                   + (f"  · \"{r['line'][:48]}\"" if r["line"] else ""))
+    return "\n".join(out) + "\n"
+
+
+def write_post_order(ledger, ready_dir: str = config.READY_DIR) -> str:
+    os.makedirs(ready_dir, exist_ok=True)
+    path = os.path.join(ready_dir, "POST ORDER.txt")
+    with open(path, "w") as f:
+        f.write(format_post_order(post_order(ledger)))
+    return path
+
+
 WINDOW_START_HOUR_ET = {"tiktok": 19, "shorts": 15, "reels": 11, "facebook": 12}
 
 
