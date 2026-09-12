@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import tempfile
 import textwrap
@@ -40,6 +41,14 @@ def wrap_text(text: str, width: int = 18, max_lines: int = 3) -> str:
         lines = lines[:max_lines]
         lines[-1] = lines[-1][: max(0, width - 1)] + "…"
     return "\n".join(lines)
+
+
+_EMOJI = re.compile("[\U0001F000-\U0001FFFF\u2600-\u27BF\u2B00-\u2BFF\uFE0F\u200d]+")
+
+
+def plain_text(text: str) -> str:
+    """The on-screen card font has no emoji: drop them there, keep them in the caption."""
+    return re.sub(r"\s{2,}", " ", _EMOJI.sub("", text or "")).strip()
 
 
 def render_text_png(text: str, path: str, max_width: int = 1000, font_path: str = config.FONT, size: int = 62) -> tuple:

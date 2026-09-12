@@ -368,10 +368,13 @@ class Runner:
                 hook = hooks.pick(lib, uses, exclude=used_here) if (lib and rules["voice"]) else None
                 hook_len = hooks.hook_length(hook, self.cfg.hook_seconds_max) if hook else 0.0
                 text_hook = (c["title"] or (hook["text"] if hook else "Watch this")) if rules["text_hook"] else ""
+                if rules["text_hook"] and rules["hook_lines"]:     # brief-approved lines beat OpusClip's clickbait titles
+                    text_hook = rules["hook_lines"][(c["id"] + made) % len(rules["hook_lines"])]
+                    self.ledger.update_clip(c["id"], title=text_hook)
                 dst = os.path.join(config.HOME, "variants", f"{c['id']:05d}_{platform}.mp4")
                 try:
-                    transform.make_variant(src, dst, text_hook, recipe, hook["file"] if hook else None, hook_len,
-                                           self.cfg.text_hook_seconds)
+                    transform.make_variant(src, dst, transform.plain_text(text_hook), recipe,
+                                           hook["file"] if hook else None, hook_len, self.cfg.text_hook_seconds)
                 except Exception as exc:
                     self.log(f"  transform failed clip #{c['id']} {platform}: {exc}")
                     continue
@@ -529,6 +532,7 @@ def main(argv=None):
     c.add_argument("--max-seconds", type=float, default=0.0)
     c.add_argument("--brand-template", default="", help="OpusClip brand template id for this campaign")
     c.add_argument("--direct", action="store_true", help="inbox files are pre-cut clips: no OpusClip, 0 credits")
+    c.add_argument("--hook-lines", default="", help="brief-approved lines, '|'-separated; rotate as card + caption opener")
     i = sub.add_parser("ingest")
     i.add_argument("--campaign", required=True)
     i.add_argument("--url", default="")
@@ -571,6 +575,8 @@ def main(argv=None):
             rules["brand_template_id"] = a.brand_template
         if a.direct:
             rules["direct"] = True
+        if a.hook_lines:
+            rules["hook_lines"] = [x.strip() for x in a.hook_lines.split("|") if x.strip()]
         r.add_campaign(a.name, a.marketplace, a.rate, a.cap, a.hashtags, a.prompt, a.platforms, a.notes, rules)
     elif a.cmd == "campaign":
         for k in r.ledger.campaigns():

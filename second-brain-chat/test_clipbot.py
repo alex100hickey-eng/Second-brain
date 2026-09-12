@@ -12,6 +12,12 @@ from clipbot.opus_api import OpusClient, estimate_credits, normalize_clips, proj
 from clipbot.runner import Runner, can_spend
 
 
+@pytest.fixture(autouse=True)
+def _no_live_kill_switch(monkeypatch):
+    """The real KILL file pauses the launchd loop; tests must not see it."""
+    monkeypatch.setattr(config, "kill_switch_on", lambda: False)
+
+
 def _ledger():
     fd, path = tempfile.mkstemp(suffix=".db")
     os.close(fd)
@@ -360,3 +366,24 @@ def test_ingest_claims_source_before_upload(tmp_path, monkeypatch):
     sid = r.ingest(cid, path=str(f))
     assert seen == {"status_during_upload": "submitting", "queued_during_upload": []}
     assert led.sources("submitted")[0]["id"] == sid and r.submit_queued() == 0
+
+
+def test_hook_lines_rotate_and_card_text_has_no_emoji(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(config, "HOOKS_DIR", str(tmp_path / "hooks"))
+    assert transform.plain_text("Every friend group has one 💀  ok ✅") == "Every friend group has one ok"
+    led = _ledger()
+    r = Runner(config.Config(), led, OpusClient(api_key=None), log=lambda *_: None)
+    cid = r.add_campaign("A", "vyro", 2.0, 0, "#a", "", "tiktok", rules={"voice": False, "hook_lines": ["one 😭", "two"]})
+    src = tmp_path / "s.mp4"
+    src.write_bytes(b"00")
+    monkeypatch.setattr(transform, "probe_duration", lambda p: 40.0)
+    sid = r.ingest(cid, path=str(src), direct=True)
+    c1 = led.clips("downloaded")[0]["id"]
+    c2 = led.add_clip(sid, {"clip_id": "x", "title": "Clickbait!!", "duration_s": 40})
+    led.update_clip(c2, local_path=str(src), status="downloaded")
+    cards = []
+    monkeypatch.setattr(transform, "make_variant", lambda s, d, text, *a, **k: cards.append(text) or d)
+    r.transform_downloaded()
+    assert cards == ["two", "one"] and {led.clip(c1)["title"], led.clip(c2)["title"]} == {"two", "one 😭"}
+    assert [v["text_hook"] for v in led.variants("made")] == ["two", "one 😭"]

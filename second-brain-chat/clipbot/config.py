@@ -57,6 +57,7 @@ DEFAULT_RULES = {
     "durations": None,      # OpusClip clipDurations override, e.g. [[30, 60]]; None = derived/min-max or config
     "brand_template_id": "",  # OpusClip brand template for this campaign (captions on/off live there)
     "direct": False,        # True: inbox files are pre-cut clips; skip OpusClip (0 credits), transform + stage as-is
+    "hook_lines": [],       # brief-approved caption/on-screen lines; rotate through these instead of OpusClip's titles
 }
 
 
