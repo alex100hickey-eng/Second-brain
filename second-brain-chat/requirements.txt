@@ -30,3 +30,4 @@ pynput==1.8.2; sys_platform == "darwin"
 # REMOTE browser over CDP) — no local browser binary installed, works on server too
 playwright==1.61.0
 # System deps (brew, not pip): ffmpeg, whisper-cpp + models/ggml-base.en.bin — see ../requirements.txt
+polymarket-us>=0.1.2

@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  polybot paper loop: scans the weather modules every hour at :55, bucket_sum every 5 min,
+  settles paper trades at :20, writes the report at 07:00 ET, rebuilds calibration at 03:00.
+  Paper/signal only until POLYMARKET_KEY_ID / POLYMARKET_SECRET_KEY exist in ~/second-brain/.env
+  AND a module is flipped to "live" in second-brain-chat/polybot/config.json.
+
+  Install:
+    cp scripts/com.secondbrain.polybot.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.secondbrain.polybot.plist
+  Stop:
+    launchctl unload ~/Library/LaunchAgents/com.secondbrain.polybot.plist
+  Emergency (keeps running, stops every order):
+    touch ~/second-brain/second-brain-chat/polybot/KILL
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.secondbrain.polybot</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>cd ~/second-brain &amp;&amp; set -a &amp;&amp; source ./.env &amp;&amp; set +a &amp;&amp; cd second-brain-chat &amp;&amp; /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 -u -m polybot.runner loop</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>60</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/alexhickey24/second-brain/second-brain-chat/polybot/loop.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/alexhickey24/second-brain/second-brain-chat/polybot/loop.log</string>
+</dict>
+</plist>

@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  clipbot loop: every 5 min ingests iCloud ClipBot/inbox/<campaign>/ videos, polls OpusClip for
+  finished clips, downloads, transforms (voice hook + text hook + per-platform trim) and stages
+  them into iCloud ClipBot/ready/<platform>/; 17:00 ET sends the "clips ready" nudge.
+  Idle until OPUSCLIP_API_KEY exists in ~/second-brain/.env (restart the agent after adding it).
+
+  Install:
+    cp scripts/com.secondbrain.clipbot.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.secondbrain.clipbot.plist
+  Restart after editing .env:
+    launchctl kickstart -k gui/$(id -u)/com.secondbrain.clipbot
+  Stop:
+    launchctl unload ~/Library/LaunchAgents/com.secondbrain.clipbot.plist
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.secondbrain.clipbot</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>cd ~/second-brain &amp;&amp; set -a &amp;&amp; source ./.env &amp;&amp; set +a &amp;&amp; cd second-brain-chat &amp;&amp; PATH=/opt/homebrew/bin:$PATH /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 -u -m clipbot.runner loop</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>60</integer>
+    <key>StandardOutPath</key>
+    <string>/Users/alexhickey24/second-brain/second-brain-chat/clipbot/loop.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/alexhickey24/second-brain/second-brain-chat/clipbot/loop.log</string>
+</dict>
+</plist>

@@ -1,0 +1,93 @@
+"""hold_favorites (H2 + S12): the calibration table says contracts in a price band resolve YES more
+(or less) often than the price implies.
+
+  favorites   YES priced 85-95c, resolving within `horizon_days` → BUY_YES when realized − price ≥ edge
+  deadline NO 'by <date>' style longshots priced 3-20c → BUY_NO when realized ≪ price
+
+Category comes from the event's tags; sports stays off until the Ohio gate is flipped.
+"""
+from __future__ import annotations
+
+import json
+import re
+from datetime import datetime, timezone
+
+from .. import calibration, config
+from ..feeds import offshore
+from .base import Signal, Strategy, size_for
+
+_DEADLINE_RE = re.compile(r"\b(by|before|until)\b", re.I)
+
+
+def _hours_left(end_iso: str) -> float | None:
+    try:
+        end = datetime.fromisoformat(end_iso.replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return None
+    return (end - datetime.now(timezone.utc)).total_seconds() / 3600
+
+
+class HoldFavorites(Strategy):
+    name = "hold_favorites"
+
+    def __init__(self, cfg: config.Config, table: dict | None = None):
+        self.cfg = cfg
+        self._injected = table is not None
+        self.table = table if table is not None else calibration.load_table()
+
+    def scan(self, ctx=None, events: list | None = None) -> list:
+        out = []
+        if not self._injected:
+            self.table = calibration.load_table()   # the loop rebuilds it nightly
+        if not self.table:
+            return out
+        events = events if events is not None else offshore.events_ending_within(self.cfg.horizon_days)
+        lo_f, hi_f = self.cfg.favorites_band
+        lo_l, hi_l = self.cfg.longshot_band
+        for e in events:
+            cat = offshore.event_category(e)
+            if cat == "sports" and not self.cfg.caps.sports_enabled:
+                continue
+            for m in e.get("markets", []):
+                if m.get("closed"):
+                    continue
+                try:
+                    yes = float(json.loads(m.get("outcomePrices") or "[]")[0])
+                    toks = json.loads(m.get("clobTokenIds") or "[]")
+                except (ValueError, IndexError, TypeError):
+                    continue
+                if not toks:
+                    continue
+                bid, ask = offshore._f(m.get("bestBid")), offshore._f(m.get("bestAsk"))
+                hours = _hours_left(m.get("endDate") or e.get("endDate") or "")
+                if hours is None or hours <= 0 or hours > self.cfg.horizon_days * 24:
+                    continue
+                label = f"{cat}: {m.get('question') or e.get('title')}"
+                spread = None if (bid is None or ask is None) else round((ask - bid) * 100, 1)
+                if lo_f <= yes <= hi_f and bid is not None and ask is not None:
+                    realized = calibration.lookup(self.table, yes, cat)
+                    if realized is None:
+                        continue
+                    post = round(min(bid + 0.01, ask - 0.01), 2)
+                    edge = (realized - post) * 100
+                    if edge >= self.cfg.edge_min_cents / 2:
+                        size = size_for(realized, post, self.cfg.bankroll_usd, self.cfg.caps)
+                        if size > 0:
+                            out.append(Signal(self.name, "offshore", toks[0], label, "BUY_YES", post, size, round(edge, 1),
+                                              f"calibration {realized:.0%} vs post {post:.2f} ({hours:.0f}h left)",
+                                              exit="settle", horizon_hours=hours, category=cat, spread_cents=spread,
+                                              meta={"market_id": str(m.get("id")), "band": "favorite"}))
+                elif lo_l <= yes <= hi_l and bid is not None and bid >= lo_l and _DEADLINE_RE.search(m.get("question") or ""):
+                    realized = calibration.lookup(self.table, yes, cat)
+                    if realized is None:
+                        continue
+                    no_price = round(1 - bid + 0.01, 2)
+                    edge = (bid - realized) * 100
+                    if edge >= self.cfg.edge_min_cents / 2:
+                        size = size_for(1 - realized, no_price, self.cfg.bankroll_usd, self.cfg.caps)
+                        if size > 0:
+                            out.append(Signal(self.name, "offshore", toks[0], label, "BUY_NO", no_price, size, round(edge, 1),
+                                              f"deadline longshot: calibration {realized:.0%} vs bid {bid:.2f} ({hours:.0f}h left)",
+                                              exit="settle", horizon_hours=hours, category=cat, spread_cents=spread,
+                                              meta={"market_id": str(m.get("id")), "band": "longshot"}))
+        return out

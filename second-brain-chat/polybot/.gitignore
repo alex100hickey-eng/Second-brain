@@ -1,0 +1,9 @@
+polybot.db
+polybot.db-journal
+KILL
+report-latest.txt
+calibration.json
+calibration-build.log
+config.json
+pairs.json
+loop.log

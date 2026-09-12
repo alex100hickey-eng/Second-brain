@@ -1,0 +1,324 @@
+"""polybot unit tests — no network. Run: python3 -m pytest test_polybot.py -q"""
+import json
+import math
+import os
+import tempfile
+import time
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+import pytest
+
+from polybot import calibration, config, fees
+from polybot.feeds import offshore, weather
+from polybot.feeds.offshore import Bucket, WeatherEvent
+from polybot.ledger import Ledger
+from polybot.paper import PaperEngine, exit_from_history, fill_from_history, pnl_usd
+from polybot.risk import RiskManager
+from polybot.strategies.base import Signal, size_for
+from polybot.strategies.bucket_sum import BucketSum, arb_check
+from polybot.strategies.hold_favorites import HoldFavorites
+from polybot.strategies.leadlag import leadlag_signal, noise_signal
+from polybot.strategies.weather import (WeatherHold, WeatherLock, WeatherModelUpdate, WeatherObs, build_ctx,
+                                        lock_state)
+
+
+# ---- fixtures -----------------------------------------------------------------------------
+def _bucket(title, bid, ask, tok, closed=False, outcome=None):
+    lo, hi, unit = offshore.parse_bucket_title(title)
+    return Bucket(title, lo, hi, unit, tok, tok + "n", "m" + tok, "c" + tok, bid, ask,
+                  (bid + ask) / 2 if bid is not None and ask is not None else None, closed, outcome)
+
+
+def _event():
+    titles = ["69°F or below", "70-71°F", "72-73°F", "74-75°F", "76-77°F", "78-79°F", "80-81°F", "82-83°F", "84°F or higher"]
+    quotes = [(None, 0.01), (None, 0.01), (0.01, 0.02), (0.01, 0.03), (0.19, 0.21), (0.67, 0.69), (0.08, 0.10), (0.01, 0.02), (None, 0.01)]
+    buckets = [_bucket(t, b, a, f"t{i}") for i, (t, (b, a)) in enumerate(zip(titles, quotes))]
+    return WeatherEvent("highest-temperature-in-nyc-on-september-12-2026", "nyc", "2026-09-12", "KLGA", "hourly", "F", buckets, True, "2026-09-12T12:00:00Z")
+
+
+def _cfg(tmp_path=None):
+    cfg = config.Config()
+    cfg.bankroll_usd = 200
+    return cfg
+
+
+def _ledger():
+    fd, path = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    return Ledger(path)
+
+
+def _ctx(event=None, members=None, obs=None, hourly=None, local_now=None, cfg=None):
+    return build_ctx("nyc", datetime(2026, 9, 12, tzinfo=ZoneInfo("America/New_York")), "high", cfg or _cfg(),
+                     venue="offshore", fetch={"event": event or _event(), "members": members if members is not None else [78.5] * 60 + [80.2] * 20,
+                                              "obs": obs if obs is not None else [], "hourly": hourly if hourly is not None else [],
+                                              "local_now": local_now})
+
+
+# ---- fees -----------------------------------------------------------------------------------
+def test_us_fee_schedule_matches_docs():
+    assert fees.us_taker_fee(0.5, 100) == pytest.approx(1.50)
+    assert fees.us_maker_rebate(0.5, 100) == pytest.approx(0.3125)
+    assert fees.leg_cost(0.5, 100, "us", maker=True) == pytest.approx(-0.3125)
+    assert fees.leg_cost(0.5, 100, "offshore", maker=True) == 0.0
+    assert fees.leg_cost(0.5, 100, "offshore", maker=False, category="weather") == pytest.approx(1.25)
+    # a taken round trip at 50c on US costs 3c per contract; two maker legs earn 0.6c
+    assert fees.swing_breakeven_cents(0.5, "us", False, False, spread_cents=0) == pytest.approx(3.0)
+    assert fees.swing_breakeven_cents(0.5, "us", True, True, spread_cents=2) == pytest.approx(-0.625)
+
+
+# ---- buckets / weather math ---------------------------------------------------------------
+def test_parse_bucket_titles():
+    assert offshore.parse_bucket_title("69°F or below") == (-math.inf, 69.0, "F")
+    assert offshore.parse_bucket_title("70-71°F") == (70.0, 71.0, "F")
+    assert offshore.parse_bucket_title("88°F or higher") == (88.0, math.inf, "F")
+    assert offshore.parse_bucket_title("27°C") == (27.0, 27.0, "C")
+    assert offshore.parse_bucket_title("26°C or below") == (-math.inf, 26.0, "C")
+    assert offshore.station_from_description("...timeseries?site=klga ...") == "KLGA"
+    assert offshore.slug_for("nyc", datetime(2026, 9, 12)) == "highest-temperature-in-nyc-on-september-12-2026"
+
+
+def test_bucket_probs_and_discount():
+    ev = _event()
+    members = [78.4, 78.9, 79.4, 80.1, 80.4]          # rounds to 78, 79, 79, 80, 80
+    probs = weather.bucket_probs(members, ev.buckets, discount=0.0, floor=0.0)
+    by = dict(zip([b.title for b in ev.buckets], probs))
+    assert by["78-79°F"] == pytest.approx(0.6) and by["80-81°F"] == pytest.approx(0.4)
+    probs_d = weather.bucket_probs(members, ev.buckets, discount=1.0, floor=0.0)  # hourly rule reads 1° under
+    by_d = dict(zip([b.title for b in ev.buckets], probs_d))
+    assert by_d["78-79°F"] == pytest.approx(0.8) and by_d["76-77°F"] == pytest.approx(0.2)
+    assert sum(weather.bucket_probs([75.0] * 10, ev.buckets)) == pytest.approx(1.0)
+
+
+def test_observations_running_max_and_c_to_f():
+    assert weather.c_to_f_whole(21.1) == 70 and weather.c_to_f_whole(25.0) == 77
+    obs = [("2026-09-12T13:51:00+00:00", 72), ("2026-09-12T17:51:00+00:00", 78), ("2026-09-13T03:30:00+00:00", 60),
+           ("2026-09-13T04:30:00+00:00", 59)]
+    mx, n, last = weather.running_extreme(obs, "2026-09-12", "America/New_York", "high")
+    assert mx == 78 and n == 3 and last.startswith("2026-09-12T23:30")  # 03:30Z is 23:30 EDT Sep 12; 04:30Z is Sep 13
+    hourly = [("2026-09-12T15:00", 77.0), ("2026-09-12T18:00", 74.0), ("2026-09-13T01:00", 80.0)]
+    assert weather.hours_remaining_max(hourly, "2026-09-12", "2026-09-12T14:30:00-04:00", "America/New_York") == 77.0
+    assert weather.parse_cli("TEMPERATURE (F)\n TODAY\n  MAXIMUM         81   3:21 PM\n  MINIMUM         64") == {"max": 81, "min": 64}
+
+
+# ---- strategies -----------------------------------------------------------------------------
+def test_weather_hold_signals_on_model_edge():
+    cfg = _cfg()
+    ctx = _ctx(members=[81.6] * 70 + [78.6] * 10)     # 81.6-1 = 80.6 → 81 → 80-81 bucket (70/80 = 87.5%)
+    sigs = WeatherHold(cfg).scan(ctx)
+    yes = [s for s in sigs if s.side == "BUY_YES"]
+    assert len(yes) == 1 and yes[0].label.endswith("80-81°F") and yes[0].price == 0.09 and yes[0].edge_cents > 70
+    assert yes[0].contracts == int(yes[0].size_usd // 0.09)
+    no = [s for s in sigs if s.side == "BUY_NO"]
+    assert any(s.label.endswith("78-79°F") for s in no)     # model ~12% vs bid 0.67 → buy NO
+
+
+def test_weather_obs_sells_dead_buckets_only():
+    cfg = _cfg()
+    obs = [("2026-09-12T14:51:00+00:00", 75), ("2026-09-12T17:51:00+00:00", 80), ("2026-09-12T18:51:00+00:00", 79)]
+    ctx = _ctx(obs=obs)
+    sigs = WeatherObs(cfg).scan(ctx)
+    labels = {s.label.split()[-1] for s in sigs}
+    assert labels == {"78-79°F", "76-77°F"}          # bid 0.67 and 0.19 are dead once 80 was observed; 0.01 bids are skipped
+    assert all(s.side == "BUY_NO" for s in sigs)
+    assert not WeatherObs(cfg).scan(_ctx(obs=[]))
+
+
+def test_weather_lock_requires_peak_passed_and_falling_obs():
+    cfg = _cfg()
+    obs = [("2026-09-12T15:51:00+00:00", 76), ("2026-09-12T18:51:00+00:00", 79), ("2026-09-12T19:51:00+00:00", 78), ("2026-09-12T20:51:00+00:00", 77)]
+    hourly = [("2026-09-12T17:00", 74.0), ("2026-09-12T18:00", 73.0), ("2026-09-12T20:00", 70.0)]
+    ctx = _ctx(obs=obs, hourly=hourly)
+    locked, winner = lock_state(ctx)
+    assert locked and winner.title == "78-79°F"
+    sigs = WeatherLock(cfg).scan(ctx)
+    assert len(sigs) == 1 and sigs[0].side == "BUY_YES" and sigs[0].price == 0.68 and sigs[0].size_usd == 20.0
+    # still rising → no lock
+    rising = [("2026-09-12T15:51:00+00:00", 76), ("2026-09-12T16:51:00+00:00", 77), ("2026-09-12T17:51:00+00:00", 79)]
+    assert lock_state(_ctx(obs=rising, hourly=[("2026-09-12T19:00", 81.0)]))[0] is False
+    # CLI-rule venue refuses a lock at a bucket's top edge (79 is the top of 78-79)
+    ctx_cli = _ctx(obs=obs, hourly=hourly)
+    ctx_cli.rule = "cli"
+    assert lock_state(ctx_cli)[0] is False
+
+
+def test_adjust_probs_with_observations():
+    from polybot.strategies.weather import adjust_probs_with_obs
+    ev = _event()
+    raw = weather.bucket_probs([78.6] * 20 + [80.6] * 40 + [82.6] * 20 + [84.6] * 20, ev.buckets, floor=0.0)
+    # running max 81 observed, model says nothing above 79 remains → 84+ is beyond the margin, 78-79 is dead,
+    # 82-83 sits inside the 2° safety margin so it keeps a quarter of its model share
+    adj = adjust_probs_with_obs(raw, ev.buckets, running=81, remaining=79.0)
+    by = dict(zip([b.title for b in ev.buckets], adj))
+    assert by["78-79°F"] == 0.0 and by["84°F or higher"] == 0.0
+    assert by["80-81°F"] == pytest.approx(0.4 / 0.45) and by["82-83°F"] == pytest.approx(0.05 / 0.45)
+    # no observations yet → untouched
+    assert adjust_probs_with_obs(raw, ev.buckets, running=None, remaining=None) == raw
+    # the bucket holding the running max never drops to zero even if the model had no members there
+    adj2 = adjust_probs_with_obs([0.0] * len(ev.buckets), ev.buckets, running=75, remaining=74.0)
+    assert dict(zip([b.title for b in ev.buckets], adj2))["74-75°F"] == 1.0
+    # a late-day context feeds the adjusted probs to weather_hold, so it no longer buys impossible buckets
+    obs = [("2026-09-12T18:51:00+00:00", 80), ("2026-09-12T19:51:00+00:00", 81), ("2026-09-12T20:51:00+00:00", 80)]
+    ctx = _ctx(members=[84.6] * 80, obs=obs, hourly=[("2026-09-12T18:00", 79.0)])
+    assert ctx.model_probs != ctx.probs and dict(zip([b.title for b in ctx.event.buckets], ctx.probs))["80-81°F"] == pytest.approx(1.0)
+    assert not [s for s in WeatherHold(_cfg()).scan(ctx) if s.side == "BUY_YES" and "84" in s.label]
+
+
+def test_weather_model_update_uses_last_run():
+    cfg, led = _cfg(), _ledger()
+    mod = WeatherModelUpdate(cfg, led)
+    assert mod.scan(_ctx(members=[78.6] * 80)) == []                 # first run: nothing to compare
+    sigs = mod.scan(_ctx(members=[81.6] * 60 + [78.6] * 20))          # 80-81 jumped from ~0 to 75%
+    assert any(s.side == "BUY_YES" and s.label.endswith("80-81°F") for s in sigs)
+    assert any(s.side == "BUY_NO" and s.label.endswith("78-79°F") for s in sigs)
+
+
+def test_bucket_sum_arb_math():
+    ev = _event()
+    kind, net, _ = arb_check(ev.buckets, "offshore")
+    assert kind is None                                                # one-sided books: no arb can be locked
+    for b in ev.buckets:
+        b.best_bid = b.best_bid or 0.001
+    asks_sum = sum(b.best_ask for b in ev.buckets)
+    assert asks_sum > 1.0
+    for b in ev.buckets:                                               # make the asks sum to 0.90
+        b.best_ask = round(b.best_ask * 0.90 / asks_sum, 4)
+    kind, net, prices = arb_check(ev.buckets, "us")
+    assert kind == "buy_all" and 5.0 < net < 10.0 and len(prices) == len(ev.buckets)   # 10c gross minus ~3.3c taker fees
+    sigs = BucketSum(_cfg()).scan(_ctx(event=ev))
+    assert len(sigs) == len(ev.buckets) and all(s.taker and s.arb for s in sigs)
+
+
+def test_leadlag_and_noise_rules():
+    t0 = 1000.0
+    ref = [(t0 + i * 10, 0.50 + (0.05 if i >= 8 else 0)) for i in range(12)]   # ref jumps +5c
+    tgt = [(t0 + i * 10, 0.50) for i in range(12)]                            # target flat
+    hit = leadlag_signal(ref, tgt, 120, 3.0, 0.5)
+    assert hit and hit[0] == "BUY_YES" and hit[3] == pytest.approx(5.0)
+    followed = [(t0 + i * 10, 0.50 + (0.04 if i >= 9 else 0)) for i in range(12)]
+    assert leadlag_signal(ref, followed, 120, 3.0, 0.5) is None
+    quiet_ref = [(t0 + i * 10, 0.50) for i in range(12)]
+    noisy_tgt = [(t0 + i * 10, 0.50 - (0.04 if i >= 9 else 0)) for i in range(12)]
+    n = noise_signal(quiet_ref, noisy_tgt, 120, 3.0)
+    assert n and n[0] == "BUY_YES" and n[3] == pytest.approx(4.0)
+    assert noise_signal(ref, noisy_tgt, 120, 3.0) is None
+
+
+def test_calibration_table_and_hold_favorites():
+    table = {}
+    for _ in range(40):
+        calibration.add_sample(table, "politics", 0.88, 1)
+    for _ in range(4):
+        calibration.add_sample(table, "politics", 0.88, 0)
+    assert calibration.band_key(0.88) == "0.85-0.90"
+    assert calibration.lookup(table, 0.88, "politics") == pytest.approx((40 + 20 * 0.88) / 64)
+    assert calibration.lookup(table, 0.88, "sports") is None
+    assert calibration.price_before([(0, 0.5), (100, 0.7), (5000, 0.9)], 90000, 24) == 0.7
+    hist = [(0, 0.5), (100, 0.7), (5000, 0.9), (200000, 0.995), (300000, 0.999)]
+    assert calibration.resolution_ts(hist) == 200000                      # first point of the settled tail
+    assert calibration.resolution_ts([(0, 0.5), (100, 0.6)]) is None      # never settled
+    assert calibration.price_before(hist, calibration.resolution_ts(hist), 24) == 0.9
+    end = datetime.now(ZoneInfo("UTC")).timestamp() + 2 * 86400
+    end_iso = datetime.fromtimestamp(end, ZoneInfo("UTC")).strftime("%Y-%m-%dT%H:%M:%SZ")
+    events = [{"title": "Will the bill pass?", "tags": [{"slug": "politics"}], "endDate": end_iso,
+               "markets": [{"id": 1, "question": "Will the bill pass by Friday?", "outcomePrices": json.dumps(["0.86", "0.14"]),
+                            "clobTokenIds": json.dumps(["tokA", "tokAn"]), "bestBid": "0.85", "bestAsk": "0.87", "endDate": end_iso}]},
+              {"title": "Lakers vs. Celtics", "tags": [{"slug": "sports"}], "endDate": end_iso,
+               "markets": [{"id": 2, "question": "Lakers win?", "outcomePrices": json.dumps(["0.88", "0.12"]),
+                            "clobTokenIds": json.dumps(["tokB", "tokBn"]), "bestBid": "0.87", "bestAsk": "0.89", "endDate": end_iso}]}]
+    sigs = HoldFavorites(_cfg(), table).scan(events=events)
+    assert len(sigs) == 1 and sigs[0].side == "BUY_YES" and sigs[0].category == "politics" and sigs[0].price == 0.86
+
+
+# ---- sizing / risk / ledger / paper -----------------------------------------------------------
+def test_size_for_quarter_kelly_and_caps():
+    caps = config.Caps()
+    assert size_for(0.5, 0.6, 200, caps) == 0.0                      # no edge
+    usd = size_for(0.95, 0.85, 200, caps)                             # f* = 0.667 → 0.25*0.667*200 = 33 → capped 20
+    assert usd == 20.0
+    assert size_for(0.60, 0.55, 200, caps) == 5.55                    # f* = 0.111 → 5.55 (above the $5 floor)
+    assert size_for(0.56, 0.55, 200, caps) == 0.0                     # f*=0.022 → 1.1 < min and f*·bankroll 4.4 < 5
+
+
+def test_risk_manager_caps():
+    cfg, led = _cfg(), _ledger()
+    rm = RiskManager(cfg, led)
+    sig = Signal("weather_hold", "offshore", "tok", "x", "BUY_YES", 0.5, 20, 6, "r")
+    assert rm.allow(sig)[0]
+    assert rm.allow(Signal("weather_hold", "offshore", "tok", "x", "BUY_YES", 0.5, 25, 6, "r"))[1].startswith("over per-market")
+    assert rm.allow(Signal("weather_hold", "offshore", "tok", "x", "BUY_YES", 0.5, 3, 6, "r"))[1].startswith("below min")
+    assert "sports" in rm.allow(Signal("leadlag", "us", "s", "x", "BUY_YES", 0.5, 10, 6, "r", category="sports"))[1]
+    assert "taker" in rm.allow(Signal("weather_hold", "offshore", "tok", "x", "BUY_YES", 0.5, 10, 6, "r", taker=True))[1]
+    assert rm.allow(Signal("bucket_sum", "offshore", "tok", "x", "BUY_YES", 0.5, 10, 6, "r", taker=True, arb=True))[0]
+    # paper mode records portfolio-level refusals instead of enforcing them; live enforces
+    ok, why = rm.allow(Signal("weather_hold", "offshore", "new", "x", "BUY_YES", 0.5, 5, 6, "r"), bankroll_usd=100)
+    assert ok and "live would refuse" in why and "floor" in why
+    for i in range(5):
+        led.add_signal(Signal("weather_hold", "offshore", f"tok{i}", "x", "BUY_YES", 0.5, 20, 6, "r"), "paper")
+    ok, why = rm.allow(sig)
+    assert ok and "total exposure" in why and sig.meta["live_would_refuse"].startswith("total exposure")
+    cfg.modes["weather_hold"] = "live"
+    live_sig = Signal("weather_hold", "us", "slug", "x", "BUY_YES", 0.5, 20, 6, "r")
+    for i in range(5):
+        led.add_signal(Signal("weather_hold", "us", f"s{i}", "x", "BUY_YES", 0.5, 20, 6, "r"), "live")
+    assert rm.allow(live_sig) == (False, "total exposure $100+$20 > cap $100")
+    cfg.modes["weather_hold"] = "paper"
+    open(config.KILL_PATH, "w").close()
+    try:
+        assert rm.allow(sig)[1] == "kill switch on"
+    finally:
+        os.remove(config.KILL_PATH)
+
+
+def test_paper_engine_fills_exits_and_pnl():
+    led = _ledger()
+    t0 = time.time() - 3600
+    hold = Signal("weather_lock", "offshore", "tokL", "lock", "BUY_YES", 0.90, 18, 8, "r", exit="settle", ts=t0, meta={"market_id": "mL"})
+    tp = Signal("weather_hold", "offshore", "tokH", "hold", "BUY_YES", 0.20, 10, 10, "r", exit="tp:0.03", ts=t0, meta={"market_id": "mH"})
+    no = Signal("weather_obs", "offshore", "tokN", "dead", "BUY_NO", 0.40, 10, 60, "r", exit="settle", ts=t0, meta={"market_id": "mN"})
+    miss = Signal("weather_hold", "offshore", "tokM", "miss", "BUY_YES", 0.10, 10, 10, "r", exit="tp:0.03", ts=t0 - 90000, horizon_hours=24, meta={"market_id": "mM"})
+    ids = [led.add_signal(s, "paper") for s in (hold, tp, no, miss)]
+    hist = {"tokL": [(t0 + 60, 0.91), (t0 + 120, 0.89), (t0 + 600, 0.95)],
+            "tokH": [(t0 + 60, 0.20), (t0 + 300, 0.24)],
+            "tokN": [(t0 + 60, 0.59), (t0 + 120, 0.61), (t0 + 900, 0.30)],
+            "tokM": [(t0 - 80000, 0.15), (t0, 0.16)]}
+    res = {"mL": 1, "mH": None, "mN": 0, "mM": None}
+    eng = PaperEngine(led, history_fn=lambda s: hist[s["market"]],
+                      resolution_fn=lambda s: res[json.loads(s["meta"])["market_id"]], now_fn=lambda: t0 + 7200)
+    counts = eng.settle_open("offshore", log=lambda *_: None)
+    assert counts == {"filled": 3, "closed": 3, "expired": 1, "open": 0}
+    r_hold = led.paper_row(ids[0])
+    assert r_hold["status"] == "closed" and r_hold["outcome"] == 1
+    assert r_hold["pnl_usd"] == pytest.approx((1 - 0.90) * 20)         # 20 contracts, resolved YES, no offshore maker fee
+    r_tp = led.paper_row(ids[1])
+    assert r_tp["exit_kind"] == "tp" and r_tp["exit_price"] == pytest.approx(0.23)
+    assert r_tp["pnl_usd"] == pytest.approx(0.03 * 50)
+    r_no = led.paper_row(ids[2])
+    assert r_no["fill_price"] == pytest.approx(0.60) and r_no["outcome"] == 0 and r_no["pnl_usd"] == pytest.approx(0.60 * 25)
+    assert led.paper_row(ids[3])["status"] == "unfilled"
+    stats = {s["module"]: s for s in led.module_stats(30)}
+    assert stats["weather_lock"]["pnl"] == pytest.approx(2.0)
+    ok, why = led.promotion_check("weather_lock")
+    assert not ok and "signals" in why                                  # 1/30 signals
+    assert "weather_lock" in led.report(1)
+
+
+def test_pnl_us_venue_includes_rebates():
+    sig = {"side": "BUY_YES", "contracts": 100, "taker": False}
+    pnl, fee = pnl_usd(sig, 0.90, None, 1, "us", "weather")
+    assert fee == pytest.approx(-fees.us_maker_rebate(0.90, 100)) and pnl == pytest.approx(10 + fees.us_maker_rebate(0.90, 100))
+    assert fill_from_history({"side": "BUY_YES", "price": 0.5, "ts": 0}, [(1, 0.55), (2, 0.5)]) == (2, 0.5)
+    assert fill_from_history({"side": "BUY_NO", "price": 0.4, "ts": 0}, [(1, 0.55), (2, 0.61)]) == (2, 0.6)
+    assert exit_from_history({"side": "BUY_YES", "price": 0.5, "exit_rule": "timeout:1h", "horizon_h": 1}, 0, [(1800, 0.52), (3600, 0.53)]) == (3600, 0.53, "timeout")
+
+
+def test_config_roundtrip(tmp_path):
+    cfg = config.Config()
+    cfg.modes["weather_lock"] = "signal"
+    cfg.caps.sports_enabled = True
+    p = str(tmp_path / "c.json")
+    config.save(cfg, p)
+    back = config.load(p)
+    assert back.mode("weather_lock") == "signal" and back.caps.sports_enabled and back.mode("leadlag") == "paper"
+    assert back.favorites_band == (0.85, 0.95)
