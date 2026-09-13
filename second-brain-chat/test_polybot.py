@@ -107,6 +107,7 @@ def test_observations_running_max_and_c_to_f():
 # ---- strategies -----------------------------------------------------------------------------
 def test_weather_hold_signals_on_model_edge():
     cfg = _cfg()
+    cfg.hold_edge_max_cents = 100                       # this fixture's edges are 60-70c; the cap has its own test
     ctx = _ctx(members=[81.6] * 70 + [78.6] * 10)     # 81.6-1 = 80.6 → 81 → 80-81 bucket (70/80 = 87.5%)
     sigs = WeatherHold(cfg).scan(ctx)
     yes = [s for s in sigs if s.side == "BUY_YES"]
@@ -276,6 +277,7 @@ def test_executor_sync_with_fake_venue():
 
 def test_weather_model_update_uses_last_run():
     cfg, led = _cfg(), _ledger()
+    cfg.hold_edge_max_cents = 100
     mod = WeatherModelUpdate(cfg, led)
     assert mod.scan(_ctx(members=[78.6] * 80)) == []                 # first run: nothing to compare
     sigs = mod.scan(_ctx(members=[81.6] * 60 + [78.6] * 20))          # 80-81 jumped from ~0 to 75%
@@ -363,6 +365,10 @@ def test_risk_manager_caps():
     # paper mode records portfolio-level refusals instead of enforcing them; live enforces
     ok, why = rm.allow(Signal("weather_hold", "offshore", "new", "x", "BUY_YES", 0.5, 5, 6, "r"), bankroll_usd=100)
     assert ok and "live would refuse" in why and "floor" in why
+    # one position per market is enforced in paper too (the 3-hourly re-entry bug)
+    led.add_signal(Signal("weather_lock", "offshore", "busy", "x", "BUY_YES", 0.9, 20, 6, "r"), "paper")
+    ok, why = rm.allow(Signal("weather_hold", "offshore", "busy", "x", "BUY_NO", 0.2, 10, 6, "r"))
+    assert not ok and why.startswith("market exposure $20+$10")
     for i in range(5):
         led.add_signal(Signal("weather_hold", "offshore", f"tok{i}", "x", "BUY_YES", 0.5, 20, 6, "r"), "paper")
     ok, why = rm.allow(sig)
@@ -407,10 +413,106 @@ def test_paper_engine_fills_exits_and_pnl():
     assert r_no["fill_price"] == pytest.approx(0.60) and r_no["outcome"] == 0 and r_no["pnl_usd"] == pytest.approx(0.60 * 25)
     assert led.paper_row(ids[3])["status"] == "unfilled"
     stats = {s["module"]: s for s in led.module_stats(30)}
-    assert stats["weather_lock"]["pnl"] == pytest.approx(2.0)
+    assert stats["weather_lock"]["pnl"] == pytest.approx(2.0) and stats["weather_lock"]["mtm"] == pytest.approx(2.0)
     ok, why = led.promotion_check("weather_lock")
     assert not ok and "signals" in why                                  # 1/30 signals
-    assert "weather_lock" in led.report(1)
+    assert "weather_lock" in led.report(1) and "mtm=" in led.report(1)
+
+
+def test_hold_band_and_edge_cap():
+    cfg = _cfg()
+    # production cap 30c: the 80-81 bucket at post 0.09 with a 60c+ edge is a model error, not a trade
+    ctx = _ctx(members=[81.6] * 70 + [78.6] * 10)
+    sigs = WeatherHold(cfg).scan(ctx)
+    assert not any(s.side == "BUY_YES" for s in sigs)
+    assert not any(s.label.endswith("78-79°F") for s in sigs)      # bid 0.67 vs model 12% = 55c: capped too
+    # a moderate disagreement inside the band still trades: 78-79 at bid/ask 0.67/0.69, model ~50%
+    ctx2 = _ctx(members=[78.6] * 40 + [80.6] * 40)
+    sigs2 = WeatherHold(cfg).scan(ctx2)
+    no = [s for s in sigs2 if s.side == "BUY_NO" and s.label.endswith("78-79°F")]
+    assert len(no) == 1 and 6 <= no[0].edge_cents <= 30
+    # the 1-5c extremes never trade, whatever the model says
+    ev = _event()
+    ev.buckets[3].best_bid, ev.buckets[3].best_ask = 0.03, 0.04      # 74-75 at 3c
+    sigs3 = WeatherHold(cfg).scan(_ctx(event=ev, members=[74.6] * 80))
+    assert not any(s.label.endswith("74-75°F") for s in sigs3)
+    cfg.hold_price_band = (0.01, 0.99)                                # band off, edge 26c under the cap: trades
+    assert any(s.label.endswith("74-75°F") for s in WeatherHold(cfg).scan(_ctx(event=ev, members=[74.6] * 24 + [78.6] * 56)))
+
+
+def test_observation_feed_follows_the_settlement_rule(monkeypatch):
+    from polybot.strategies import weather as wmod
+    calls = []
+    monkeypatch.setattr(wmod.weather, "observations", lambda st, a=None, b=None, limit=500: calls.append(("nws", st)) or [])
+    monkeypatch.setattr(wmod.metar, "observations", lambda st, hours=24, unit="F": calls.append(("metar", st)) or [])
+    assert wmod.observations_for_rule("KSFO", "hourly", "2026-09-12", "America/Los_Angeles") == []
+    assert wmod.observations_for_rule("KSFO", "cli", "2026-09-12", "America/Los_Angeles") == []
+    assert wmod.observations_for_rule("EGLL", "hourly", "2026-09-12", "Europe/London") == []
+    assert calls == [("metar", "KSFO"), ("nws", "KSFO"), ("metar", "EGLL")]
+    # build_ctx without an injected obs list goes through the same switch (offshore KLGA event is 'hourly')
+    fetch = {"event": _event(), "members": [78.5] * 10, "hourly": []}
+    calls.clear()
+    ctx = build_ctx("nyc", datetime(2026, 9, 12, tzinfo=ZoneInfo("America/New_York")), "high", _cfg(), venue="offshore", fetch=fetch)
+    assert ctx is not None and calls == [("metar", "KLGA")]
+    calls.clear()
+    ctx = build_ctx("nyc", datetime(2026, 9, 12, tzinfo=ZoneInfo("America/New_York")), "high", _cfg(), venue="us", fetch=fetch)
+    assert ctx.rule == "cli" and calls == [("nws", "KNYC")]
+
+
+def test_gate_uses_mark_to_market_and_us_paper():
+    led = _ledger()
+    t0 = time.time() - 600
+    ids = []
+    for i in range(30):
+        sid = led.add_signal(Signal("weather_obs", "offshore", f"t{i}", "x", "BUY_NO", 0.9, 10, 10, "r", ts=t0), "paper")
+        led.upsert_paper(sid, filled_ts=t0, fill_price=0.1, status="closed" if i < 20 else "filled",
+                         pnl_usd=1.0 if i < 20 else -0.5, exit_ts=t0 + 60 if i < 20 else None)
+        ids.append(sid)
+    ok, why = led.promotion_check("weather_obs")
+    assert ok and "mtm +15.00" in why                               # closed +20, open marked -5
+    # the same closed net with the open positions deep underwater is a hold
+    for sid in ids[20:]:
+        led.upsert_paper(sid, pnl_usd=-3.0)
+    ok, why = led.promotion_check("weather_obs")
+    assert not ok and why.startswith("mark-to-market -10.00")
+    for sid in ids[20:]:
+        led.upsert_paper(sid, pnl_usd=0.5)
+    assert led.promotion_check("weather_obs")[0]
+    # a losing US-venue paper record blocks promotion even when the offshore proxy passes
+    sid = led.add_signal(Signal("weather_obs", "us", "slug", "x", "BUY_NO", 0.9, 10, 10, "r", ts=t0), "paper")
+    led.upsert_paper(sid, filled_ts=t0, fill_price=0.1, status="filled", pnl_usd=-2.0)
+    ok, why = led.promotion_check("weather_obs")
+    assert not ok and why.startswith("US paper mark-to-market -2.00")
+    led.upsert_paper(sid, pnl_usd=0.4)
+    ok, why = led.promotion_check("weather_obs")
+    assert ok and "US 1 signals +0.40" in why
+    assert "Polymarket US books only" in led.report(1)
+    assert "gate PASS: weather_obs" in led.summary(1)
+    # evidence before a rule change stops counting
+    led.gate_since_ts = time.time() + 1
+    assert led.promotion_check("weather_obs") == (False, "no signals")
+    led.gate_since_ts = 0.0
+    led.add_snapshot("offshore", "old", 0.1, 0.2, ts=time.time() - 10 * 86400)
+    led.add_snapshot("offshore", "new", 0.1, 0.2)
+    assert led.prune_snapshots(7) == 1 and len(led.snapshots("offshore", "new", 0)) == 1
+
+
+def test_promote_and_live_module_offshore_stays_paper(monkeypatch):
+    from polybot import runner as runner_mod, config as cfg_mod, notify
+    cfg, led = _cfg(), _ledger()
+    saved, nudged = [], []
+    monkeypatch.setattr(cfg_mod, "save", lambda c, path=None: saved.append(dict(c.modes)))
+    monkeypatch.setattr(notify, "nudge", lambda *a, **k: nudged.append(a[0]))
+    r = runner_mod.Runner(cfg, led, log=lambda *_: None)
+    assert r.promote() == [] and saved == []
+    monkeypatch.setattr(led, "promotion_check", lambda m, **k: (m == "weather_obs", "fake"))
+    assert r.promote() == ["weather_obs"] and cfg.mode("weather_obs") == "live" and saved and nudged == ["polybot: LIVE"]
+    assert r.promote(["weather_lock"]) == [] and cfg.mode("weather_lock") == "paper"
+    # a live module's offshore signals are recorded as paper, never sent
+    sig = Signal("weather_obs", "offshore", "tokX", "x", "BUY_NO", 0.9, 10, 10, "r", meta={"market_id": "m"})
+    assert r.handle(sig) == "paper"
+    rows = led.open_signals(module="weather_obs")
+    assert len(rows) == 1 and rows[0]["mode"] == "paper" and rows[0]["venue"] == "offshore"
 
 
 def test_pnl_us_venue_includes_rebates():

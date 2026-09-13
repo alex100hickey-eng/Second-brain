@@ -93,6 +93,7 @@ class Ledger:
         self.conn = sqlite3.connect(path)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
+        self.gate_since_ts = 0.0     # set by the runner from config: evidence before a rule change doesn't count
 
     # ---- signals -------------------------------------------------------------------------
     def add_signal(self, sig, mode: str) -> int:
@@ -208,38 +209,59 @@ class Ledger:
                WHERE p.status='closed' AND p.exit_ts>=? AND s.mode=?""", (start, mode)).fetchone()
         return float(r["s"])
 
+    def prune_snapshots(self, keep_days: int = 7) -> int:
+        cur = self.conn.execute("DELETE FROM snapshots WHERE ts < ?", (_now() - keep_days * 86400,))
+        self.conn.commit()
+        return cur.rowcount
+
     # ---- reporting -----------------------------------------------------------------------
-    def module_stats(self, days: int = 30):
-        since = _now() - days * 86400
-        rows = self.conn.execute(
-            """SELECT s.module, s.mode, COUNT(*) AS n,
+    def module_stats(self, days: int = 30, venue: str | None = None):
+        """Per module+mode: counts, closed net, and the mark-to-market of what is still open. Closed net
+        alone flatters a take-profit module — winners close in hours, losers sit open until settlement."""
+        since = max(_now() - days * 86400, float(self.gate_since_ts or 0.0))
+        q = """SELECT s.module, s.mode, COUNT(*) AS n,
                       SUM(CASE WHEN p.status='closed' THEN 1 ELSE 0 END) AS closed,
                       SUM(CASE WHEN p.filled_ts IS NOT NULL THEN 1 ELSE 0 END) AS filled,
+                      SUM(CASE WHEN p.status='filled' THEN 1 ELSE 0 END) AS open_filled,
                       COALESCE(SUM(CASE WHEN p.status='closed' THEN p.pnl_usd END),0) AS pnl,
+                      COALESCE(SUM(CASE WHEN p.status='filled' THEN p.pnl_usd END),0) AS unreal,
                       COALESCE(SUM(CASE WHEN p.status='closed' THEN p.fees_usd END),0) AS fees,
                       AVG(s.edge_cents) AS edge, AVG(s.spread_cents) AS spread
                FROM signals s LEFT JOIN paper_trades p ON p.signal_id=s.id
-               WHERE s.ts>=? GROUP BY s.module, s.mode ORDER BY s.module""", (since,)).fetchall()
-        return [dict(r) for r in rows]
+               WHERE s.ts>=?"""
+        args = [since]
+        if venue:
+            q += " AND s.venue=?"
+            args.append(venue)
+        rows = [dict(r) for r in self.conn.execute(q + " GROUP BY s.module, s.mode ORDER BY s.module", args)]
+        for r in rows:
+            r["mtm"] = (r["pnl"] or 0.0) + (r["unreal"] or 0.0)
+        return rows
 
     def promotion_check(self, module: str, days: int = 30, min_signals: int = 30, min_fill_rate: float = 0.5):
-        """The gate from the design doc. Returns (ok, reason)."""
+        """The gate: enough signals, enough fills, positive mark-to-market (not just closed net), and the
+        US-venue paper — the only books real money ever touches — not negative. Returns (ok, reason)."""
         stats = [s for s in self.module_stats(days) if s["module"] == module]
         if not stats:
             return False, "no signals"
         n = sum(s["n"] for s in stats)
         closed = sum(s["closed"] or 0 for s in stats)
         filled = sum(s["filled"] or 0 for s in stats)
-        pnl = sum(s["pnl"] or 0 for s in stats)
+        mtm = sum(s["mtm"] for s in stats)
         if n < min_signals:
             return False, f"{n}/{min_signals} signals"
         if closed == 0:
             return False, "nothing closed yet"
         if filled / max(n, 1) < min_fill_rate:
             return False, f"fill rate {filled / n:.0%} < {min_fill_rate:.0%}"
-        if pnl <= 0:
-            return False, f"net {pnl:+.2f} not positive"
-        return True, f"{n} signals, {closed} closed, net {pnl:+.2f}, fills {filled / n:.0%}"
+        if mtm <= 0:
+            return False, f"mark-to-market {mtm:+.2f} not positive"
+        us = [s for s in self.module_stats(days, venue="us") if s["module"] == module]
+        us_n = sum(s["n"] for s in us)
+        us_mtm = sum(s["mtm"] for s in us)
+        if us_n and us_mtm < 0:
+            return False, f"US paper mark-to-market {us_mtm:+.2f} negative over {us_n} signals"
+        return True, f"{n} signals, {closed} closed, mtm {mtm:+.2f}, fills {filled / n:.0%}, US {us_n} signals {us_mtm:+.2f}"
 
     def report(self, days: int = 1) -> str:
         lines = [f"polybot report — last {days}d — {datetime.now().strftime('%Y-%m-%d %H:%M')}"]
@@ -249,9 +271,30 @@ class Ledger:
         for s in stats:
             lines.append(
                 f"  {s['module']:<22} {s['mode']:<6} signals={s['n']:<3} filled={s['filled'] or 0:<3} "
-                f"closed={s['closed'] or 0:<3} net=${s['pnl']:+.2f} fees=${s['fees']:+.2f} "
+                f"closed={s['closed'] or 0:<3} net=${s['pnl']:+.2f} open={s['open_filled'] or 0:<3} "
+                f"unreal=${s['unreal']:+.2f} mtm=${s['mtm']:+.2f} fees=${s['fees']:+.2f} "
                 f"edge={s['edge'] or 0:.1f}c spread={s['spread'] or 0:.1f}c")
+        us = self.module_stats(days, venue="us")
+        if us:
+            lines.append("  Polymarket US books only (what live would have done):")
+            for s in us:
+                lines.append(f"    {s['module']:<22} {s['mode']:<6} signals={s['n']:<3} filled={s['filled'] or 0:<3} "
+                             f"closed={s['closed'] or 0:<3} mtm=${s['mtm']:+.2f}")
         for m in config.MODULES:
             ok, why = self.promotion_check(m)
             lines.append(f"  gate {m:<22} {'PASS' if ok else 'hold'} — {why}")
         return "\n".join(lines)
+
+    def summary(self, days: int = 1) -> str:
+        """One line for a phone nudge."""
+        stats = self.module_stats(days)
+        n = sum(s["n"] for s in stats)
+        paper = sum(s["mtm"] for s in stats if s["mode"] != "live")
+        live = [s for s in stats if s["mode"] == "live"]
+        parts = [f"{days}d: {n} signals, paper mtm {paper:+.2f}"]
+        if live:
+            parts.append(f"LIVE net {sum(s['pnl'] for s in live):+.2f} ({sum(s['open_filled'] or 0 for s in live)} open)")
+        gates = [(m, self.promotion_check(m)) for m in config.MODULES]
+        passing = [m for m, (ok, _) in gates if ok]
+        parts.append(f"gate PASS: {', '.join(passing) if passing else 'none yet'}")
+        return " · ".join(parts)

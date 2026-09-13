@@ -7,6 +7,7 @@
     python3 -m polybot.runner report [--days 7]
     python3 -m polybot.runner calibrate [--events 300]
     python3 -m polybot.runner status
+    python3 -m polybot.runner promote [--modules weather_obs]   flip gate-passing paper modules to live
     python3 -m polybot.runner loop            run forever on the built-in schedule
 
 Cadence (loop): weather modules at :55 every hour (after the :51 observation) · bucket_sum every
@@ -55,6 +56,7 @@ class Runner:
         self.cfg = cfg or config.load()
         self.ledger = ledger or Ledger()
         self.log = log
+        self.ledger.gate_since_ts = self.cfg.gate_since_ts
         self.us = USVenue()
         self.risk = RiskManager(self.cfg, self.ledger)
         self.paper = PaperEngine(self.ledger, history_fn=self._paper_history, resolution_fn=self._paper_resolution)
@@ -92,14 +94,14 @@ class Runner:
         mode = self.cfg.mode(sig.module)
         if mode == "off":
             return "off"
+        if mode == "live" and sig.venue != "us":
+            mode = "paper"                # offshore is a paper proxy: a live module keeps measuring there
         if self.ledger.recent_signal_exists(sig.module, sig.market, sig.side, DEDUPE_S):
             return "dup"
-        ok, why = self.risk.allow(sig)
+        ok, why = self.risk.allow(sig, mode=mode)
         if not ok:
             self.log(f"    refused {sig.module} {sig.label}: {why}")
             return "refused"
-        if mode == "live" and sig.venue != "us":
-            return "paper-venue"          # offshore is a paper proxy; nothing is ever sent there
         sid = self.ledger.add_signal(sig, mode)
         line = (f"    {mode.upper():<6} #{sid} {sig.module} {sig.side} {sig.label} @ {sig.price:.2f} "
                 f"${sig.size_usd:.0f} edge {sig.edge_cents:.1f}c — {sig.reason}")
@@ -241,6 +243,29 @@ class Runner:
             f.write(text + "\n")
         return text
 
+    def promote(self, modules=None) -> list:
+        """Flip every paper module whose gate passes to live (or only the named ones), write config.json,
+        and say so. Nothing else ever changes a mode. Returns the modules flipped."""
+        flipped = []
+        for m in (modules or config.MODULES):
+            if self.cfg.mode(m) != "paper":
+                if modules:
+                    self.log(f"  promote {m}: mode is {self.cfg.mode(m)}, not paper")
+                continue
+            ok, why = self.ledger.promotion_check(m)
+            if ok:
+                self.cfg.modes[m] = "live"
+                flipped.append(m)
+                self.log(f"  promote {m}: paper -> LIVE ({why})")
+            elif modules:
+                self.log(f"  promote {m}: refused — {why}")
+        if flipped:
+            config.save(self.cfg)
+            notify.nudge("polybot: LIVE", f"{', '.join(flipped)} passed the gate and now place real orders "
+                         f"(caps ${self.cfg.caps.max_per_market_usd:.0f}/market, ${self.cfg.caps.max_exposure_usd:.0f} total, "
+                         f"${self.cfg.caps.daily_loss_stop_usd:.0f} daily stop).", key="polybot-promote", log=self.log)
+        return flipped
+
     def status(self) -> str:
         lines = [f"polybot {config.__name__.split('.')[0]} — modes: " + ", ".join(f"{m}={self.cfg.mode(m)}" for m in config.MODULES),
                  f"  us venue: {'ready' if self.us.available else self.us.why_unavailable}",
@@ -283,8 +308,16 @@ class Runner:
                         self.scan_other(modules=["hold_favorites"])
                     if now.hour == 7 and now.minute == 0:
                         self.log(self.report(1))
+                        promoted = self.promote() if self.cfg.auto_promote else []
+                        line = self.ledger.summary(1)
+                        if not promoted:
+                            ready = [m for m in config.MODULES if self.cfg.mode(m) == "paper" and self.ledger.promotion_check(m)[0]]
+                            if ready:
+                                line += f" — say the word to go live: {', '.join(ready)}"
+                        notify.nudge("polybot daily", line, key="polybot-daily", log=self.log)
                     if now.hour == 3 and now.minute == 0:
                         calibration.save_table(calibration.build(log=self.log))
+                        self.log(f"pruned {self.ledger.prune_snapshots(self.cfg.snapshot_keep_days)} snapshots older than {self.cfg.snapshot_keep_days}d")
                 except Exception as exc:
                     self.log(f"loop error: {exc}\n{traceback.format_exc(limit=3)}")
                 if len(done) > 5000:
@@ -294,7 +327,7 @@ class Runner:
 
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="polybot")
-    ap.add_argument("cmd", choices=["scan", "settle", "report", "calibrate", "status", "loop", "backtest", "pairs"])
+    ap.add_argument("cmd", choices=["scan", "settle", "report", "calibrate", "status", "loop", "backtest", "pairs", "promote"])
     ap.add_argument("--city", action="append")
     ap.add_argument("--modules", nargs="*")
     ap.add_argument("--venue", default="offshore", choices=["offshore", "us"], help="scan: which books to read")
@@ -314,6 +347,9 @@ def main(argv=None):
         r.settle()
     elif a.cmd == "report":
         print(r.report(a.days))
+    elif a.cmd == "promote":
+        flipped = r.promote(a.modules)
+        print(f"promoted: {', '.join(flipped) if flipped else 'nothing (see the gate lines in `report`)'}")
     elif a.cmd == "calibrate":
         table = calibration.build(max_events=a.events)
         calibration.save_table(table)

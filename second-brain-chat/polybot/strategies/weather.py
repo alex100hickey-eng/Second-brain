@@ -70,12 +70,7 @@ def build_ctx(city: str, date: datetime, kind: str = "high", cfg: config.Config 
     probs = weather.bucket_probs(members, event.buckets, discount=discount)
     obs = fetch.get("obs")
     if obs is None:
-        start, end = weather.local_day_bounds(event.date, tz)
-        if station.startswith("K"):
-            obs = weather.observations(station, start.isoformat(), min(end, datetime.now(ZoneInfo(tz))).isoformat())
-        else:
-            hours = int((datetime.now(ZoneInfo(tz)) - start).total_seconds() // 3600) + 2
-            obs = metar.observations(station, hours=max(hours, 3), unit=event.unit)
+        obs = observations_for_rule(station, rule, event.date, tz, event.unit)
     running, n_obs, last_local = weather.running_extreme(obs, event.date, tz, kind)
     hourly = fetch.get("hourly")
     if hourly is None:
@@ -86,6 +81,21 @@ def build_ctx(city: str, date: datetime, kind: str = "high", cfg: config.Config 
                       model_probs=list(probs), obs=obs, running=running, n_obs=n_obs, last_obs_local=last_local,
                       hourly=hourly, remaining_extreme=remaining,
                       local_now=fetch.get("local_now") or datetime.now(ZoneInfo(tz)), station=station, rule=rule)
+
+
+def observations_for_rule(station: str, rule: str, date: str, tz: str, unit: str = "F") -> list:
+    """The observation feed that matches how the market settles.
+
+    'cli' (Polymarket US): the NWS 5-minute ASOS readings — the CLI daily max comes off the same
+    continuous sensor, so no reading can exceed it. 'hourly' (offshore): the METAR column only. The
+    5-minute feed prints 1-2°F above the hourly METAR (KSFO 2026-09-12: 72 vs a 70-71 settlement),
+    which made buckets look dead or locked when they were not."""
+    start, end = weather.local_day_bounds(date, tz)
+    now = datetime.now(ZoneInfo(tz))
+    if rule == "cli" and station.startswith("K"):
+        return weather.observations(station, start.isoformat(), min(end, now).isoformat())
+    hours = int((now - start).total_seconds() // 3600) + 2
+    return metar.observations(station, hours=max(hours, 3), unit=unit)
 
 
 def adjust_probs_with_obs(probs: list, buckets, running, remaining, kind: str = "high",
@@ -142,6 +152,12 @@ def _spread_cents(b) -> float | None:
     return round((b.best_ask - b.best_bid) * 100, 1)
 
 
+def _in_band(yes_level: float, cfg) -> bool:
+    """Model modules only trade buckets the market prices inside hold_price_band (YES terms)."""
+    lo, hi = cfg.hold_price_band
+    return lo <= yes_level <= hi
+
+
 def _post_price_buy(b, tick=0.01):
     """Where a maker BUY rests: improve the bid by one tick if that stays under the ask."""
     if b.best_bid is None:
@@ -172,7 +188,8 @@ class WeatherHold(Strategy):
             if post is None:
                 continue
             edge = (p - post) * 100
-            if edge >= self.cfg.edge_min_cents and post <= 0.93:
+            if (edge >= self.cfg.edge_min_cents and post <= 0.93 and _in_band(post, self.cfg)
+                    and edge <= self.cfg.hold_edge_max_cents):
                 size = size_for(p, post, self.cfg.bankroll_usd, self.cfg.caps)
                 if size > 0:
                     out.append(Signal(self.name, ctx.venue, b.yes_token, _label(ctx, b), "BUY_YES", post, size,
@@ -180,7 +197,8 @@ class WeatherHold(Strategy):
                                       exit=tp, horizon_hours=30, spread_cents=_spread_cents(b),
                                       meta={"market_id": b.market_id, "p_model": p, "station": ctx.station}))
             # the NO side: model says this bucket is far less likely than priced
-            if b.best_bid is not None and (b.best_bid - p) * 100 >= self.cfg.edge_min_cents and b.best_bid >= 0.10:
+            if (b.best_bid is not None and (b.best_bid - p) * 100 >= self.cfg.edge_min_cents and b.best_bid >= 0.10
+                    and _in_band(b.best_bid, self.cfg) and (b.best_bid - p) * 100 <= self.cfg.hold_edge_max_cents):
                 no_price = round(1 - b.best_bid + 0.01, 2)  # rest a NO buy one tick inside
                 size = size_for(1 - p, no_price, self.cfg.bankroll_usd, self.cfg.caps)
                 if size > 0:
@@ -209,7 +227,7 @@ class WeatherObs(Strategy):
             if not dead or b.best_bid < self.cfg.dead_bucket_min_bid:
                 continue
             no_price = round(1 - b.best_bid + 0.01, 2)
-            size = min(self.cfg.caps.max_per_market_usd, max(self.cfg.caps.min_order_usd, 10.0))
+            size = self.cfg.caps.max_per_market_usd     # dead is dead: the only risk is the feed, so size to the cap
             out.append(Signal(self.name, ctx.venue, b.yes_token, _label(ctx, b), "BUY_NO", no_price, size,
                               round(b.best_bid * 100, 1),
                               f"dead: running {ctx.kind} {ctx.running}° past bucket, bid still {b.best_bid:.2f}",
@@ -295,7 +313,7 @@ class WeatherModelUpdate(Strategy):
                 if post is None:
                     continue
                 edge = (p_now - post) * 100
-                if edge >= self.cfg.edge_min_cents / 2:
+                if edge >= self.cfg.edge_min_cents / 2 and _in_band(post, self.cfg) and edge <= self.cfg.hold_edge_max_cents:
                     size = size_for(p_now, post, self.cfg.bankroll_usd, self.cfg.caps)
                     if size > 0:
                         out.append(Signal(self.name, ctx.venue, b.yes_token, _label(ctx, b), "BUY_YES", post, size,
@@ -305,7 +323,7 @@ class WeatherModelUpdate(Strategy):
             elif shift < 0 and b.best_bid is not None and b.best_bid >= 0.10:
                 no_price = round(1 - b.best_bid + 0.01, 2)
                 edge = (b.best_bid - p_now) * 100
-                if edge >= self.cfg.edge_min_cents / 2:
+                if edge >= self.cfg.edge_min_cents / 2 and _in_band(b.best_bid, self.cfg) and edge <= self.cfg.hold_edge_max_cents:
                     size = size_for(1 - p_now, no_price, self.cfg.bankroll_usd, self.cfg.caps)
                     if size > 0:
                         out.append(Signal(self.name, ctx.venue, b.yes_token, _label(ctx, b), "BUY_NO", no_price, size,

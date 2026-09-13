@@ -137,6 +137,12 @@ class Config:
     favorites_band: tuple = (0.85, 0.95)
     longshot_band: tuple = (0.03, 0.20)
     horizon_days: int = 7
+    hold_price_band: tuple = (0.06, 0.94)  # weather_hold / model_update: the YES level the market must sit in; 1-5c and
+                                           # 95-99c carry information the model can't have (2026-09-12 paper: -$412 there)
+    hold_edge_max_cents: float = 30.0      # a bigger model-vs-market gap is a model or venue-rule error, not an edge
+    gate_since_ts: float = 0.0             # signals before this epoch don't count toward the report or the gate
+    auto_promote: bool = False             # True: the 07:00 report flips PASS modules paper -> live by itself
+    snapshot_keep_days: int = 7            # book snapshots older than this are pruned at 03:00
 
     def mode(self, module: str) -> str:
         return self.modes.get(module, "off")
@@ -152,6 +158,7 @@ def load(path: str = CONFIG_PATH) -> Config:
         cfg.caps = Caps(**{k: v for k, v in caps.items() if k in Caps.__dataclass_fields__})
         cfg.favorites_band = tuple(cfg.favorites_band)
         cfg.longshot_band = tuple(cfg.longshot_band)
+        cfg.hold_price_band = tuple(cfg.hold_price_band)
     for m in MODULES:
         if cfg.modes.get(m) not in MODES:
             cfg.modes[m] = "paper"

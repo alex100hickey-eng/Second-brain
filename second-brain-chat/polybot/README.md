@@ -3,8 +3,15 @@
 Alex's multi-strategy Polymarket bot. Design doc: vault `Money/Polymarket Bot — Design v1 (2026-09-12).md`.
 
 ## What it is
-- Strategy modules, each with a mode `off → paper → signal → live`. The ledger promotes them
-  (`report` prints the gate for every module: ≥30 signals, net positive after fees, ≥50% fills).
+- Strategy modules, each with a mode `off → paper → signal → live`. The ledger decides who is ready
+  (`report` prints the gate for every module: ≥30 signals, ≥50% fills, mark-to-market positive —
+  closed net PLUS the open positions marked at the last price — and the Polymarket US paper record
+  not negative). `promote` flips passing modules to live; `auto_promote: true` in config.json lets the
+  07:00 report do it alone. Signals before `gate_since_ts` don't count (a rule change resets the evidence).
+- One position per market in every mode (paper included). Model modules (`weather_hold`,
+  `weather_model_update`) only trade buckets the market prices inside `hold_price_band` (6-94c) and
+  skip any "edge" over `hold_edge_max_cents` (30c): the 2026-09-12 paper run lost $412 on 1-5c long
+  shots and $107 on 40c+ edges — those are model errors, not market errors.
 - One risk manager every order passes through: $20/market, $100 total, halt under $120 bankroll,
   $20 daily loss stop, sports off until flipped (Ohio), maker limit orders only, kill switch =
   `touch polybot/KILL`.
@@ -30,6 +37,7 @@ python3 -m polybot.runner status
 python3 -m polybot.runner scan                 # one pass over all 30 offshore cities, high + low markets
 python3 -m polybot.runner settle               # fill/close paper signals from what the market did next
 python3 -m polybot.runner report --days 7
+python3 -m polybot.runner promote              # flip every gate-passing paper module to live (writes config.json)
 python3 -m polybot.runner calibrate --events 300
 python3 -m polybot.runner backtest --days 7    # replay the weather modules on real past days (also Sundays 04:00)
 python3 -m polybot.runner pairs                # match US markets to offshore twins for leadlag (needs the key)
@@ -54,11 +62,16 @@ tuned from data. Output: `backtest-latest.json` + a summary in the log.
 1. `pip install polymarket-us`; put `POLYMARKET_KEY_ID` and `POLYMARKET_SECRET_KEY` in the server env.
 2. `status` shows `us venue: ready`; bankroll is read from the account.
 3. Flip one module to `signal` in `polybot/config.json`; nudges only.
-4. Flip to `live` only after the gate passes twice. Orders are limit/GTC; `cancel_all` on the kill switch.
+4. `promote` (or `auto_promote: true`) flips a module to `live` once the gate passes. Orders are limit/GTC;
+   `cancel_all` on the kill switch. A live module's offshore signals keep being recorded as paper.
 
 ## Venue rules that matter
 - Offshore weather markets resolve on the HOURLY "Temp" column of the station in the description
   (NYC = LaGuardia KLGA). Polymarket US settles on the NWS daily climate report (CLI) at Central Park
   KNYC (and KMDW/KMIA/KLAX/KSFO) at 8 AM ET the next day. The context carries the right station and
-  rule per venue; `hourly_rule_discount_f` (1°F) accounts for the hourly column reading under the daily max.
+  rule per venue; `hourly_rule_discount_f` accounts for the hourly column reading under the daily max.
+- The observation feed follows the rule too: `cli` reads the NWS 5-minute ASOS feed (the CLI max comes
+  off the same sensor), `hourly` reads the METAR column via aviationweather.gov. The 5-minute feed prints
+  1-2°F above the hourly METAR (KSFO 2026-09-12: 72 vs a 70-71 settlement), which is why the first paper
+  day's offshore "dead" and "locked" buckets went the wrong way.
 - Polymarket US fees (2026-07-01): taker 0.06·p·(1−p), maker rebate 0.0125·p·(1−p).
