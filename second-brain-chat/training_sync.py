@@ -56,6 +56,34 @@ LOCAL_TZ = ZoneInfo("America/New_York")
 RETRY_COOLDOWN_S = 60
 
 # The PWA's origin, for CORS. Env-overridable in case the app ever moves.
+# The app can be served from more than one place: the deployed PWA, and a local
+# copy on a dev port when we are editing the library side by side with him. CORS
+# was a single hardcoded origin, so a local copy could never sync no matter what
+# URL it was pointed at — every PUT died on preflight, silently, and edits made
+# there looked saved until the page reloaded. Allowlist, not a single value.
+# TRAINING_APP_ORIGIN stays honoured for anything already setting it.
+_DEFAULT_ORIGINS = (
+    "https://luminous-madeleine-bf89fa.netlify.app",
+    "http://localhost:8137",
+    "http://127.0.0.1:8137",
+)
+APP_ORIGINS = tuple(
+    o.strip() for o in os.environ.get(
+        "TRAINING_APP_ORIGINS",
+        os.environ.get("TRAINING_APP_ORIGIN", ",".join(_DEFAULT_ORIGINS)),
+    ).split(",") if o.strip()
+) or _DEFAULT_ORIGINS
+
+
+def cors_origin(request_origin: str | None) -> str:
+    """Echo the caller's origin when it is allowed, else the primary one.
+
+    Returning a single fixed origin to every caller is what broke local copies:
+    the browser compares the header to its own origin and blocks on mismatch."""
+    ro = (request_origin or "").strip()
+    return ro if ro in APP_ORIGINS else APP_ORIGINS[0]
+
+
 APP_ORIGIN = os.environ.get(
     "TRAINING_APP_ORIGIN", "https://luminous-madeleine-bf89fa.netlify.app"
 )

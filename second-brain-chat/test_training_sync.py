@@ -480,6 +480,27 @@ def test_undo_history_trims_instead_of_vanishing():
         training_sync.MAX_ROW_BYTES = real_cap
 
 
+def test_cors_allows_more_than_one_app_origin():
+    print("\n=== CORS: a local copy of the app can sync too ===")
+    # 2026-09-12: the sync route answered every caller with one hardcoded origin,
+    # so a local copy of the PWA failed preflight on every PUT. The browser gave
+    # no error the user could see — edits looked saved and vanished on reload.
+    prod = "https://luminous-madeleine-bf89fa.netlify.app"
+    check("the deployed app is still allowed", training_sync.cors_origin(prod) == prod)
+    check("a local copy gets its OWN origin echoed",
+          training_sync.cors_origin("http://localhost:8137") == "http://localhost:8137")
+    check("127.0.0.1 spelling works too",
+          training_sync.cors_origin("http://127.0.0.1:8137") == "http://127.0.0.1:8137")
+    # The allowlist must not become a reflector: echoing any origin back would
+    # let any site on the internet read and overwrite his training data.
+    check("an unknown origin is NOT echoed back",
+          training_sync.cors_origin("https://evil.example") == prod)
+    check("a missing Origin header falls back to the primary",
+          training_sync.cors_origin(None) == prod)
+    check("empty string does not slip through",
+          training_sync.cors_origin("  ") == prod)
+
+
 def test_library_tools_wired():
     print("\n=== library tools: schemas + dispatch wiring ===")
     check("both tools in TOOL_NAMES",
@@ -519,6 +540,7 @@ if __name__ == "__main__":
     test_append_library_log_row()
     test_library_undo_and_size_cap()
     test_undo_history_trims_instead_of_vanishing()
+    test_cors_allows_more_than_one_app_origin()
     test_library_tools_wired()
     total, passed = len(_results), sum(_results)
     print("\n" + "=" * 48)

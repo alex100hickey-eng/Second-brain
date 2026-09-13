@@ -305,7 +305,8 @@ def training_sync_endpoint(token):
     origin, and OPTIONS answers before the token check because preflights carry
     no data and browsers send them tokenless."""
     cors = {
-        "Access-Control-Allow-Origin": training_sync.APP_ORIGIN,
+        "Access-Control-Allow-Origin": training_sync.cors_origin(
+            request.headers.get("Origin")),
         "Vary": "Origin",
         "Access-Control-Allow-Methods": "GET, PUT, OPTIONS",
         "Access-Control-Allow-Headers": "Content-Type",
