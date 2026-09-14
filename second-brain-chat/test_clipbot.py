@@ -1,4 +1,5 @@
 """clipbot tests — no network. ffmpeg smoke test runs only if ffmpeg is installed."""
+import json
 import os
 import subprocess
 import tempfile
@@ -459,3 +460,41 @@ def test_post_order_interleaves_caption_lines():
         led.update_variant(vid, staged_path=f"/r/{i}.mp4", status="staged")
     lines = [r["line"] for r in posting.post_order(led, today="2026-09-12")]
     assert lines == ["same", "other", "same", "third", "same"]
+
+
+def test_stalled_backlog_nudges_with_the_blockers(tmp_path, monkeypatch):
+    """A staged backlog nobody is posting must break the silence. Sep 12-14 2026: 187 clips sat ready,
+    nothing went out, and ready_nudge returned False every day because no NEW variant had been staged."""
+    monkeypatch.setattr(config, "HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(config, "READY_DIR", str(tmp_path / "ready"))
+    monkeypatch.setattr(config, "HOOKS_DIR", str(tmp_path / "hooks"))
+    monkeypatch.setattr(config, "INBOX_DIR", str(tmp_path / "inbox"))
+    sent = []
+    monkeypatch.setattr("clipbot.notify.nudge", lambda title, body, **kw: sent.append((title, body)) or True)
+    led = _ledger()
+    r = Runner(config.Config(), led, OpusClient(api_key=None), log=lambda *_: None)
+    cid = r.add_campaign("Battlbox", "vyro", 1.5, 1000, "#battlbox")
+    sid = led.add_source(cid, "file:///a.mp4", "a", 10.0, 10)
+    clip_id = led.add_clip(sid, {"clip_id": "c1", "title": "t", "score": 90, "start": 0, "end": 30})
+    vid = led.add_variant(clip_id, "tiktok", str(tmp_path / "a.mp4"))
+    led.update_variant(vid, status="staged", staged_path=str(tmp_path / "a.mp4"))
+
+    # Fresh backlog, nothing ever posted -> the normal "clips ready" nudge.
+    assert r.ready_nudge() is True and "ready to post" in sent[0][0]
+    sent.clear()
+
+    # Same backlog a day later, still nothing posted: silence before, a blocker-carrying nudge now.
+    led.set_kv("blockers", json.dumps(["Vyro: check approvals"]))
+    assert r.ready_nudge() is True
+    assert sent[0][0] == "clipbot is stalled"
+    assert "1 clips staged" in sent[0][1] and "Vyro: check approvals" in sent[0][1]
+
+    # Once per day, not once per loop tick.
+    sent.clear()
+    assert r.ready_nudge() is False and sent == []
+
+    # And a backlog that IS moving stays quiet.
+    led.set_kv("last_stalled_nudge_day", "")
+    led.mark_posted(vid, url="https://tiktok.com/x", posted_at=time.time())
+    led.update_variant(vid, status="staged")
+    assert r.ready_nudge() is False

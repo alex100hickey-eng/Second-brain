@@ -504,7 +504,10 @@ class Runner:
         fresh = [v for v in staged if v["id"] > last_seen]
         posting.write_post_order(self.ledger)
         if not fresh:
-            return False
+            # A staged backlog that nobody is posting is the failure mode this nudge exists to catch:
+            # between 2026-09-12 and 09-14, 187 clips sat ready, nothing posted, and because no NEW
+            # variant had been staged this returned False every day — silence that read as "all fine".
+            return self._stalled_nudge(staged)
         by = {}
         for v in fresh:
             by[v["platform"]] = by.get(v["platform"], 0) + 1
@@ -514,6 +517,29 @@ class Runner:
                           f"{len(staged)} staged in total.", log=self.log)
         if ok:
             self.ledger.set_kv("last_nudged_variant", max(v["id"] for v in fresh))
+        return ok
+
+    def _stalled_nudge(self, staged) -> bool:
+        """Nothing new staged, but is the pipeline actually moving? If a backlog is sitting there and
+        nothing has gone out in 24 h, say so and name what is blocking it — a nudge that doesn't carry
+        the next action is the same as no nudge."""
+        if not staged:
+            return False
+        posts = self.ledger.posts()
+        last_post = max((p.get("posted_at") or 0) for p in posts) if posts else 0
+        idle_h = (time.time() - last_post) / 3600 if last_post else 999
+        if idle_h < 24:
+            return False
+        day = datetime.now(ET).strftime("%Y-%m-%d")
+        if self.ledger.get_kv("last_stalled_nudge_day", "") == day:
+            return False
+        blockers = json.loads(self.ledger.get_kv("blockers", "[]") or "[]")
+        body = f"{len(staged)} clips staged and nothing posted in {int(idle_h)} h."
+        if blockers:
+            body += " Blocked on: " + "; ".join(blockers)
+        ok = notify.nudge("clipbot is stalled", body, key="clipbot-stalled", log=self.log)
+        if ok:
+            self.ledger.set_kv("last_stalled_nudge_day", day)
         return ok
 
     def status(self) -> str:
@@ -602,6 +628,8 @@ def main(argv=None):
     p = sub.add_parser("posted")
     p.add_argument("--variant", type=int, required=True)
     p.add_argument("--url", required=True)
+    b = sub.add_parser("blockers", help="what is stopping posting; carried in the stalled nudge")
+    b.add_argument("--set", nargs="*", default=None, help="replace the list (no args clears it)")
     v = sub.add_parser("views")
     v.add_argument("--variant", type=int, required=True)
     v.add_argument("--views", type=int, required=True)
@@ -665,6 +693,10 @@ def main(argv=None):
     elif a.cmd == "plan":
         print(posting.format_post_order(posting.post_order(r.ledger)), end="")
         print(f"→ {posting.write_post_order(r.ledger)}")
+    elif a.cmd == "blockers":
+        if a.set is not None:
+            r.ledger.set_kv("blockers", json.dumps(a.set))
+        print(json.loads(r.ledger.get_kv("blockers", "[]") or "[]"))
     elif a.cmd == "nudge":
         print("sent" if r.ready_nudge() else "nothing new to nudge")
     elif a.cmd == "prune":

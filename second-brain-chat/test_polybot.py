@@ -699,3 +699,29 @@ def test_us_scan_records_us_signals_and_snapshots(monkeypatch):
         assert s["market"].startswith("tc-temp-nychigh-2026-09-13-") and s["mode"] == "paper"
     assert n == len(led.open_signals(venue="us"))
     assert r.scan_weather(cities=["chicago"], modules=["bucket_sum"], kinds=("high",), venue="us") == 0
+
+
+def test_config_reload_picks_up_an_edited_mode(tmp_path, monkeypatch):
+    """The loop read config.json once at startup: flipping a module by hand did nothing until a
+    relaunch, and the next promote() wrote the stale copy back over the edit."""
+    import json as _json
+    import polybot.config as cfgmod
+    path = str(tmp_path / "config.json")
+    base = _json.loads(_json.dumps(cfgmod.load().__dict__, default=lambda o: o.__dict__))
+    base["modes"] = {"weather_lock": "paper", "weather_hold": "paper"}
+    with open(path, "w") as f:
+        _json.dump(base, f)
+    monkeypatch.setattr(cfgmod, "CONFIG_PATH", path)
+
+    from polybot.runner import Runner
+    r = Runner(cfg=cfgmod.load(path), ledger=_ledger(), log=lambda *_: None)
+    r._cfg_mtime = os.path.getmtime(path)
+    assert r.cfg.mode("weather_hold") == "paper"
+    assert r.reload_config_if_changed() is False          # untouched file: no work
+
+    base["modes"]["weather_hold"] = "off"
+    with open(path, "w") as f:
+        _json.dump(base, f)
+    os.utime(path, (time.time() + 1, time.time() + 1))
+    assert r.reload_config_if_changed() is True
+    assert r.cfg.mode("weather_hold") == "off" and r.cfg.mode("weather_lock") == "paper"

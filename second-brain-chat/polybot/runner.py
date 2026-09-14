@@ -16,6 +16,7 @@ Cadence (loop): weather modules at :55 every hour (after the :51 observation) ·
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 import json
@@ -54,6 +55,7 @@ class SeriesStore:
 class Runner:
     def __init__(self, cfg: config.Config | None = None, ledger: Ledger | None = None, log=print):
         self.cfg = cfg or config.load()
+        self._cfg_mtime = os.path.getmtime(config.CONFIG_PATH) if os.path.exists(config.CONFIG_PATH) else 0.0
         self.ledger = ledger or Ledger()
         self.log = log
         self.ledger.gate_since_ts = self.cfg.gate_since_ts
@@ -237,6 +239,25 @@ class Runner:
         path = pairs.save_pairs(found)
         return f"pairs: {len(found)} matched from {len(us_markets)} US × {len(off)} offshore markets → {path}"
 
+    def reload_config_if_changed(self) -> bool:
+        """Pick up an edited config.json without a restart. The loop used to read config once at
+        startup, so flipping a module by hand did nothing until a relaunch — and worse, the next
+        `promote` wrote the stale in-memory copy back over the edit."""
+        try:
+            mtime = os.path.getmtime(config.CONFIG_PATH)
+        except OSError:
+            return False
+        if mtime == self._cfg_mtime:
+            return False
+        self._cfg_mtime = mtime
+        before = dict(self.cfg.modes)
+        self.cfg = config.load()
+        self.ledger.gate_since_ts = self.cfg.gate_since_ts
+        changed = {m: (before.get(m), v) for m, v in self.cfg.modes.items() if before.get(m) != v}
+        if changed:
+            self.log("  config reloaded: " + ", ".join(f"{m} {a}->{b}" for m, (a, b) in changed.items()))
+        return True
+
     def report(self, days: int = 1) -> str:
         text = self.ledger.report(days)
         with open(config.REPORT_PATH, "w") as f:
@@ -287,10 +308,15 @@ class Runner:
             if key not in done:
                 done.add(key)
                 try:
+                    self.reload_config_if_changed()
+                    # weather_lock first: it is the only module the 208-city-day backtest paid
+                    # (+29.8% ROI vs weather_hold -14.5%), and in paper the per-market cap let
+                    # whoever scanned first take the bucket — weather_hold refused 95 lock signals
+                    # that way, starving the one strategy worth promoting.
                     if now.minute == 55:
-                        self.scan_weather(modules=["weather_hold", "weather_obs", "weather_lock", "weather_model_update"])
+                        self.scan_weather(modules=["weather_lock", "weather_model_update", "weather_hold", "weather_obs"])
                         if self.us.available:
-                            self.scan_weather(modules=["weather_hold", "weather_obs", "weather_lock", "weather_model_update"], venue="us")
+                            self.scan_weather(modules=["weather_lock", "weather_model_update", "weather_hold", "weather_obs"], venue="us")
                     if now.minute % 5 == 0:
                         self.scan_weather(modules=["bucket_sum"])
                         if self.us.available:
