@@ -8,9 +8,9 @@ and produces ONE organized, structured markdown report — summary up top, thema
 sections, and a sources list with URLs — saved to `synthesized/` AND logged to the
 Supabase "Agent Outputs" table.
 
-Web research is KEYLESS by default (DuckDuckGo via the `ddgs` package + page-text
-extraction). It's structured so a proper search API (Tavily / Serper / Brave) can be
-dropped in later just by setting an env var — see `search_web()` and LIMITATIONS below.
+Web research goes through a keyed search API (Tavily / Serper / Brave — whichever key is
+set; Tavily is the one live here). There is no keyless mode: DuckDuckGo stopped serving
+results to scripts in 2026. See `search_web()` and LIMITATIONS below.
 
 Run standalone:
     python3 data_synthesizer_agent.py "electric vehicle battery recycling"          # web research
@@ -21,12 +21,11 @@ Or import and call `synthesize(...)` from the chat brain (see app.py's synthesiz
 
 LIMITATIONS
 -----------
-* Keyless DuckDuckGo search is rate-limited and lower-recall than a paid API. To upgrade,
-  set ONE of TAVILY_API_KEY / SERPER_API_KEY / BRAVE_API_KEY in `.env`; `search_web()` will
-  prefer it automatically (the keyed branches are stubbed with the exact request shape and
-  marked TODO — wire the HTTP call when you have a key).
+* A search key is REQUIRED: set ONE of TAVILY_API_KEY / SERPER_API_KEY / BRAVE_API_KEY in
+  `.env`. `search_web()` uses the first one set and raises a named error when none is —
+  it no longer degrades to an empty result list that looks like 'nothing found'.
 * Page-text extraction is best-effort (paywalls, JS-only sites, PDFs may yield little).
-* It never scrapes Google directly (ToS); DuckDuckGo only.
+* It never scrapes search engines directly (ToS) — keyed APIs only.
 """
 
 import os
@@ -64,50 +63,52 @@ USER_AGENT = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.3
 # ============================================================
 # WEB RESEARCH — keyless by default, key-upgradeable
 # ============================================================
-def search_web(query: str, max_results: int = DEFAULT_NUM_SOURCES) -> list:
-    """Return [{title, url, snippet}]. Prefers a paid search API if a key is present
-    (better recall), else falls back to keyless DuckDuckGo. Drop a key in `.env` to
-    upgrade with zero code changes elsewhere."""
+def search_web(query: str, max_results: int = DEFAULT_NUM_SOURCES,
+               include_domains: list = None) -> list:
+    """Return [{title, url, snippet}] from the first configured search key.
+
+    `include_domains` restricts results to those sites (Tavily supports this natively;
+    the others get an emulated `site:` prefix). It is how the Reddit scout reads Reddit
+    now that Reddit 403s unauthenticated clients.
+
+    Raises RuntimeError when no key is set — there is no keyless fallback left."""
     # --- Preferred: keyed APIs, first configured key wins ---
     if os.environ.get("TAVILY_API_KEY"):
-        return _search_tavily(query, max_results)
+        return _search_tavily(query, max_results, include_domains)
+    scoped = query
+    if include_domains:
+        # Serper and Brave have no domain filter — `site:` is the portable equivalent.
+        scoped = f"{query} (" + " OR ".join(f"site:{d}" for d in include_domains) + ")"
     if os.environ.get("SERPER_API_KEY"):
-        return _search_serper(query, max_results)
+        return _search_serper(scoped, max_results)
     if os.environ.get("BRAVE_API_KEY"):
-        return _search_brave(query, max_results)
+        return _search_brave(scoped, max_results)
 
-    # --- Default: keyless DuckDuckGo ---
-    try:
-        from ddgs import DDGS
-    except ImportError:
-        try:
-            from duckduckgo_search import DDGS  # older package name
-        except ImportError:
-            raise RuntimeError("Install a search backend: `pip install ddgs`.")
-
-    results = []
-    with DDGS() as d:
-        for r in d.text(query, max_results=max_results):
-            results.append({
-                "title": r.get("title", "").strip(),
-                "url": r.get("href") or r.get("url") or "",
-                "snippet": r.get("body", "").strip(),
-            })
-    return [r for r in results if r["url"]]
+    # --- No key: there is no working keyless fallback anymore ---
+    # DuckDuckGo (via the `ddgs` package and the html.duckduckgo.com scrape) now
+    # answers with an anomaly/bot-check page instead of results — verified
+    # 2026-09-14, zero results parsed. Keeping it as a "fallback" meant every
+    # keyless call returned an empty list that callers read as "nothing found on
+    # the web" rather than "search is broken". Fail loudly instead.
+    raise RuntimeError(
+        "No web-search backend configured. Set TAVILY_API_KEY (or SERPER_API_KEY / "
+        "BRAVE_API_KEY) in .env — keyless DuckDuckGo stopped returning results in 2026."
+    )
 
 
-def _search_tavily(query, max_results):
+def _search_tavily(query, max_results, include_domains=None):
     """Tavily search API — live since 2026-08-14 (free tier, 1000 credits/mo)."""
     import requests
-    resp = requests.post(
-        "https://api.tavily.com/search",
-        json={"api_key": os.environ["TAVILY_API_KEY"], "query": query,
-              "max_results": max_results, "include_answer": False},
-        timeout=FETCH_TIMEOUT,
-    )
+    payload = {"api_key": os.environ["TAVILY_API_KEY"], "query": query,
+               "max_results": max_results, "include_answer": False}
+    if include_domains:
+        payload["include_domains"] = list(include_domains)
+    resp = requests.post("https://api.tavily.com/search", json=payload,
+                         timeout=FETCH_TIMEOUT)
     data = resp.json()
     return [{"title": r.get("title", ""), "url": r.get("url", ""),
-             "snippet": r.get("content", "")} for r in data.get("results", [])]
+             "snippet": r.get("content", ""), "score": r.get("score")}
+            for r in data.get("results", [])]
 
 
 def _search_serper(query, max_results):

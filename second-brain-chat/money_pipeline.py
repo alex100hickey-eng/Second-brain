@@ -6,8 +6,8 @@ stages that hunt for ways Jarvis can EARN money toward Alex's $3k/month goal:
                 STRUCTURED money-making ideas (never raw dumps):
                   github      revenue-generating automation projects & templates
                   hackernews  Algolia HN API — indie hacker / side-income threads
-                  reddit      public JSON — r/SideProject, r/passive_income, etc.
-                  web         keyless DuckDuckGo via the data synthesizer
+                  reddit      keyed search scoped to reddit.com (public JSON is 403 now)
+                  web         keyed search API via the data synthesizer
                   capability  introspective — ideas grounded in what Jarvis can
                               ALREADY do (no external source at all)
   Council       each idea is routed through the EXISTING decision council
@@ -102,7 +102,6 @@ _MAX_DAILY_MINUTES = 45.0
 ALL_SOURCES = ("github", "hackernews", "reddit", "web", "capability")
 
 HN_API = "https://hn.algolia.com/api/v1/search"
-REDDIT_SUBS = "SideProject+passive_income+EntrepreneurRideAlong+indiehackers"
 
 
 def init(claude_client, supabase_client, tool_dispatcher, council_call_fn,
@@ -400,48 +399,55 @@ def hn_scout(focus_brief: str, cap: int = DEFAULT_SCOUT_CAP) -> list:
 
 
 def reddit_scout(focus_brief: str, cap: int = DEFAULT_SCOUT_CAP) -> list:
-    """Reddit's public JSON search across side-project / passive-income subs.
-    NOTE (verified 2026-07-26): Reddit now returns a hard 403 (HTML bot-check
-    page, not JSON) to this server's IP regardless of User-Agent or domain
-    (tried www./old.reddit.com, browser and custom UAs — all blocked). This
-    isn't fixable from here without Reddit's OAuth API (needs registered app
-    credentials) or a proxy. Rather than fail silently forever, a persistent
-    block is audited so it shows up as a real incident instead of masquerading
-    as 'no ideas found'."""
+    """Reddit's side-project / passive-income subs, read through the search API.
+
+    History worth keeping: this used to hit `reddit.com/r/<subs>/search.json`
+    directly. Reddit began returning a hard 403 bot-check page to unauthenticated
+    clients — noted 2026-07-26 as "this server's IP", but re-verified 2026-09-14
+    from the Mac as well, so it is every IP, not a server problem. For seven weeks
+    this scout returned nothing on every run while looking like it simply found no
+    ideas.
+
+    Fixed by going through the same keyed search stack the web scout uses, scoped
+    to reddit.com. No OAuth app, no registered credentials, and no cookie handed to
+    a third-party CLI — the key was already in `.env`. One behaviour change: the old
+    version searched four named subs (SideProject, passive_income,
+    EntrepreneurRideAlong, indiehackers); this searches reddit.com as a whole, which
+    is strictly more recall and still surfaces those subs first on topical queries.
+    """
+    try:
+        from data_synthesizer_agent import search_web
+    except Exception as e:
+        _audit("reddit_scout", "agent", f"search stack unavailable: {str(e)[:120]}",
+               success=False)
+        return []
     raw = []
-    blocked = 0
+    failed = 0
     for q in _distill_queries(focus_brief):
         try:
-            r = httpx.get(f"https://www.reddit.com/r/{REDDIT_SUBS}/search.json",
-                          params={"q": q, "restrict_sr": "on", "sort": "top",
-                                  "t": "year", "limit": min(cap * 2, 25)},
-                          timeout=20, headers={"User-Agent": "Jarvis-money-scout/1.0"},
-                          follow_redirects=True)
-            if r.status_code != 200 or "application/json" not in r.headers.get("content-type", ""):
-                blocked += 1
-                posts = []
-            else:
-                posts = r.json().get("data", {}).get("children", [])
+            results = search_web(q, max_results=min(cap * 2, 25),
+                                 include_domains=["reddit.com"])
         except Exception:
-            blocked += 1
-            posts = []
-        for p in posts:
-            d = p.get("data", {})
+            failed += 1
+            continue
+        for r in results:
+            url = r.get("url", "")
+            m = re.search(r"/r/([A-Za-z0-9_]+)", url)
             raw.append({
-                "title": d.get("title"),
-                "url": f"https://www.reddit.com{d.get('permalink', '')}",
-                "snippet": (d.get("selftext") or "")[:200],
-                "signals": f"{d.get('score', 0)} upvotes, {d.get('num_comments', 0)} comments, r/{d.get('subreddit')}",
+                "title": r.get("title"),
+                "url": url,
+                "snippet": (r.get("snippet") or "")[:200],
+                "signals": f"r/{m.group(1)}" if m else "reddit",
             })
-    if blocked and not raw:
-        _audit("reddit_scout", "agent", "Reddit blocked every request (403/non-JSON) — "
-               "this server's IP appears blocked from Reddit's unauthenticated search API",
+    if failed and not raw:
+        _audit("reddit_scout", "agent",
+               "every Reddit search failed — check TAVILY_API_KEY on this node",
                success=False)
     return _structure_ideas(focus_brief, "reddit", _dedupe_raw(raw)[:cap * 4])
 
 
 def web_scout(focus_brief: str, cap: int = DEFAULT_SCOUT_CAP) -> list:
-    """Open-web search (keyless DuckDuckGo via the data synthesizer)."""
+    """Open-web search (keyed search API via the data synthesizer)."""
     try:
         from data_synthesizer_agent import search_web
     except Exception:

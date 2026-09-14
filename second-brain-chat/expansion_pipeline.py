@@ -422,7 +422,7 @@ def github_scout(focus_brief: str, cap: int = DEFAULT_SCOUT_CAP) -> list:
 
 
 def web_scout(focus_brief: str, cap: int = DEFAULT_SCOUT_CAP) -> list:
-    """Search the open web (keyless DuckDuckGo via the data synthesizer) using the same
+    """Search the open web (keyed search API via the data synthesizer) using the same
     distilled queries, so a long brief doesn't dilute recall."""
     try:
         from data_synthesizer_agent import search_web

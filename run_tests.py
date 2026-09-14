@@ -2743,8 +2743,10 @@ def suite_observability(app, live):
         os.environ.pop("TAVILY_API_KEY", None)
         none = health.run_startup_check(supabase_client=None)
         srch = [c for c in none["checks"] if c["name"] == "env: web search"]
-        check("zero search keys → web search is a notice naming the fallback",
-              len(srch) == 1 and srch[0]["ok"] is None and "DuckDuckGo" in srch[0]["detail"],
+        check("zero search keys → notice says search is DOWN, not that it falls "
+              "back to DuckDuckGo (that fallback died 2026-09-14)",
+              len(srch) == 1 and srch[0]["ok"] is None
+              and "DOWN" in srch[0]["detail"] and "falls back" not in srch[0]["detail"],
               str(srch))
     finally:
         for var, val in saved_keys.items():

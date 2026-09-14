@@ -210,9 +210,15 @@ def _check_env() -> list:
         checks.append({"name": "env: web search", "ok": True,
                        "status": f"keyed ({keyed[0].split('_')[0].lower()})", "detail": ""})
     else:
+        # A notice, NOT a failure: optional deps must never drive `overall` to
+        # critical on their own (that tier is for a node that cannot function).
+        # What changed 2026-09-14 is the honesty of the text, not the severity —
+        # it used to promise a keyless DuckDuckGo fallback that no longer exists.
         checks.append({"name": "env: web search", "ok": None, "status": "no key set",
-                       "detail": "falls back to keyless DuckDuckGo (set TAVILY_API_KEY "
-                                 "or SERPER_API_KEY or BRAVE_API_KEY)"})
+                       "detail": "web search is DOWN on this node — there is no keyless "
+                                 "fallback since DuckDuckGo started refusing scripts "
+                                 "(2026-09-14). Set TAVILY_API_KEY (or SERPER_API_KEY / "
+                                 "BRAVE_API_KEY)."})
     return checks
 
 
