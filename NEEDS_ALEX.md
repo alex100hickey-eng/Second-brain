@@ -12,6 +12,32 @@ is still yours to do.
 
 ---
 
+## 🔎 2026-09-14 — one 30-second check: does the SERVER have the search key?
+
+Shipped today (`b4391f9`, live on both nodes): `read_url`, and the Reddit scout is
+working again after seven weeks of silently returning nothing — it now reads Reddit
+through the Tavily key instead of Reddit's own JSON, which 403s every unauthenticated
+client. DuckDuckGo is out of the codebase entirely; it stopped returning results to
+scripts and every "fallback" through it was returning an empty internet.
+
+**That makes `TAVILY_API_KEY` load-bearing on both nodes, and I can only see the Mac's.**
+The Mac has it. The server's env lives in Coolify and `/api/health` needs the server's
+own ACCESS_CODE, which I don't hold. If the server is missing it, the money and
+expansion scouts there find nothing — the same failure that just cost seven weeks.
+
+Run this with the server's access code and look for `env: web search`:
+
+```
+curl -s -H "X-Access-Code: <server code>" \
+  https://clarvis.178.156.209.40.sslip.io/api/health | grep -i "web search"
+```
+
+- `keyed (tavily)` → done, delete this section.
+- `no key set` → add `TAVILY_API_KEY` (same value as the Mac's `.env`) to the Coolify
+  environment and redeploy.
+
+---
+
 ## 🔴 2026-09-12 — the four things standing between you and a D1 season
 
 You said the fire died down and you want the system finalized. I audited it instead of
