@@ -119,6 +119,14 @@ def _resolve_outbox(view, ref):
     view["link_label"] = ("Open Gmail Drafts" if item.get("kind") == "email_draft"
                           else "Open it")
     view["done_label"] = "Sent it" if item.get("kind") == "email_draft" else "Done"
+    if item.get("kind") == "email_draft" and not item.get("send_approved"):
+        # The detail already carries the full subject + body, which is the point: this button
+        # is the last place the email can be stopped, so it is read before it is pressed.
+        view["steps"] = ["Read it. This is exactly what goes out.",
+                         "Send it now — it leaves from your Mac within a couple of minutes.",
+                         "Or open the Drafts folder to edit it first."]
+    elif item.get("send_approved"):
+        view["why"] = "Approved — it goes out from your Mac within a couple of minutes."
     line = outbox_mod.summary_line(item)
     age = line.split(" — ", 1)[1] if " — " in line else ""
     view["why"] = ("Ready and " + age if age
@@ -276,6 +284,12 @@ def _do_outbox(ref, op):
     if op in ("done", "sent"):
         outbox_mod.close(item_id, outbox_mod.DONE, note="closed from notification")
         return {"ok": True, "message": "Logged — I'll stop asking about that one."}
+    if op == "send":
+        # Records the approval only. His Mac picks it up and sends within ~2 minutes.
+        item = outbox_mod.approve_send(item_id)
+        if not item:
+            return {"ok": False, "message": "That item isn't a sendable draft."}
+        return {"ok": True, "message": "Approved — going out from your Mac in a minute or two."}
     if op == "snooze":
         outbox_mod.snooze(item_id, hours=3)
         return {"ok": True, "message": "Snoozed 3 hours."}

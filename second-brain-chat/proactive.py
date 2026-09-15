@@ -815,10 +815,15 @@ def run_awareness_pass(force: bool = False) -> str:
     waiting = picture["waiting"]
     if len(waiting) == 1:
         it = waiting[0]
-        page = _do_link("outbox", it["id"], ops=("done", "snooze", "drop"),
+        # `send` rides on the PAGE token, never on a shade button: sending a cold email under
+        # his name is consequential, and the rule here is the same one the approval queue uses —
+        # a lock-screen tap is not consent. He opens it, reads the email, then presses Send.
+        page = _do_link("outbox", it["id"], ops=("done", "snooze", "drop", "send"),
                         label=it.get("title", "")[:80])
         buttons = []
-        if it.get("link"):
+        if page:
+            buttons.append({"kind": "view", "label": "Read & send", "url": page})
+        elif it.get("link"):
             buttons.append({"kind": "view", "label": "Review & send",
                             "url": it["link"]})
         sent = _act_link("outbox", it["id"], "done")
@@ -836,7 +841,7 @@ def run_awareness_pass(force: bool = False) -> str:
             body, priority="high", tags="outbox_tray", force=force,
             renudge_hours=8, click=page, actions=buttons))
     elif len(waiting) > 1:
-        page = _do_link("outbox_all", "", ops=())
+        page = _do_link("outbox_all", "", ops=("send",))
         lines = [f"• {outbox_summary(it)}" for it in waiting[:4]]
         body = "\n".join([f"{len(waiting)} finished things are waiting on you:"]
                           + lines + ["Each needs one action from you. Tap to run them."])

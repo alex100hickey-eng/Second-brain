@@ -206,6 +206,26 @@ def sweep_sent(draft_ids_fn) -> list:
     return closed
 
 
+def approve_send(item_id: int, source: str = "notification") -> dict | None:
+    """Stamp Alex's approval to send an email_draft item. This records a decision; it does not
+    send. A separate process on his Mac (scripts/splitframe_send.py) is the only thing that can,
+    which is what keeps the send capability off the internet-facing node."""
+    item = get(item_id)
+    if not item or item.get("kind") != "email_draft":
+        return None
+    if item.get("status") != OPEN or item.get("send_approved"):
+        return item
+    return _write(item_id, {"send_approved": _now().isoformat(),
+                            "send_approved_by": source})
+
+
+def awaiting_send(limit: int = 30) -> list:
+    """Open email_draft items Alex has approved and nobody has sent yet."""
+    return [it for it in open_items(limit=limit)
+            if it.get("kind") == "email_draft" and it.get("send_approved")
+            and not it.get("sent_at")]
+
+
 def snooze(item_id: int, hours: float = 3) -> dict | None:
     """"Not now" without losing the item. Snoozing is the honest answer most of
     the time, and an assistant that only offers done/never trains him to lie."""

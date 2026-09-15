@@ -1,4 +1,5 @@
 """Tests for the Splitframe daily operator (scripts/splitframe_daily.py). No network."""
+import ast
 import csv
 import importlib.util
 import os
@@ -104,3 +105,69 @@ def test_body_parsing_survives_a_chatty_model():
     assert sfd.parse_body('Here you go:\n{"body": "after preamble"}') == "after preamble"
     assert sfd.parse_body('just the prose, no json at all') == "just the prose, no json at all"
     assert sfd.parse_body('{"body": ""}') == '{"body": ""}'      # empty body is not a body
+
+
+# ---- the send path: where it is allowed to live, and where it must never appear ----
+
+SEND_MARKERS = ("GMAIL_SEND_DRAFT", "GMAIL_SEND_EMAIL", "GMAIL_REPLY_TO_THREAD",
+                "smtplib", "sendmail")
+SENDER = os.path.expanduser("~/second-brain/scripts/splitframe_send.py")
+
+
+def test_the_server_still_cannot_send():
+    """The original gate's reason is about this node: it reads untrusted email and runs a model,
+    so a model with a send tool is an exfiltration lane. Tapping Send on the /do page only stamps
+    an approval — if a send slug ever appears in the server-side chain, that reasoning is broken."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    for fname in ("do_actions.py", "outbox.py", "proactive.py", "action_links.py",
+                  "mail_drafts.py", "app.py"):
+        path = os.path.join(here, fname)
+        if not os.path.exists(path):
+            continue
+        tree = ast.parse(open(path, encoding="utf-8", errors="replace").read())
+        docs = set()
+        for node in ast.walk(tree):
+            body = getattr(node, "body", None)
+            # IfExp and friends carry a single node in `body`, not a list of statements.
+            if isinstance(body, list) and body and isinstance(body[0], ast.Expr) \
+                    and isinstance(body[0].value, ast.Constant) \
+                    and isinstance(body[0].value.value, str):
+                docs.add(id(body[0].value))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str) \
+                    and id(node) not in docs and any(m in node.value for m in SEND_MARKERS):
+                raise AssertionError(f"{fname}:{node.lineno} gained a send path")
+
+
+def test_no_model_tool_can_reach_the_sender():
+    """splitframe_send.py is reachable by launchd and by Alex, and by nothing the model drives."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    for fname in os.listdir(here):
+        if not fname.endswith(".py") or fname == os.path.basename(__file__):
+            continue
+        tree = ast.parse(open(os.path.join(here, fname), encoding="utf-8", errors="replace").read())
+        for node in ast.walk(tree):
+            names = ([a.name for a in node.names] if isinstance(node, ast.Import)
+                     else [node.module or ""] if isinstance(node, ast.ImportFrom) else [])
+            assert not any("splitframe_send" in (n or "") for n in names), \
+                f"{fname} imports the sender"
+            # a dynamic import is the same door with a different handle
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) \
+                    and node.func.id in ("__import__", "import_module"):
+                for arg in node.args:
+                    assert not (isinstance(arg, ast.Constant)
+                                and "splitframe_send" in str(arg.value)), \
+                        f"{fname} dynamically imports the sender"
+
+
+def test_sender_only_targets_studio_drafts_and_tracked_recipients():
+    import importlib.util as iu
+    spec = iu.spec_from_file_location("sfs", SENDER)
+    sfs = iu.module_from_spec(spec)
+    spec.loader.exec_module(sfs)
+    assert sfs.parse_ref("gmail:studio:r123") == ("studio", "r123")
+    assert sfs.parse_ref("gmail:personal:r9") == ("personal", "r9")
+    assert sfs.parse_ref("nonsense") == ("", "")
+    assert sfs.parse_ref("") == ("", "")
+    assert sfs.recipient_of({"title": "Send the reply to Caelin@Diggs.pet"}) == "caelin@diggs.pet"
+    assert sfs.recipient_of({"title": "Something with no address"}) == ""

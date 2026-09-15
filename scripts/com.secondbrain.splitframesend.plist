@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The send arm. Polls the outbox for drafts Alex approved by tapping "Send it now" on a /do
+  page, and sends those exact Gmail drafts from this Mac. The server never holds this
+  capability — see the header of scripts/splitframe_send.py for why that split matters.
+  Install:  cp scripts/com.secondbrain.splitframesend.plist ~/Library/LaunchAgents/
+            launchctl load ~/Library/LaunchAgents/com.secondbrain.splitframesend.plist
+  Stop:     launchctl unload ~/Library/LaunchAgents/com.secondbrain.splitframesend.plist
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.secondbrain.splitframesend</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>cd ~/second-brain &amp;&amp; set -a &amp;&amp; source ./.env &amp;&amp; set +a &amp;&amp; /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 scripts/splitframe_send.py</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StartInterval</key>
+    <integer>120</integer>
+    <key>StandardOutPath</key>
+    <string>/Users/alexhickey24/second-brain/scripts/splitframe_send.launchd.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/alexhickey24/second-brain/scripts/splitframe_send.launchd.log</string>
+</dict>
+</plist>

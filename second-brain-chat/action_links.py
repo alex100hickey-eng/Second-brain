@@ -53,7 +53,10 @@ VALID_KINDS = (KIND_INTAKE, KIND_TASK, KIND_OUTBOX, KIND_OUTBOX_ALL,
 # Operations a token may authorise. A token carries only the ops its nudge offered,
 # so a "mark done" link can never be replayed into a "drop it". `log` is the form
 # submit on the capture pages (scorecard, pace) — it records what Alex tapped.
-VALID_OPS = ("done", "snooze", "drop", "approve", "deny", "sent", "log")
+# `send` is the one op that makes something LEAVE the building. It does not itself send:
+# it records Alex's approval on an outbox item, and the Mac — not this server — acts on it.
+# The server reads untrusted email and runs the model, so it must never hold the capability.
+VALID_OPS = ("done", "snooze", "drop", "approve", "deny", "sent", "log", "send")
 
 DEFAULT_TTL_DAYS = 14
 

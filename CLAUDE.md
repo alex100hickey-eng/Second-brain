@@ -6,11 +6,23 @@ the hardening pass, `NEEDS_ALEX.md` what's blocked on Alex.
 
 ## Hard gates — never negotiate these away
 
-- **No email send path, anywhere.** `mail_drafts.py` creates Gmail drafts and
-  nothing else; Alex presses Send himself. CLARVIS reads untrusted email bodies,
-  so a model holding a send tool is an exfiltration lane. An AST-walking test
-  (`test_no_send_capability`) fails the suite if a send slug or `smtplib`
-  appears outside a docstring. This stays even if Alex asks casually.
+- **No email send path on this node, ever.** `mail_drafts.py` creates Gmail drafts
+  and nothing else. CLARVIS reads untrusted email bodies, so a model holding a send
+  tool is an exfiltration lane. An AST-walking test (`test_no_send_capability`)
+  fails the suite if a send slug or `smtplib` appears outside a docstring, and
+  `test_splitframe_daily.py` re-checks the whole server-side chain
+  (`do_actions`/`outbox`/`proactive`/`action_links`/`app`). This stays even if Alex
+  asks casually.
+  **The one exception, and where it lives (2026-09-15, Alex's explicit call).** He
+  asked for the send to be one tap on his phone: the laptop step failed every time
+  — 3 cold emails in 14 days, every follow-up missed, $0. So the capability sits on
+  his *Mac*, in `scripts/splitframe_send.py`, and the threat above stays closed:
+  the server only ever STAMPS an approval (`outbox.approve_send`), no module here
+  imports the sender (test-pinned, dynamic imports included), and the sender will
+  only send a draft that already existed, from the studio mailbox, to an address
+  already verified in the prospect tracker. `send` rides on the /do **page** token,
+  never a shade button — same rule as the approval queue: a lock-screen tap is not
+  consent, so he reads the email before he presses it.
 - **Never draft work Alex submits for a grade.** Every one of his Fall 2026
   courses bans AI on submitted work — ECON, MATH, ACCT and AIQS have explicit
   verbatim policies (AIQS bans it even for *ideas*, Grammarly included). Study
@@ -105,7 +117,14 @@ the hardening pass, `NEEDS_ALEX.md` what's blocked on Alex.
   reads `/api/v1/courses/<id>/students/submissions?student_ids[]=self` through
   the logged-in Browser pane (no token — the CWRU rule stands) and runs
   `scripts/apply_canvas_status.py`, the only thing that flips assignments.csv
-  rows to submitted/graded. It needs the pane's SSO session alive.
+  rows to submitted/graded. It needs the pane's SSO session alive. The same run
+  reads `/api/v1/courses/<id>/assignments` and stamps `weight_pct` **0** on rows
+  whose Canvas `grading_type` is `not_graded` (ACCT100's "Day N Reading" WileyPlus
+  links: no points, nothing to submit). That 0 is the shared ungraded-prep marker
+  — `school_status.ungraded` / `school_data.ungraded` keep such rows out of
+  OVERDUE, DO NEXT, due-soon, lapsed and the ranked day; at most a one-line
+  "prep" hint for the next class. Blank weight = unknown, so ECON103's graded
+  "Reading N" rows (5 pts, late = zero) stay hard deadlines.
 - **Pace floors.** `school_status.effective_prepared` assumes attendance (a
   lecture that passed is a lecture he sat in → prepared through today) and
   counts submitted readings/APQs/homework. PACE reads "+0d under target" between
