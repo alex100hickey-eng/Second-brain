@@ -30,7 +30,34 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 _TZ = ZoneInfo("America/New_York")
-DEFAULT_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "observability.db")
+_HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+def _default_db_path() -> str:
+    """Where the cost/audit DB lives. Same problem job_queue._default_db_path() already
+    solved, and the same fix — it just never got carried over here. On the server the
+    module dir is the container's ephemeral layer, so every redeploy wiped the spend
+    history: audited 2026-09-15, the live DB held 9 rows spanning 100 minutes, which is
+    why the monthly cost picture has to be reconstructed by hand from inboxes instead of
+    read off the table built for it. The vault volume is the only disk that survives a
+    redeploy, and `.appstate/` there is already gitignored and already holds jobs.db.
+    OBSERVABILITY_DB_PATH overrides everything for tests or a future dedicated volume."""
+    env = (os.environ.get("OBSERVABILITY_DB_PATH") or "").strip()
+    if env:
+        return env
+    if (os.environ.get("JARVIS_RUNTIME") or "local").strip().lower() == "server":
+        vault = (os.environ.get("VAULT_PATH") or "/data/vault").strip()
+        if os.path.isdir(vault):
+            state_dir = os.path.join(vault, ".appstate")
+            try:
+                os.makedirs(state_dir, exist_ok=True)
+                return os.path.join(state_dir, "observability.db")
+            except OSError:
+                pass  # unwritable volume → fall through to the ephemeral default
+    return os.path.join(_HERE, "observability.db")
+
+
+DEFAULT_DB = _default_db_path()
 PRICING_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "pricing.json")
 
 # Optional cross-node mirror for tool-audit rows: app.py points this at a function

@@ -30,8 +30,18 @@ RETENTION_DAYS = {
     "screen_result": 7,
     "jarvis_taskman_step": 30,   # managed-task step audit; task rows themselves are kept
     "jarvis_taskman_kill": 14,   # kill-switch flags — meaningless once acted on
-    "jarvis_tool_audit": 90,     # the cross-node usage mirror (usage audits look back ~weeks)
+    # 14, not 90. At ~205 rows/day this tag was 9,455 of the table's 12,220 rows —
+    # 77% of everything — and the 90-day TTL meant not one row had EVER been swept
+    # since the first on 2026-07-31. Nothing reads a tool audit older than a couple
+    # of weeks; the monthly cost rollup lives in intake_state, not here.
+    "jarvis_tool_audit": 14,
     "system_event": 60,          # monitor incident log; scans read the last 6h
+    # Added 2026-09-15: test fixtures were landing in the live table (132 of them)
+    # and nothing swept them, so they grew forever. Fixtures are exhaust by
+    # definition — unlike expansion_finding, jarvis_chat and the rest of the
+    # protected set in run_tests.py, which are CONTENT and must stay unbounded no
+    # matter how untriaged they look.
+    "jarvis_draft_note_test": 7,
 }
 
 BATCH = 200                      # delete in slices; never one giant call

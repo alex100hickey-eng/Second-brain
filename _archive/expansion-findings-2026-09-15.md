@@ -1,0 +1,236 @@
+# Expansion scout findings — full export before retention pruning
+
+Exported 2026-09-15. 222 findings total. The scheduled weekly scout was
+turned off the same day (0 of these were ever applied). `/scout` still runs on demand.
+
+
+## found (208)
+
+- **Cavuno: Job Feeds for Job Boards (Backfill/Monetize Guide)** — 2026-08-01
+- **12 Best Affiliate Programs for Job Boards (JobCopilot)** — 2026-08-01
+- **CPAlead CPA/CPI Offer Marketplace** — 2026-08-01
+- **Best Open Source Job Board Software in 2026 (Job Boardly)** — 2026-08-01
+- **cpanova/cpa-network (GitHub)** — 2026-08-01
+- **Apify Review (data4ai)** — 2026-08-01
+- **Apify.com (official platform)** — 2026-08-01
+- **5 Best Apify Alternatives for Reliable Web Scraping in 2026 (Firecrawl)** — 2026-08-01
+- **OfferVault** — 2026-08-02
+- **Lovable** — 2026-08-02
+- **Apify (GitHub org)** — 2026-08-02
+- **Open Source Actors Scraper (Apify actor)** — 2026-08-02
+- **Apify Store — Open-source Actors category** — 2026-08-02
+- **Apify Open Source docs (Crawlee, fingerprint tools)** — 2026-08-02
+- **Apify Store / Actors Marketplace** — 2026-08-02
+- **apify/actor-scraper** — 2026-08-02
+- **JobApis Open Source Projects** — 2026-08-03
+- **JobsMulti (JobApis)** — 2026-08-03
+- **Best Open Source Job Board Software 2026 (Cavuno)** — 2026-08-03
+- **OpenAffiliate registry** — 2026-08-03
+- **Open Source Affiliate & Referral Marketing Tools (OpenAlternative)** — 2026-08-03
+- **Open-source affiliate software guide (OpenPartner)** — 2026-08-03
+- **Apify Store** — 2026-08-03
+- **Apify Store Actors Scraper 2025** — 2026-08-03
+- **Apify SDK for Python** — 2026-08-04
+- **Wrap open-source as an Actor (Apify Academy)** — 2026-08-04
+- **Apify Actors Platform docs** — 2026-08-04
+- **Relume AI Website Builder** — 2026-08-04
+- **Webild** — 2026-08-04
+- **Silex** — 2026-08-04
+- **Hugo** — 2026-08-04
+- **Webstudio** — 2026-08-04
+- **JobApis** — 2026-08-05
+- **Programmatic Job Ad Platforms Compared (2026)** — 2026-08-05
+- **30+ Affiliate Programs for Job Boards (Cavuno)** — 2026-08-05
+- **Job Feeds for Driving Traffic & Backfilling (JBoard)** — 2026-08-05
+- **Parallax-Website (VineetKumar02)** — 2026-08-05
+- **Parallax Web (GitHub Topic)** — 2026-08-05
+- **Lenis Smooth Scroll** — 2026-08-05
+- **GSAP ScrollTrigger Examples** — 2026-08-05
+- **affiliate-tracking · GitHub Topics** — 2026-08-06
+- **Ecosyste.ms — GitHub topics: apify** — 2026-08-06
+- **How to Scrape LinkedIn Jobs Automatically Using Apify (YouTube tutorial)** — 2026-08-06
+- **WaveLeKick/linkedin-ads-library-scraper (Apify actor)** — 2026-08-06
+- **Crawlee vs Apify vs Firecrawl vs Spider vs ScrapeGraph comparison** — 2026-08-06
+- **pp-apify Skill (Claude Skills Hub)** — 2026-08-06
+- **Parallax Scroll Hero Template (Quackit)** — 2026-08-06
+- **Hero Parallax (Aceternity UI)** — 2026-08-06
+- **Cavuno – What Is a Job Board Aggregator? How to Build One (No-Code)** — 2026-08-07
+- **Job Boardly – Job Aggregator Feature** — 2026-08-07
+- **skrollr** — 2026-08-07
+- **parallaxx-js** — 2026-08-07
+- **Colorlib Parallax Website Templates roundup** — 2026-08-07
+- **freefrontend CSS Parallax snippets** — 2026-08-07
+- **templatemo Parallax Templates** — 2026-08-07
+- **job-radar (hawkesj12)** — 2026-08-08
+- **job-hunter (YarboJanks)** — 2026-08-08
+- **job-hunt-automation (farhaanqazi)** — 2026-08-08
+- **Aperio-J (Dendro-X0)** — 2026-08-08
+- **OpenRouter** — 2026-08-08
+- **LibHunt – Top Apify Open-Source Projects** — 2026-08-08
+- **apify-actor-scraper (erikcaineolson)** — 2026-08-08
+- **Motion Scroll Zoom Hero Example** — 2026-08-08
+- **Affiliate Program DB – CPC Affiliate Programs (incl. Indeed)** — 2026-08-09
+- **ApifyForge - Actor Reliability Monitoring** — 2026-08-09
+- **websiteprompts (openwarehq)** — 2026-08-09
+- **Zoom Hero Image On Scroll (CodePen)** — 2026-08-09
+- **Scroll-Driven Animations Introduction (YouTube)** — 2026-08-09
+- **Background-Size Zooming with Scroll-Driven Animations (Frontend Masters)** — 2026-08-09
+- **Neroli Health/Fitness Template (Framer Marketplace)** — 2026-08-09
+- **Magic UI** — 2026-08-09
+- **GSAP ScrollTrigger** — 2026-08-10
+- **AOS (Animate On Scroll)** — 2026-08-10
+- **Zumly** — 2026-08-10
+- **JobApis (GitHub org)** — 2026-08-11
+- **Job Posting APIs by Techmap (jobdatafeeds.com)** — 2026-08-11
+- **Apify Reviews & Ratings — TrustRadius** — 2026-08-11
+- **Apify Store — full categories** — 2026-08-11
+- **GentleHorse/Anim_Zoom_Parallax (GitHub)** — 2026-08-11
+- **Parallax Scrolling guide — Webflow Blog** — 2026-08-11
+- **CSS Scroll-Driven Examples — freefrontend** — 2026-08-11
+- **jQuery Parallax & Zoom on Scroll plugin** — 2026-08-11
+- **Smart Apify Actor Scraper (+70 Fields + Quality Metrics)** — 2026-08-12
+- **Apify Reddit Scraper pricing/quality analysis** — 2026-08-12
+- **Lenis – Smooth Scroll** — 2026-08-12
+- **Free Frontend – JavaScript Hero Effects collection** — 2026-08-12
+- **Zoom Out Hero Image on Scroll (CodeConvey tutorial)** — 2026-08-12
+- **claude-directory (AI-generated UI components)** — 2026-08-12
+- **10 Best Open Source Affiliate Program Software (Scaleo)** — 2026-08-13
+- **apify-public-actor-scraper** — 2026-08-13
+- **Parallax Engine (Vue 3)** — 2026-08-13
+- **Locomotive Scroll** — 2026-08-13
+- **Apify Store Scraper** — 2026-08-14
+- **Apify Reviews (G2)** — 2026-08-14
+- **7 Best Web Scraping Tools for Data Extraction in 2026 (Browserless)** — 2026-08-14
+- **How to Use Apify for Web Scraping & Automation in 2026** — 2026-08-14
+- **Best Web Scraping Tools 2026 Comparison (use-apify.com)** — 2026-08-14
+- **Parallax Starter Template (templatemo tm-612)** — 2026-08-14
+- **Top 23 Parallax Open-Source Projects (LibHunt)** — 2026-08-14
+- **GitHub Topic: parallax-scrolling** — 2026-08-14
+- **remote-it-job-feeder** — 2026-08-15
+- **crawlee-cloud** — 2026-08-15
+- **actor-rust-scraper** — 2026-08-15
+- **tiktok-profile-scraper-python (Apify SDK)** — 2026-08-15
+- **producthunt-scraper-python (Apify SDK)** — 2026-08-15
+- **Directory of APIs for Job Boards - Indie Hackers** — 2026-08-15
+- **ever-jobs (GitHub)** — 2026-08-15
+- **Best Apify Alternative for Large-Scale Scraping - Zenrows** — 2026-08-15
+- **Job Boardly — Job Board Scraping Guide 2026** — 2026-08-16
+- **Cavuno — How to Scrape Job Postings 2026** — 2026-08-16
+- **Best Job Scraping Tools in 2026 (WebScrapingAPI)** — 2026-08-16
+- **scroll-experience Skill (claude-code-templates)** — 2026-08-16
+- **CSS Scroll-Driven Animations (native browser API) walkthrough** — 2026-08-16
+- **CSS Scroll Effects roundup (Prismic)** — 2026-08-16
+- **SmartParallax (WordPress plugin)** — 2026-08-16
+- **5 Best Apify Alternatives (Lobstr.io comparison)** — 2026-08-16
+- **job-aggregator · GitHub Topics** — 2026-08-17
+- **TheirStack Job Postings API** — 2026-08-17
+- **Choosing the right solution — Apify Help** — 2026-08-17
+- **GitHub topic: parallax-scrolling** — 2026-08-17
+- **Builder.io: Best way to create a parallax effect (2026)** — 2026-08-17
+- **Reddit: tools for interactive parallax** — 2026-08-17
+- **YouTube: 'This parallax library is 🤌'** — 2026-08-17
+- **Framer Blog: 10 parallax scrolling examples** — 2026-08-17
+- **CareerGist** — 2026-08-18
+- **CareerGistPRO** — 2026-08-18
+- **Job-Board-Aggregator-API (arsh-bains)** — 2026-08-18
+- **Job-Board-Aggregator (slyskat)** — 2026-08-18
+- **Job-Board-Aggregator (dhanihab-netizen)** — 2026-08-18
+- **Spotlight Media API** — 2026-08-18
+- **Arbeitnow API listing** — 2026-08-18
+- **Arbeitsamt API listing** — 2026-08-18
+- **Job Listings Aggregator Pro (Apify actor)** — 2026-08-19
+- **Apify Web Scraper (Actor)** — 2026-08-19
+- **Web Scraping — From Code to Cash: Build a Monetizable Apify Actor** — 2026-08-19
+- **Exclusive Addons – Parallax Scrolling Toolkit** — 2026-08-19
+- **Framer 3D Scroll Parallax Guide** — 2026-08-19
+- **Google Jobs API (SerpApi)** — 2026-08-20
+- **Webstudio Scroll-Driven Animations** — 2026-08-20
+- **medium-zoom** — 2026-08-20
+- **NRK Scroll-Driven Animation Case Study** — 2026-08-20
+- **Scrollsequence** — 2026-08-20
+- **Webflow Scroll Zoom Interaction Tutorial** — 2026-08-20
+- **PublicAPIs.io Jobs Category** — 2026-08-21
+- **job-board-scraper GitHub Topic** — 2026-08-21
+- **react-just-parallax** — 2026-08-21
+- **Locomotive Scroll vs React Scroll Parallax comparison** — 2026-08-21
+- **Apify-Scraper (FlowExtractAPI)** — 2026-08-22
+- **WP Job Manager – Choosing the Best Open Source Job Board** — 2026-08-22
+- **Apify Academy – How Apify Store Works** — 2026-08-22
+- **Reddit: Web scraping tool reviews (Apify, Bright Data, Octoparse)** — 2026-08-22
+- **Zoom Parallax with Next.js and Framer Motion** — 2026-08-22
+- **parallax-websites (GitHub)** — 2026-08-22
+- **WhatJobs Publisher Program** — 2026-08-23
+- **Apify Store Market Analyzer** — 2026-08-23
+- **LoopCV Job Board API** — 2026-08-24
+- **postajob/api** — 2026-08-24
+- **Bright Data: Best Job APIs and Data Providers 2026** — 2026-08-24
+- **Automating Data Collection with Apify (DEV Community)** — 2026-08-24
+- **Apify Python SDK Announcement** — 2026-08-24
+- **Scroll-driven Animations (Chrome DevRel resource)** — 2026-08-24
+- **scroll-video-website-skill (GitHub)** — 2026-08-24
+- **"This Hero Scroll Animation Feels Like Looking Through a Window" (tutorial)** — 2026-08-24
+- **linkedin-jobs-scraper-python** — 2026-08-25
+- **Apify Blog: 11 Best Open-Source Web Crawlers and Scrapers** — 2026-08-25
+- **Apify Academy: How to Build Actors** — 2026-08-25
+- **LoopCV Job Board / Aggregator API** — 2026-08-26
+- **Chrome DevRel: Scroll-driven Animations (native CSS)** — 2026-08-26
+- **Josh W. Comeau: Scroll-Driven Animations** — 2026-08-26
+- **3D Scroll Animation Tutorial (GSAP & Three.js)** — 2026-08-26
+- **8 Proven Ways to Monetize Your Job Board (JobCopilot)** — 2026-08-27
+- **ZipRecruiter Affiliate Program overview (JBoard)** — 2026-08-27
+- **Apify Review 2026: Honest Pros, Cons, and Pricing (Use Apify)** — 2026-08-27
+- **Apify vs Scrape Creators (benchmark blog)** — 2026-08-28
+- **9 Best Apify Alternatives for Web Scraping in 2026** — 2026-08-28
+- **Scroll animation rebuild tutorial ("destroys the hero section")** — 2026-08-28
+- **Best Scroll Animation Websites (Webflow showcase)** — 2026-08-28
+- **bradtraversy/design-resources-for-developers** — 2026-08-28
+- **OpenDesign.ai Prototype Templates (scroll-driven hero prototypes)** — 2026-08-28
+- **Apify Review 2025 - Black Bear Media** — 2026-08-29
+- **The Apify Actor Survival Guide (dev.to)** — 2026-08-29
+- **Scroll World (Claude Code skill) — via 'Create Scrollable 3D Websites in 10 Minutes'** — 2026-08-29
+- **Codrops Scroll Tutorials** — 2026-08-29
+- **JobsPipe** — 2026-08-30
+- **OpenClaw Jobs APIs directory (Operator Vault)** — 2026-08-30
+- **react-kino** — 2026-08-30
+- **7 Stunning Parallax Effect Examples (2025)** — 2026-08-30
+- **Top CPC Affiliate Networks (Business of Apps)** — 2026-08-31
+- **Apify SDK for Python / cloud scraper deployment (Reddit thread)** — 2026-08-31
+- **awesome-immersive-storytelling** — 2026-08-31
+- **Building scrollytelling articles (data.europa.eu guide)** — 2026-08-31
+- **Best Scrollytelling Examples & Websites (2026)** — 2026-08-31
+- **Scrollytelling with Closeread (Quarto extension)** — 2026-08-31
+- **Apify Actor Store Scraper (scrape.badger)** — 2026-09-01
+- **Best Job Posting Data APIs 2026 comparison (TheirStack)** — 2026-09-02
+- **Lenis – Smooth Scroll Library** — 2026-09-02
+- **Cavuno – Job Board Affiliate Programs** — 2026-09-07
+- **Job Board Doctor – CPA vs CPC vs Duration-based Postings** — 2026-09-07
+- **CPC vs CPA in Affiliate Marketing (cipiai blog)** — 2026-09-07
+- **Open-source Job Board REST API (Go + MongoDB)** — 2026-09-07
+- **Jamstack Static Site Generators directory** — 2026-09-07
+- **awesome-static-generators (GitHub)** — 2026-09-07
+- **Motion (Framer Motion)** — 2026-09-07
+- **8 Best Static Site Generators for 2023 – Sanity** — 2026-09-07
+- **Jobcurator** — 2026-09-14
+- **First2Apply (open-source job board aggregator)** — 2026-09-14
+- **scroll-driven-animations (GitHub topic)** — 2026-09-14
+- **Best Parallax Websites (Awwwards)** — 2026-09-14
+
+## deferred (5)
+
+- **vad (Dart/Flutter VAD binding)** — 2026-07-31
+- **Arbeitnow Job Board API** — 2026-07-31
+- **Job Board Aggregator — Market Analysis API (Apify)** — 2026-07-31
+- **WebScraping.AI — Job Listing Aggregation** — 2026-07-31
+- **Apify Documentation** — 2026-07-31
+
+## rejected (9)
+
+- **ziprecruiter-scraper-nodejs-example** — 2026-07-30
+- **how-to-scrape-dice-com-jobs-in-nodejs** — 2026-07-30
+- **naukri-jobs-scraper** — 2026-07-30
+- **apna-jobs-scraper** — 2026-07-30
+- **the-muse-jobs-scraper** — 2026-07-30
+- **job-board-aggregator (GitHub)** — 2026-07-31
+- **Top 22 Jobs APIs (publicapis.dev)** — 2026-07-31
+- **14 Top Jobs APIs 2025 (jsonapi.co)** — 2026-07-31
+- **Job Board Aggregator monetization guide (JBoard)** — 2026-07-31

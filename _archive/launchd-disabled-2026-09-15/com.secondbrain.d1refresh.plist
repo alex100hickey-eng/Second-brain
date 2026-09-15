@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Keeps the Division I transfer tracker current — guard depth at Alex's 13
+  target programs (see second-brain-chat/d1_tracker.py).
+
+  Fires hourly, but the module's own TTL decides whether anything is actually
+  refetched: 6h per school in-season, 24h in the offseason. So most runs are a
+  no-op costing one SQLite read per school, and box scores land within ~6 hours
+  during the season without anyone opening the tab.
+
+  Install:
+    cp scripts/com.secondbrain.d1refresh.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.secondbrain.d1refresh.plist
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.secondbrain.d1refresh</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>cd ~/second-brain &amp;&amp; set -a &amp;&amp; source ./.env &amp;&amp; set +a &amp;&amp; /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 scripts/d1_refresh.py</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StartInterval</key>
+    <integer>3600</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/alexhickey24/second-brain/scripts/d1_refresh.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/alexhickey24/second-brain/scripts/d1_refresh.log</string>
+</dict>
+</plist>
