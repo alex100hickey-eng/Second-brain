@@ -6140,10 +6140,20 @@ def _daily_scout_loop():
         time.sleep(3600)
 
 
-if task_manager.RUNTIME == "server" or os.environ.get("SCOUT_DAILY_LOCAL", "").lower() in ("1", "true"):
+# Off by default since 2026-09-15. The scheduled run was throttled daily -> weekly
+# once because findings piled up unread; that only slowed the pile. The audit found
+# 222 findings total: 208 still "found" (never triaged), 9 rejected, 5 deferred,
+# 0 ever applied. A generator whose consumer has never once run is spend, not
+# capability. The pipeline itself is untouched — `/scout` still runs on demand, and
+# SCOUT_SCHEDULED=1 puts the weekly timer back with no other change.
+_SCOUT_SCHEDULED = os.environ.get("SCOUT_SCHEDULED", "").lower() in ("1", "true")
+if _SCOUT_SCHEDULED and (task_manager.RUNTIME == "server"
+                         or os.environ.get("SCOUT_DAILY_LOCAL", "").lower() in ("1", "true")):
     if not TEST_MODE:
         threading.Thread(target=_daily_scout_loop, daemon=True, name="jarvis-daily-scout").start()
     print("Daily expansion-scout scheduler started.")
+else:
+    print("Expansion-scout scheduler OFF (on-demand only; set SCOUT_SCHEDULED=1 to restore).")
 
 
 # Daily retention sweep — keeps the shared Agent Outputs table bounded (whitelist-only
@@ -6380,9 +6390,15 @@ if task_manager.RUNTIME == "server" or os.environ.get("MAIL_SCAN_LOCAL", "").low
 # phone. Without this, the deployed tab would only ever update when someone
 # opened it, which is precisely when stale numbers do the most damage.
 #
-# Wakes hourly and lets d1_tracker's own TTL decide what refetches (6h per school
-# in-season, 24h off), so most passes are a handful of SQLite reads.
-D1_REFRESH_INTERVAL = 3600
+# Lets d1_tracker's own TTL decide what refetches (6h per school in-season, 24h
+# off), so most passes are a handful of SQLite reads.
+#
+# 6h, not the old 1h: 17 days of score_history showed the most volatile school
+# producing 3 distinct scores and three schools producing exactly 1 — the rosters
+# simply do not move in the off-season. Hourly was ~24 wake-ups a day to re-read
+# numbers that change about twice a month. The per-school TTL was already the real
+# throttle; this just stops the loop spinning underneath it.
+D1_REFRESH_INTERVAL = 6 * 3600
 
 
 def _d1_refresh_loop():
@@ -6390,6 +6406,14 @@ def _d1_refresh_loop():
     while True:
         try:
             d1_tracker.refresh_all(only_stale=True)
+            # This node now OWNS the d1_refresh heartbeat. It used to be beaten only
+            # by the Mac's launchd job (scripts/d1_refresh.py), which ran the same
+            # scrape against the same 13 schools on a second node for no added
+            # coverage. That job was retired 2026-09-15; without a beat here the
+            # heartbeat would go stale and nudge "subsystem down" forever about work
+            # that is in fact still happening, right here.
+            monitor.beat("d1-refresh", stale_after_s=3 * D1_REFRESH_INTERVAL,
+                         note="server d1 refresh pass ok")
         except Exception as e:
             try:
                 monitor.report_event("d1-tracker", "warning",

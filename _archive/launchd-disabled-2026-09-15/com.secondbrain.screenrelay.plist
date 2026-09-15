@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Runs screen_relay.py so the server-side CLARVIS can drive this Mac's screen.
+  Install:
+    cp scripts/com.secondbrain.screenrelay.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.secondbrain.screenrelay.plist
+  Stop for good:
+    launchctl unload ~/Library/LaunchAgents/com.secondbrain.screenrelay.plist
+
+  Only runs while Alex is logged in and the Mac is awake — which is exactly the
+  window in which he wants screen control usable. With it down, commands from
+  the server expire unexecuted rather than queueing up.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.secondbrain.screenrelay</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>source ~/.zshrc; cd ~/second-brain/second-brain-chat &amp;&amp; /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 screen_relay.py</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/alexhickey24/second-brain/scripts/screen_relay.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/alexhickey24/second-brain/scripts/screen_relay.log</string>
+</dict>
+</plist>

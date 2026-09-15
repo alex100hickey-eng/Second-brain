@@ -341,13 +341,18 @@ def reconcile_vault() -> bool:
     Returns True only if the file actually changed."""
     if runtime != "local":
         return False
-    completed = _load_completed()
-    if not completed:
-        return False
+    # Cheap checks BEFORE the network. _load_completed() is a Supabase read, and the
+    # local maintenance loop calls this every 120s — so a tracker file that no longer
+    # exists was costing ~720 round-trips a day to discover, every day, that there is
+    # still nothing to reconcile. Read the file first: if it's gone, there is no
+    # checkbox to tick and the answer cannot depend on what Supabase says.
     path = tracker_file()
     try:
         text = open(path, encoding="utf-8").read()
     except OSError:
+        return False
+    completed = _load_completed()
+    if not completed:
         return False
 
     out, changed = [], False

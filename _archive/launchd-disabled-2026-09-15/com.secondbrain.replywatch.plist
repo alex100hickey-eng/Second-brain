@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Splitframe reply watcher: every 30 min, reads the studio inbox for mail from any tracked
+  prospect domain, nudges Alex's phone, stamps `replied` in Money/prospect-tracker.csv.
+  Read-only on Gmail. Never sends.
+
+  Install:
+    cp scripts/com.secondbrain.replywatch.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.secondbrain.replywatch.plist
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.secondbrain.replywatch</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>cd ~/second-brain &amp;&amp; set -a &amp;&amp; source ./.env &amp;&amp; set +a &amp;&amp; /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 scripts/reply_watch.py</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StartInterval</key>
+    <integer>1800</integer>
+    <key>StandardOutPath</key>
+    <string>/Users/alexhickey24/second-brain/scripts/reply_watch.launchd.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/alexhickey24/second-brain/scripts/reply_watch.launchd.log</string>
+</dict>
+</plist>
