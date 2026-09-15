@@ -244,11 +244,17 @@ def main() -> int:
     import anthropic                                    # type: ignore
     from composio import Composio                       # type: ignore
     import mail_drafts                                  # type: ignore
+    import outbox                                       # type: ignore
+    from supabase import create_client                  # type: ignore
 
     c = Composio(api_key=os.environ["COMPOSIO_API_KEY"])
     entity = os.environ.get("STUDIO_GMAIL_ENTITY")
     mail_drafts.init(c, os.environ.get("PERSONAL_GMAIL_ENTITY", "alex"),
                      os.environ.get("SCHOOL_GMAIL_ENTITY", "alex-school"), entity)
+    # Without this the outbox filing inside create_email_draft fails soft and the whole
+    # one-tap chain never starts: no outbox row means no nudge, no /do page, no Send button.
+    # The draft would sit in Gmail exactly as invisibly as it did before any of this existed.
+    outbox.init(create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_KEY"]))
     # the repo standardised on CLAUDE_API_KEY; accept the vendor name too so a future .env
     # rename does not silently stop the follow-ups the way the last gap did
     key = os.environ.get("CLAUDE_API_KEY") or os.environ["ANTHROPIC_API_KEY"]

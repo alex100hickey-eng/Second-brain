@@ -171,3 +171,17 @@ def test_sender_only_targets_studio_drafts_and_tracked_recipients():
     assert sfs.parse_ref("") == ("", "")
     assert sfs.recipient_of({"title": "Send the reply to Caelin@Diggs.pet"}) == "caelin@diggs.pet"
     assert sfs.recipient_of({"title": "Something with no address"}) == ""
+
+
+def test_daily_job_initialises_the_outbox():
+    """The chain starts with an outbox row: no row, no nudge, no /do page, no Send button — and
+    create_email_draft files that row fail-soft, so forgetting outbox.init() looks like success
+    and leaves the draft exactly as invisible as before any of this existed. It did, once."""
+    src = open(os.path.expanduser("~/second-brain/scripts/splitframe_daily.py")).read()
+    tree = ast.parse(src)
+    main = next(n for n in ast.walk(tree)
+                if isinstance(n, ast.FunctionDef) and n.name == "main")
+    calls = [n for n in ast.walk(main) if isinstance(n, ast.Call)]
+    assert any(isinstance(c.func, ast.Attribute) and c.func.attr == "init"
+               and isinstance(c.func.value, ast.Name) and c.func.value.id == "outbox"
+               for c in calls), "splitframe_daily.main() never calls outbox.init()"
