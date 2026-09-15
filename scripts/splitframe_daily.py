@@ -154,6 +154,24 @@ def _d(value: str):
         return None
 
 
+def already_waiting(outbox_mod) -> set:
+    """Recipients that already have an open outbox row. The state dict says what THIS node
+    drafted; the outbox says what is actually sitting in front of Alex. When the two disagree
+    the outbox is right — a crash between drafting and saving state once put a second identical
+    follow-up in front of the same prospect."""
+    out = set()
+    try:
+        for it in outbox_mod.open_items():
+            if it.get("kind") != "email_draft":
+                continue
+            title = it.get("title") or ""
+            if "@" in title:
+                out.add(title.split()[-1].strip().lower())
+    except Exception:
+        pass
+    return out
+
+
 def due_followups(rows, today: date, drafted: dict) -> list:
     """(row, touch) for every prospect owed a follow-up now. touch 2 = FU1, touch 3 = FU2.
 
@@ -296,11 +314,16 @@ def main() -> int:
     drafted = st.setdefault("drafted", {})
     today = date.today()
     due = due_followups(rows, today, drafted)
+    waiting = already_waiting(outbox)
 
     made, rejected = [], []
     for row, touch in due:
         brand = (row.get("brand") or "").strip()
         address = (row.get("email") or "").strip()
+        if address.lower() in waiting:
+            log(f"{brand}: touch {touch} skipped — an unsent draft for {address} is already waiting")
+            drafted.setdefault(address.lower(), []).append(touch)
+            continue
         original = original_email(c, entity, address)
         if not original.get("thread_id"):
             log(f"{brand}: no sent message found for {address} — skipped (nothing to reply to)")
@@ -329,6 +352,7 @@ def main() -> int:
             log(f"{brand}: draft NOT saved — {result[:160]}")
             continue
         drafted.setdefault(address.lower(), []).append(touch)
+        save_state(st)
         made.append(f"{brand} (touch {touch})")
         log(f"{brand}: touch {touch} drafted on thread {original['thread_id']}")
 

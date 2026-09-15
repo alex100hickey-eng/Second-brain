@@ -185,3 +185,27 @@ def test_daily_job_initialises_the_outbox():
     assert any(isinstance(c.func, ast.Attribute) and c.func.attr == "init"
                and isinstance(c.func.value, ast.Name) and c.func.value.id == "outbox"
                for c in calls), "splitframe_daily.main() never calls outbox.init()"
+
+
+def test_an_open_outbox_row_blocks_a_second_identical_followup():
+    """State said 'not drafted', the outbox said otherwise, and Diggs got two identical
+    follow-ups sitting in front of him. The outbox is the authority: it's what Alex actually
+    sees. (The server crashed between writing the draft and saving state.)"""
+    class FakeOutbox:
+        @staticmethod
+        def open_items():
+            return [{"kind": "email_draft", "title": "Send the reply to Caelin@Diggs.pet"},
+                    {"kind": "email_draft", "title": "Send the reply to x@y.com"},
+                    {"kind": "task", "title": "Send the reply to ignored@nope.com"},
+                    {"kind": "email_draft", "title": "no address in this title"}]
+    assert sfd.already_waiting(FakeOutbox) == {"caelin@diggs.pet", "x@y.com"}
+
+
+def test_already_waiting_survives_a_dead_outbox():
+    """Dedup must fail CLOSED-ish: an unreachable outbox returns nothing and the state dict
+    still guards, rather than the whole run crashing."""
+    class Dead:
+        @staticmethod
+        def open_items():
+            raise RuntimeError("supabase down")
+    assert sfd.already_waiting(Dead) == set()
