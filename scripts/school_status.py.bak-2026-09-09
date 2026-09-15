@@ -34,7 +34,7 @@ SCHOOL = os.environ.get("SCHOOL_DIR") or os.path.join(VAULT, "School")
 
 # confidence (1 = blank stare, 5 = could teach it) -> days until it needs review
 SPACING = {1: 1, 2: 3, 3: 7, 4: 16, 5: 35}
-DONE = {"submitted", "graded", "done", "complete", "completed", "dropped"}
+DONE = {"submitted", "graded", "done", "complete", "completed"}
 EXAM_TYPES = {"exam", "quiz", "test", "midterm", "final"}
 
 

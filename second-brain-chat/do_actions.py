@@ -123,10 +123,11 @@ def _resolve_outbox(view, ref):
         # The detail already carries the full subject + body, which is the point: this button
         # is the last place the email can be stopped, so it is read before it is pressed.
         view["steps"] = ["Read it. This is exactly what goes out.",
-                         "Send it now — it leaves from your Mac within a couple of minutes.",
+                         "Send it now — it goes the next time your Mac is awake, "
+                         "usually within minutes.",
                          "Or open the Drafts folder to edit it first."]
     elif item.get("send_approved"):
-        view["why"] = "Approved — it goes out from your Mac within a couple of minutes."
+        view["why"] = "Approved — it goes the next time your Mac is awake."
     line = outbox_mod.summary_line(item)
     age = line.split(" — ", 1)[1] if " — " in line else ""
     view["why"] = ("Ready and " + age if age
@@ -289,7 +290,7 @@ def _do_outbox(ref, op):
         item = outbox_mod.approve_send(item_id)
         if not item:
             return {"ok": False, "message": "That item isn't a sendable draft."}
-        return {"ok": True, "message": "Approved — going out from your Mac in a minute or two."}
+        return {"ok": True, "message": "Approved — it goes the next time your Mac is awake."}
     if op == "snooze":
         outbox_mod.snooze(item_id, hours=3)
         return {"ok": True, "message": "Snoozed 3 hours."}

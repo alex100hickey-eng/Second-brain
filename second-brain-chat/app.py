@@ -6177,6 +6177,70 @@ if task_manager.RUNTIME == "server" or os.environ.get("RETENTION_LOCAL", "").low
         threading.Thread(target=_daily_retention_loop, daemon=True, name="jarvis-retention").start()
     print("Daily retention sweep scheduler started.")
 
+# Splitframe follow-ups — drafted HERE, on the always-on node, because the Mac is usually
+# asleep at 07:30 and a follow-up that waits for a laptop lid is the exact failure this whole
+# thing exists to fix (three cold emails in fourteen days, every follow-up missed). This end
+# only DRAFTS and files an outbox row; the send stays on Alex's Mac, off this node, for the
+# reason in CLAUDE.md's hard-gate section.
+def _splitframe_followups_loop():
+    import importlib.util
+    observability.set_trigger("agent")
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "scripts", "splitframe_daily.py")
+    while True:
+        try:
+            st = intake._load_state("splitframe:loop")
+            today = datetime.now(LOCAL_TZ).strftime("%Y-%m-%d")
+            if st.get("last_run", "") != today and datetime.now(LOCAL_TZ).hour >= 7 \
+                    and os.path.exists(path):
+                spec = importlib.util.spec_from_file_location("splitframe_daily", path)
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                mod.main()
+                st["last_run"] = today
+                intake._save_state(st)
+                monitor.beat("splitframe", stale_after_s=50 * 3600, note="follow-up drafts")
+            _splitframe_stuck_check()
+        except Exception as e:
+            try:
+                monitor.report_event("splitframe", "warning", "follow-up drafting failed", str(e))
+            except Exception:
+                pass
+        time.sleep(3600)
+
+
+def _splitframe_stuck_check():
+    """Alex approves a send on his phone; his Mac is what actually sends it. If the Mac stays
+    asleep, that approval is a silent nothing — the same shape of failure as every other one
+    here. After six hours, say so, and say what to do instead."""
+    try:
+        stuck = [it for it in outbox.awaiting_send()
+                 if (datetime.now(LOCAL_TZ) - datetime.fromisoformat(
+                     it["send_approved"])).total_seconds() > 6 * 3600]
+    except Exception:
+        return
+    if not stuck:
+        return
+    st = intake._load_state("splitframe:stuck")
+    today = datetime.now(LOCAL_TZ).strftime("%Y-%m-%d")
+    if st.get("last_warned", "") == today:
+        return
+    proactive.send_nudge(
+        "splitframe-stuck", f"{len(stuck)} approved email{'s' if len(stuck) > 1 else ''} "
+        "haven't gone out",
+        "You approved them but your Mac hasn't been awake to send. Open the laptop for a "
+        "minute, or send them straight from the Gmail app — they're in studio Drafts.",
+        priority="high", tags="warning", force=True)
+    st["last_warned"] = today
+    intake._save_state(st)
+
+
+if task_manager.RUNTIME == "server":
+    if not TEST_MODE:
+        threading.Thread(target=_splitframe_followups_loop, daemon=True,
+                         name="jarvis-splitframe").start()
+    print("Splitframe follow-up scheduler started.")
+
 
 # ------------------------------------------------------------
 # Mail intake worker. iMessage has had a background watcher since day one, but

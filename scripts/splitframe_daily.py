@@ -25,9 +25,14 @@ import os
 import sys
 from datetime import date, datetime
 
-VAULT = os.path.expanduser("~/Library/Mobile Documents/com~apple~CloudDocs/Obsidian/Second brain")
+# On the server the vault is the git-synced copy (VAULT_PATH); on the Mac it is iCloud.
+# Drafting only ever READS the tracker — the Mac stays the only writer, which is what keeps
+# the two copies from diverging.
+VAULT = os.environ.get("VAULT_PATH") or os.path.expanduser(
+    "~/Library/Mobile Documents/com~apple~CloudDocs/Obsidian/Second brain")
 TRACKER = os.path.join(VAULT, "Money", "prospect-tracker.csv")
 STATE = os.path.expanduser("~/second-brain/scripts/splitframe_daily_state.json")
+STATE_KEY = "splitframe:followups"
 LOG = os.path.expanduser("~/second-brain/scripts/splitframe_daily.log")
 CHAT = os.path.expanduser("~/second-brain/second-brain-chat")
 
@@ -103,7 +108,21 @@ def log(msg: str) -> None:
         f.write(line + "\n")
 
 
+_shared = None          # intake module, once a Supabase client is wired into it
+
+
 def load_state() -> dict:
+    """Shared state, not a local file: the server drafts at 07:30 whether or not the Mac is
+    awake, and the Mac can still run this by hand. Two nodes with two state files would send
+    the same prospect the same follow-up twice."""
+    if _shared:
+        try:
+            st = _shared._load_state(STATE_KEY)
+            if st:
+                st.setdefault("drafted", {})
+                return st
+        except Exception as exc:
+            log(f"shared state unavailable ({str(exc)[:80]}) — falling back to the local file")
     try:
         with open(STATE) as f:
             return json.load(f)
@@ -112,8 +131,15 @@ def load_state() -> dict:
 
 
 def save_state(st: dict) -> None:
+    if _shared:
+        try:
+            st["key"] = STATE_KEY
+            _shared._save_state(st)
+            return
+        except Exception as exc:
+            log(f"shared state write failed ({str(exc)[:80]}) — writing the local file")
     with open(STATE, "w") as f:
-        json.dump(st, f, indent=1)
+        json.dump({k: v for k, v in st.items() if k != "_row_id"}, f, indent=1)
 
 
 def tracker_rows() -> list:
@@ -254,7 +280,12 @@ def main() -> int:
     # Without this the outbox filing inside create_email_draft fails soft and the whole
     # one-tap chain never starts: no outbox row means no nudge, no /do page, no Send button.
     # The draft would sit in Gmail exactly as invisibly as it did before any of this existed.
-    outbox.init(create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_KEY"]))
+    sb = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_KEY"])
+    outbox.init(sb)
+    global _shared
+    import intake                                     # type: ignore
+    intake.supabase = sb
+    _shared = intake
     # the repo standardised on CLAUDE_API_KEY; accept the vendor name too so a future .env
     # rename does not silently stop the follow-ups the way the last gap did
     key = os.environ.get("CLAUDE_API_KEY") or os.environ["ANTHROPIC_API_KEY"]
