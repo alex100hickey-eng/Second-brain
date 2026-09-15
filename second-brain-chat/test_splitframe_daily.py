@@ -209,3 +209,45 @@ def test_already_waiting_survives_a_dead_outbox():
         def open_items():
             raise RuntimeError("supabase down")
     assert sfd.already_waiting(Dead) == set()
+
+
+def test_pile_page_hands_out_send_links_for_email_drafts():
+    """Alex tapped the notification and nothing happened. With more than one thing waiting the
+    nudge points at the PILE page, and every per-item link it built carried only done/snooze/drop
+    — so the page he landed on could do everything except the one thing the notification
+    promised. An email draft's link must carry `send`; an already-approved one must not."""
+    import do_actions
+    minted = []
+
+    class FakeAL:
+        KIND_OUTBOX, KIND_OUTBOX_ALL = "outbox", "outbox_all"
+
+        @staticmethod
+        def url(kind, ref, ops=(), label=""):
+            minted.append((ref, tuple(ops)))
+            return f"https://x/do/{ref}"
+
+    class FakeOutbox:
+        @staticmethod
+        def open_items():
+            return [{"id": 1, "kind": "email_draft", "title": "Send the reply to a@b.com"},
+                    {"id": 2, "kind": "email_draft", "title": "Send the reply to c@d.com",
+                     "send_approved": "2026-09-15T12:00:00"},
+                    {"id": 3, "kind": "task", "title": "Pay the invoice"}]
+
+        @staticmethod
+        def summary_line(it):
+            return it["title"] + " — 2h"
+
+    old_al, old_ob = do_actions.al, do_actions.outbox_mod
+    do_actions.al, do_actions.outbox_mod = FakeAL, FakeOutbox
+    try:
+        view = {}
+        do_actions._resolve_outbox_all(view)
+    finally:
+        do_actions.al, do_actions.outbox_mod = old_al, old_ob
+
+    ops = dict(minted)
+    assert "send" in ops["1"], "an unsent email draft must offer send"
+    assert "send" not in ops["2"], "an already-approved draft must not offer send again"
+    assert "send" not in ops["3"], "a non-email item must never offer send"

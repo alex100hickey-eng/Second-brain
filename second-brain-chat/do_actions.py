@@ -126,12 +126,13 @@ def _resolve_outbox(view, ref):
                          "Send it now — it goes the next time your Mac is awake, "
                          "usually within minutes.",
                          "Or open the Drafts folder to edit it first."]
-    elif item.get("send_approved"):
-        view["why"] = "Approved — it goes the next time your Mac is awake."
     line = outbox_mod.summary_line(item)
     age = line.split(" — ", 1)[1] if " — " in line else ""
-    view["why"] = ("Ready and " + age if age
-                   else "Ready — it just needs the part only you can do.")
+    if item.get("send_approved"):
+        view["why"] = "Approved — it goes the next time your Mac is awake."
+    else:
+        view["why"] = ("Ready and " + age if age
+                       else "Ready — it just needs the part only you can do.")
 
 
 def _resolve_outbox_all(view):
@@ -147,7 +148,12 @@ def _resolve_outbox_all(view):
         "id": it["id"], "title": it.get("title", ""),
         "line": outbox_mod.summary_line(it),
         "link": it.get("link", ""),
-        "url": al.url(al.KIND_OUTBOX, str(it["id"]), ops=("done", "snooze", "drop")),
+        # An email draft's page must carry `send`, or tapping through from the pile lands on a
+        # page that can do everything except the one thing the notification promised.
+        "url": al.url(al.KIND_OUTBOX, str(it["id"]),
+                      ops=("done", "snooze", "drop", "send")
+                      if it.get("kind") == "email_draft" and not it.get("send_approved")
+                      else ("done", "snooze", "drop")),
     } for it in items]
     view["steps"] = ["Open each one below.",
                      "Do the last step yourself — send, sign, pay, confirm.",
