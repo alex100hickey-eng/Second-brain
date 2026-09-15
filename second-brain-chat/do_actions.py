@@ -155,7 +155,12 @@ def _resolve_outbox_all(view):
                       if it.get("kind") == "email_draft" and not it.get("send_approved")
                       else ("done", "snooze", "drop")),
     } for it in items]
-    view["steps"] = ["Open each one below.",
+    unsent = [it for it in items
+              if it.get("kind") == "email_draft" and not it.get("send_approved")]
+    if unsent:
+        view["send_label"] = (f"Send all {len(unsent)} emails" if len(unsent) > 1
+                              else "Send the 1 email")
+    view["steps"] = ["Open each one below to read it.",
                      "Do the last step yourself — send, sign, pay, confirm.",
                      "Tap done so it stops surfacing."]
 
@@ -264,7 +269,9 @@ def perform(payload: dict, op: str, form=None) -> dict:
         return {"ok": False, "message": "That link doesn't allow this action."}
     kind, ref = payload.get("k"), payload.get("r", "")
     try:
-        if kind in (al.KIND_OUTBOX, al.KIND_OUTBOX_ALL):
+        if kind == al.KIND_OUTBOX_ALL:
+            return _do_outbox_all(op)
+        if kind == al.KIND_OUTBOX:
             return _do_outbox(ref, op)
         if kind == al.KIND_INTAKE:
             return _do_intake(ref, op)
@@ -304,6 +311,27 @@ def _do_outbox(ref, op):
         outbox_mod.close(item_id, outbox_mod.DROPPED, note="dropped from notification")
         return {"ok": True, "message": "Dropped. It won't come back."}
     return {"ok": False, "message": "Unknown action."}
+
+
+def _do_outbox_all(op):
+    """Ops pressed on the PILE page, where `ref` is empty by definition. Alex pressed the page's
+    Send button after reading through the individual ones and got "Couldn't do that: invalid
+    literal for int()" — the pile was being handed to the single-item handler.
+
+    Bulk send approves every unsent email draft at once. That is a real decision, so it is only
+    ever a button on the page (which lists every item), never an ntfy shade button."""
+    if not outbox_mod:
+        return {"ok": False, "message": "Outbox unavailable."}
+    if op != "send":
+        return {"ok": False, "message": "Open an item to do that."}
+    drafts = [it for it in outbox_mod.open_items()
+              if it.get("kind") == "email_draft" and not it.get("send_approved")]
+    if not drafts:
+        return {"ok": True, "message": "Nothing left to send — they're all approved already."}
+    done = [it for it in (outbox_mod.approve_send(it["id"]) for it in drafts) if it]
+    return {"ok": True,
+            "message": f"Approved {len(done)} email{'s' if len(done) != 1 else ''} — "
+                       "they go the next time your Mac is awake."}
 
 
 def _do_intake(ref, op):

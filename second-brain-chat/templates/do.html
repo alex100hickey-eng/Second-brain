@@ -150,7 +150,7 @@
         <button class="btn good" name="op" value="log" type="submit">{{ view.done_label }}</button>
       {% endif %}
       {% if 'send' in view.ops %}
-        <button class="btn good" name="op" value="send" type="submit">Send it now</button>
+        <button class="btn good" name="op" value="send" type="submit">{{ view.send_label or 'Send it now' }}</button>
       {% endif %}
       {% if 'approve' in view.ops %}
         <button class="btn good" name="op" value="approve" type="submit">Approve</button>

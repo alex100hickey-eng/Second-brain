@@ -251,3 +251,43 @@ def test_pile_page_hands_out_send_links_for_email_drafts():
     assert "send" in ops["1"], "an unsent email draft must offer send"
     assert "send" not in ops["2"], "an already-approved draft must not offer send again"
     assert "send" not in ops["3"], "a non-email item must never offer send"
+
+
+def test_pile_send_button_approves_every_unsent_draft():
+    """Alex read the individual ones, then pressed the pile's own Send button and got
+    "Couldn't do that: invalid literal for int() with base 10: ''" — the pile page has no ref,
+    and it was being routed into the single-item handler. Five emails silently didn't go."""
+    import do_actions
+    approved = []
+
+    class FakeOutbox:
+        DONE, DROPPED, OPEN = "done", "dropped", "open"
+
+        @staticmethod
+        def open_items():
+            return [{"id": 1, "kind": "email_draft"},
+                    {"id": 2, "kind": "email_draft", "send_approved": "2026-09-15T12:00:00"},
+                    {"id": 3, "kind": "task"},
+                    {"id": 4, "kind": "email_draft"}]
+
+        @staticmethod
+        def approve_send(item_id, source="notification"):
+            approved.append(item_id)
+            return {"id": item_id}
+
+    old = do_actions.outbox_mod
+    do_actions.outbox_mod = FakeOutbox
+    try:
+        res = do_actions._do_outbox_all("send")
+        assert res["ok"] and approved == [1, 4], f"approved {approved}"
+        assert "2 emails" in res["message"]
+        # an op that only makes sense on one item must not silently do nothing useful
+        assert do_actions._do_outbox_all("done")["ok"] is False
+        # pressing it twice must not double-approve
+        approved.clear()
+        FakeOutbox.open_items = staticmethod(
+            lambda: [{"id": 1, "kind": "email_draft", "send_approved": "x"}])
+        again = do_actions._do_outbox_all("send")
+        assert again["ok"] and approved == [] and "all approved already" in again["message"]
+    finally:
+        do_actions.outbox_mod = old
