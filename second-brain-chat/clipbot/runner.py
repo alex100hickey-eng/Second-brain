@@ -117,6 +117,49 @@ def can_spend(ledger: Ledger, cfg: config.Config, credits: int, usage: dict | No
     return True, "ok"
 
 
+
+def _beat(name: str, stale_after_s: int, note: str = "") -> None:
+    """Report liveness into the SHARED store so the always-on server can see this Mac loop.
+
+    Silent death is this system's signature failure — polybot slept through a DNS blackout,
+    clipbot sat on 187 finished clips for two days, and nothing anywhere noticed. A loop that
+    cannot be seen from the server is a loop nobody is watching."""
+    try:
+        import os, sys
+        sys.path.insert(0, os.path.expanduser("~/second-brain/second-brain-chat"))
+        import intake, monitor
+        from supabase import create_client
+        if intake.supabase is None:
+            intake.supabase = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_KEY"])
+        monitor.supabase = intake.supabase
+        monitor.beat(name, stale_after_s, note)
+    except Exception:
+        pass        # a heartbeat must never break the work it reports on
+
+
+
+def _publish(lane: str, facts: dict) -> None:
+    """Push this lane's money-relevant numbers into the SHARED store.
+
+    Liveness is not the same as health: polybot can beat happily while every module loses, and
+    clipbot beat for two days while 187 finished clips went nowhere. The server cannot read this
+    Mac's sqlite, so the scoreboard has to travel."""
+    try:
+        import os, sys
+        sys.path.insert(0, os.path.expanduser("~/second-brain/second-brain-chat"))
+        import intake
+        from supabase import create_client
+        if intake.supabase is None:
+            intake.supabase = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_KEY"])
+        st = intake._load_state(f"business:{lane}")
+        st.update(facts)
+        st["key"] = f"business:{lane}"
+        st["at"] = __import__("datetime").datetime.now().isoformat()
+        intake._save_state(st)
+    except Exception:
+        pass
+
+
 class Runner:
     def __init__(self, cfg: config.Config | None = None, ledger: Ledger | None = None, client=None, log=print):
         self.cfg = cfg or config.load()
@@ -606,6 +649,15 @@ class Runner:
                         f.write(self.ledger.report() + "\n")
             except Exception as exc:
                 self.log(f"loop error: {exc}\n{traceback.format_exc(limit=3)}")
+            _beat("clipbot", 3 * 3600, "loop alive")
+            try:
+                st = self.ledger.stats()
+                risky = [c["name"] for c in self.ledger.campaigns()
+                         if self.transformation_risk(c)]
+                _publish("clipbot", {"stats": st, "risky_campaigns": risky,
+                                     "credits_week": self.ledger.credits_this_week()})
+            except Exception:
+                pass
             time.sleep(30)
 
 

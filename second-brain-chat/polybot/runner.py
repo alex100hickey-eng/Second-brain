@@ -52,6 +52,49 @@ class SeriesStore:
         return [(r["ts"], r["mid"]) for r in rows if r["mid"] is not None]
 
 
+
+def _beat(name: str, stale_after_s: int, note: str = "") -> None:
+    """Report liveness into the SHARED store so the always-on server can see this Mac loop.
+
+    Silent death is this system's signature failure — polybot slept through a DNS blackout,
+    clipbot sat on 187 finished clips for two days, and nothing anywhere noticed. A loop that
+    cannot be seen from the server is a loop nobody is watching."""
+    try:
+        import os, sys
+        sys.path.insert(0, os.path.expanduser("~/second-brain/second-brain-chat"))
+        import intake, monitor
+        from supabase import create_client
+        if intake.supabase is None:
+            intake.supabase = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_KEY"])
+        monitor.supabase = intake.supabase
+        monitor.beat(name, stale_after_s, note)
+    except Exception:
+        pass        # a heartbeat must never break the work it reports on
+
+
+
+def _publish(lane: str, facts: dict) -> None:
+    """Push this lane's money-relevant numbers into the SHARED store.
+
+    Liveness is not the same as health: polybot can beat happily while every module loses, and
+    clipbot beat for two days while 187 finished clips went nowhere. The server cannot read this
+    Mac's sqlite, so the scoreboard has to travel."""
+    try:
+        import os, sys
+        sys.path.insert(0, os.path.expanduser("~/second-brain/second-brain-chat"))
+        import intake
+        from supabase import create_client
+        if intake.supabase is None:
+            intake.supabase = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_KEY"])
+        st = intake._load_state(f"business:{lane}")
+        st.update(facts)
+        st["key"] = f"business:{lane}"
+        st["at"] = __import__("datetime").datetime.now().isoformat()
+        intake._save_state(st)
+    except Exception:
+        pass
+
+
 class Runner:
     def __init__(self, cfg: config.Config | None = None, ledger: Ledger | None = None, log=print):
         self.cfg = cfg or config.load()
@@ -64,7 +107,10 @@ class Runner:
         self.paper = PaperEngine(self.ledger, history_fn=self._paper_history, resolution_fn=self._paper_resolution)
         self.executor = Executor(self.ledger, self.us, self.cfg, self.log)
         if self.us.available:
-            bal = self.us.balance_usd()
+            # Account VALUE, not buying power: money already in positions is still the bankroll.
+            # Reading buying power halted the bot at "bankroll under floor" the moment anything
+            # was deployed, and it can never compound if deployed money stops counting.
+            bal = self.us.account_value_usd()
             if bal is not None:
                 self.cfg.bankroll_usd = bal
         self.weather_modules = {
@@ -348,6 +394,21 @@ class Runner:
                     self.log(f"loop error: {exc}\n{traceback.format_exc(limit=3)}")
                 if len(done) > 5000:
                     done = set(sorted(done)[-100:])
+            _beat("polybot", 3 * 3600, f"{self.cfg.mode('weather_lock')} lock")
+            try:
+                ready = [m for m in config.MODULES
+                         if self.cfg.mode(m) == "paper" and self.ledger.promotion_check(m)[0]]
+                _publish("polybot", {
+                    "modes": {m: self.cfg.mode(m) for m in config.MODULES
+                              if self.cfg.mode(m) != "off"},
+                    "signals_24h": self.ledger.signal_count_since(time.time() - 86400)
+                    if hasattr(self.ledger, "signal_count_since") else None,
+                    "ready_to_promote": ready,
+                    "live_orders": self.ledger.live_order_count()
+                    if hasattr(self.ledger, "live_order_count") else None,
+                    "bankroll_usd": self.cfg.bankroll_usd})
+            except Exception:
+                pass
             time.sleep(20)
 
 

@@ -6252,6 +6252,52 @@ if task_manager.RUNTIME == "server":
     print("Splitframe follow-up scheduler started.")
 
 
+# One watcher over all three money lanes. monitor.check_heartbeats already answers "is it running";
+# this answers "is it earning, and what is stuck" — because every failure this month was a healthy
+# process doing nothing useful. Nudges only on a real problem, plus one digest a day.
+import business_monitor  # noqa: E402
+
+business_monitor.init(intake, outbox)
+
+
+def _business_monitor_loop():
+    observability.set_trigger("agent")
+    while True:
+        try:
+            snap = business_monitor.snapshot()
+            probs = business_monitor.problems(snap)
+            st = intake._load_state("business:monitor")
+            today = datetime.now(LOCAL_TZ).strftime("%Y-%m-%d")
+            for lane, text in probs:
+                # one nudge per distinct problem per day: a stuck lane is one fact, not 48 buzzes
+                key = f"{lane}:{abs(hash(text)) % 10**8}"
+                if st.get(key) == today:
+                    continue
+                proactive.send_nudge(f"biz:{key}", f"{lane} needs you", text,
+                                     priority="high", tags="chart_with_downwards_trend")
+                st[key] = today
+            if st.get("digest") != today and datetime.now(LOCAL_TZ).hour >= 20:
+                proactive.send_nudge("biz-digest", "Where the three lanes stand",
+                                     business_monitor.digest(snap), recurring=True)
+                st["digest"] = today
+            st["key"] = "business:monitor"
+            intake._save_state(st)
+            monitor.beat("business-monitor", 3 * 3600, f"{len(probs)} problem(s)")
+        except Exception as e:
+            try:
+                monitor.report_event("business-monitor", "warning", "pass failed", str(e))
+            except Exception:
+                pass
+        time.sleep(1800)
+
+
+if task_manager.RUNTIME == "server":
+    if not TEST_MODE:
+        threading.Thread(target=_business_monitor_loop, daemon=True,
+                         name="jarvis-business-monitor").start()
+    print("Business monitor started (splitframe / polybot / clipbot).")
+
+
 # ------------------------------------------------------------
 # Mail intake worker. iMessage has had a background watcher since day one, but
 # every mail scan (personal Gmail, school Gmail, iCloud) existed ONLY as a tool

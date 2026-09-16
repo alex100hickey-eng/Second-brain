@@ -99,6 +99,20 @@ def nudge(title: str, body: str) -> None:
     urllib.request.urlopen(req, timeout=10).read()
 
 
+
+def _beat(note: str = "") -> None:
+    """Liveness into the shared store so the always-on server can see this Mac job."""
+    try:
+        sys.path.insert(0, CHAT if "CHAT" in globals() else os.path.expanduser("~/second-brain/second-brain-chat"))
+        import intake, monitor
+        from supabase import create_client
+        if intake.supabase is None:
+            intake.supabase = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_KEY"])
+        monitor.supabase = intake.supabase
+        monitor.beat("reply-watch", 7200, note)
+    except Exception:
+        pass
+
 def main() -> int:
     from composio import Composio  # type: ignore
     c = Composio(api_key=os.environ["COMPOSIO_API_KEY"])
@@ -134,6 +148,7 @@ def main() -> int:
     st["seen"] = sorted(seen)[-500:]
     st["last_run"] = datetime.now().isoformat()
     save_state(st)
+    _beat(f"{len(msgs)} scanned")
     if not hits:
         log(f"no prospect replies ({len(msgs)} inbox messages scanned)")
     return 0

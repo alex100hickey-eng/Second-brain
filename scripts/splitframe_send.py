@@ -116,6 +116,20 @@ def stamp_tracker(address: str) -> None:
         w.writerows(rows)
 
 
+
+def _beat(note: str = "") -> None:
+    """Liveness into the shared store so the always-on server can see this Mac job."""
+    try:
+        sys.path.insert(0, CHAT if "CHAT" in globals() else os.path.expanduser("~/second-brain/second-brain-chat"))
+        import intake, monitor
+        from supabase import create_client
+        if intake.supabase is None:
+            intake.supabase = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_KEY"])
+        monitor.supabase = intake.supabase
+        monitor.beat("splitframe-send", 3600, note)
+    except Exception:
+        pass
+
 def main() -> int:
     sys.path.insert(0, CHAT)
     import outbox                                   # type: ignore
@@ -127,6 +141,7 @@ def main() -> int:
         log("paused (scripts/SPLITFRAME_PAUSE exists) — nothing sent")
         return 0
 
+    _beat("alive")
     pending = list(outbox.awaiting_send())
     approved_ids = {it["id"] for it in pending}
     # Auto-send: drafts whose hold window has expired. Alex asked for this 2026-09-15 so he can be

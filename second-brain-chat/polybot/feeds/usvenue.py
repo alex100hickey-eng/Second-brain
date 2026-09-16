@@ -216,6 +216,29 @@ class USVenue:
                 return _price(row[k])
         return None
 
+    def account_value_usd(self) -> float | None:
+        """Cash buying power PLUS what is already sitting in open positions.
+
+        `balance_usd` returns buying power, which is what you can deploy right now — and on
+        2026-09-16 that read $0.41 while the account actually held ~$187 in two open positions.
+        Sizing and the bankroll floor must use account VALUE, or the bot halts the moment money is
+        working ("bankroll under floor") and never compounds. Alex's rule: you start at $200, and
+        what you make becomes what you trade with."""
+        if not self.available:
+            return None
+        cash = self.balance_usd() or 0.0
+        held = 0.0
+        for p in (self.positions() or []):
+            cost = p.get("cost") if isinstance(p, dict) else None
+            val = (cost or {}).get("value") if isinstance(cost, dict) else None
+            if val is not None:
+                try:
+                    held += float(val)
+                except (TypeError, ValueError):
+                    pass
+        return round(cash + held, 2)
+
+
     def balance_detail(self) -> dict:
         if not self.available:
             return {}
