@@ -306,6 +306,13 @@ def _do_outbox(ref, op):
         return {"ok": True, "message": "Approved — it goes the next time your Mac is awake."}
     if op == "snooze":
         outbox_mod.snooze(item_id, hours=3)
+        item = outbox_mod.get(item_id) or {}
+        if item.get("auto_send_at"):
+            # Snoozing an armed draft has to move the SEND too. Otherwise "not now" silences the
+            # reminder and the email goes out anyway three hours later — the worst of both.
+            from datetime import datetime as _dt, timedelta as _td
+            outbox_mod.arm_auto_send(item_id, (_dt.now() + _td(hours=3)).isoformat())
+            return {"ok": True, "message": "Held 3 hours — it won't go out before then."}
         return {"ok": True, "message": "Snoozed 3 hours."}
     if op == "drop":
         outbox_mod.close(item_id, outbox_mod.DROPPED, note="dropped from notification")

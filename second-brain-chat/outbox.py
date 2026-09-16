@@ -219,6 +219,29 @@ def approve_send(item_id: int, source: str = "notification") -> dict | None:
                             "send_approved_by": source})
 
 
+def arm_auto_send(item_id: int, when_iso: str) -> dict | None:
+    """Schedule an email_draft to go on its own at `when_iso` unless Alex stops it first.
+
+    The hold window is the whole safety model for auto-send: he does nothing and it goes, which
+    is what he asked for, but there is a real window in which "Not doing it" still kills it."""
+    item = get(item_id)
+    if not item or item.get("kind") != "email_draft":
+        return None
+    return _write(item_id, {"auto_send_at": when_iso})
+
+
+def due_to_auto_send(now_iso: str, limit: int = 30) -> list:
+    """Open email drafts whose hold window has expired and that nobody approved or killed."""
+    out = []
+    for it in open_items(limit=limit):
+        if it.get("kind") != "email_draft" or it.get("sent_at") or it.get("send_approved"):
+            continue
+        when = it.get("auto_send_at")
+        if when and when <= now_iso:
+            out.append(it)
+    return out
+
+
 def awaiting_send(limit: int = 30) -> list:
     """Open email_draft items Alex has approved and nobody has sent yet."""
     return [it for it in open_items(limit=limit)

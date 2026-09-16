@@ -31,6 +31,8 @@ from datetime import date, datetime
 VAULT = os.path.expanduser("~/Library/Mobile Documents/com~apple~CloudDocs/Obsidian/Second brain")
 TRACKER = os.path.join(VAULT, "Money", "prospect-tracker.csv")
 LOG = os.path.expanduser("~/second-brain/scripts/splitframe_send.log")
+PAUSE_FILE = os.path.expanduser("~/second-brain/scripts/SPLITFRAME_PAUSE")
+DAILY_CAP = 5           # the plan's cadence, and the blast radius of any bug in the drafter
 CHAT = os.path.expanduser("~/second-brain/second-brain-chat")
 SEND_SLUG = "GMAIL_" + "SEND_DRAFT"      # split so the suite's marker scan stays honest elsewhere
 
@@ -40,6 +42,17 @@ def log(msg: str) -> None:
     print(line)
     with open(LOG, "a") as f:
         f.write(line + "\n")
+
+
+
+def _sent_today() -> int:
+    """How many this script has already sent today, read back from its own log."""
+    today = date.today().isoformat()
+    try:
+        with open(LOG) as f:
+            return sum(1 for line in f if line.startswith(today) and ": SENT to " in line)
+    except OSError:
+        return 0
 
 
 def approved_recipients() -> set:
@@ -110,7 +123,24 @@ def main() -> int:
     from supabase import create_client              # type: ignore
 
     outbox.init(create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_KEY"]))
-    pending = outbox.awaiting_send()
+    if os.path.exists(PAUSE_FILE):
+        log("paused (scripts/SPLITFRAME_PAUSE exists) — nothing sent")
+        return 0
+
+    pending = list(outbox.awaiting_send())
+    approved_ids = {it["id"] for it in pending}
+    # Auto-send: drafts whose hold window has expired. Alex asked for this 2026-09-15 so he can be
+    # hands-off. The cap is what stops a Mac that slept through three days of drafts waking up and
+    # firing all of them into the same morning.
+    sent_today = _sent_today()
+    room = max(0, DAILY_CAP - sent_today)
+    if room:
+        for it in outbox.due_to_auto_send(datetime.now().isoformat()):
+            if it["id"] in approved_ids or len(pending) - len(approved_ids) >= room:
+                continue
+            pending.append(it)
+    elif outbox.due_to_auto_send(datetime.now().isoformat()):
+        log(f"daily cap reached ({sent_today}/{DAILY_CAP}) — auto-sends deferred to tomorrow")
     if not pending:
         return 0
 
@@ -146,9 +176,10 @@ def main() -> int:
                   "Gmail — send it by hand.")
             outbox._write(item["id"], {"sent_at": ""})
             continue
-        outbox.close(item["id"], outbox.DONE, note="sent from the Mac on Alex's approval")
+        route = "on Alex's approval" if item.get("send_approved") else "automatically (hold window expired)"
+        outbox.close(item["id"], outbox.DONE, note=f"sent from the Mac {route}")
         stamp_tracker(who)
-        log(f"item {item['id']}: SENT to {who} (draft {draft_id})")
+        log(f"item {item['id']}: SENT to {who} (draft {draft_id}) — {route}")
         nudge("Sent", f"Your email to {who} just went out.")
     return 0
 

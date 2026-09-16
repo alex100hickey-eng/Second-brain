@@ -311,7 +311,18 @@ class _FakeOutbox:
     def __init__(self, open_rows=()):
         self.rows = [dict(r) for r in open_rows]
         self.added = []
+        self.armed = {}
         self._id = 100
+
+    def arm_auto_send(self, item_id, when_iso):
+        """Auto-send (2026-09-15): every released draft must be armed, or it silently waits
+        forever for a tap Alex was told he no longer has to give."""
+        self.armed[item_id] = when_iso
+        for r in self.rows:
+            if r["id"] == item_id:
+                r["auto_send_at"] = when_iso
+                return r
+        return None
 
     def open_items(self, limit=60):
         return list(self.rows)
@@ -351,6 +362,7 @@ def test_the_five_a_day_cap_is_per_day_not_per_invocation(monkeypatch, quiet_log
 
     first = sfd.release_first_touches(box, "https://mail")
     assert len(first) == 5, f"first run should release exactly PER_DAY, got {first}"
+    assert len(box.armed) == 5, "every released first touch must be armed to send itself"
 
     # same calendar day, second invocation: nothing more goes out
     assert sfd.release_first_touches(box, "https://mail") == []
@@ -397,3 +409,45 @@ def test_a_queue_entry_with_no_draft_id_is_never_announced_as_sendable(monkeypat
     assert box.added == ["gmail:studio:d3"], "a ref with an empty draft id must never be filed"
     assert not queue[0].get("released") and not queue[1].get("released")
     assert any("no draft_id" in ln for ln in quiet_log), "malformed entries must be reported"
+
+
+def test_auto_send_only_picks_up_drafts_nobody_has_handled():
+    """Auto-send is Alex being hands-off, not a second send of something already handled."""
+    import outbox as ob
+    rows = [
+        {"id": 1, "kind": "email_draft", "auto_send_at": "2026-09-15T10:00:00"},           # due
+        {"id": 2, "kind": "email_draft", "auto_send_at": "2026-09-15T23:00:00"},           # held
+        {"id": 3, "kind": "email_draft"},                                                   # not armed
+        {"id": 4, "kind": "email_draft", "auto_send_at": "2026-09-15T10:00:00",
+         "send_approved": "x"},                                                             # he tapped
+        {"id": 5, "kind": "email_draft", "auto_send_at": "2026-09-15T10:00:00",
+         "sent_at": "x"},                                                                   # already gone
+        {"id": 6, "kind": "task", "auto_send_at": "2026-09-15T10:00:00"},                   # not an email
+    ]
+    old = ob.open_items
+    ob.open_items = lambda limit=60, include_snoozed=True: rows
+    try:
+        due = [it["id"] for it in ob.due_to_auto_send("2026-09-15T12:00:00")]
+    finally:
+        ob.open_items = old
+    assert due == [1], f"expected only the due, unhandled email draft; got {due}"
+
+
+def test_sender_counts_todays_sends_from_its_own_log(tmp_path, monkeypatch):
+    """The cap is the blast radius of any bug in the drafter. A Mac that slept through three days
+    of drafts must not wake up and fire all of them into one morning."""
+    import importlib.util as iu
+    spec = iu.spec_from_file_location("sfs2", SENDER)
+    sfs = iu.module_from_spec(spec)
+    spec.loader.exec_module(sfs)
+    from datetime import date
+    today = date.today().isoformat()
+    log = tmp_path / "send.log"
+    log.write_text(
+        f"{today} 09:01 item 1: SENT to a@b.com (draft r1) — automatically (hold window expired)\n"
+        f"{today} 09:02 item 2: SENT to c@d.com (draft r2) — on Alex's approval\n"
+        f"{today} 09:03 item 3: send refused: recipient not in tracker\n"
+        "2026-01-01 09:04 item 9: SENT to old@x.com (draft r9) — on Alex's approval\n")
+    monkeypatch.setattr(sfs, "LOG", str(log))
+    assert sfs._sent_today() == 2
+    assert sfs.DAILY_CAP == 5

@@ -23,7 +23,7 @@ import csv
 import json
 import os
 import sys
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 # On the server the vault is the git-synced copy (VAULT_PATH); on the Mac it is iCloud.
@@ -276,6 +276,9 @@ def nudge(title: str, body: str) -> None:
 
 
 QUEUE_KEY = "splitframe:firsttouch_queue"
+HOLD_HOURS = 3             # Alex asked for auto-send (2026-09-15). This is the window in which he
+                           # can still kill one: he does nothing and it goes, which is the point,
+                           # but nothing leaves the building the instant a model wrote it.
 PER_DAY = 5                # the plan's cadence: 5 a day, 25 a week
 
 
@@ -351,6 +354,8 @@ def release_first_touches(outbox_mod, drafts_url: str, limit: int = PER_DAY) -> 
             account="studio", ref=f"gmail:studio:{draft_id}")
         if rid:
             entry["released"] = datetime.now(LOCAL_TZ).isoformat()
+            outbox_mod.arm_auto_send(
+                rid, (datetime.now(LOCAL_TZ) + timedelta(hours=HOLD_HOURS)).isoformat())
             released.append(f"{entry.get('brand', to)}")
     if deferred:
         log("first touch held (a draft to the same address is already open, will retry): "
@@ -448,6 +453,15 @@ def main() -> int:
             continue
         drafted.setdefault(address.lower(), []).append(touch)
         save_state(st)
+        # create_email_draft filed the outbox row; arm it so it sends itself after the hold.
+        row = next((o for o in outbox.open_items()
+                    if (o.get("title") or "").strip().lower().endswith(address.lower())
+                    and not o.get("auto_send_at")), None)
+        if row:
+            outbox.arm_auto_send(
+                row["id"], (datetime.now(LOCAL_TZ) + timedelta(hours=HOLD_HOURS)).isoformat())
+        else:
+            log(f"{brand}: drafted but no outbox row to arm — it will wait for a tap")
         made.append(f"{brand} (touch {touch})")
         log(f"{brand}: touch {touch} drafted on thread {original['thread_id']}")
 
@@ -465,16 +479,12 @@ def main() -> int:
         nudge("Splitframe: a follow-up was withheld",
               "The generated copy claimed research Alex hasn't done, so it was not staged: "
               + "; ".join(rejected) + ". It needs a real look at the account first.")
-    if fresh and not made:
-        nudge(f"{len(fresh)} email{'s' if len(fresh) > 1 else ''} ready to send",
-              ", ".join(fresh) + ". Open the notification, read it, press Send.")
-    if made:
-        nudge(f"{len(made)} follow-up{'s' if len(made) > 1 else ''} ready to send",
-              ", ".join(made) + ". They're reply drafts on the original threads in "
-              "splitframestudio Gmail — read, hit send. Nothing goes out until you do.")
-    log(f"{len(made)} follow-up draft(s) made · {len(due)} due · "
-        f"{len(waiting)} verified addresses still waiting on a first touch")
-    return 0
+    going = made + fresh
+    if going:
+        when = (datetime.now(LOCAL_TZ) + timedelta(hours=HOLD_HOURS)).strftime("%-I:%M %p")
+        nudge(f"{len(going)} email{'s' if len(going) > 1 else ''} going out at {when}",
+              ", ".join(going) + f". They send themselves at {when} — open this and tap "
+              "'Not doing it' on any you want stopped. Nothing needed if they're fine.")
 
 
 if __name__ == "__main__":
