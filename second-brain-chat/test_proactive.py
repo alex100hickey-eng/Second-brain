@@ -610,10 +610,16 @@ def test_waiting_on_alex():
     check("once it has aged, it nudges", len(ready) == 1)
     labels = [a["label"] for a in ready[0]["actions"]] if ready else []
     check("the notification carries the button that STARTS the job",
-          "Review & send" in labels)
+          "Read & send" in labels)
     check("…and the one-tap 'Sent it' that ends it", "Sent it" in labels)
-    check("Review & send points at the mailbox, not at CLARVIS",
-          ready and any(a["url"].startswith("https://mail.google.com")
+    # Rewritten 2026-09-15. This used to assert the button pointed AT GMAIL, which is the
+    # opposite of the hard gate: `send` rides on the /do page token, never a shade button,
+    # because a lock-screen tap is not consent for a cold email under his name. He opens the
+    # page, reads what actually goes out, and acts there. proactive only falls back to the raw
+    # mailbox link when the page token cannot mint. The test was pinning the old shape, so it
+    # sat red and stopped being read — which is how it missed nothing for weeks.
+    check("the send button opens CLARVIS's own page, where the email is read first",
+          ready and any(a["label"] == "Read & send" and "/do/" in a["url"]
                         for a in ready[0]["actions"]))
     check("tapping the notification opens the item's page",
           ready and "/do/" in ready[0]["click"])

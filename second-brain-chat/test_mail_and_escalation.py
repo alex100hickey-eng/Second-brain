@@ -217,13 +217,25 @@ def test_no_send_capability():
                         isinstance(body[0].value, ast.Constant) and \
                         isinstance(body[0].value.value, str):
                     doc_positions.add(id(body[0].value))
+        # A sibling guard has to NAME these markers to enforce this same rule —
+        # test_splitframe_daily.py's SEND_MARKERS is the marker list, not a send path. This
+        # check was failing on its own reflection, which is how it sat red long enough to stop
+        # meaning anything. Test files keep the checks below: a literal is prose, an import or
+        # a call is a capability, and only the second one can actually send an email.
+        prose_only = fname.startswith("test_")
         for node in ast.walk(tree):
             if isinstance(node, ast.Constant) and isinstance(node.value, str) \
-                    and id(node) not in doc_positions \
+                    and id(node) not in doc_positions and not prose_only \
                     and any(m in node.value for m in send_markers):
                 offenders.append(f"{fname}:{node.lineno}")
             if isinstance(node, ast.Name) and node.id in ("smtplib", "sendmail"):
                 offenders.append(f"{fname}:{node.lineno} ({node.id})")
+            # An import is the capability itself, so it counts everywhere, tests included.
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                mods = ([a.name for a in node.names] if isinstance(node, ast.Import)
+                        else [node.module or ""])
+                if any((m or "").split(".")[0] in ("smtplib",) for m in mods):
+                    offenders.append(f"{fname}:{node.lineno} (imports smtplib)")
     check("no module can send email (markers only ever in docstrings): "
           + (", ".join(offenders) if offenders else "clean"), not offenders)
 
