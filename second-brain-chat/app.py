@@ -2528,9 +2528,14 @@ def _situational_snapshot() -> str:
     # those is worse than losing "Top of his plate".
     waiting = []
     try:
-        for it in outbox.open_items(limit=20):
+        # Capped: this section is now reserved ahead of the optional ones, so it must stay
+        # small enough to deserve that. Twenty outbox lines with links is most of the budget.
+        _open = outbox.open_items(limit=20)
+        for it in _open[:4]:
             waiting.append(f"UNFINISHED BY HIM: {outbox.summary_line(it)}"
                            + (f" — link: {it['link']}" if it.get("link") else ""))
+        if len(_open) > 4:
+            waiting.append(f"…and {len(_open) - 4} more unfinished in the outbox")
     except Exception as e:
         print(f"situational: outbox check failed ({e})")
     try:
@@ -2601,7 +2606,10 @@ def _situational_snapshot() -> str:
     except Exception as e:
         print(f"situational: weather section failed ({e})")
 
-    return situational.assemble(sections, now)
+    # "Waiting on him" is reserved: what is in it is consequential and often irreversible,
+    # so it must not depend on how long today's orders happened to be.
+    return situational.assemble(sections, now,
+                                required=("Waiting on him:", "Due & overdue:"))
 
 
 def build_system_blocks(recall_text: str = "") -> list:

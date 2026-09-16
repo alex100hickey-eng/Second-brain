@@ -103,31 +103,44 @@ def calendar_lines(events: list, now: datetime, max_lines: int = 8) -> list:
     return lines
 
 
-def assemble(sections: list, now: datetime, max_chars: int = MAX_CHARS) -> str:
+def assemble(sections: list, now: datetime, max_chars: int = MAX_CHARS,
+             required=()) -> str:
     """[(header, [line, ...]), ...] -> the digest text. Empty sections vanish.
 
     The time header is unconditional: even with nothing else to say, CLARVIS should
     always know what day and time it is — the movies' assistants never ask.
+
+    Headers listed in `required` get first claim on the budget, before any optional
+    section can spend it. Skipping only the section that does not fit was not enough on
+    its own: it just means the SHORTEST survivor wins, so a fat orders section could
+    still drop "Waiting on him" and keep a one-line weather note. That section carries
+    consequential, often irreversible things — since 2026-09-15 an unapproved email
+    draft is counting down to send itself — so it must not depend on how busy the day
+    is. Required sections are still bounded by max_chars; they cannot blow the budget,
+    they only get to spend it first. Output stays in the caller's section order.
     """
     parts = [f"It is {now.strftime('%A, %B %-d, %Y — %-I:%M %p')}."]
     used = len(parts[0])
-    for header, lines in sections:
-        if not lines:
-            continue
-        block_lines = [header] + [f"- {ln}" for ln in lines]
-        block = "\n".join(block_lines)
-        if used + len(block) > max_chars:
-            # Budget: drop whole sections rather than truncating mid-line — a half-sentence
-            # about an approval is worse than silence about it.
-            # `continue`, not `break`: this used to stop at the first section that did not
-            # fit, so ONE fat section took every shorter one below it with it. On 2026-09-16
-            # (exam tomorrow + two quizzes) the orders section alone starved "Waiting on him"
-            # — the count of things counting down to send themselves — and "Due & overdue",
-            # the reminder horizon. Skipping just the section that does not fit keeps the
-            # cheap, high-value ones. Order is still preserved for everything included.
-            continue
-        parts.append(block)
-        used += len(block)
+    kept = {}
+
+    def _block(header, lines):
+        return "\n".join([header] + [f"- {ln}" for ln in lines])
+
+    for pass_required in (True, False):
+        for header, lines in sections:
+            if not lines or (header in required) is not pass_required or header in kept:
+                continue
+            block = _block(header, lines)
+            if used + len(block) > max_chars:
+                # Drop whole sections rather than truncating mid-line — a half-sentence
+                # about an approval is worse than silence about it. `continue`, not
+                # `break`: one long section used to take every shorter one below it with
+                # it, which is how "Due & overdue" vanished on a heavy school day.
+                continue
+            kept[header] = block
+            used += len(block)
+
+    parts.extend(kept[h] for h, _ in sections if h in kept)
     return "\n\n".join(parts)
 
 
