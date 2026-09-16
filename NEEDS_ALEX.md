@@ -12,6 +12,35 @@ is still yours to do.
 
 ---
 
+## 📅 2026-09-15 — ECON103 Exam 1 is stamped 2:30 AM. Which day is it really?
+
+`School/assignments.csv` has:
+
+```
+ECON103,Exam 1,exam,2026-10-06T02:30,16.7,...,canvas:event-assignment-753478
+```
+
+**A 2:30 AM exam does not exist.** Every other deadline in that file is 10:00, 23:59,
+11:15 or 14:30 — ordinary times. 02:30 is what a UTC timestamp looks like after it has
+been written as if it were local: `2026-10-06T02:30Z` is **Sunday Oct 5, 10:30 PM** in
+New York.
+
+Either way the row is wrong, and it lands in the Oct 5–9 collision week:
+- if the exam is **Mon Oct 6**, the time is junk and should be the real sitting time
+- if the stamp is UTC, the **date** is wrong too and the exam is a day earlier than the
+  study plan thinks
+
+I can't settle it — reading it from Canvas needs an API token, and that's off the table
+(CWRU rules). **Open the ECON103 Canvas page, look at Exam 1's date and time, and fix
+the row.** Everything downstream (the exam spine, the prep countdown, the collision-week
+ordering) is computed off that one value.
+
+Not a code bug: `_parse_date` was fixed 2026-09-15 to convert offset-bearing timestamps
+into your timezone before taking the day, and it changes 0 of the 370 date values
+currently in `School/*.csv`. This row is naive text — only you can say what it means.
+
+---
+
 ## 🔎 2026-09-14 — one 30-second check: does the SERVER have the search key?
 
 Shipped today (`b4391f9`, live on both nodes): `read_url`, and the Reddit scout is
@@ -40,6 +69,13 @@ curl -s -H "X-Access-Code: <server code>" \
 
 ## 🔴 2026-09-12 — the four things standing between you and a D1 season
 
+> **2026-09-15, Alex's word — both closed.** Sports Information Form: *"pretty sure I did it"*
+> (unverified against Schwartz's list; if he chases it again it is a 2-minute resend, not an open
+> 47-day item). Sickle-cell / practice clearance: *"definitely did the sickle cell form"* —
+> **he is cleared to practice.** Neither of these gets nudged again. Only the **week of 10/15
+> retest** (task #16) stays live in this section.
+
+
 You said the fire died down and you want the system finalized. I audited it instead of
 answering. What the system knows about the last three weeks:
 
@@ -52,11 +88,11 @@ answering. What the system knows about the last three weeks:
 
 Four of those 40 buried items are ball-critical and three have been open for weeks:
 
-1. **CWRU MBB Sports Information Form — open 44 days** (Jon Schwartz, 2026-07-30: *"you're
+1. ~~**CWRU MBB Sports Information Form**~~ — **DONE per Alex 2026-09-15.** (was: open 44 days) (Jon Schwartz, 2026-07-30: *"you're
    one of two missing it"*). That form is your roster bio. It is the searchable public
    record of you as a player, and a D1 staff's first search result. Intake caught it in
    July and it has been sitting under dead mail ever since.
-2. **Practice clearance is still unconfirmed** (Emily Randall 8/22: no NCAA practice or
+2. ~~**Practice clearance**~~ — **CLEARED per Alex 2026-09-15 (sickle-cell form submitted).** (was: unconfirmed) (Emily Randall 8/22: no NCAA practice or
    games until the sickle-cell result is submitted; Quest activated 8/26; silence since).
    You cannot audition for anyone if you cannot practice. One line settles it.
 3. ~~**Coach Rocco's lift program**~~ — **DECIDED 2026-09-12: not doing Rocco's lifts.**
@@ -112,6 +148,19 @@ That is the thing to build next, and it is blocked behind the lift question in #
   pane was back at login.case.edu by the time the nightly sync ran, so the 3:35 PM
   session did not survive to tonight. Nothing was read. Next time you log in, leave
   that Canvas tab open and the Mac awake — or expect to re-log in each evening.
+
+- **2026-09-14 — the nightly Canvas status sync could not run (4th night in a row).**
+  canvas.case.edu redirected to login.case.edu (SSO expired), so no submissions, grades
+  or announcements were read tonight. Open the Browser pane on the Mac, go to
+  canvas.case.edu and log in once — and leave that tab open with the Mac awake, or the
+  session will be gone again by 9:36 PM. Until then, work you have already submitted
+  keeps showing as **open** in the vault, and the school brief, ranked daily orders and
+  phone nudges will all be wrong in that direction. Last good read: 2026-09-10 10:26
+  (now 4 days stale).
+- **2026-09-14 9:40 PM — confirmed again at the nightly run.** canvas.case.edu still
+  redirects to login.case.edu; nothing was read tonight either. No new phone alert was
+  sent (one already went out inside the last 3 days). This is the 5th consecutive
+  night with no Canvas data.
 
 - **2026-09-11 — the nightly Canvas status sync could not run.** canvas.case.edu
   redirected to login.case.edu (SSO expired), so no submissions, grades or

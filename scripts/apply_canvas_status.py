@@ -54,7 +54,11 @@ LOCAL_TZ = ZoneInfo("America/New_York")
 VAULT = os.environ.get("OBSIDIAN_VAULT_PATH") or os.path.expanduser(
     "~/Library/Mobile Documents/com~apple~CloudDocs/Obsidian/Second brain")
 CSV_PATH = os.path.join(VAULT, "School", "assignments.csv")
-DONE = {"submitted", "graded", "done", "complete", "completed"}
+# Must stay in sync with school_data._DONE_STATUSES. "dropped" is a MANUAL terminal
+# decision (Alex dropped the item); it was missing here, so a row he dropped fell through
+# to the reconciliation below and the next Canvas sync overwrote it back to
+# submitted/graded — work he had deliberately killed reappearing in the study plan.
+DONE = {"submitted", "graded", "done", "complete", "completed", "dropped"}
 CLOSED_STATES = {"submitted", "graded", "pending_review"}
 NOT_GRADED = "not_graded"
 # The weight_pct value that marks "Canvas does not grade this". Read by

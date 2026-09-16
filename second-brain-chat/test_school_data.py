@@ -299,6 +299,13 @@ with open(os.path.join(sp_school, "assignments.csv"), "w", encoding="utf-8") as 
     f.write("ECON103,Exam 1,exam,2026-10-01T02:30,16.7,,,open,,canvas,,,\n")
     f.write("ECON103,Final Exam,exam,2026-12-14T12:00,33.3,,,open,,canvas,,,\n")
     f.write("ACCT100,Day 3 APQ - GAAP,assignment,2026-09-08T10:00,,,,open,,canvas,,,\n")
+    # Canvas not_graded prep (weight_pct 0, stamped by the nightly status sync):
+    # one just past (would be "lapsed" if it were graded), one for the next
+    # class (Tue Sep 8), one for the class after — only the nearest may
+    # surface, and only as a hint, never as due/lapsed/before-next-class.
+    f.write("ACCT100,Day 4 Reading: Ch. 2 LO 2,reading,2026-09-04T10:00,0,,,open,,canvas,,,\n")
+    f.write("ACCT100,Day 5 Reading: Ch. 3 LO 1,reading,2026-09-08T10:00,0,,,open,,canvas,,,\n")
+    f.write("ACCT100,Day 6 Reading: Ch. 4 LO 2-3,reading,2026-09-10T10:00,0,,,open,,canvas,,,\n")
     f.write("MATH120,HW week 3,homework,2026-09-12,,,,open,,manual,,,\n")
     f.write("MATH120,Weekly quiz,quiz,2026-09-09,,,,open,,manual,,,\n")
     f.write("AIQS100,Final Paper,exam,2026-09-20,,,,open,,canvas,,,\n")
@@ -328,6 +335,36 @@ check("submitted work never resurfaces as due",
               pc["ECON103"]["before_next_class"]))
 check("APQ due at class start counts for that class",
       any("Day 3 APQ" in s for s in pc["ACCT100"]["before_next_class"]))
+
+# Not-graded prep: weight_pct 0 (ACCT "Day N Reading" — Canvas not_graded, no
+# points, nothing to submit) is a hint for the next class, never a deadline.
+acct = pc["ACCT100"]
+check("ungraded prep (weight 0) never lands in due_soon",
+      not any("Reading" in s for s in acct["due_soon"]))
+check("ungraded prep never lands in before_next_class",
+      not any("Reading" in s for s in acct["before_next_class"]))
+check("a just-passed ungraded prep row is not 'lapsed'",
+      not any("Day 4 Reading" in s for s in acct.get("lapsed") or []))
+check("the next class's prep surfaces as a hint, dated to that class",
+      any("Day 5 Reading" in s and "for Tue Sep 8" in s for s in acct.get("prep") or []))
+check("only the NEXT class's prep is hinted, not the one after",
+      not any("Day 6 Reading" in s for s in acct.get("prep") or []))
+check("the plan renders exactly one prep line for the course",
+      sum(1 for l in data["lines"] if l.strip().startswith("prep (ungraded)")) == 1
+      and any("Day 5 Reading" in l for l in data["lines"] if "prep (ungraded)" in l))
+check("the hint never reads as a due date",
+      not any("due" in l.lower() for l in data["lines"] if "prep (ungraded)" in l))
+check("ECON's graded reading (blank weight) is still a real due item",
+      any("Reading 3" in s for s in pc["ECON103"]["due_soon"]))
+check("ungraded(): 0 and 0.0 are prep; blank, a real weight and garbage are not",
+      school_data.ungraded({"weight_pct": "0"}) and school_data.ungraded({"weight_pct": " 0.0 "})
+      and not school_data.ungraded({"weight_pct": ""}) and not school_data.ungraded({"weight_pct": "16.7"})
+      and not school_data.ungraded({"weight_pct": "n/a"}) and not school_data.ungraded({}))
+_asg = school_data._load("assignments.csv")
+check("_open_assignments leaves prep out by default; prep=True returns only prep, in date order",
+      not any("Reading" in (r.get("title") or "") for _d, r in school_data._open_assignments(_asg, "ACCT100"))
+      and [r["title"][:5] for _d, r in school_data._open_assignments(_asg, "ACCT100", prep=True)]
+      == ["Day 4", "Day 5", "Day 6"])
 check("AIQS next class = next non-paren row, not the Labor Day row",
       pc["AIQS100"]["next_class"] == "2026-09-09")
 check("MATH next class skips the Labor Day Monday",
@@ -616,7 +653,11 @@ with open(os.path.join(school2, "assignments.csv"), "w", encoding="utf-8") as f:
     f.write("course,title,type,due_date,weight_pct,est_hours,actual_hours,status,"
             "topic,source,submitted_date,grade,notes\n"
             f"ECON103,HW 2,homework,{_iso(_today - timedelta(days=1))},,,,open,,canvas:event-assignment-1,,,\n"
-            f"ECON103,HW 3,homework,{_iso(_today + timedelta(days=5))},,,,open,,canvas:event-assignment-2,,,\n")
+            f"ECON103,HW 3,homework,{_iso(_today + timedelta(days=5))},,,,open,,canvas:event-assignment-2,,,\n"
+            # weight_pct 0 = Canvas not_graded prep: one already past, one for the next class
+            # (+3, not +2: the csv_owns 'different date' probe below uses +2)
+            f"ECON103,Ungraded prep row,reading,{_iso(_today - timedelta(days=1))}T10:00,0,,,open,,canvas:event-assignment-3,,,\n"
+            f"ECON103,Next prep row,reading,{_iso(_today + timedelta(days=3))}T10:00,0,,,open,,canvas:event-assignment-4,,,\n")
 with open(os.path.join(school2, "review-log.csv"), "w", encoding="utf-8") as f:
     f.write("course,topic,last_reviewed,confidence,next_due,times_reviewed,notes\n")
 school_data.init(tmp2)
@@ -638,6 +679,24 @@ _plan_today = school_data.study_plan_data(_today)
 check("an open row that just passed surfaces as lapsed, not overdue",
       any("HW 2" in s for s in (_plan_today["per_course"].get("ECON103") or {}).get("lapsed", []))
       and any("past due, unverified" in ln for ln in _plan_today["lines"]))
+check("a passed ungraded prep row is not lapsed either",
+      not any("Ungraded prep" in s
+              for s in (_plan_today["per_course"].get("ECON103") or {}).get("lapsed", [])))
+# The brief (scripts/school_status.py) applies the same rule: OVERDUE and DO NEXT
+# are for graded work; not-graded prep is one dim hint line for the next class.
+_brief = school_data.get_school_brief_tool(days=14)
+_over = _brief.split("DUE IN THE NEXT")[0]
+check("brief: a graded row past due is OVERDUE, an ungraded one is not",
+      "HW 2" in _over and "Ungraded prep row" not in _over)
+check("brief: a passed ungraded prep row appears nowhere", "Ungraded prep row" not in _brief)
+check("brief: DO NEXT never names ungraded prep",
+      "prep row" not in _brief.split("DO NEXT")[-1])
+_prep_lines = [l for l in _brief.splitlines() if l.strip().startswith("prep")]
+check("brief: the next class's prep is ONE hint line, marked ungraded",
+      len(_prep_lines) == 1 and "Next prep row" in _prep_lines[0] and "ungraded" in _prep_lines[0])
+check("brief: the hint is not in the DUE list",
+      not any("Next prep row" in l and not l.strip().startswith("prep")
+              for l in _brief.splitlines()))
 check("csv_owns: course named + same due date", school_data.csv_owns(
     "HW 2 due for Prin of Macroeconomics by 11:59 PM", _today - timedelta(days=1)))
 check("csv_owns: same course, different date → not owned", not school_data.csv_owns(
@@ -652,6 +711,60 @@ shutil.rmtree(tmp2, ignore_errors=True)
 school_data.init(tmp)  # restore for cleanliness
 
 shutil.rmtree(tmp, ignore_errors=True)
+
+# ---- dates that carry a timezone, and the twin parser that must agree ---------
+
+print("\n_parse_date: offsets, and parity with scripts/school_status.py")
+
+import ast as _ast
+import importlib.util as _iu
+
+_SCRIPTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts")
+_spec = _iu.spec_from_file_location("school_status_twin",
+                                    os.path.join(_SCRIPTS, "school_status.py"))
+_ss = _iu.module_from_spec(_spec)
+_spec.loader.exec_module(_ss)
+
+# A UTC instant just after midnight is still the PREVIOUS day in New York. Chopping the
+# string at the "T" called it the next day and moved a deadline onto the wrong class.
+check("UTC offset converts to the NY day",
+      school_data._parse_date("2026-09-08T00:30:00+00:00") == date(2026, 9, 7))
+check("Z suffix converts to the NY day",
+      school_data._parse_date("2026-09-08T00:30:00Z") == date(2026, 9, 7))
+check("an offset already in NY keeps its day",
+      school_data._parse_date("2026-09-08T09:00:00-04:00") == date(2026, 9, 8))
+# canvas_sync writes naive local times into assignments.csv — those keep their calendar day.
+check("naive timed value keeps its day",
+      school_data._parse_date("2026-08-27T23:30") == date(2026, 8, 27))
+check("naive small-hours value keeps its day",
+      school_data._parse_date("2026-10-06T02:30") == date(2026, 10, 6))
+check("date-only is unchanged", school_data._parse_date("2026-08-21") == date(2026, 8, 21))
+check("hand-typed is unchanged", school_data._parse_date("9/2/2026") == date(2026, 9, 2))
+check("junk is still None",
+      school_data._parse_date("garbage") is None and school_data._parse_date("") is None)
+
+# school_data._parse_date's docstring promises the two tools never disagree about a row.
+for _v in ("2026-09-08T00:30:00+00:00", "2026-09-08T00:30:00Z", "2026-10-06T02:30",
+           "2026-08-27T23:30", "2026-08-21", "9/2/2026", "Sep 2, 2026", "garbage", ""):
+    check(f"twin parsers agree on {_v!r}", school_data._parse_date(_v) == _ss.date(_v))
+
+
+# ---- "dropped" is a decision Canvas must not overturn -------------------------
+
+print("\nterminal statuses stay in sync across the two writers")
+
+_acs = open(os.path.join(_SCRIPTS, "apply_canvas_status.py"), encoding="utf-8").read()
+_done = next((_ast.literal_eval(n.value) for n in _ast.walk(_ast.parse(_acs))
+              if isinstance(n, _ast.Assign)
+              and any(getattr(t, "id", "") == "DONE" for t in n.targets)), None)
+check("apply_canvas_status defines DONE", isinstance(_done, set))
+# Alex dropping an item is a manual terminal decision. It was missing from this set, so the
+# next Canvas sync overwrote `dropped` back to submitted/graded and the work came back.
+check("'dropped' is terminal for the Canvas reconciler too", "dropped" in (_done or set()))
+check("the two terminal-status sets are identical",
+      _done == school_data._DONE_STATUSES,
+      )
+
 
 print(f"\n{sum(_results)}/{len(_results)} passed")
 raise SystemExit(0 if all(_results) else 1)

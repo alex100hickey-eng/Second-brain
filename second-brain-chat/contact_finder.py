@@ -266,7 +266,7 @@ def fill_contacts(wave: str = "", brands=None, limit: int = 6) -> str:
     if not api_key():
         return ("No HUNTER_API_KEY set, so I can't look anyone up. Sign up for the "
                 "free tier at hunter.io (25 searches/mo — a wave is 3), put the key "
-                "in second-brain-chat/.env as HUNTER_API_KEY, and restart. Don't "
+                "in second-brain/.env (project root, NOT second-brain-chat/) as HUNTER_API_KEY, and restart. Don't "
                 "paste the key into chat.")
     path, cols, rows = _read_tracker()
     if not path:

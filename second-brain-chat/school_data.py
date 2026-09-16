@@ -204,6 +204,17 @@ def _parse_date(s):
     if not s:
         return None
     if "T" in s:
+        # An offset-bearing value ('2026-09-08T00:30:00+00:00') is a real instant: convert
+        # it to Alex's timezone BEFORE taking the day. Chopping at the "T" called that Sep 8
+        # when in New York it is 8:30pm on Sep 7 — the same off-by-one-day class as the naive
+        # now() that used to report today's work as overdue every evening. Naive timed values
+        # ('2026-08-27T23:30', what canvas_sync writes) are already local; keep their day.
+        try:
+            _dt = datetime.fromisoformat(s)
+        except ValueError:
+            _dt = None
+        if _dt is not None and _dt.tzinfo is not None:
+            return _dt.astimezone(LOCAL_TZ).date()
         s = s.split("T", 1)[0]
     for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y", "%b %d, %Y", "%B %d, %Y",
                 "%b %d %Y", "%m-%d-%Y", "%d %b %Y"):
@@ -320,7 +331,25 @@ def get_school_brief_tool(days: int = 14, course: str = "") -> str:
 #               NOT ACCT's routine "(deadline — no class)" Mondays).
 
 # Assignment statuses that mean "already handled" — everything else is open.
-_DONE_STATUSES = {"submitted", "graded", "done", "complete", "completed"}
+_DONE_STATUSES = {"submitted", "graded", "done", "complete", "completed", "dropped"}
+
+
+def ungraded(row) -> bool:
+    """weight_pct == 0: Canvas says the item is not graded.
+
+    ACCT100's "Day N Reading: Ch. X LO Y" rows are grading_type not_graded —
+    WileyPlus section links, no points, nothing to submit; the APQ is the only
+    graded reading check. The ICS feed cannot see that, so the nightly Canvas
+    status sync (scripts/apply_canvas_status.py) stamps the 0 from the
+    assignments API. Such a row is prep, never a deadline: never due_soon,
+    never lapsed, never before_next_class (those become orders and nudges) —
+    at most a one-line "prep" hint for the next class. A blank weight is
+    unknown, not 0, so ECON103's graded "Reading N" rows (5 pts, late = zero)
+    stay hard. Mirrored verbatim in scripts/school_status.py."""
+    try:
+        return float((row.get("weight_pct") or "").strip()) == 0
+    except (ValueError, AttributeError):
+        return False
 
 # assignments.csv types that are real exams. type=quiz stays out (MATH has a
 # quiz EVERY class — flooding the exam list would bury the four real tests).
@@ -459,13 +488,18 @@ def _class_day_map(courses, curriculum):
     return days
 
 
-def _open_assignments(assignments, code):
+def _open_assignments(assignments, code, prep=False):
+    """Open rows of a course with a parseable due date, soonest first.
+    prep=False (the default every deadline surface uses) leaves out the
+    not-graded rows; prep=True returns ONLY those — see ungraded()."""
     code = code.lower()
     out = []
     for r in assignments:
         if (r.get("course") or "").strip().lower() != code:
             continue
         if (r.get("status") or "").strip().lower() in _DONE_STATUSES:
+            continue
+        if ungraded(r) != prep:
             continue
         d = _parse_date(r.get("due_date"))
         if d:
@@ -795,7 +829,8 @@ def study_plan_data(for_date=None) -> dict:
         code = (c.get("course") or "").strip()
         cur_rows = _course_curriculum(curriculum, code)
         open_rows = _open_assignments(assignments, code)
-        if not cur_rows and not open_rows:
+        prep_rows = _open_assignments(assignments, code, prep=True)
+        if not cur_rows and not open_rows and not prep_rows:
             # Nothing published anywhere (CSDS101) — "unknown load" is the
             # honest answer; "nothing due" would be a lie.
             unknown.append(code)
@@ -821,6 +856,18 @@ def study_plan_data(for_date=None) -> dict:
         # date itself, so "on or before" naturally counts them for that class.
         before_next = [_assignment_line(d, r) for d, r in open_rows
                        if next_class and for_date <= d <= next_class]
+        # Not-graded prep (weight_pct 0 — Canvas not_graded, stamped by the
+        # nightly status sync): what the next class draws on, with nothing to
+        # hand in. Never in the three lists above (they become orders and
+        # nudges); just the items for the NEAREST upcoming date, as one hint.
+        # Past ones vanish with their class. daily_orders ignores this key.
+        prep = []
+        upcoming = [(d, r) for d, r in prep_rows if d >= for_date]
+        if upcoming:
+            first = upcoming[0][0]
+            if first <= (next_class or for_date + timedelta(days=lead)):
+                prep = [f"{(r.get('title') or '?').strip()} — for {_fmt_day(d)}"
+                        for d, r in upcoming if d == first]
         pointer, quiz_today = None, False
         if code == "MATH120":
             exam_days = {d for d, r in cur_rows if _row_is_real_exam(r)}
@@ -829,6 +876,7 @@ def study_plan_data(for_date=None) -> dict:
             "due_soon": due_soon,
             "lapsed": lapsed,
             "before_next_class": before_next,
+            "prep": prep,
             "next_class": next_class.isoformat() if next_class else None,
             "quiz_pointer": pointer,
             "quiz_today": quiz_today,
@@ -865,7 +913,10 @@ def study_plan_data(for_date=None) -> dict:
         if pc["quiz_pointer"]:
             lines.append(f"  {pc['quiz_pointer']}")
         if not pc["due_soon"] and not pc["before_next_class"] and not pc["quiz_pointer"]:
-            lines.append("  nothing in the lead window")
+            lines.append("  nothing graded in the lead window" if pc.get("prep")
+                         else "  nothing in the lead window")
+        if pc.get("prep"):
+            lines.append("  prep (ungraded): " + "; ".join(pc["prep"])[:120])
     for code in unknown:
         lines.append(_UNKNOWN_LOAD_LINE.format(code=code))
     for code in partial:
@@ -1364,7 +1415,9 @@ TOOL_SCHEMAS = [
             "must be done before the next class meeting, when that next class "
             "is, MATH120's daily-quiz pointer (quiz every class on the PRIOR "
             "class's material — weekly Canvas problem list, no topic names "
-            "exist), and every exam within 30 days. Use for 'what should I "
+            "exist), a one-line 'prep (ungraded)' hint for not-graded reading "
+            "(ACCT Day-N readings: no points, never a deadline), and every "
+            "exam within 30 days. Use for 'what should I "
             "study tonight' — NOT for drafting the work itself: all four "
             "courses ban AI on submitted work, so this plans time only."
         ),

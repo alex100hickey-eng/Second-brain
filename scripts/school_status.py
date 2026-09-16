@@ -84,6 +84,17 @@ def date(s):
     if not s:
         return None
     if "T" in s:
+        # An offset-bearing value ('2026-09-08T00:30:00+00:00') is a real instant: convert
+        # it to Alex's timezone BEFORE taking the day. Chopping at the "T" called that Sep 8
+        # when in New York it is 8:30pm on Sep 7 — the same off-by-one-day class as the naive
+        # now() that used to report today's work as overdue every evening. Naive timed values
+        # ('2026-08-27T23:30', what canvas_sync writes) are already local; keep their day.
+        try:
+            _dt = datetime.fromisoformat(s)
+        except ValueError:
+            _dt = None
+        if _dt is not None and _dt.tzinfo is not None:
+            return _dt.astimezone(LOCAL_TZ).date()
         s = s.split("T", 1)[0]
     for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y", "%b %d, %Y", "%B %d, %Y",
                 "%b %d %Y", "%m-%d-%Y", "%d %b %Y"):

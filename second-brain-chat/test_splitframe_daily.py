@@ -3,7 +3,7 @@ import ast
 import csv
 import importlib.util
 import os
-from datetime import date
+from datetime import date, datetime, timedelta
 
 import pytest
 
@@ -291,3 +291,109 @@ def test_pile_send_button_approves_every_unsent_draft():
         assert again["ok"] and approved == [] and "all approved already" in again["message"]
     finally:
         do_actions.outbox_mod = old
+
+
+# ---- the first-touch release queue: the three ways it used to lose or fake work ----
+
+class _FakeShared:
+    """Stands in for the intake module's Supabase-backed state."""
+    def __init__(self, queue):
+        self.state = {"key": sfd.QUEUE_KEY, "queue": queue}
+
+    def _load_state(self, key):
+        return self.state
+
+    def _save_state(self, st):
+        self.state = st
+
+
+class _FakeOutbox:
+    def __init__(self, open_rows=()):
+        self.rows = [dict(r) for r in open_rows]
+        self.added = []
+        self._id = 100
+
+    def open_items(self, limit=60):
+        return list(self.rows)
+
+    def add(self, kind, title, *, detail="", link="", steps=None, account="", ref=""):
+        # the real outbox collapses duplicate refs onto the existing open item
+        for r in self.rows:
+            if r.get("ref") == ref:
+                return r["id"]
+        self._id += 1
+        self.rows.append({"id": self._id, "kind": kind, "title": title, "ref": ref})
+        self.added.append(ref)
+        return self._id
+
+
+def _entry(n, draft_id="d%s", **kw):
+    e = {"brand": f"Brand{n}", "to": f"founder{n}@brand{n}.com",
+         "subject": "s", "body": "b", "draft_id": draft_id % n if "%s" in draft_id else draft_id}
+    e.update(kw)
+    return e
+
+
+@pytest.fixture
+def quiet_log(monkeypatch):
+    """Capture log lines instead of appending to the real splitframe_daily.log."""
+    lines = []
+    monkeypatch.setattr(sfd, "log", lines.append)
+    return lines
+
+
+def test_the_five_a_day_cap_is_per_day_not_per_invocation(monkeypatch, quiet_log):
+    """A retry, a launchd overlap or one manual run used to release another five on top of the
+    five already waiting — the exact pile of notifications the cadence exists to prevent."""
+    queue = [_entry(n) for n in range(1, 8)]          # seven written drafts
+    monkeypatch.setattr(sfd, "_shared", _FakeShared(queue))
+    box = _FakeOutbox()
+
+    first = sfd.release_first_touches(box, "https://mail")
+    assert len(first) == 5, f"first run should release exactly PER_DAY, got {first}"
+
+    # same calendar day, second invocation: nothing more goes out
+    assert sfd.release_first_touches(box, "https://mail") == []
+    assert len(box.added) == 5
+
+    # the two survivors are untouched and still pending
+    assert sum(1 for e in queue if not e.get("released")) == 2
+
+    # roll the clock: yesterday's five no longer spend today's budget
+    for e in queue:
+        if e.get("released"):
+            e["released"] = (datetime.now(sfd.LOCAL_TZ) - timedelta(days=1)).isoformat()
+    assert len(sfd.release_first_touches(box, "https://mail")) == 2
+    assert all(e.get("released") for e in queue)
+
+
+def test_a_conflicting_draft_defers_a_first_touch_it_does_not_retire_it(monkeypatch, quiet_log):
+    """An unrelated open draft to the same address used to stamp the queued first touch
+    'skipped: already waiting' forever: a written cold email that silently never went out."""
+    queue = [_entry(1)]
+    monkeypatch.setattr(sfd, "_shared", _FakeShared(queue))
+    box = _FakeOutbox([{"id": 1, "kind": "email_draft",
+                        "title": "Send the reply to founder1@brand1.com", "ref": "gmail:studio:OTHER"}])
+
+    assert sfd.release_first_touches(box, "https://mail") == []
+    assert not queue[0].get("released"), "a deferral must not mark the entry released"
+    assert any("held" in ln for ln in quiet_log), "a held first touch must be reported"
+
+    # once the conflicting item clears, the queued draft goes out on the next run
+    box.rows.clear()
+    assert sfd.release_first_touches(box, "https://mail") == ["Brand1"]
+    assert box.added == ["gmail:studio:d1"]
+
+
+def test_a_queue_entry_with_no_draft_id_is_never_announced_as_sendable(monkeypatch, quiet_log):
+    """splitframe_send.py refuses a ref with no draft id, so releasing one put 'ready to send'
+    in front of Alex for an email the one-tap path could not send. Worse, every malformed entry
+    shared the ref 'gmail:studio:' and collapsed onto one outbox row."""
+    queue = [_entry(1, draft_id=""), _entry(2, draft_id=""), _entry(3)]
+    monkeypatch.setattr(sfd, "_shared", _FakeShared(queue))
+    box = _FakeOutbox()
+
+    assert sfd.release_first_touches(box, "https://mail") == ["Brand3"]
+    assert box.added == ["gmail:studio:d3"], "a ref with an empty draft id must never be filed"
+    assert not queue[0].get("released") and not queue[1].get("released")
+    assert any("no draft_id" in ln for ln in quiet_log), "malformed entries must be reported"

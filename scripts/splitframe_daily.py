@@ -24,10 +24,16 @@ import json
 import os
 import sys
 from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 # On the server the vault is the git-synced copy (VAULT_PATH); on the Mac it is iCloud.
 # Drafting only ever READS the tracker — the Mac stays the only writer, which is what keeps
 # the two copies from diverging.
+# Alex's actual day. Pinned rather than system-local because this also runs inside the
+# server container (UTC), where a naive now() rolls the date over at 8pm ET and the
+# "5 a day" release cadence would spend two days' worth in one evening.
+LOCAL_TZ = ZoneInfo("America/New_York")
+
 VAULT = os.environ.get("VAULT_PATH") or os.path.expanduser(
     "~/Library/Mobile Documents/com~apple~CloudDocs/Obsidian/Second brain")
 TRACKER = os.path.join(VAULT, "Money", "prospect-tracker.csv")
@@ -269,6 +275,95 @@ def nudge(title: str, body: str) -> None:
         log(f"ntfy failed rc={r.returncode}: {r.stderr.strip()[:160]}")
 
 
+QUEUE_KEY = "splitframe:firsttouch_queue"
+PER_DAY = 5                # the plan's cadence: 5 a day, 25 a week
+
+
+def _released_date(entry):
+    """The NY-local calendar day this entry actually went out, or None if it never did.
+
+    Only an ISO timestamp counts as released. Anything else — including the old terminal
+    "skipped: already waiting" marker written by earlier versions — reads as "still
+    pending", so a queue entry that was retired by mistake comes back on the next run.
+    """
+    raw = (entry.get("released") or "").strip()
+    if not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=LOCAL_TZ)
+    return dt.astimezone(LOCAL_TZ).date()
+
+
+def release_first_touches(outbox_mod, drafts_url: str, limit: int = PER_DAY) -> list:
+    """Move up to `limit` already-written first-touch drafts into the outbox, which is what puts
+    them in front of Alex. The drafts are written in a batch (they need a live Ad Library read,
+    which stays manual); releasing them on the plan's 5-a-day cadence is what stops that batch
+    landing as one unreadable pile of twelve notifications.
+
+    `limit` is per CALENDAR DAY, not per call. It used to cap only the current invocation, so a
+    retry, a launchd overlap or one manual run released another five on top of the five already
+    sitting in Alex's outbox — which is exactly the pile the cadence exists to prevent.
+    """
+    if not _shared:
+        return []
+    q = _shared._load_state(QUEUE_KEY)
+    queue = q.get("queue") or []
+    today = datetime.now(LOCAL_TZ).date()
+    spent = sum(1 for d in queue if _released_date(d) == today)
+    room = limit - spent
+    if room <= 0:
+        return []
+    pending = [d for d in queue if _released_date(d) is None]
+    if not pending:
+        return []
+    waiting = already_waiting(outbox_mod)
+    released, deferred, malformed = [], [], []
+    for entry in pending:
+        if len(released) >= room:
+            break
+        to = (entry.get("to") or "").strip()
+        draft_id = (entry.get("draft_id") or "").strip()
+        if not to or not draft_id:
+            # scripts/splitframe_send.py refuses a ref with no draft id, so releasing this
+            # would put "ready to send" in front of Alex for an email the one-tap path
+            # cannot send. outbox.add also collapses duplicate refs, so every malformed
+            # entry would land on the SAME "gmail:studio:" row and all of them would be
+            # marked released off that one id. Hold them and say so.
+            malformed.append(entry.get("brand") or to or "(no recipient)")
+            continue
+        if to.lower() in waiting:
+            # Deferred, NOT retired. This used to write a terminal "skipped" marker, so any
+            # unrelated open draft to this address killed the queued first touch for good —
+            # a written cold email that silently never went out and never reported it.
+            deferred.append(entry.get("brand") or to)
+            continue
+        rid = outbox_mod.add(
+            "email_draft", f"Send the reply to {to}",
+            detail=f"Subject: {entry.get('subject','')}\n\n{entry.get('body','')}",
+            link=drafts_url,
+            steps=["Read it. This is exactly what goes out.",
+                   "Send it now — it goes the next time your Mac is awake.",
+                   "Or open the Drafts folder to edit it first."],
+            account="studio", ref=f"gmail:studio:{draft_id}")
+        if rid:
+            entry["released"] = datetime.now(LOCAL_TZ).isoformat()
+            released.append(f"{entry.get('brand', to)}")
+    if deferred:
+        log("first touch held (a draft to the same address is already open, will retry): "
+            + ", ".join(deferred))
+    if malformed:
+        log("first touch NOT released — queue entry has no draft_id/recipient, it cannot be "
+            "sent by the one-tap path: " + ", ".join(malformed))
+    q["key"] = QUEUE_KEY
+    q["queue"] = queue
+    _shared._save_state(q)
+    return released
+
+
 def waiting_for_first_touch(rows) -> list:
     """Verified real-person addresses that have never been emailed. Support desks don't count —
     a first touch about ad creative dies in a support queue."""
@@ -356,8 +451,13 @@ def main() -> int:
         made.append(f"{brand} (touch {touch})")
         log(f"{brand}: touch {touch} drafted on thread {original['thread_id']}")
 
+    import mail_drafts as _md                            # type: ignore
+    fresh = release_first_touches(outbox, _md.drafts_url("studio"))
+    if fresh:
+        log(f"released {len(fresh)} first touch(es): {', '.join(fresh)}")
+
     waiting = waiting_for_first_touch(rows)
-    st["last_run"] = datetime.now().isoformat()
+    st["last_run"] = datetime.now(LOCAL_TZ).isoformat()
     st["waiting_first_touch"] = len(waiting)
     save_state(st)
 
@@ -365,6 +465,9 @@ def main() -> int:
         nudge("Splitframe: a follow-up was withheld",
               "The generated copy claimed research Alex hasn't done, so it was not staged: "
               + "; ".join(rejected) + ". It needs a real look at the account first.")
+    if fresh and not made:
+        nudge(f"{len(fresh)} email{'s' if len(fresh) > 1 else ''} ready to send",
+              ", ".join(fresh) + ". Open the notification, read it, press Send.")
     if made:
         nudge(f"{len(made)} follow-up{'s' if len(made) > 1 else ''} ready to send",
               ", ".join(made) + ". They're reply drafts on the original threads in "

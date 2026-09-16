@@ -160,6 +160,71 @@ check("a backup was written before the first change",
 again = acs.apply([sub_file])
 check("second run is idempotent", again["changed"] == [])
 
+# ---- 1b. grading facts: Canvas not_graded -> weight_pct 0 (the ungraded-prep marker)
+# ACCT "Day N Reading" rows are WileyPlus links with no points; the ICS feed can't
+# see that, so the same nightly run reads /assignments and stamps the 0 that
+# school_status / school_data / daily_orders read as "prep, never a deadline".
+print("apply_canvas_status: not_graded -> weight_pct 0")
+stamp_dir = os.path.join(tmp, "stamp")
+os.makedirs(stamp_dir)
+stamp_csv = os.path.join(stamp_dir, "assignments.csv")
+shutil.copy(os.path.join(school, "assignments.csv"), stamp_csv)
+with open(stamp_csv, "a", encoding="utf-8") as f:
+    f.write("ECON103,Exam 1,exam,2026-10-06T02:30,16.7,,,open,,canvas:event-assignment-15,,,\n"
+            "ECON103,Reading 1: National Income,reading,2026-09-14,,,,open,,canvas:event-assignment-16,,,\n")
+acs.CSV_PATH = stamp_csv
+
+
+def _stamp_rows():
+    with open(stamp_csv, newline="", encoding="utf-8") as f:
+        return {r["source"]: r for r in csv.DictReader(f)}
+
+
+asg_file = os.path.join(tmp, "ACCT100.assignments.json")
+with open(asg_file, "w", encoding="utf-8") as f:
+    json.dump({"course": "ACCT100", "n": 4, "items": [
+        {"id": 14, "name": "Day 1 Reading", "grading_type": "not_graded",
+         "points_possible": None, "submission_types": ["not_graded"]},
+        {"id": 11, "name": "Day 4 APQ", "grading_type": "percent", "points_possible": 10},
+        {"id": 15, "name": "Exam 1", "grading_type": "not_graded", "points_possible": None},
+        {"id": 77, "name": "Not in the CSV", "grading_type": "not_graded", "points_possible": None},
+    ]}, f)
+sub2 = os.path.join(tmp, "ECON103.json")
+with open(sub2, "w", encoding="utf-8") as f:   # submissions with include[]=assignment
+    json.dump([{"assignment_id": 16, "workflow_state": "unsubmitted",
+                "assignment": {"id": 16, "grading_type": "points", "points_possible": 5}},
+               {"assignment_id": 13, "workflow_state": "unsubmitted",
+                "assignment": {"id": 13, "grading_type": "points", "points_possible": 25}}], f)
+dry = acs.apply([asg_file, sub2], dry_run=True)
+check("dry run counts the stamp but writes nothing",
+      dry["stamped_ungraded"] == 1 and _stamp_rows()["canvas:event-assignment-14"]["weight_pct"] == "")
+res = acs.apply([asg_file, sub2])
+rows = _stamp_rows()
+check("a not_graded assignment stamps weight_pct 0 on its row",
+      rows["canvas:event-assignment-14"]["weight_pct"] == "0")
+check("stamping leaves the row's status alone", rows["canvas:event-assignment-14"]["status"] == "done")
+check("graded assignments (bare or embedded) stamp nothing",
+      rows["canvas:event-assignment-11"]["weight_pct"] == ""
+      and rows["canvas:event-assignment-16"]["weight_pct"] == "")
+check("a human-typed weight is never overwritten, even if Canvas says not_graded",
+      rows["canvas:event-assignment-15"]["weight_pct"] == "16.7")
+check("submissions still count only as submissions; unknown ids are ignored",
+      res["matched_rows"] == 2 and res["stamped_ungraded"] == 1 and res["assignments"] == 6)
+check("the change log names the stamp",
+      any("weight_pct 0" in c and "Day 1 Reading" in c for c in res["changed"]) and len(res["changed"]) == 1)
+check("a backup was written before the stamp",
+      any(n.startswith("assignments.csv.bak-pre-canvas-status-") for n in os.listdir(stamp_dir)))
+check("stamping is idempotent", acs.apply([asg_file, sub2])["changed"] == [])
+check("is_not_graded: grading_type or the submission_types marker; 0 points alone is NOT enough",
+      acs.is_not_graded({"grading_type": "not_graded"})
+      and acs.is_not_graded({"submission_types": ["not_graded"]})
+      and not acs.is_not_graded({"grading_type": "points", "points_possible": 0})
+      and not acs.is_not_graded({"grading_type": "pass_fail", "points_possible": 0})
+      and not acs.is_not_graded(None))
+check("announcement-shaped objects (id, no grading_type) are not assignments",
+      acs.load_assignments(sub_file) == {} and "16" in acs.load_assignments(sub2))
+acs.CSV_PATH = os.path.join(school, "assignments.csv")
+
 # ---- 2. school_grades reads the grade column the sync just wrote --------------
 
 print("school_grades from assignments.csv")
