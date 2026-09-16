@@ -26,6 +26,11 @@ Seeded 2026-09-16, highest leverage first:
 > in-house-team brands, the worst odds for a 19-year-old with no portfolio. The 5-50 ad band that
 > actually converts is EXHAUSTED. Do not burn Hunter quota or draft time on the giants; the funnel
 > needs NEW in-band candidates, not more rows from this tracker.
+> **And the 36 'candidate' rows are dead too** — 6 of 6 sampled (DEUX, Muddy Bites, GOODLES,
+> Golde, Taika, OffLimits) return ZERO active ads, and OffLimits' stored page id resolves to an
+> unrelated page. The tracker is mined out end to end. **Source new brands from the Ad Library
+> KEYWORD search** (`&q=<category>&search_type=keyword_unordered`) — every advertiser it returns
+> is currently spending, which is the qualification test. Source → qualify → then Hunter.
 
 1. **Click "Run now" once on the Scheduled task "Money operator (nightly)"** while you're at the Mac (30 s).
    The first run asks for Browser / Bash / connector permissions; approvals get stored, and every night
