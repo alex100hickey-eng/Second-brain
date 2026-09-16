@@ -12,6 +12,44 @@ is still yours to do.
 
 ---
 
+## 💰 Money lanes — what only you can do
+*Kept current by the nightly "Money operator" scheduled task (8 PM, Scheduled sidebar). It reads this
+section before every run and rewrites it; items disappear when they stop being true. Everything else in
+the three money lanes now happens without you: Splitframe drafting/sending, TikTok posting at the
+account-safe cadence, Vyro submissions once you're logged in, polybot engineering in paper mode.*
+
+Seeded 2026-09-16, highest leverage first:
+
+> **Operator note added 2026-09-16 (read before topping the Splitframe queue):** every remaining
+> undrafted tracker prospect is **96-150 active ads** (Momentous 110, Needed 120, Pet Honesty 110,
+> Wild One 96, Fishwife 150, Canvas Beauty 130, Apothékary 120, Emi Jay 150, Halfdays 110) — all
+> in-house-team brands, the worst odds for a 19-year-old with no portfolio. The 5-50 ad band that
+> actually converts is EXHAUSTED. Do not burn Hunter quota or draft time on the giants; the funnel
+> needs NEW in-band candidates, not more rows from this tracker.
+
+1. **Click "Run now" once on the Scheduled task "Money operator (nightly)"** while you're at the Mac (30 s).
+   The first run asks for Browser / Bash / connector permissions; approvals get stored, and every night
+   after that runs unattended. Until then the 8 PM run can stall on a prompt nobody sees.
+2. **Log in to Vyro once in the Mac's Browser pane** — app.vyro.com → "Continue with Google" with the alt
+   account (basketballlacrosse387@gmail.com) (1 min). The pane is logged out right now, so posts can't be
+   submitted for payment and the new-account gate can't be checked. Views only count after submission.
+3. ~~Join Whop Content Rewards~~ **DONE 2026-09-16** — joined Clipping Culture (472.7K members, 4.7★)
+   as basketballlacrosse387@gmail.com; onboarding complete (Gaming/Sports/Basketball, on-camera
+   "Sometimes", Start Earning). **The board is live and readable in the pane.** See
+   [[side-hustles-clipping-polymarket]] for live rates and the iframe trap.
+4. **YouTube Studio: why were all 5 Shorts deleted?** Open studio.youtube.com on @wildestmomentsclips and
+   read the notification. Nothing gets re-uploaded to YouTube until you say what it said.
+5. **Fix the 5 Instagram Reel captions in the IG app** (replace `%23` with `#`). The API can't edit them
+   and Vyro rejects them as they are; unfixed, they stay unpaid forever.
+6. ~~Polymarket: what are the two positions~~ **ANSWERED 2026-09-16** — Alex: "I messed around with the
+   money but there is a little more than $200 tradable dollars in there right now. All yours."
+   polybot reads bankroll from `account_value_usd()` ($201.35) and must still never assume his manual
+   positions are its own.
+Also on the clock: **Sep 19 Claude Max renewal ($106)**. The nightly operator spends Claude Code usage;
+on Pro (~$21) one run a night is about the ceiling. The Sep 18 nudge already asks you.
+
+---
+
 ## 📅 2026-09-15 — ECON103 Exam 1 is stamped 2:30 AM. Which day is it really?
 
 `School/assignments.csv` has:
@@ -184,6 +222,15 @@ That is the thing to build next, and it is blocked behind the lift question in #
   phone nudges will all be wrong in that direction.
 
 ---
+
+- **2026-09-16 6:25 PM — the nightly Canvas status sync still cannot run (6th consecutive night: 9/11-9/16).**
+  canvas.case.edu redirected to login.case.edu again, so no submissions, grades or
+  announcements were read. Open the Browser pane on this Mac, go to canvas.case.edu,
+  log in once, and **leave that tab open with the Mac awake** — every previous login has
+  expired before the next nightly run. Until then anything you have already submitted
+  keeps showing as **open** in the vault, and the school brief, ranked daily orders and
+  phone nudges are all wrong in that direction. Last good Canvas read: 2026-09-10 10:26
+  (now 6 days stale).
 
 ## 📚 2026-09-11 (Fri 3:50 PM) — Friday sweep done by hand (the 3:10 task hung); 6 things are yours
 
