@@ -44,7 +44,11 @@ CHAT = os.path.expanduser("~/second-brain/second-brain-chat")
 
 MODEL = "claude-sonnet-5"
 MAX_TOUCHES = 3          # first touch + 2 follow-ups, then the brand is left alone
-SKIP_ADDRESSES = ("support@", "help@", "info@", "hello@", "contact@")
+# Shared inboxes. A first touch about ad creative dies in a support queue, and Hunter will
+# happily return one as "deliverable" — talktous@ and support@ both came back in the
+# 2026-09-15 pass looking exactly like a real person's address.
+SKIP_ADDRESSES = ("support@", "help@", "info@", "hello@", "contact@", "talktous@",
+                  "team@", "care@", "service@", "orders@", "admin@", "sales@")
 
 VOICE = """You are drafting a follow-up email as Alex Hickey, 19, who runs Splitframe Studio,
 a one-person ad-creative service for DTC brands ($650 flat drop, $950/mo retainer).
