@@ -1673,3 +1673,46 @@ the module's TTL (6h in-season, 24h off) decides what actually refetches, and a
 `d1_refresh` heartbeat makes a stalled tracker visible.
 
 **Tests:** `test_d1_tracker.py`, 78 checks. Full suite green (1041 passed).
+
+---
+
+## 2026-09-16 — Daily backstop: queue empty, and the health check was about to cry wolf forever
+
+**Requested:** nothing. The capability queue was empty (`pending` → `[]`), which is
+the healthy outcome. No builds this run.
+
+**Found instead:** `watcher_health.py` reported `VERDICT: DEAD — launchd job
+com.secondbrain.capabilitywatcher is NOT loaded`. It was not dead. The watcher was
+retired *on purpose* the day before, in `fdc1190` ("Cut the idle polling"): it
+polled every 120s against a queue that had held 4 requests in its entire life, the
+last one 2026-08-18. The plist was renamed `.plist.disabled` and archived under
+`_archive/launchd-disabled-2026-09-15/` rather than deleted — deliberately "one
+`launchctl load` from coming back."
+
+So the watcher was left alone. Reloading it would have quietly undone a considered
+decision made a day earlier.
+
+**Shipped** (`bd5a740`): `watcher_health.py` now distinguishes retired from dead.
+
+- The marker is the file **pair** — live plist absent AND `.plist.disabled` present.
+  Either file alone is not retirement: a live plist that failed to load is still a
+  real defect and still reads DEAD, and reinstalling drops a live plist back, which
+  cancels the retirement by itself with no state stored anywhere.
+- New `RETIRED` verdict, exit 0. It carries the two facts a bare status word would
+  have left the reader to work out: **this daily backstop is now the only drain on
+  the capability queue**, so a filed request can sit up to a day before anything
+  sees it — and the exact command to bring the watcher back. Tests assert both
+  strings, because that consequence *is* the point of the verdict.
+- Tests: `test_watcher_health.py` +11 checks (precedence — retirement outranks a
+  stale or missing heartbeat, but never excuses a *loaded* job; and the file-pair
+  logic through a tempdir). Full suite green: 24/24 files pass.
+
+**Why it mattered:** the module's own docstring says a false alarm every morning is
+worse than no alarm, because it trains the reader to skip the one signal separating a
+dead watcher from a quiet queue. This one was set to fire in every future backstop
+run, forever, about something nobody needed to act on.
+
+**Open for Alex:** the queue's only drain is now this once-a-day run. That is almost
+certainly fine at 4 requests/year — but it is a real latency change from ~2 minutes
+to ~24 hours, and it was a side effect of the polling audit rather than a stated
+decision. Worth a conscious yes.
