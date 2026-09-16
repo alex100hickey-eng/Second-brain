@@ -31,7 +31,7 @@ class RiskManager:
             return False, "sports disabled (Ohio)"
         if not (0.01 <= sig.price <= 0.99):
             return False, "price outside 1-99c"
-        if sig.taker and not sig.arb:
+        if sig.taker and not (sig.arb or sig.taker_ok):
             return False, "taker order outside an arb"
         mode = mode or self.cfg.mode(sig.module)
         live_like = mode == "live"

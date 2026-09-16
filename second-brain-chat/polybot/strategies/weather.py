@@ -271,19 +271,31 @@ class WeatherLock(Strategy):
         self.cfg = cfg
 
     def scan(self, ctx: WeatherCtx) -> list:
+        """A locked bucket is the one case where resting a maker bid is the wrong order.
+
+        The day's max is already in, so the price only walks toward 1.00 — a bid one tick over
+        best_bid fills only if someone sells back INTO it, which on a settled-in-fact market they
+        mostly don't. Live paper 2026-09-15: 27% fill rate, and the misses were not bad luck.
+        Worse, an illiquid book (bid 0.03 / ask 0.95) made `(1 - post)` read as 90+ cents of edge
+        that no one would ever trade against. So: skip books with no real market, and cross the
+        spread when the edge survives the taker fee."""
         locked, winner = lock_state(ctx)
         if not locked or winner.closed or winner.best_ask is None:
             return []
-        post = _post_price_buy(winner)
-        if post is None or post > 0.97:
-            return []
-        edge = (1 - post) * 100 - fees.leg_cost(post, 1, ctx.venue, True) * 100
-        if edge < self.cfg.lock_min_edge_cents:
+        spread = _spread_cents(winner)
+        if spread is not None and spread > self.cfg.lock_max_spread_cents:
+            return []                      # bid 0.03 / ask 0.95 is not a price, it is an empty book
+        ask = round(winner.best_ask, 2)
+        if ask > 0.97:
+            return []                      # nothing left to win
+        edge = (1 - ask) * 100 - fees.leg_cost(ask, 1, ctx.venue, False) * 100
+        if edge < max(self.cfg.lock_min_edge_cents, self.cfg.lock_take_min_edge_cents):
             return []
         size = self.cfg.caps.max_per_market_usd
-        return [Signal(self.name, ctx.venue, winner.yes_token, _label(ctx, winner), "BUY_YES", post, size,
-                       round(edge, 1), f"locked at {ctx.running}° (model remaining {ctx.remaining_extreme}), post {post:.2f}",
-                       exit="settle", horizon_hours=24, spread_cents=_spread_cents(winner),
+        return [Signal(self.name, ctx.venue, winner.yes_token, _label(ctx, winner), "BUY_YES", ask, size,
+                       round(edge, 1), f"locked at {ctx.running}° (model remaining {ctx.remaining_extreme}), "
+                       f"taking the ask at {ask:.2f}",
+                       exit="settle", horizon_hours=24, spread_cents=spread, taker=True, taker_ok=True,
                        meta={"market_id": winner.market_id, "running": ctx.running, "n_obs": ctx.n_obs})]
 
 

@@ -22,6 +22,7 @@ class Signal:
     spread_cents: float | None = None
     taker: bool = False        # True only for arb legs that must cross the spread
     arb: bool = False
+    taker_ok: bool = False     # the strategy has a reason to cross that is not an arb (see WeatherLock)
     ts: float | None = None
     meta: dict = field(default_factory=dict)
 

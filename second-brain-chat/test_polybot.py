@@ -136,7 +136,11 @@ def test_weather_lock_requires_peak_passed_and_falling_obs():
     locked, winner = lock_state(ctx)
     assert locked and winner.title == "78-79°F"
     sigs = WeatherLock(cfg).scan(ctx)
-    assert len(sigs) == 1 and sigs[0].side == "BUY_YES" and sigs[0].price == 0.68 and sigs[0].size_usd == 20.0
+    # It TAKES the ask (0.69), it does not rest a maker bid at 0.68. A locked bucket only walks
+    # toward 1.00, so a bid under the market fills when someone sells back into a settled fact —
+    # live paper 2026-09-15 filled 27% of these and the misses were structural, not luck.
+    assert len(sigs) == 1 and sigs[0].side == "BUY_YES" and sigs[0].price == 0.69
+    assert sigs[0].size_usd == 20.0 and sigs[0].taker and sigs[0].taker_ok
     # still rising → no lock
     rising = [("2026-09-12T15:51:00+00:00", 76), ("2026-09-12T16:51:00+00:00", 77), ("2026-09-12T17:51:00+00:00", 79)]
     assert lock_state(_ctx(obs=rising, hourly=[("2026-09-12T19:00", 81.0)]))[0] is False
@@ -725,3 +729,19 @@ def test_config_reload_picks_up_an_edited_mode(tmp_path, monkeypatch):
     os.utime(path, (time.time() + 1, time.time() + 1))
     assert r.reload_config_if_changed() is True
     assert r.cfg.mode("weather_hold") == "off" and r.cfg.mode("weather_lock") == "paper"
+
+
+def test_weather_lock_skips_an_empty_book_and_may_cross():
+    """bid 0.03 / ask 0.95 made (1 - post) read as 92 cents of edge that nobody would ever trade
+    against. Those phantom signals were most of the 27% fill rate."""
+    from polybot.risk import RiskManager
+    cfg = _cfg()
+    ctx = _ctx(obs=[("2026-09-12T15:51:00+00:00", 76), ("2026-09-12T18:51:00+00:00", 79),
+                    ("2026-09-12T19:51:00+00:00", 78), ("2026-09-12T20:51:00+00:00", 77)],
+               hourly=[("2026-09-12T17:00", 74.0), ("2026-09-12T18:00", 73.0), ("2026-09-12T20:00", 70.0)])
+    _, winner = lock_state(ctx)
+    winner.best_bid, winner.best_ask = 0.03, 0.95
+    assert WeatherLock(cfg).scan(ctx) == [], "a 92-cent spread is an empty book, not an edge"
+    # and nothing is left to win once the ask is at the ceiling
+    winner.best_bid, winner.best_ask = 0.97, 0.98
+    assert WeatherLock(cfg).scan(ctx) == []

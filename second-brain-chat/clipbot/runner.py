@@ -498,6 +498,32 @@ class Runner:
         self.ledger.update_post(variant_id, **fields)
 
     # ---- nudge / status ---------------------------------------------------------------------
+    def transformation_risk(self, campaign) -> str:
+        """Does this campaign's brief force us to post content the platforms suppress?
+
+        2026-09-15 diagnosis: @wildest_moments went to zero reach — 247 views across 13 posts,
+        unchanged for 24 h, and YouTube deleted all five Shorts outright. TikTok's rule is explicit
+        that "reposted, duplicate or unoriginal content" is not shown broadly in the For You feed,
+        and the zero-view threshold (3+ consecutive posts 24 h apart) was met.
+
+        The Vyro TV/film briefs REQUIRE that: The Shards said no added text or subtitles, FX Adults
+        said no audio changes. Obeying the brief and keeping reach are mutually exclusive there.
+        Battlbox, which allows recuts, hooks and captions, is the compatible shape. So a campaign
+        that forbids every form of transformation is an account-risk, not just a low payer."""
+        r = self.ledger.rules(campaign)
+        blocked = []
+        if r.get("voice") is False:
+            blocked.append("no voiceover")
+        if r.get("text_hook") is False:
+            blocked.append("no text card")
+        if r.get("direct"):
+            blocked.append("pre-cut bank, no re-cut")
+        if len(blocked) >= 2:
+            return ("posts would be near-untransformed (" + ", ".join(blocked)
+                    + ") — that is what platforms suppress as unoriginal")
+        return ""
+
+
     def ready_nudge(self) -> bool:
         staged = self.ledger.variants("staged")
         last_seen = self.ledger.get_kv("last_nudged_variant", 0)

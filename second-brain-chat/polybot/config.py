@@ -127,6 +127,8 @@ class Config:
     edge_min_cents: float = 6.0            # weather_hold / hold_favorites entry edge
     take_profit_cents: float = 3.0         # resting sell above entry on hold modules
     lock_min_edge_cents: float = 2.0       # weather_lock: 1 - ask must exceed this
+    lock_max_spread_cents: float = 10.0    # weather_lock: wider is an empty book, not a price
+    lock_take_min_edge_cents: float = 4.0  # weather_lock crosses the spread; make it worth the fee
     dead_bucket_min_bid: float = 0.03      # weather_obs: only sell dead buckets bid >= this
     model_update_min_shift: float = 0.10   # weather_model_update: probability shift that counts
     bucket_sum_min_net_cents: float = 1.0  # bucket_sum: net after fees must exceed this

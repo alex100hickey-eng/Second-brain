@@ -498,3 +498,30 @@ def test_stalled_backlog_nudges_with_the_blockers(tmp_path, monkeypatch):
     led.mark_posted(vid, url="https://tiktok.com/x", posted_at=time.time())
     led.update_variant(vid, status="staged")
     assert r.ready_nudge() is False
+
+
+def test_campaigns_that_forbid_transformation_are_flagged_as_account_risk(tmp_path, monkeypatch):
+    """The Shards was the account's FIRST campaign — 6 pre-cut clips, no voice, no text card,
+    posted Sep 12. Reach went to zero and never came back, and YouTube deleted the lot. A brief
+    that bans every form of transformation costs the account, not just the payout."""
+    monkeypatch.setattr(config, "HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(config, "READY_DIR", str(tmp_path / "ready"))
+    monkeypatch.setattr(config, "HOOKS_DIR", str(tmp_path / "hooks"))
+    monkeypatch.setattr(config, "INBOX_DIR", str(tmp_path / "inbox"))
+    led = _ledger()
+    r = Runner(config.Config(), led, OpusClient(api_key=None), log=lambda *_: None)
+
+    shards = r.add_campaign("Shards", "vyro", 2.0, 1000, "#x")
+    led.update_campaign(shards, rules=json.dumps(
+        {"voice": False, "text_hook": False, "direct": True})) if hasattr(led, "update_campaign") else None
+    row = dict(led.campaign(shards))
+    row["rules"] = json.dumps({"voice": False, "text_hook": False, "direct": True})
+    assert "unoriginal" in r.transformation_risk(row)
+
+    battlbox = dict(led.campaign(r.add_campaign("Battlbox", "vyro", 1.5, 1000, "#y")))
+    battlbox["rules"] = json.dumps({"extra_tags": False, "min_seconds": 20})
+    assert r.transformation_risk(battlbox) == ""
+
+    # one restriction alone is survivable; it takes two to make a repost
+    one = dict(battlbox); one["rules"] = json.dumps({"voice": False})
+    assert r.transformation_risk(one) == ""
