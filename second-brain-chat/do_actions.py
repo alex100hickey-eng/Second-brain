@@ -105,6 +105,26 @@ def resolve(payload: dict) -> dict:
     return view
 
 
+def _auto_send_moment(item) -> str:
+    """When an armed draft leaves on its own, as Alex reads a clock — '' if it is not armed.
+
+    Same-day sends render as '8:14 PM'; one that crosses midnight carries its weekday, because
+    "sends itself at 7:02 AM" with no day is the kind of line he'd read as "already gone".
+    """
+    raw = (item.get("auto_send_at") or "").strip()
+    if not raw:
+        return ""
+    try:
+        when = datetime.fromisoformat(raw)
+    except ValueError:
+        return ""
+    if when.tzinfo is not None:
+        when = when.astimezone(LOCAL_TZ) if LOCAL_TZ else when.replace(tzinfo=None)
+    now = _now()
+    same_day = when.date() == now.date()
+    return when.strftime("%-I:%M %p") if same_day else when.strftime("%a %-I:%M %p")
+
+
 def _resolve_outbox(view, ref):
     item = outbox_mod.get(int(ref)) if outbox_mod else None
     if not item or item.get("status") != outbox_mod.OPEN:
@@ -119,17 +139,30 @@ def _resolve_outbox(view, ref):
     view["link_label"] = ("Open Gmail Drafts" if item.get("kind") == "email_draft"
                           else "Open it")
     view["done_label"] = "Sent it" if item.get("kind") == "email_draft" else "Done"
+    armed = _auto_send_moment(item)
     if item.get("kind") == "email_draft" and not item.get("send_approved"):
         # The detail already carries the full subject + body, which is the point: this button
         # is the last place the email can be stopped, so it is read before it is pressed.
-        view["steps"] = ["Read it. This is exactly what goes out.",
-                         "Send it now — it goes the next time your Mac is awake, "
-                         "usually within minutes.",
-                         "Or open the Drafts folder to edit it first."]
+        if armed:
+            # Since Alex asked for auto-send (2026-09-15) doing nothing on this page is no
+            # longer a no-op — it is a yes. The nudge already became a veto; this page had
+            # not, and it is the one screen where he could read the email, close the tab
+            # thinking he had declined it, and have it go anyway three hours later.
+            view["steps"] = [
+                f"This sends itself at {armed}. You don't have to do anything.",
+                "Read it — this is exactly what goes out.",
+                "Wrong? Tap Not doing it to kill it, or Snooze to push the send back."]
+        else:
+            view["steps"] = ["Read it. This is exactly what goes out.",
+                             "Send it now — it goes the next time your Mac is awake, "
+                             "usually within minutes.",
+                             "Or open the Drafts folder to edit it first."]
     line = outbox_mod.summary_line(item)
     age = line.split(" — ", 1)[1] if " — " in line else ""
     if item.get("send_approved"):
         view["why"] = "Approved — it goes the next time your Mac is awake."
+    elif armed:
+        view["why"] = f"Going out at {armed} on its own unless you stop it."
     else:
         view["why"] = ("Ready and " + age if age
                        else "Ready — it just needs the part only you can do.")

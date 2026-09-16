@@ -348,9 +348,12 @@ def release_first_touches(outbox_mod, drafts_url: str, limit: int = PER_DAY) -> 
             "email_draft", f"Send the reply to {to}",
             detail=f"Subject: {entry.get('subject','')}\n\n{entry.get('body','')}",
             link=drafts_url,
-            steps=["Read it. This is exactly what goes out.",
-                   "Send it now — it goes the next time your Mac is awake.",
-                   "Or open the Drafts folder to edit it first."],
+            # The /do page recomputes these from the item's armed state (do_actions
+            # ._resolve_outbox); these are the fallback for any other renderer, so they must
+            # not tell him to press a button the email no longer waits for.
+            steps=[f"This sends itself about {HOLD_HOURS} hours from now. Nothing to do.",
+                   "Read it — this is exactly what goes out.",
+                   "Wrong? Tap Not doing it to kill it, or Snooze to push the send back."],
             account="studio", ref=f"gmail:studio:{draft_id}")
         if rid:
             entry["released"] = datetime.now(LOCAL_TZ).isoformat()

@@ -451,3 +451,65 @@ def test_sender_counts_todays_sends_from_its_own_log(tmp_path, monkeypatch):
     monkeypatch.setattr(sfs, "LOG", str(log))
     assert sfs._sent_today() == 2
     assert sfs.DAILY_CAP == 5
+
+
+def test_the_do_page_says_an_armed_email_sends_itself():
+    """Auto-send (2026-09-15) turned the nudge into a veto but left this page reading
+    "Send it now". That is the one screen where Alex reads the actual email, so it is the
+    screen where he'd decide 'not this one', close the tab, and have it go anyway three
+    hours later. Doing nothing here is a yes now, and the page has to say so."""
+    import do_actions
+    from zoneinfo import ZoneInfo
+
+    tz = ZoneInfo("America/New_York")
+    soon = (datetime.now(tz) + timedelta(hours=3)).replace(microsecond=0)
+
+    class FakeOutbox:
+        OPEN = "open"
+
+        def __init__(self, item):
+            self.item = item
+
+        def get(self, _id):
+            return self.item
+
+        @staticmethod
+        def summary_line(it):
+            return it["title"] + " — 2h"
+
+    armed = {"id": 1, "kind": "email_draft", "status": "open", "title": "Send the reply to a@b.com",
+             "detail": "Subject: hi\n\nbody", "auto_send_at": soon.isoformat()}
+    plain = {k: v for k, v in armed.items() if k != "auto_send_at"}
+
+    old_ob, old_tz = do_actions.outbox_mod, do_actions.LOCAL_TZ
+    do_actions.LOCAL_TZ = tz
+    try:
+        do_actions.outbox_mod = FakeOutbox(armed)
+        view = {}
+        do_actions._resolve_outbox(view, "1")
+        steps = " ".join(view["steps"])
+        clock = soon.strftime("%-I:%M %p")
+        assert clock in steps, f"the send time must be on the page: {steps}"
+        assert "sends itself" in steps
+        assert "Not doing it" in steps, "the page must name the button that stops it"
+        assert "Send it now" not in steps, "an armed draft must not ask for a tap it won't wait for"
+        assert clock in view["why"] and "unless you stop it" in view["why"]
+
+        # A 3-hour window started in the evening lands tomorrow: "sends itself at 12:56 AM"
+        # with no day reads as "already gone". The weekday has to be there.
+        tomorrow = (datetime.now(tz) + timedelta(days=1)).replace(microsecond=0)
+        do_actions.outbox_mod = FakeOutbox({**armed, "auto_send_at": tomorrow.isoformat()})
+        view_t = {}
+        do_actions._resolve_outbox(view_t, "1")
+        assert tomorrow.strftime("%a") in " ".join(view_t["steps"]), \
+            "a send that crosses midnight must carry its weekday"
+
+        # an UNARMED draft still waits for him, and must still say so
+        do_actions.outbox_mod = FakeOutbox(plain)
+        view2 = {}
+        do_actions._resolve_outbox(view2, "1")
+        steps2 = " ".join(view2["steps"])
+        assert "Send it now" in steps2, "a draft with no auto-send still needs the tap"
+        assert "sends itself" not in steps2
+    finally:
+        do_actions.outbox_mod, do_actions.LOCAL_TZ = old_ob, old_tz
