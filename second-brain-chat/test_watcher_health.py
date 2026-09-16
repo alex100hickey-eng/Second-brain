@@ -31,8 +31,9 @@ def check(name, got, want):
         failures.append(f"{name}: got {got!r}, wanted {want!r}")
 
 
-def verdict(heartbeat=None, last_wake=None, streak=0, loaded=True, now=NOW):
-    return wh.assess(now, heartbeat, last_wake, streak, loaded)[0]
+def verdict(heartbeat=None, last_wake=None, streak=0, loaded=True, now=NOW,
+            retired=False):
+    return wh.assess(now, heartbeat, last_wake, streak, loaded, retired)[0]
 
 
 def ago(**kw):
@@ -74,6 +75,39 @@ check("unloaded launchd job is dead",
       verdict(heartbeat=ago(seconds=30), last_wake=ago(hours=1), loaded=False), "DEAD")
 check("missing heartbeat is dead",
       verdict(heartbeat=None, last_wake=ago(hours=1)), "DEAD")
+
+# --- retired on purpose is not a defect ------------------------------------
+# The watcher was retired 2026-09-15 (fdc1190). "Not loaded" then reported a
+# fresh outage every single day about a deliberate decision — the exact false
+# alarm this module exists to kill. Retired reads RETIRED and exits 0.
+check("retired job is not dead",
+      verdict(heartbeat=ago(hours=20), last_wake=ago(minutes=5),
+              loaded=False, retired=True), "RETIRED")
+# A stale heartbeat is expected once nothing is beating it, so it must not
+# override the retirement.
+check("retirement outranks a stale heartbeat",
+      verdict(heartbeat=ago(days=9), last_wake=ago(minutes=1),
+              loaded=False, retired=True), "RETIRED")
+check("retirement outranks a missing heartbeat",
+      verdict(heartbeat=None, last_wake=ago(hours=1),
+              loaded=False, retired=True), "RETIRED")
+# The narrow claim: retired only excuses an UNLOADED job. A loaded one is
+# judged on its heartbeat exactly as before.
+check("a loaded job is never excused by the retired flag",
+      verdict(heartbeat=ago(hours=2), last_wake=ago(hours=5),
+              loaded=True, retired=True), "DEAD")
+# And an unloaded job with no retirement marker is still a real defect.
+check("unloaded without the marker stays dead",
+      verdict(heartbeat=ago(seconds=30), last_wake=ago(hours=1),
+              loaded=False, retired=False), "DEAD")
+
+# The verdict must tell the reader the backstop is now the only drain, and how
+# to undo it — a bare "RETIRED" would leave both unsaid.
+_v, _headline, _, _ = wh.assess(NOW, ago(hours=20), ago(minutes=5), 0, False, True)
+check("retired headline names the backstop consequence",
+      "only drain" in _headline.lower(), True)
+check("retired headline says how to bring it back",
+      "launchctl load" in _headline, True)
 
 # --- blind (running, but cannot read the queue) ----------------------------
 check("failstreak at the alert threshold is blind",
@@ -123,6 +157,24 @@ with tempfile.TemporaryDirectory() as tmp:
     check("failstreak parses", wh.read_failstreak(fs), (12, "2026-08-26T10:00:00+00:00"))
     check("absent failstreak is the healthy case",
           wh.read_failstreak(os.path.join(tmp, "nope")), (0, None))
+
+# --- the retirement marker is a FILE PAIR, not either file alone -----------
+with tempfile.TemporaryDirectory() as tmp:
+    live = os.path.join(tmp, "w.plist")
+    off = live + ".disabled"
+
+    check("neither file present is not retirement", wh.watcher_retired(live, off), False)
+
+    open(off, "w").close()
+    check("disabled alone is retirement", wh.watcher_retired(live, off), True)
+
+    # Reinstalling leaves both behind; a live plist means it is meant to run, so
+    # a failure to load is a real defect again.
+    open(live, "w").close()
+    check("a live plist cancels retirement", wh.watcher_retired(live, off), False)
+
+    os.remove(off)
+    check("live plist alone is not retirement", wh.watcher_retired(live, off), False)
 
 if failures:
     print(f"FAILED ({len(failures)}):")

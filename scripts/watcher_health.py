@@ -27,6 +27,22 @@ THE FIX — measure AWAKE age, not wall-clock age
     unlike `pmset -g log`, which takes minutes on a loaded machine and is far too
     slow to sit in a health check.
 
+RETIRED IS NOT DEAD
+    On 2026-09-15 the watcher was retired on purpose (commit fdc1190, a cost audit:
+    it polled every 120s against a queue that had held 4 requests ever, the last one
+    2026-08-18). The plist was renamed to `.plist.disabled` and archived rather than
+    deleted, so the job is one `launchctl load` from coming back.
+
+    A retired job is NOT loaded, so the plain "not loaded = DEAD" rule reported a
+    fresh outage every single day about a decision someone made deliberately —
+    precisely the false alarm this module exists to kill. When the live plist is
+    absent and the `.disabled` one is present, that is the documented retirement
+    convention and the verdict is RETIRED (exit 0, nothing to fix).
+
+    What DOES matter while it is retired: the daily backstop is now the ONLY thing
+    draining the capability queue, so a request can sit up to a day before it is
+    seen. That is stated in the verdict rather than left for the reader to infer.
+
 KNOWN BLIND SPOT
     max(heartbeat, last_wake) measures only the MOST RECENT awake window. If the
     Mac woke, sat awake 20 minutes with a dead watcher, slept, and woke again one
@@ -37,7 +53,7 @@ KNOWN BLIND SPOT
     awake window long enough to fire.
 
 Usage:  python3 scripts/watcher_health.py [--quiet]
-Exit:   0 = healthy, 1 = needs attention (DEAD / BLIND)
+Exit:   0 = healthy or retired-on-purpose, 1 = needs attention (DEAD / BLIND)
 """
 
 import os
@@ -57,6 +73,8 @@ from capability_watcher import (  # noqa: E402
 )
 
 LABEL = "com.secondbrain.capabilitywatcher"
+PLIST = os.path.expanduser(f"~/Library/LaunchAgents/{LABEL}.plist")
+DISABLED_PLIST = PLIST + ".disabled"   # the repo's convention for "retired, not lost"
 POLL_INTERVAL_S = 120           # must match StartInterval in the plist
 STALE_AWAKE_S = 15 * 60         # ~7 missed polls while awake — past any noise
 MAX_RAW_AGE_S = 36 * 3600       # floor under the multi-sleep-cycle blind spot
@@ -125,10 +143,25 @@ def launchd_loaded(label: str = LABEL) -> bool:
         return False
 
 
-def assess(now, heartbeat, last_wake, streak, loaded):
+def watcher_retired(plist: str = PLIST, disabled: str = DISABLED_PLIST) -> bool:
+    """True when the job was retired on purpose rather than falling over.
+
+    The tell is the pair, not either file alone: the live plist gone AND the
+    `.disabled` copy sitting beside it. A live plist that simply failed to load is
+    still a real defect, and must keep reading DEAD."""
+    return os.path.exists(disabled) and not os.path.exists(plist)
+
+
+def assess(now, heartbeat, last_wake, streak, loaded, retired=False):
     """Pure verdict logic — no I/O, so the tests can drive every branch.
 
     Returns (verdict, headline, awake_age_s or None, slept_s or None)."""
+    if not loaded and retired:
+        return ("RETIRED",
+                "watcher retired on purpose (plist archived as .disabled, not lost) — "
+                "this daily backstop is now the ONLY drain on the capability queue, so a "
+                f"request can wait up to a day. To bring it back: launchctl load {PLIST}",
+                None, None)
     if not loaded:
         return "DEAD", f"launchd job {LABEL} is NOT loaded — the watcher cannot run", None, None
     if heartbeat is None:
@@ -166,8 +199,10 @@ def main() -> int:
     last_wake = read_last_wake()
     streak, since = read_failstreak()
     loaded = launchd_loaded()
+    retired = (not loaded) and watcher_retired()
 
-    verdict, headline, awake_age, slept = assess(now, heartbeat, last_wake, streak, loaded)
+    verdict, headline, awake_age, slept = assess(
+        now, heartbeat, last_wake, streak, loaded, retired)
 
     print(f"VERDICT: {verdict} — {headline}")
     if not quiet:
@@ -183,9 +218,15 @@ def main() -> int:
             note = f"  ({_fmt_age(slept)} of the gap was sleep)" if slept else ""
             print(f"  awake age   {_fmt_age(awake_age)}{note}   <- the number that matters")
         print(f"  failstreak  {streak or 'none'}" + (f" since {since}" if since else ""))
-        print(f"  launchd     {'loaded' if loaded else 'NOT LOADED'}")
+        if loaded:
+            state = "loaded"
+        elif retired:
+            state = "NOT LOADED — retired on purpose 2026-09-15 (fdc1190)"
+        else:
+            state = "NOT LOADED"
+        print(f"  launchd     {state}")
 
-    return 0 if verdict == "HEALTHY" else 1
+    return 0 if verdict in ("HEALTHY", "RETIRED") else 1
 
 
 if __name__ == "__main__":
