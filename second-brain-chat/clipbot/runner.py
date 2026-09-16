@@ -33,6 +33,7 @@ from .ledger import Ledger
 from .opus_api import OpusClient, estimate_credits, normalize_clips, project_id_from
 
 ET = ZoneInfo("America/New_York")
+MIN_POST_GAP_S = 3 * 3600   # 13 posts in 5 hours is what killed the first account
 
 
 def parse_urls_file(path: str) -> list:
@@ -541,6 +542,34 @@ class Runner:
         self.ledger.update_post(variant_id, **fields)
 
     # ---- nudge / status ---------------------------------------------------------------------
+    def posting_policy(self, account_age_days: float, posts_today: int,
+                       last_post_ts: float | None = None) -> tuple:
+        """How many more posts this account may make right now, and why.
+
+        @wildest_moments posted 13 clips in ~5 hours on a ONE-DAY-OLD account across three
+        unrelated campaigns, and went to zero reach permanently. TikTok's guidance is explicit
+        that posting many clips the day an account is created is one of the strongest spam
+        signals, and that the algorithm reads rhythm: 2 a day for 14 days beats 5 in one day and
+        silence. So volume is earned by age, not chosen.
+
+        Returns (allowed_now, reason)."""
+        import time as _t
+        if account_age_days < 1:
+            return 0, "account is less than a day old — posting today is the strongest spam signal there is"
+        if account_age_days < 7:
+            cap = 1
+        elif account_age_days < 21:
+            cap = 2
+        else:
+            cap = self.cfg.max_posts_per_day if hasattr(self.cfg, "max_posts_per_day") else 5
+        if posts_today >= cap:
+            return 0, f"day {int(account_age_days)}: cap is {cap}/day and {posts_today} already went out"
+        if last_post_ts and (_t.time() - last_post_ts) < MIN_POST_GAP_S:
+            mins = int((MIN_POST_GAP_S - (_t.time() - last_post_ts)) / 60)
+            return 0, f"last post was too recent — {mins} min before the next one"
+        return cap - posts_today, f"day {int(account_age_days)}: {cap - posts_today} of {cap} left today"
+
+
     def transformation_risk(self, campaign) -> str:
         """Does this campaign's brief force us to post content the platforms suppress?
 

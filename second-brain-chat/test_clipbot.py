@@ -525,3 +525,24 @@ def test_campaigns_that_forbid_transformation_are_flagged_as_account_risk(tmp_pa
     # one restriction alone is survivable; it takes two to make a repost
     one = dict(battlbox); one["rules"] = json.dumps({"voice": False})
     assert r.transformation_risk(one) == ""
+
+
+def test_posting_policy_earns_volume_with_account_age(tmp_path, monkeypatch):
+    """13 clips in ~5 hours on a one-day-old account is what took @wildest_moments to zero reach
+    and never gave it back. Volume is earned by age, and rhythm beats bursts."""
+    import time
+    monkeypatch.setattr(config, "HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(config, "READY_DIR", str(tmp_path / "ready"))
+    monkeypatch.setattr(config, "HOOKS_DIR", str(tmp_path / "hooks"))
+    monkeypatch.setattr(config, "INBOX_DIR", str(tmp_path / "inbox"))
+    r = Runner(config.Config(), _ledger(), OpusClient(api_key=None), log=lambda *_: None)
+
+    assert r.posting_policy(0.5, 0)[0] == 0, "day zero must post nothing"
+    assert r.posting_policy(3, 0)[0] == 1 and r.posting_policy(3, 1)[0] == 0
+    assert r.posting_policy(10, 1)[0] == 1 and r.posting_policy(10, 2)[0] == 0
+    assert r.posting_policy(30, 0)[0] >= 2, "a matured account may run normal volume"
+
+    # the burst guard: a post 20 minutes ago blocks the next one regardless of the daily cap
+    allowed, why = r.posting_policy(30, 0, last_post_ts=time.time() - 1200)
+    assert allowed == 0 and "too recent" in why
+    assert r.posting_policy(30, 0, last_post_ts=time.time() - 4 * 3600)[0] >= 2
