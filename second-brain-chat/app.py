@@ -2519,6 +2519,42 @@ def _situational_snapshot() -> str:
     except Exception as e:
         print(f"situational: orders section failed ({e})")
 
+    # Sits above task/job bookkeeping on purpose, for the same reason orders sit above
+    # everything: assemble() drops TRAILING sections whole at the 1600-char cap, and on a
+    # busy school day (an exam tomorrow plus two quizzes) the sections above this one filled
+    # the budget and this one vanished — silently, exactly when the pile is deepest. What is
+    # in here is consequential and often irreversible: since 2026-09-15 an unapproved email
+    # draft is not waiting for him, it is counting down to send itself. Losing the count of
+    # those is worse than losing "Top of his plate".
+    waiting = []
+    try:
+        for it in outbox.open_items(limit=20):
+            waiting.append(f"UNFINISHED BY HIM: {outbox.summary_line(it)}"
+                           + (f" — link: {it['link']}" if it.get("link") else ""))
+    except Exception as e:
+        print(f"situational: outbox check failed ({e})")
+    try:
+        n = len(get_pending_actions())
+        if n:
+            waiting.append(f"{n} action{'s' if n != 1 else ''} awaiting his approval on the dashboard")
+    except Exception as e:
+        print(f"situational: approvals check failed ({e})")
+    try:
+        n = len([d for d in run_drafter.list_drafts() if d.get("status") in ("draft", "approved")])
+        if n:
+            waiting.append(f"{n} overnight run{'s' if n != 1 else ''} drafted, not yet launched")
+    except Exception as e:
+        print(f"situational: drafts check failed ({e})")
+    try:
+        # limit must be explicit: list_intake defaults to 25, which silently
+        # caps the "waiting for triage" count at 25 no matter how big the pile.
+        n = len(intake.list_intake(status="new", limit=200))
+        if n:
+            waiting.append(f"{n} intake item{'s' if n != 1 else ''} waiting for triage")
+    except Exception as e:
+        print(f"situational: intake check failed ({e})")
+    sections.append(("Waiting on him:", waiting))
+
     try:
         open_statuses = {"idea", "evaluating", "approved", "in_progress"}
         tasks = [t for t in task_tracker.get_tracker().top_by_priority(limit=8)
@@ -2550,34 +2586,6 @@ def _situational_snapshot() -> str:
     except Exception as e:
         print(f"situational: due section failed ({e})")
 
-    waiting = []
-    try:
-        for it in outbox.open_items(limit=20):
-            waiting.append(f"UNFINISHED BY HIM: {outbox.summary_line(it)}"
-                           + (f" — link: {it['link']}" if it.get("link") else ""))
-    except Exception as e:
-        print(f"situational: outbox check failed ({e})")
-    try:
-        n = len(get_pending_actions())
-        if n:
-            waiting.append(f"{n} action{'s' if n != 1 else ''} awaiting his approval on the dashboard")
-    except Exception as e:
-        print(f"situational: approvals check failed ({e})")
-    try:
-        n = len([d for d in run_drafter.list_drafts() if d.get("status") in ("draft", "approved")])
-        if n:
-            waiting.append(f"{n} overnight run{'s' if n != 1 else ''} drafted, not yet launched")
-    except Exception as e:
-        print(f"situational: drafts check failed ({e})")
-    try:
-        # limit must be explicit: list_intake defaults to 25, which silently
-        # caps the "waiting for triage" count at 25 no matter how big the pile.
-        n = len(intake.list_intake(status="new", limit=200))
-        if n:
-            waiting.append(f"{n} intake item{'s' if n != 1 else ''} waiting for triage")
-    except Exception as e:
-        print(f"situational: intake check failed ({e})")
-    sections.append(("Waiting on him:", waiting))
 
     try:
         counts = JOB_QUEUE.counts()

@@ -117,9 +117,15 @@ def assemble(sections: list, now: datetime, max_chars: int = MAX_CHARS) -> str:
         block_lines = [header] + [f"- {ln}" for ln in lines]
         block = "\n".join(block_lines)
         if used + len(block) > max_chars:
-            # Budget: drop whole trailing sections rather than truncating mid-line —
-            # a half-sentence about an approval is worse than silence about it.
-            break
+            # Budget: drop whole sections rather than truncating mid-line — a half-sentence
+            # about an approval is worse than silence about it.
+            # `continue`, not `break`: this used to stop at the first section that did not
+            # fit, so ONE fat section took every shorter one below it with it. On 2026-09-16
+            # (exam tomorrow + two quizzes) the orders section alone starved "Waiting on him"
+            # — the count of things counting down to send themselves — and "Due & overdue",
+            # the reminder horizon. Skipping just the section that does not fit keeps the
+            # cheap, high-value ones. Order is still preserved for everything included.
+            continue
         parts.append(block)
         used += len(block)
     return "\n\n".join(parts)
