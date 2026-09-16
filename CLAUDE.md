@@ -22,7 +22,23 @@ the hardening pass, `NEEDS_ALEX.md` what's blocked on Alex.
   only send a draft that already existed, from the studio mailbox, to an address
   already verified in the prospect tracker. `send` rides on the /do **page** token,
   never a shade button — same rule as the approval queue: a lock-screen tap is not
-  consent, so he reads the email before he presses it.
+  consent.
+  **Amended the same evening (2026-09-15, `db582f1`): consent is now a VETO, not a
+  tap.** He asked to "just send them automatically from now on so that i can be more
+  hands off of the whole company." Every draft the daily job files is armed with
+  `auto_send_at = now + HOLD_HOURS` (3) and goes on its own. Everything in the
+  paragraph above still holds — Mac-only sender, no server-side import, studio
+  mailbox, recipient verified in the tracker, one send per row, nothing to anyone
+  who replied — and the window is guarded by a daily cap counted from the send log,
+  by `scripts/SPLITFRAME_PAUSE`, and by snooze moving the SEND rather than just the
+  reminder. What changed is the default: **silence now means yes.** So every surface
+  that shows an armed draft must say it sends itself and name the time and the button
+  that kills it — the nudge does, and `do_actions._resolve_outbox` does (`53bcc63`,
+  test-pinned). If you add another surface, it says so too. The reason the window
+  exists at all is that nobody reads these any more and the drafter's first live run
+  invented a warranty figure, a concept Alex had not built, and a claim to have
+  re-checked an ad account; `fabrication_risk()` catches the phrasings already seen,
+  not the ones it hasn't.
 - **Never draft work Alex submits for a grade.** Every one of his Fall 2026
   courses bans AI on submitted work — ECON, MATH, ACCT and AIQS have explicit
   verbatim policies (AIQS bans it even for *ideas*, Grammarly included). Study
