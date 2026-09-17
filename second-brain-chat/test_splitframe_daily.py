@@ -513,3 +513,42 @@ def test_the_do_page_says_an_armed_email_sends_itself():
         assert "sends itself" not in steps2
     finally:
         do_actions.outbox_mod, do_actions.LOCAL_TZ = old_ob, old_tz
+
+
+def test_followups_reach_front_desk_brands():
+    """The bug this pins: due_followups keyed on the `email` column, which is EMPTY for a brand
+    whose only address is a front desk (that lives in email_generic). Every one of them was
+    dropped before any date was even looked at — a first touch went out and no follow-up could
+    ever fire. Silent, and after 2026-09-17 most of the funnel is those brands."""
+    today = sfd.date(2026, 9, 20)
+    rows = [
+        {"brand": "Named", "email": "eric@bigbarker.com", "email_generic": "",
+         "contact_name": "", "sent_date": "2026-09-16", "replied": "", "outcome": "",
+         "followup1_date": "2026-09-19", "followup2_date": "2026-09-23"},
+        {"brand": "FrontDesk", "email": "", "email_generic": "hello@calypsa.com",
+         "contact_name": "", "sent_date": "2026-09-16", "replied": "", "outcome": "",
+         "followup1_date": "2026-09-19", "followup2_date": "2026-09-23"},
+        {"brand": "TicketDesk", "email": "", "email_generic": "support@zitsticka.com",
+         "contact_name": "", "sent_date": "2026-09-16", "replied": "", "outcome": "",
+         "followup1_date": "2026-09-19", "followup2_date": "2026-09-23"},
+    ]
+    due = sfd.due_followups(rows, today, {})
+    assert [r["brand"] for r, _touch in due] == ["Named", "FrontDesk"]
+    assert all(touch == 2 for _r, touch in due)
+
+    # And the address it would actually write to is the front desk, not "".
+    assert sfd.target_address(rows[1]) == ("hello@calypsa.com", "shared")
+
+    # A brand that answered is still left alone, whichever column held the address.
+    rows[1]["replied"] = "2026-09-18"
+    assert [r["brand"] for r, _t in sfd.due_followups(rows, today, {})] == ["Named"]
+
+
+def test_first_touch_waiting_list_counts_front_desks_too():
+    rows = [{"brand": "FrontDesk", "email": "", "email_generic": "hello@calypsa.com",
+             "contact_name": "", "sent_date": ""},
+            {"brand": "Ticket", "email": "support@x.com", "email_generic": "",
+             "contact_name": "", "sent_date": ""},
+            {"brand": "Sent", "email": "eric@bigbarker.com", "email_generic": "",
+             "contact_name": "", "sent_date": "2026-09-16"}]
+    assert [r["brand"] for r in sfd.waiting_for_first_touch(rows)] == ["FrontDesk"]

@@ -22,6 +22,7 @@ from __future__ import annotations
 import csv
 import json
 import os
+import re
 import sys
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -49,6 +50,159 @@ MAX_TOUCHES = 3          # first touch + 2 follow-ups, then the brand is left al
 # 2026-09-15 pass looking exactly like a real person's address.
 SKIP_ADDRESSES = ("support@", "help@", "info@", "hello@", "contact@", "talktous@",
                   "team@", "care@", "service@", "orders@", "admin@", "sales@")
+
+def _s(value) -> str:
+    return (value or "").strip()
+
+
+# Which inbox an address actually is. Three tiers, and the order is the whole point:
+#
+#   person      a named human. Best reply rate, always drafted first, only one that gets a name
+#               in the greeting.
+#   front desk  the company inbox at a small brand — hello@, info@, press@, or the brand's own
+#               name. At 5-50 active ads the company is a few people and one of them reads it.
+#   ticket desk support@, orders@, wholesale@. Whoever reads it is answering "where is my order",
+#               has no say over creative, and can only close the ticket. Never written to.
+#
+# This used to be one blocklist of role prefixes, which meant any address that was not on the
+# list counted as a person: `goodday@`, `justdoughit@`, `oudwarellc@`, `store@` all read as
+# humans and would have been greeted by name. So a person now needs positive evidence instead —
+# the tracker's own contact_name, a known first name, or a first.last local part. An unusual
+# real name gets demoted to front desk, which costs a greeting and some ordering, never a send.
+
+TICKET_LOCALS = {"support", "sup", "help", "care", "service", "customerservice", "custserv",
+                 "orders", "order", "returns", "cs", "admin", "billing", "accounts", "shop",
+                 "store", "sales", "dealers", "wholesale", "noreply", "no-reply", "donotreply"}
+
+# Deliberately not exhaustive: anything that is not a person and not a ticket desk falls through
+# to front desk, because a brand-voice inbox (goodday@, justdoughit@) is a front desk.
+FRONT_LOCALS = {"hello", "hi", "hey", "heythere", "info", "contact", "talktous", "team",
+                "partnerships", "partners", "press", "media", "marketing", "hola", "inquiries",
+                "general", "studio", "office", "mail", "email", "ask", "connect"}
+
+# Enough coverage for founder first names that appear without a contact_name in the tracker.
+# A miss demotes to front desk; it never promotes a role inbox to a person.
+FIRST_NAMES = {
+    "aaron", "abby", "abigail", "adam", "adrian", "alan", "alex", "alexa", "alexis", "ali",
+    "alice", "alicia", "allison", "amanda", "amber", "amy", "ana", "andrea", "andrew", "andy",
+    "angela", "anna", "anne", "annie", "anthony", "april", "ariel", "ashley", "austin", "ava",
+    "becca", "becky", "ben", "benjamin", "beth", "bethany", "bill", "billy", "blake", "bob",
+    "bobby", "brad", "bradley", "brandon", "breanna", "brenda", "brendan", "brent", "brett",
+    "brian", "briana", "brittany", "brooke", "bruce", "bryan", "caelin", "caitlin", "cameron",
+    "camille", "cara", "carl", "carla", "carlos", "carly", "carol", "carolina", "caroline",
+    "carrie", "casey", "cassidy", "catherine", "cathy", "chad", "charles", "charlie", "chase",
+    "chelsea", "cheryl", "chris", "chrissy", "christian", "christina", "christine", "chloe",
+    "cindy", "claire", "clara", "clark", "cody", "colin", "connor", "corey", "courtney", "craig",
+    "crystal", "curtis", "dan", "dana", "daniel", "danielle", "danny", "darren", "dave", "david",
+    "dawn", "dean", "deb", "debbie", "deborah", "denise", "dennis", "derek", "devin", "diana",
+    "diane", "dominic", "don", "donald", "donna", "doug", "douglas", "drew", "dylan", "ed",
+    "eddie", "eduardo", "edward", "elaine", "eleanor", "elena", "eli", "elijah", "elise",
+    "elizabeth", "ella", "ellen", "ellie", "emily", "emma", "eric", "erica", "erik", "erin",
+    "ethan", "eva", "evan", "eve", "faith", "felix", "fiona", "frank", "fred", "gabe", "gabriel",
+    "gabriella", "gary", "gavin", "gemma", "gene", "george", "gerald", "gillian", "gina", "grace",
+    "gracie", "graham", "grant", "greg", "gregory", "hailey", "haley", "hannah", "harry",
+    "hayden", "heather", "heidi", "helen", "henry", "holly", "hope", "hunter", "ian", "isaac",
+    "isabel", "isabella", "ivan", "jack", "jackie", "jackson", "jacob", "jacqueline", "jade",
+    "jake", "james", "jamie", "jan", "jane", "janet", "jason", "jay", "jayden", "jean", "jeff",
+    "jeffrey", "jen", "jenna", "jennifer", "jenny", "jeremy", "jerry", "jess", "jesse", "jessica",
+    "jill", "jim", "jimmy", "joan", "joann", "joe", "joel", "john", "johnny", "jon", "jonathan",
+    "jordan", "jose", "joseph", "josh", "joshua", "joy", "juan", "judy", "julia", "julian",
+    "julianne", "julie", "justin", "kaitlyn", "karen", "kari", "kate", "katelyn", "katherine",
+    "kathy", "katie", "katrina", "kayla", "keith", "kelly", "kelsey", "ken", "kenneth", "kevin",
+    "kim", "kimberly", "kris", "kristen", "kristin", "kristina", "kyle", "lance", "lara", "larry",
+    "laura", "lauren", "laurie", "lee", "leah", "leo", "leslie", "levi", "liam", "lily", "linda",
+    "lindsay", "lindsey", "lisa", "liz", "logan", "lori", "louis", "lucas", "lucy", "luke",
+    "lydia", "lynn", "madeline", "madison", "maggie", "mandy", "marc", "marcus", "margaret",
+    "maria", "mariah", "marie", "mario", "marissa", "mark", "marta", "martha", "martin", "mary",
+    "mason", "matt", "matthew", "maureen", "max", "maxx", "maya", "megan", "meghan", "mel",
+    "melanie", "melissa", "meredith", "mia", "michael", "michele", "michelle", "mike", "miranda",
+    "molly", "monica", "morgan", "nancy", "naomi", "natalie", "natasha", "nate", "nathan", "neil",
+    "nicholas", "nick", "nicole", "nina", "noah", "nora", "olivia", "oscar", "owen", "pam",
+    "pamela", "pat", "patricia", "patrick", "paul", "paula", "peggy", "peter", "philip", "phil",
+    "phoebe", "polina", "rachel", "ralph", "randy", "ray", "rebecca", "regina", "renee", "rich",
+    "richard", "rick", "riley", "rob", "robert", "robin", "rochelle", "rodney", "roger", "ron",
+    "ronald", "rosa", "rose", "ross", "roy", "russell", "ruth", "ryan", "sabrina", "sally", "sam",
+    "samantha", "samuel", "sandra", "sandy", "sara", "sarah", "scott", "sean", "serena", "seth",
+    "shane", "shannon", "sharon", "shaun", "shawn", "sheila", "shelby", "shelly", "sierra",
+    "simon", "sofia", "sophia", "sophie", "stacey", "stacy", "stephanie", "stephen", "steve",
+    "steven", "stormi", "stuart", "sue", "susan", "suzanne", "sydney", "tami", "tammy", "tanya",
+    "tara", "taylor", "ted", "teresa", "terry", "tess", "thomas", "tiffany", "tim", "timothy",
+    "tina", "toby", "todd", "tom", "tommy", "tony", "tracy", "travis", "trevor", "tricia",
+    "tyler", "valerie", "vanessa", "vera", "veronica", "vicki", "victor", "victoria", "vincent",
+    "virginia", "wade", "walter", "wayne", "wendy", "wes", "will", "william", "willow", "wyatt",
+    "zach", "zachary", "zoe",
+}
+
+DOTTED_NAME = re.compile(r"^[a-z]{2,}[._-][a-z]{2,}$")
+
+
+def _local(email: str) -> str:
+    e = _s(email).lower()
+    return e.split("@", 1)[0] if "@" in e else ""
+
+
+def _letters(value: str) -> str:
+    return re.sub(r"[^a-z]", "", (value or "").lower())
+
+
+def matches_contact(email: str, contact_name: str) -> bool:
+    """The local part is the tracker's named contact: becca, maxx.appelman, pveksler, klee."""
+    parts = [t.lower() for t in re.split(r"[^A-Za-z]+", contact_name or "") if len(t) > 1]
+    if not parts:
+        return False
+    first, last = parts[0], parts[-1]
+    local = _letters(_local(email))
+    if not local:
+        return False
+    return local in {first, last, first + last, last + first, first[0] + last, first + last[0]}
+
+
+def is_ticket_desk(email: str) -> bool:
+    """An inbox whose job is orders. A creative pitch there is deleted by someone who could not
+    have acted on it anyway, and costs a spam complaint on a domain that took weeks to warm."""
+    return _local(email) in TICKET_LOCALS
+
+
+def is_person(email: str) -> bool:
+    """A real person's address, by positive evidence — a known first name or a first.last local
+    part. Without a name there is nobody to greet, and a greeting invented for a shared inbox is
+    the tell that the email was machine-written."""
+    local = _local(email)
+    if not local or local in TICKET_LOCALS or local in FRONT_LOCALS:
+        return False
+    return _letters(local) in FIRST_NAMES or bool(DOTTED_NAME.match(local))
+
+
+def is_front_desk(email: str) -> bool:
+    """A shared inbox a pitch can survive in: the company's own front door. Anything that is not
+    a ticket desk qualifies, including brand-voice inboxes like goodday@ or justdoughit@ —
+    those are the front door with a costume on."""
+    return bool(_local(email)) and not is_ticket_desk(email)
+
+
+def target_address(row: dict) -> tuple:
+    """(address, tier) for a tracker row — "person", "shared", or ("", "") for nobody to write to.
+
+    Both address columns are read because the tracker grew a column: `email` held whatever was
+    found first and `email_generic` was added later for site-scraped addresses. A row can carry
+    either, and a person always wins over a front desk on the same row.
+    """
+    cols = ("email", "email_generic")
+    name = _s(row.get("contact_name"))
+    for col in cols:                                   # the tracker's own named contact first
+        e = _s(row.get(col)).lower()
+        if e and name and matches_contact(e, name) and not is_ticket_desk(e):
+            return e, "person"
+    for col in cols:
+        e = _s(row.get(col)).lower()
+        if is_person(e):
+            return e, "person"
+    for col in cols:
+        e = _s(row.get(col)).lower()
+        if e and "@" in e and is_front_desk(e):
+            return e, "shared"
+    return "", ""
+
 
 VOICE = """You are drafting a follow-up email as Alex Hickey, 19, who runs Splitframe Studio,
 a one-person ad-creative service for DTC brands ($650 flat drop, $950/mo retainer).
@@ -193,7 +347,10 @@ def due_followups(rows, today: date, drafted: dict) -> list:
             continue
         if (r.get("replied") or "").strip() or (r.get("outcome") or "").strip():
             continue
-        key = (r.get("email") or "").strip().lower()
+        # NOT r["email"]: a front-desk brand carries its address in email_generic and leaves
+        # `email` empty, so keying on that column skipped every one of them — a first touch went
+        # out and no follow-up ever could. Silent, and most of the funnel is those brands now.
+        key, _tier = target_address(r)
         if not key:
             continue
         done = drafted.get(key, [])
@@ -377,14 +534,12 @@ def release_first_touches(outbox_mod, drafts_url: str, limit: int = PER_DAY) -> 
 
 
 def waiting_for_first_touch(rows) -> list:
-    """Verified real-person addresses that have never been emailed. Support desks don't count —
-    a first touch about ad creative dies in a support queue."""
+    """Addresses that have never been emailed and can be. Ticket queues don't count — a first
+    touch about ad creative dies in a support queue — but a front desk does."""
     out = []
     for r in rows:
-        email = (r.get("email") or "").strip().lower()
+        email, _tier = target_address(r)
         if not email or (r.get("sent_date") or "").strip():
-            continue
-        if email.startswith(SKIP_ADDRESSES):
             continue
         out.append(r)
     return out
@@ -426,7 +581,7 @@ def main() -> int:
     made, rejected = [], []
     for row, touch in due:
         brand = (row.get("brand") or "").strip()
-        address = (row.get("email") or "").strip()
+        address, _tier = target_address(row)
         if address.lower() in waiting:
             log(f"{brand}: touch {touch} skipped — an unsent draft for {address} is already waiting")
             drafted.setdefault(address.lower(), []).append(touch)
