@@ -278,8 +278,40 @@ def guard_body(body: str) -> list:
     return problems
 
 
+IMAGE_URL_RE = re.compile(r"https?://[^\s\"'<>]+\.(?:jpg|jpeg|png|webp)(?:\?[^\s\"'<>]*)?", re.I)
+
+
+def offer_image_problems(url: str, domain: str) -> list:
+    """Why a promised spec ad could not be built from this photo.
+
+    The offer close makes a claim the fabrication guard cannot see, because it is about the
+    FUTURE: "I'll build you X." On 2026-09-17 the first batch promised Antler Farms a static
+    built from imagery of their free-grazing herds. They publish product bottles and a logo.
+    That ad could only have been made by inventing a farm.
+
+    So the offer arm has to name the photo it would use, on the brand's own domain, and it gets
+    stored with the queue entry — which also means that when someone says yes, the image is
+    already chosen instead of being hunted for under a same-day promise.
+    """
+    url = _c(url)
+    if not url:
+        return ["--offer-image is required with --close offer: name the photo on their own site "
+                "you would actually build the ad from, or the promise is one nobody can keep"]
+    if not IMAGE_URL_RE.fullmatch(url):
+        return [f"--offer-image {url[:60]!r} is not an image URL (jpg/png/webp)"]
+    host = re.sub(r"^https?://", "", url).split("/")[0].lower().removeprefix("www.")
+    base = _c(domain).lower().removeprefix("www.")
+    if not base:
+        return []                                  # no domain on the row to check against
+    root = ".".join(base.split(".")[-2:])
+    if root not in host:
+        return [f"--offer-image is on {host}, not {base} — a spec ad uses the brand's OWN photo, "
+                f"never one found elsewhere"]
+    return []
+
+
 def plan_add(rows: list, queue: list, to: str, subject: str, body: str,
-             ad_count, brand: str = ""):
+             ad_count, brand: str = "", close: str = "", offer_image: str = ""):
     """(tracker row, problems). An empty problems list is the only permission to queue."""
     to = _c(to).lower()
     row = next((r for r in rows
@@ -312,6 +344,8 @@ def plan_add(rows: list, queue: list, to: str, subject: str, body: str,
     elif ad_count > TOO_BIG:
         problems.append(f"{ad_count} active ads means an in-house team — out of band, "
                         "don't burn the funnel on it")
+    if close == "offer":
+        problems += offer_image_problems(offer_image, _c(row.get("domain")))
     problems += guard_body(body)
     return row, problems
 
@@ -718,7 +752,9 @@ def cmd_add(args) -> int:
     q, queue = load_queue()
     with open(args.body_file, encoding="utf-8") as f:
         body = f.read().strip()
-    row, problems = plan_add(rows, queue, args.to, args.subject, body, args.ad_count, args.brand)
+    variant_arg = _c(args.close)
+    row, problems = plan_add(rows, queue, args.to, args.subject, body, args.ad_count, args.brand,
+                             variant_arg, _c(args.offer_image))
     if problems:
         print("NOT queued:")
         for p in problems:
@@ -735,10 +771,10 @@ def cmd_add(args) -> int:
         # the ref — so a queue entry here would be a written email that can never go out.
         print(f"NOT queued: no draft id came back from Gmail — {msg[:200]}")
         return 1
-    variant = _c(args.close) or next_close_variant(queue)
+    variant = variant_arg or next_close_variant(queue)
     queue.append({"brand": brand, "to": _c(args.to).lower(), "subject": _c(args.subject),
                   "body": body, "draft_id": draft_id, "ad_count": args.ad_count,
-                  "close_variant": variant,
+                  "close_variant": variant, "offer_image": _c(args.offer_image),
                   "evidence": _c(args.evidence), "queued_at": datetime.now(LOCAL_TZ).isoformat(),
                   "queued_by": "money-shift"})
     save_queue(q, queue)
@@ -806,6 +842,9 @@ def main(argv=None) -> int:
     a.add_argument("--evidence", default="", help="one line: what the ads actually showed")
     a.add_argument("--close", default="", choices=("", "question", "offer"),
                    help="which close this email used; default alternates to balance the arms")
+    a.add_argument("--offer-image", default="",
+                   help="with --close offer: the photo ON THEIR OWN SITE the promised ad would be "
+                        "built from. Required, because the promise is unkeepable without one")
     a.add_argument("--dry-run", action="store_true", help="run every guard, draft nothing")
     a.set_defaults(fn=cmd_add)
     so = sub.add_parser("source", help="add a brand nobody had, from a live Ad Library read")

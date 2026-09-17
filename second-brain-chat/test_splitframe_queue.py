@@ -453,3 +453,36 @@ def test_creator_entry_verified_beats_a_nearby_warning():
     # ...or the line under it, where the operator usually writes the caveat.
     below = "- **Email:** `x@y.com`\n  This is UNVERIFIED — confirm it off their own page.\n"
     assert sq.creator_entry(below, "x@y.com")["unverified"] is True
+
+
+def test_offer_close_must_name_a_photo_on_their_own_site():
+    """The offer close makes a claim the fabrication guard cannot see, because it is about the
+    future: "I'll build you X." The first batch promised Antler Farms a static built from imagery
+    of their free-grazing herds; they publish product bottles and a logo, so that ad could only
+    have been made by inventing a farm."""
+    dom = "antlerfarms.com"
+    good = "https://antlerfarms.com/cdn/shop/files/AFDAV_bottle900.jpg"
+    assert sq.offer_image_problems(good, dom) == []
+    assert sq.offer_image_problems("https://www.antlerfarms.com/x.png?v=2", dom) == []
+
+    assert any("required" in p for p in sq.offer_image_problems("", dom))
+    assert any("not an image URL" in p for p in
+               sq.offer_image_problems("https://antlerfarms.com/pages/about", dom))
+    assert any("never one found elsewhere" in p for p in
+               sq.offer_image_problems("https://unsplash.com/deer-herd.jpg", dom))
+
+    # A row with no domain recorded cannot be checked against one; that is not a reason to refuse.
+    assert sq.offer_image_problems(good, "") == []
+
+
+def test_plan_add_only_demands_the_photo_for_the_offer_arm():
+    rows = [_row(domain="myobvi.com")]
+    _, p = sq.plan_add(rows, [], "ankit@myobvi.com", "s", GOOD_BODY_PROSE, 19, "", "question", "")
+    assert p == []
+
+    _, p = sq.plan_add(rows, [], "ankit@myobvi.com", "s", GOOD_BODY_PROSE, 19, "", "offer", "")
+    assert any("--offer-image is required" in x for x in p)
+
+    _, p = sq.plan_add(rows, [], "ankit@myobvi.com", "s", GOOD_BODY_PROSE, 19, "", "offer",
+                       "https://myobvi.com/cdn/shop/files/tub.jpg")
+    assert p == []
