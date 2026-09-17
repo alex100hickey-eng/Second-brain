@@ -64,12 +64,13 @@ step, and you need me to prompt you to say do the next step." So inside your tas
 - `python3 scripts/adlib_read.py --page-id <id>` / `--keyword "<q>"` / `--url <any url>`: headless
   Chrome, prints the active count and one compact line per ad (or the page text). Exit 3 = login
   wall. A keyword page's count is contaminated (every ad mentioning the words); its ADVERTISERS line
-  names who is spending, and `--keyword "<q>" --find 'view_all_page_id=\d+'` lists their page ids —
-  the clean count for a brand is always its own `--page-id` read. DTC brands only: skip retailers,
-  agencies, marketplaces, publishers and health-scare advertorials. It uses the operator Chrome profile `~/.money-operator-chrome`; Alex logs a site in ONCE with
-  A `--page-id` read can come back empty for one page while others work (Wild One did on 2026-09-16
-  while Obvi read fine). Fallback that worked: run the brand's exact name as `--keyword`, count only
-  the blocks whose advertiser line matches the brand exactly, and treat that as the live count.
+  names who is spending, and `--keyword "<q>" --find 'view_all_page_id=\d+'` lists their page ids;
+  the clean count for a brand is its own `--page-id` read. DTC brands only: skip retailers, agencies,
+  marketplaces, publishers and health-scare advertorials. A `--page-id` read can come back empty for
+  one page while others work (Wild One did on 2026-09-16 while Obvi read fine); the fallback that
+  worked: run the brand's exact name as `--keyword`, count only the blocks whose advertiser line
+  matches the brand exactly, and treat that as the live count.
+  The reader uses the operator Chrome profile `~/.money-operator-chrome`. Alex logs a site in ONCE with
   `open -na "Google Chrome" --args --user-data-dir="$HOME/.money-operator-chrome" <url>` and every
   later read carries the cookies. If a read fails with "profile in use", a headed window is open on
   that profile: skip the step and say so.
