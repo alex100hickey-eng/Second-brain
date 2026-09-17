@@ -33,6 +33,9 @@ close the window (the worker cannot read while it is open).
 3. **Log in to Whop on the same operator profile** (same alt account):
    `open -na "Google Chrome" --args --user-data-dir="$HOME/.money-operator-chrome" https://whop.com/discover/content-rewards`
    You joined Clipping Culture, but the worker's browser has no session, so it can't read the board.
+   *Confirmed 2026-09-17 this is the only route: whop.com hangs the desktop Browser pane outright —
+   two attempts, one of them a 300 s timeout on a fresh tab — so I cannot read the board for you
+   from here either. Don't let a future session spend time trying.*
 4. **YouTube Studio: why were all 5 Shorts deleted?** Open studio.youtube.com on @wildestmomentsclips and
    read the notification. Nothing gets re-uploaded to YouTube until you say what it said.
 
