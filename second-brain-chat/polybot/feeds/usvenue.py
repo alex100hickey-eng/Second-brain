@@ -5,6 +5,17 @@ False until POLYMARKET_KEY_ID / POLYMARKET_SECRET_KEY exist in the environment. 
 degrades to None/[] when unavailable so the rest of the bot keeps running in paper mode.
 
 Only LIMIT orders are ever sent (maker intent). No market orders exist in this file on purpose.
+
+gateway.polymarket.us sits behind Cloudflare, and CWRU's shared campus IP got rate-limited
+(error 1015, "You are being rate limited" / "banned you temporarily") on 2026-09-17. The SDK's
+error path (`client.py::_handle_error_response`) puts the raw response body — the whole HTML
+page — into the exception message when it isn't JSON, and nothing here caught it: every scan
+tick, every settle, and every 5-minute sync kept calling the banned host again, each failure
+logging ~250 lines of HTML and doing nothing to let the ban clear. That is why the US-book
+cross-check for weather_lock (report's "Polymarket US books only" line) sits stuck on stale
+signals — `resolution()` never learns the outcome, it just fails the same way every hour. A
+rate limit now trips a cooldown (`available` goes False, same as a missing key) so the loop
+backs off instead of hammering a host that just told it to stop.
 """
 from __future__ import annotations
 
@@ -12,6 +23,7 @@ import json
 import math
 import os
 import re
+import time
 from datetime import datetime
 
 from .. import config
@@ -21,6 +33,15 @@ try:  # the SDK is optional until the key exists
     from polymarket_us import PolymarketUS  # type: ignore
 except Exception:  # pragma: no cover - import guard
     PolymarketUS = None
+
+RATE_LIMIT_BACKOFF_S = 600  # 10 minutes: long enough to outlast a Cloudflare 1015 window
+
+
+def _is_rate_limited(exc: Exception) -> bool:
+    if getattr(exc, "status_code", None) == 429:
+        return True
+    text = str(exc)[:4000].lower()
+    return "rate limit" in text or "banned you temporarily" in text
 
 
 # ---- response shapes, verified live 2026-09-12 with the real key ---------------------------
@@ -116,8 +137,18 @@ class USVenue:
         self.key_id = os.environ.get("POLYMARKET_KEY_ID")
         self.secret = os.environ.get("POLYMARKET_SECRET_KEY")
         self.sdk_installed = PolymarketUS is not None
-        self.available = bool(self.sdk_installed and self.key_id and self.secret)
-        self._client = PolymarketUS(key_id=self.key_id, secret_key=self.secret) if self.available else None
+        self._base_available = bool(self.sdk_installed and self.key_id and self.secret)
+        self._client = PolymarketUS(key_id=self.key_id, secret_key=self.secret) if self._base_available else None
+        self._backoff_until = 0.0
+        self._backoff_reason = ""
+
+    @property
+    def available(self) -> bool:
+        return self._base_available and time.time() >= self._backoff_until
+
+    @available.setter
+    def available(self, value: bool) -> None:
+        self._base_available = bool(value)
 
     @property
     def why_unavailable(self) -> str:
@@ -125,38 +156,65 @@ class USVenue:
             return "polymarket-us SDK not installed (pip install polymarket-us)"
         if not (self.key_id and self.secret):
             return "POLYMARKET_KEY_ID / POLYMARKET_SECRET_KEY not set"
+        if time.time() < self._backoff_until:
+            mins = int((self._backoff_until - time.time()) / 60) + 1
+            return f"backing off {mins}m ({self._backoff_reason})"
         return ""
+
+    def _enter_backoff(self, exc: Exception) -> None:
+        self._backoff_until = time.time() + RATE_LIMIT_BACKOFF_S
+        self._backoff_reason = f"{type(exc).__name__}: {str(exc).splitlines()[0][:120]}"
+
+    def _guarded(self, fn, default=None):
+        """Run an SDK call; on a rate limit, back off instead of calling a banned host again next
+        tick, and return `default` instead of the raw (often HTML) error body every caller would
+        otherwise have to log in full."""
+        try:
+            return fn()
+        except Exception as exc:
+            if _is_rate_limited(exc):
+                self._enter_backoff(exc)
+                return default
+            raise
 
     # ---- market data ---------------------------------------------------------------------
     def search(self, query: str):
         if not self.available:
             return None
-        return self._client.search.query({"query": query})
+        return self._guarded(lambda: self._client.search.query({"query": query}))
 
     def events(self, **params):
         if not self.available:
             return []
-        return self._client.events.list(params or {"limit": 50, "active": True}).get("events", [])
+        return self._guarded(
+            lambda: self._client.events.list(params or {"limit": 50, "active": True}).get("events", []),
+            default=[])
 
     def market(self, slug: str):
-        return self._client.markets.retrieve_by_slug(slug) if self.available else None
+        if not self.available:
+            return None
+        return self._guarded(lambda: self._client.markets.retrieve_by_slug(slug))
 
     def bbo(self, slug: str):
         """Return (bid, ask) as floats, or (None, None)."""
         if not self.available:
             return None, None
-        d = _unwrap(self._client.markets.bbo(slug))
+        d = self._guarded(lambda: _unwrap(self._client.markets.bbo(slug)), default={})
         return _price(d.get("bestBid", d.get("bid"))), _price(d.get("bestAsk", d.get("ask")))
 
     def bbo_full(self, slug: str) -> dict:
         """The whole marketData block: bestBid/bestAsk/lastTradePx/settlementPx/state/depths."""
-        return _unwrap(self._client.markets.bbo(slug)) if self.available else {}
+        if not self.available:
+            return {}
+        return self._guarded(lambda: _unwrap(self._client.markets.bbo(slug)), default={})
 
     def book(self, slug: str):
         """{'bids': [(px, qty)...] high→low, 'asks': [(px, qty)...] low→high, 'last': float|None}."""
         if not self.available:
             return None
-        d = _unwrap(self._client.markets.book(slug))
+        d = self._guarded(lambda: _unwrap(self._client.markets.book(slug)))
+        if d is None:
+            return None
         bids = sorted(((_price(x.get("px")), float(x.get("qty") or 0)) for x in d.get("bids", []) if _price(x.get("px")) is not None), reverse=True)
         asks = sorted(((_price(x.get("px")), float(x.get("qty") or 0)) for x in d.get("asks", []) if _price(x.get("px")) is not None))
         return {"bids": bids, "asks": asks, "last": _price(d.get("lastTradePx")), "tick": 0.01}
@@ -171,12 +229,21 @@ class USVenue:
         try:
             e = self._client.events.retrieve_by_slug(slug)
         except Exception as exc:
+            if _is_rate_limited(exc):
+                self._enter_backoff(exc)
+                return None
             if not _is_not_found(exc):
                 raise
         if not e or not e.get("markets"):
             word = "Highest" if kind == "high" else "Lowest"
             query = (config.city_meta(city_slug) or {}).get("query", city_slug)
-            res = self._client.search.query({"query": f"{word} temperature in {query}"}) or []
+            try:
+                res = self._client.search.query({"query": f"{word} temperature in {query}"}) or []
+            except Exception as exc:
+                if _is_rate_limited(exc):
+                    self._enter_backoff(exc)
+                    return None
+                raise
             items = res if isinstance(res, list) else (res.get("events") or res.get("results") or [])
             e = next((x for x in items if isinstance(x, dict) and x.get("slug") == slug), None)
         return weather_event_from_us(e, city_slug, kind) if e else None
@@ -188,6 +255,9 @@ class USVenue:
         try:
             s = self._client.markets.settlement(slug) or {}
         except Exception as exc:
+            if _is_rate_limited(exc):
+                self._enter_backoff(exc)
+                return None
             if _is_not_found(exc):
                 return None
             raise
@@ -208,7 +278,7 @@ class USVenue:
         """Buying power (cash + any promo credit the venue lets you trade with)."""
         if not self.available:
             return None
-        b = self._client.account.balances() or {}
+        b = self._guarded(lambda: self._client.account.balances(), default={}) or {}
         rows = b.get("balances") if isinstance(b, dict) else b
         row = (rows or [{}])[0] if isinstance(rows, list) else (rows or {})
         for k in ("buyingPower", "currentBalance", "available", "cash", "balance", "total"):
@@ -242,7 +312,7 @@ class USVenue:
     def balance_detail(self) -> dict:
         if not self.available:
             return {}
-        b = self._client.account.balances() or {}
+        b = self._guarded(lambda: self._client.account.balances(), default={}) or {}
         rows = b.get("balances") if isinstance(b, dict) else b
         row = (rows or [{}])[0] if isinstance(rows, list) else (rows or {})
         return {k: row.get(k) for k in ("buyingPower", "currentBalance", "displayedCash", "bonusReservation",
@@ -251,7 +321,7 @@ class USVenue:
     def positions(self):
         if not self.available:
             return []
-        d = self._client.portfolio.positions() or {}
+        d = self._guarded(lambda: self._client.portfolio.positions(), default={}) or {}
         if isinstance(d, list):
             return d
         pos = d.get("positions")
@@ -294,7 +364,9 @@ class USVenue:
         return list((d or {}).get("orders") or [])
 
     def _orders_list(self):
-        return self._client.orders.list() if self.available else []
+        if not self.available:
+            return []
+        return self._guarded(lambda: self._client.orders.list(), default=[])
 
     def close(self):
         if self._client:

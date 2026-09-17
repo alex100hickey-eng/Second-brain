@@ -705,6 +705,46 @@ def test_us_venue_parses_live_shapes(monkeypatch):
     assert v.find_weather_event("nyc", datetime(2026, 9, 14), "high") is None
 
 
+def test_us_venue_backs_off_on_rate_limit_instead_of_hammering():
+    """2026-09-17: CWRU's shared IP got Cloudflare-1015-rate-limited by gateway.polymarket.us, and
+    every scan/settle tick kept calling the banned host again, each failure logging the full HTML
+    error page (~250 lines) with nothing to let the ban clear. A rate limit should trip a cooldown
+    (`available` goes False, same as a missing key) so callers stop hitting it and degrade to their
+    normal no-key defaults instead of raising the raw response body."""
+    from polybot.feeds import usvenue
+
+    class RateLimited(Exception):
+        status_code = 429
+
+    calls = {"n": 0}
+
+    class Markets:
+        def settlement(self, slug):
+            calls["n"] += 1
+            raise RateLimited("<!doctype html>...You are being rate limited...")
+
+    class Client:
+        markets = Markets()
+
+    v = usvenue.USVenue()
+    v.available, v._client = True, Client()
+    assert v.resolution("some-slug") is None          # degrades cleanly, no raw HTML propagates
+    assert calls["n"] == 1
+    assert v.available is False                        # backoff engaged
+    assert "RateLimited" in v.why_unavailable
+
+    assert v.resolution("some-slug") is None            # still backing off
+    assert calls["n"] == 1                              # ...so it never calls the banned host again
+
+    v._backoff_until = 0.0                              # cooldown elapsed
+    assert v.available is True
+    with pytest.raises(RateLimited):
+        v._client.markets.settlement("some-slug")       # sanity: the fake still raises when called directly
+    calls["n"] = 0
+    assert v.resolution("some-slug") is None
+    assert calls["n"] == 1                              # tries again once backoff has passed
+
+
 def test_us_scan_records_us_signals_and_snapshots(monkeypatch):
     from polybot import runner as runner_mod
     from polybot.feeds import usvenue
