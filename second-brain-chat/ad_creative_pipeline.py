@@ -1046,6 +1046,107 @@ def detect_prospect_replies(fetch, seen: set = None) -> list:
     return hits
 
 
+# ---------------------------------------------------------------- bounces
+
+# A bounce is invisible to reply detection and always will be: a delivery-status notice comes
+# from mailer-daemon@googlemail.com, which is one of OUR domains, not a prospect's, so every
+# reply watcher written so far skips it by design.
+#
+# It matters more than one lost prospect. The sending domain is the asset the whole outreach
+# machine sits on — it took weeks to warm, it is the reason any of this lands in an inbox at
+# all, and a run of bounces is how it gets burned. It is also the one number that says whether
+# the daily cap can safely go up, which is otherwise a guess.
+BOUNCE_FROM = ("mailer-daemon", "postmaster", "mail-daemon")
+BOUNCE_SUBJECT = re.compile(
+    r"delivery status notification|undeliverable|address not found|delivery (has failed|incomplete)"
+    r"|returned mail|mail delivery (failed|subsystem)|failure notice|could ?n.t be delivered", re.I)
+_ADDRESS_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+
+
+def sent_addresses() -> dict:
+    """{address: brand} for every address an email actually went to. Unlike sent_domains this
+    keeps brands that already replied — a reply does not mean a later message reached them."""
+    path = _tracker_path()
+    out = {}
+    if not path:
+        return out
+    try:
+        with open(path, newline="", encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                if not (row.get("sent_date") or "").strip():
+                    continue
+                brand = (row.get("brand") or "").strip()
+                for col in ("email", "email_generic"):
+                    addr = (row.get(col) or "").strip().lower()
+                    if "@" in addr and brand:
+                        out[addr] = brand
+    except (OSError, csv.Error):
+        return {}
+    return out
+
+
+def _message_text(m: dict) -> str:
+    preview = m.get("preview")
+    if isinstance(preview, dict):
+        preview = preview.get("body")
+    return " ".join(str(x or "") for x in
+                    (m.get("subject"), preview, m.get("snippet"), m.get("body"), m.get("messageText")))
+
+
+def sent_since(day: str) -> int:
+    """How many first touches actually went out on or after `day` (YYYY-MM-DD). The denominator
+    for the bounce rate: a rate against all-time sends would keep looking fine while today's
+    sending burned."""
+    path = _tracker_path()
+    if not path:
+        return 0
+    n = 0
+    try:
+        with open(path, newline="", encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                sent = (row.get("sent_date") or "").strip()
+                if sent and sent >= day:
+                    n += 1
+    except (OSError, csv.Error):
+        return 0
+    return n
+
+
+def detect_bounces(fetch, seen: set = None) -> list:
+    """Delivery failures for addresses we actually wrote to. `fetch(query)` -> [msg dicts].
+
+    Deterministic: the failed address has to be one the tracker says an email went to, so a
+    bounce for some unrelated message cannot enter the funnel's numbers. Returns
+    [{address, brand, subject, id}]; pure detection, no writes."""
+    known = sent_addresses()
+    if not known:
+        return []
+    seen = seen or set()
+    try:
+        msgs = fetch("(from:mailer-daemon OR from:postmaster OR subject:(\"Delivery Status "
+                     "Notification\" OR Undeliverable)) newer_than:7d") or []
+    except Exception:                                        # noqa: BLE001
+        return []
+    hits = []
+    for m in msgs:
+        if not isinstance(m, dict):
+            continue
+        mid = str(m.get("messageId") or m.get("id") or "")
+        if mid and mid in seen:
+            continue
+        sender = str(m.get("sender") or m.get("from") or "").lower()
+        subject = str(m.get("subject") or "")
+        if not (any(f in sender for f in BOUNCE_FROM) or BOUNCE_SUBJECT.search(subject)):
+            continue
+        text = _message_text(m)
+        for addr in {a.lower() for a in _ADDRESS_RE.findall(text)}:
+            if addr in known:
+                hits.append({"address": addr, "brand": known[addr], "id": mid,
+                             "subject": subject[:120]})
+                break
+    return hits
+
+
 def check_ad_pipeline(limit: int = 12) -> str:
     rows = _all_rows()
     brands = [r for r in rows if r["data"].get("kind") == "brand"]

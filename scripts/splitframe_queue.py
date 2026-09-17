@@ -34,7 +34,7 @@ import os
 import re
 import shutil
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -566,6 +566,23 @@ def _intake():
     return intake
 
 
+BOUNCE_KEY = "splitframe:bounces"
+
+
+def recent_bounces(days: int = 14) -> list:
+    """Delivery failures in the last `days`, newest first. The server records these (a bounce is
+    invisible to reply detection — it comes from mailer-daemon at one of our own domains), and
+    this is where the decision they inform gets made: whether the daily cap can go up, and
+    whether the newest addresses in the tracker are any good."""
+    cutoff = (datetime.now(LOCAL_TZ) - timedelta(days=days)).isoformat()
+    try:
+        events = (_intake()._load_state(BOUNCE_KEY) or {}).get("events") or []
+    except Exception:                                        # noqa: BLE001
+        return []
+    return sorted([e for e in events if _c(e.get("at")) >= cutoff],
+                  key=lambda e: _c(e.get("at")), reverse=True)
+
+
 def load_queue():
     q = _intake()._load_state(QUEUE_KEY) or {}
     return q, list(q.get("queue") or [])
@@ -781,6 +798,7 @@ def status_report(rows: list, queue: list, today: str) -> dict:
         "hunter_targets": hunter_targets(rows),
         "next_close": next_close_variant(queue),
         "close_report": close_report(rows, queue),
+        "bounces": recent_bounces(),
     }
 
 
@@ -806,6 +824,12 @@ def _print_status(rep: dict) -> None:
     print(f"\nClose experiment — write the next one with the {rep['next_close'].upper()} close.")
     for arm in CLOSE_VARIANTS:
         print(f"  {arm:9} {cr[arm]['sent']:>3} sent, {cr[arm]['replied']} replied")
+
+    b = rep["bounces"]
+    if b:
+        print(f"\nBounced in the last 14 days ({len(b)}) — the sending domain is the asset here:")
+        for e in b[:6]:
+            print(f"  {e.get('brand')} <{e.get('address')}> {_c(e.get('at'))[:10]}")
 
     print(f"\nCandidates worth a live read ({len(rep['candidates_to_qualify'])}):")
     for c in rep["candidates_to_qualify"]:

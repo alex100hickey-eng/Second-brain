@@ -473,9 +473,13 @@ def brief_sf_topup(sf: dict, need: int) -> str:
             f"--evidence \"...\" --close <arm>`, where <arm> is the one `status` names under 'Close "
             f"experiment' — it alternates, so read it before EACH email, not once per run. The QUESTION "
             f"close is the one that has always been sent: name the service, then ask something real "
-            f"about their business. The OFFER close names the service, then offers to make the specific "
-            f"test the email just described, free, theirs to use either way — no other part of the email "
-            f"changes between arms. Never work around the script. Targets marked 'front desk' have no named "
+            f"about their business. The OFFER close names the service, then offers to make ONE STATIC AD "
+            f"of the test the email just described — free, theirs either way. Offer only a static: "
+            f"`scripts/spec_ad.py` renders those from the brand's own product photo at no cost, and a "
+            f"video cannot be made for free, so promising one would be a promise that gets broken. If the "
+            f"test you named in the body is a video, name a static version of the same idea in the close. "
+            f"No other part of the email changes between arms. Never work around the script. "
+            f"Targets marked 'front desk' have no named "
             f"person: open with the observation, never with an invented greeting, and write to the company "
             f"('your ads', not 'your team's ads'). Report facts drafts_queued=<n>.")
 

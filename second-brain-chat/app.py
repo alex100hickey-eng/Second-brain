@@ -6356,6 +6356,12 @@ MAIL_SCAN_INTERVAL = int(os.environ.get("MAIL_SCAN_INTERVAL_SEC", "900"))  # 15 
 
 
 _PROSPECT_SEEN_KEY = "prospect:replies-seen"
+_BOUNCE_KEY = "splitframe:bounces"
+# Above this share of a sending day, stop and look before the domain is burned.
+# Mailbox providers start filtering around 2%; 10% of a 5-a-day cap is one bad
+# address, so the rate alone is too jumpy to act on at this volume — the nudge
+# needs a real count behind it too.
+_BOUNCE_ALERT_RATE, _BOUNCE_ALERT_MIN = 0.08, 2
 
 
 def _prospect_reply_pass() -> str:
@@ -6407,6 +6413,55 @@ def _prospect_reply_pass() -> str:
     return "; ".join(h["brand"] for h in hits)
 
 
+def _prospect_bounce_pass() -> str:
+    """Notice a delivery failure, which reply detection structurally cannot.
+
+    A bounce arrives from mailer-daemon at one of our own domains, so every reply watcher
+    skips it. That matters more than the one lost prospect: the sending domain took weeks to
+    warm, it is why any of this reaches an inbox, and a run of bounces is how it gets burned.
+    It is also the only number that says whether the daily cap can safely go up.
+
+    Records to shared state rather than the tracker CSV: the server only READS the vault, so a
+    CSV write here would be reverted by the next sync and the evidence would quietly vanish.
+    """
+    watch_account = "studio" if "studio" in mail_reader._ENTITIES else "personal"
+    st = intake._load_state(_BOUNCE_KEY) or {}
+    seen = set(st.get("ids") or [])
+    hits = ad_creative_pipeline.detect_bounces(
+        lambda q: mail_reader._gmail_fetch(watch_account, q, 15), seen=seen)
+    if not hits:
+        return "none"
+    events = list(st.get("events") or [])
+    now = datetime.now(LOCAL_TZ)
+    for h in hits:
+        events.append({"address": h["address"], "brand": h["brand"],
+                       "subject": h["subject"], "at": now.isoformat()})
+        if h["id"]:
+            seen.add(h["id"])
+    st.update({"key": _BOUNCE_KEY, "ids": sorted(seen)[-300:], "events": events[-200:]})
+    intake._save_state(st)
+
+    # Only the last fortnight counts: a bad address from a month ago says nothing about
+    # whether today's sending is safe.
+    cutoff = now - timedelta(days=14)
+    recent = [e for e in events
+              if (e.get("at") or "") >= cutoff.isoformat()]
+    sent_recent = ad_creative_pipeline.sent_since(cutoff.date().isoformat())
+    rate = (len(recent) / sent_recent) if sent_recent else 0.0
+    if len(recent) >= _BOUNCE_ALERT_MIN and rate >= _BOUNCE_ALERT_RATE:
+        try:
+            proactive.send_nudge(
+                "splitframe-bounces",
+                "⚠️ Splitframe emails are bouncing",
+                f"{len(recent)} of the last {sent_recent} sends bounced ({rate:.0%}). "
+                "That is the sending domain at risk, not just lost prospects. "
+                "Worth pausing the daily release until the addresses are checked.",
+                priority="high", tags="warning", renudge_hours=12)
+        except Exception as e:                               # noqa: BLE001
+            print(f"bounce nudge failed: {e}")
+    return "; ".join(f"{h['brand']} <{h['address']}>" for h in hits)
+
+
 def _outbox_sent_pass() -> str:
     """Close outbox items whose Gmail draft is no longer in Drafts. Rides the
     15-minute mail worker: the same poll that reads the mailbox can see that
@@ -6437,6 +6492,7 @@ def _mail_scan_pass() -> dict:
     if icloud_intake._configured():
         _try("icloud", lambda: icloud_intake.scan_icloud(days=2))
     _try("prospect_replies", _prospect_reply_pass)
+    _try("prospect_bounces", _prospect_bounce_pass)
     _try("outbox_sent", _outbox_sent_pass)
     # Beat even when individual accounts failed — those already report their own
     # warnings above. This heartbeat answers a different question: is the WORKER
