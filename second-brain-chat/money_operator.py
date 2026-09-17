@@ -442,7 +442,9 @@ def brief_sf_topup(sf: dict, need: int) -> str:
             f"read with `python3 scripts/adlib_read.py --page-id <id>` (0 active → `note --ad-count 0`; over "
             f"100 → `note` and skip), write the email in Alex's voice with the splitframe-outreach skill from "
             f"what you just read, save the body to a temp file, then `splitframe_queue.py add ... --ad-count N "
-            f"--evidence \"...\"`. Never work around the script. Report facts drafts_queued=<n>.")
+            f"--evidence \"...\"`. Never work around the script. Targets marked 'front desk' have no named "
+            f"person: open with the observation, never with an invented greeting, and write to the company "
+            f"('your ads', not 'your team's ads'). Report facts drafts_queued=<n>.")
 
 
 def brief_sf_hunter(sf: dict) -> str:
@@ -455,15 +457,17 @@ def brief_sf_hunter(sf: dict) -> str:
 
 
 def brief_sf_source(sf: dict) -> str:
-    return ("The tracker is mined out: every remaining prospect is either a 100+ ad in-house team or a dead "
-            "candidate row (0 active ads). The funnel needs NEW brands that are spending right now in the 5-50 "
+    return ("Every prospect already in the tracker is drafted, queued, out of band or dead. The funnel needs "
+            "NEW brands that are spending right now in the 5-50 "
             "active-ad band. Use Ad Library keyword searches (`python3 scripts/adlib_read.py --keyword "
             "\"<category>\"`, categories like pet supplies, skincare, supplements, swimwear, snacks, home goods, "
             "activewear; DTC brands only, never retailers, agencies or marketplaces), pick advertisers whose "
             "own page (`--page-id`) shows 5-50 active ads, and add each with `python3 scripts/splitframe_queue.py "
             "source --brand \"...\" --domain ... --ad-count N --page-id ... --category ... --evidence \"keyword "
-            "<q>: what the ads showed\"`. Target 6 new in-band brands this run. Emails come later from Hunter. "
-            "Report facts candidates_added=<n>.")
+            "<q>: what the ads showed\"`. Target 6 new in-band brands this run. Then finish the run with "
+            "`python3 scripts/find_prospect_emails.py --status qualified --write`, which reads the brands' own "
+            "sites for a published address and costs nothing — it is what fills most rows, and Hunter is only "
+            "for putting a name on one that already matters. Report facts candidates_added=<n>.")
 
 
 def brief_clip_post(clip: dict) -> str:

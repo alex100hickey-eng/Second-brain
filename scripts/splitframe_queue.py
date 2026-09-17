@@ -83,10 +83,153 @@ def _c(value) -> str:
 
 # ---------------------------------------------------------------- pure: reading the tracker
 
-def is_person(email: str) -> bool:
-    """A real person's address. Shared inboxes are where a first touch about ad creative dies."""
+# Which inbox an address actually is. Three tiers, and the order is the whole point:
+#
+#   person      a named human. Best reply rate, always drafted first, only one that gets a name
+#               in the greeting.
+#   front desk  the company inbox at a small brand — hello@, info@, press@, or the brand's own
+#               name. At 5-50 active ads the company is a few people and one of them reads it.
+#   ticket desk support@, orders@, wholesale@. Whoever reads it is answering "where is my order",
+#               has no say over creative, and can only close the ticket. Never written to.
+#
+# This used to be one blocklist of role prefixes, which meant any address that was not on the
+# list counted as a person: `goodday@`, `justdoughit@`, `oudwarellc@`, `store@` all read as
+# humans and would have been greeted by name. So a person now needs positive evidence instead —
+# the tracker's own contact_name, a known first name, or a first.last local part. An unusual
+# real name gets demoted to front desk, which costs a greeting and some ordering, never a send.
+
+TICKET_LOCALS = {"support", "sup", "help", "care", "service", "customerservice", "custserv",
+                 "orders", "order", "returns", "cs", "admin", "billing", "accounts", "shop",
+                 "store", "sales", "dealers", "wholesale", "noreply", "no-reply", "donotreply"}
+
+# Deliberately not exhaustive: anything that is not a person and not a ticket desk falls through
+# to front desk, because a brand-voice inbox (goodday@, justdoughit@) is a front desk.
+FRONT_LOCALS = {"hello", "hi", "hey", "heythere", "info", "contact", "talktous", "team",
+                "partnerships", "partners", "press", "media", "marketing", "hola", "inquiries",
+                "general", "studio", "office", "mail", "email", "ask", "connect"}
+
+# Enough coverage for founder first names that appear without a contact_name in the tracker.
+# A miss demotes to front desk; it never promotes a role inbox to a person.
+FIRST_NAMES = {
+    "aaron", "abby", "abigail", "adam", "adrian", "alan", "alex", "alexa", "alexis", "ali",
+    "alice", "alicia", "allison", "amanda", "amber", "amy", "ana", "andrea", "andrew", "andy",
+    "angela", "anna", "anne", "annie", "anthony", "april", "ariel", "ashley", "austin", "ava",
+    "becca", "becky", "ben", "benjamin", "beth", "bethany", "bill", "billy", "blake", "bob",
+    "bobby", "brad", "bradley", "brandon", "breanna", "brenda", "brendan", "brent", "brett",
+    "brian", "briana", "brittany", "brooke", "bruce", "bryan", "caelin", "caitlin", "cameron",
+    "camille", "cara", "carl", "carla", "carlos", "carly", "carol", "carolina", "caroline",
+    "carrie", "casey", "cassidy", "catherine", "cathy", "chad", "charles", "charlie", "chase",
+    "chelsea", "cheryl", "chris", "chrissy", "christian", "christina", "christine", "chloe",
+    "cindy", "claire", "clara", "clark", "cody", "colin", "connor", "corey", "courtney", "craig",
+    "crystal", "curtis", "dan", "dana", "daniel", "danielle", "danny", "darren", "dave", "david",
+    "dawn", "dean", "deb", "debbie", "deborah", "denise", "dennis", "derek", "devin", "diana",
+    "diane", "dominic", "don", "donald", "donna", "doug", "douglas", "drew", "dylan", "ed",
+    "eddie", "eduardo", "edward", "elaine", "eleanor", "elena", "eli", "elijah", "elise",
+    "elizabeth", "ella", "ellen", "ellie", "emily", "emma", "eric", "erica", "erik", "erin",
+    "ethan", "eva", "evan", "eve", "faith", "felix", "fiona", "frank", "fred", "gabe", "gabriel",
+    "gabriella", "gary", "gavin", "gemma", "gene", "george", "gerald", "gillian", "gina", "grace",
+    "gracie", "graham", "grant", "greg", "gregory", "hailey", "haley", "hannah", "harry",
+    "hayden", "heather", "heidi", "helen", "henry", "holly", "hope", "hunter", "ian", "isaac",
+    "isabel", "isabella", "ivan", "jack", "jackie", "jackson", "jacob", "jacqueline", "jade",
+    "jake", "james", "jamie", "jan", "jane", "janet", "jason", "jay", "jayden", "jean", "jeff",
+    "jeffrey", "jen", "jenna", "jennifer", "jenny", "jeremy", "jerry", "jess", "jesse", "jessica",
+    "jill", "jim", "jimmy", "joan", "joann", "joe", "joel", "john", "johnny", "jon", "jonathan",
+    "jordan", "jose", "joseph", "josh", "joshua", "joy", "juan", "judy", "julia", "julian",
+    "julianne", "julie", "justin", "kaitlyn", "karen", "kari", "kate", "katelyn", "katherine",
+    "kathy", "katie", "katrina", "kayla", "keith", "kelly", "kelsey", "ken", "kenneth", "kevin",
+    "kim", "kimberly", "kris", "kristen", "kristin", "kristina", "kyle", "lance", "lara", "larry",
+    "laura", "lauren", "laurie", "lee", "leah", "leo", "leslie", "levi", "liam", "lily", "linda",
+    "lindsay", "lindsey", "lisa", "liz", "logan", "lori", "louis", "lucas", "lucy", "luke",
+    "lydia", "lynn", "madeline", "madison", "maggie", "mandy", "marc", "marcus", "margaret",
+    "maria", "mariah", "marie", "mario", "marissa", "mark", "marta", "martha", "martin", "mary",
+    "mason", "matt", "matthew", "maureen", "max", "maxx", "maya", "megan", "meghan", "mel",
+    "melanie", "melissa", "meredith", "mia", "michael", "michele", "michelle", "mike", "miranda",
+    "molly", "monica", "morgan", "nancy", "naomi", "natalie", "natasha", "nate", "nathan", "neil",
+    "nicholas", "nick", "nicole", "nina", "noah", "nora", "olivia", "oscar", "owen", "pam",
+    "pamela", "pat", "patricia", "patrick", "paul", "paula", "peggy", "peter", "philip", "phil",
+    "phoebe", "polina", "rachel", "ralph", "randy", "ray", "rebecca", "regina", "renee", "rich",
+    "richard", "rick", "riley", "rob", "robert", "robin", "rochelle", "rodney", "roger", "ron",
+    "ronald", "rosa", "rose", "ross", "roy", "russell", "ruth", "ryan", "sabrina", "sally", "sam",
+    "samantha", "samuel", "sandra", "sandy", "sara", "sarah", "scott", "sean", "serena", "seth",
+    "shane", "shannon", "sharon", "shaun", "shawn", "sheila", "shelby", "shelly", "sierra",
+    "simon", "sofia", "sophia", "sophie", "stacey", "stacy", "stephanie", "stephen", "steve",
+    "steven", "stormi", "stuart", "sue", "susan", "suzanne", "sydney", "tami", "tammy", "tanya",
+    "tara", "taylor", "ted", "teresa", "terry", "tess", "thomas", "tiffany", "tim", "timothy",
+    "tina", "toby", "todd", "tom", "tommy", "tony", "tracy", "travis", "trevor", "tricia",
+    "tyler", "valerie", "vanessa", "vera", "veronica", "vicki", "victor", "victoria", "vincent",
+    "virginia", "wade", "walter", "wayne", "wendy", "wes", "will", "william", "willow", "wyatt",
+    "zach", "zachary", "zoe",
+}
+
+DOTTED_NAME = re.compile(r"^[a-z]{2,}[._-][a-z]{2,}$")
+
+
+def _local(email: str) -> str:
     e = _c(email).lower()
-    return bool(e) and "@" in e and not e.startswith(SKIP_ADDRESSES)
+    return e.split("@", 1)[0] if "@" in e else ""
+
+
+def _letters(value: str) -> str:
+    return re.sub(r"[^a-z]", "", (value or "").lower())
+
+
+def matches_contact(email: str, contact_name: str) -> bool:
+    """The local part is the tracker's named contact: becca, maxx.appelman, pveksler, klee."""
+    parts = [t.lower() for t in re.split(r"[^A-Za-z]+", contact_name or "") if len(t) > 1]
+    if not parts:
+        return False
+    first, last = parts[0], parts[-1]
+    local = _letters(_local(email))
+    if not local:
+        return False
+    return local in {first, last, first + last, last + first, first[0] + last, first + last[0]}
+
+
+def is_ticket_desk(email: str) -> bool:
+    """An inbox whose job is orders. A creative pitch there is deleted by someone who could not
+    have acted on it anyway, and costs a spam complaint on a domain that took weeks to warm."""
+    return _local(email) in TICKET_LOCALS
+
+
+def is_person(email: str) -> bool:
+    """A real person's address, by positive evidence — a known first name or a first.last local
+    part. Without a name there is nobody to greet, and a greeting invented for a shared inbox is
+    the tell that the email was machine-written."""
+    local = _local(email)
+    if not local or local in TICKET_LOCALS or local in FRONT_LOCALS:
+        return False
+    return _letters(local) in FIRST_NAMES or bool(DOTTED_NAME.match(local))
+
+
+def is_front_desk(email: str) -> bool:
+    """A shared inbox a pitch can survive in: the company's own front door. Anything that is not
+    a ticket desk qualifies, including brand-voice inboxes like goodday@ or justdoughit@ —
+    those are the front door with a costume on."""
+    return bool(_local(email)) and not is_ticket_desk(email)
+
+
+def target_address(row: dict) -> tuple:
+    """(address, tier) for a tracker row — "person", "shared", or ("", "") for nobody to write to.
+
+    Both address columns are read because the tracker grew a column: `email` held whatever was
+    found first and `email_generic` was added later for site-scraped addresses. A row can carry
+    either, and a person always wins over a front desk on the same row.
+    """
+    cols = ("email", "email_generic")
+    name = _c(row.get("contact_name"))
+    for col in cols:                                   # the tracker's own named contact first
+        e = _c(row.get(col)).lower()
+        if e and name and matches_contact(e, name) and not is_ticket_desk(e):
+            return e, "person"
+    for col in cols:
+        e = _c(row.get(col)).lower()
+        if is_person(e):
+            return e, "person"
+    for col in cols:
+        e = _c(row.get(col)).lower()
+        if e and "@" in e and is_front_desk(e):
+            return e, "shared"
+    return "", ""
 
 
 def known_count(row: dict):
@@ -133,8 +276,8 @@ def next_targets(rows: list, queue: list) -> list:
     queued = {_c(e.get("to")).lower() for e in queue}
     out = []
     for r in rows:
-        email = _c(r.get("email")).lower()
-        if _c(r.get("status")) != "qualified" or not is_person(email):
+        email, tier = target_address(r)
+        if _c(r.get("status")) != "qualified" or not email:
             continue
         if _c(r.get("sent_date")) or _c(r.get("replied")) or _c(r.get("outcome")):
             continue
@@ -144,12 +287,15 @@ def next_targets(rows: list, queue: list) -> list:
         b = band(n)
         if b in ("zero", "big"):
             continue
-        out.append({"brand": _c(r.get("brand")), "to": email,
+        out.append({"brand": _c(r.get("brand")), "to": email, "tier": tier,
                     "contact": _c(r.get("contact_name")), "page_id": page_id(r),
                     "adlib_url": _c(r.get("adlib_url")), "known_count": n,
                     "count_read_live": when, "band": b})
+    # A named founder outranks a front desk at a better-fitting brand: who reads it moves the
+    # reply rate more than five ads either way does.
+    tier_order = {"person": 0, "shared": 1}
     order = {"in": 0, "unknown": 1, "out": 2}
-    out.sort(key=lambda t: (order[t["band"]], t["brand"].lower()))
+    out.sort(key=lambda t: (tier_order[t["tier"]], order[t["band"]], t["brand"].lower()))
     return out
 
 
@@ -213,13 +359,15 @@ def plan_add(rows: list, queue: list, to: str, subject: str, body: str,
              ad_count, brand: str = ""):
     """(tracker row, problems). An empty problems list is the only permission to queue."""
     to = _c(to).lower()
-    row = next((r for r in rows if _c(r.get("email")).lower() == to), None)
+    row = next((r for r in rows
+                if to in {_c(r.get("email")).lower(), _c(r.get("email_generic")).lower()} and to),
+               None)
     if row is None:
         return None, [f"{to or '(empty)'} is not in the tracker — the sender only ever sends "
                       "to a tracker-verified address, so this could never go out"]
     problems = []
-    if not is_person(to):
-        problems.append("shared inbox — a first touch about ad creative dies in a support queue")
+    if not (is_person(to) or is_front_desk(to)):
+        problems.append("ticket queue — a first touch about ad creative dies in a support inbox")
     if _c(row.get("status")) != "qualified":
         problems.append(f"row status is {row.get('status')!r}, not qualified")
     if _c(row.get("sent_date")):
@@ -430,12 +578,16 @@ def _print_status(rep: dict) -> None:
           f"to hold {RUNWAY_TARGET} in stock.")
     for e in rep["pending"]:
         print(f"  queued: {e['brand']} <{e['to']}> — {e['subject']}")
-    print(f"\nCan be drafted next ({len(rep['next_targets'])}):")
+    people = sum(1 for t in rep["next_targets"] if t["tier"] == "person")
+    shared = len(rep["next_targets"]) - people
+    print(f"\nCan be drafted next ({len(rep['next_targets'])}: "
+          f"{people} named, {shared} front desk):")
     for t in rep["next_targets"]:
         known = ("never read live" if t["known_count"] is None else
                  f"{t['known_count']} active" + (f" (live {t['count_read_live']})"
                                                  if t["count_read_live"] else " (old note)"))
-        print(f"  [{t['band']:>7}] {t['brand']} <{t['to']}> {t['contact'] or '(no name)'} "
+        who = t["contact"] or ("front desk" if t["tier"] == "shared" else "(no name)")
+        print(f"  [{t['band']:>7}] {t['brand']} <{t['to']}> {who} "
               f"— {known} — page id {t['page_id'] or '?'}")
     print(f"\nCandidates worth a live read ({len(rep['candidates_to_qualify'])}):")
     for c in rep["candidates_to_qualify"]:

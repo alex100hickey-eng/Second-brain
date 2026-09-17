@@ -13,46 +13,53 @@ is still yours to do.
 ---
 
 ## 💰 Money lanes — what only you can do
-*Kept current by the money operator. Since 2026-09-16 night it is not a scheduled routine any more:
-the SERVER (CLARVIS on Hetzner) decides the next unblocked task every 10 minutes and files it; your
-Mac's capability watcher runs it as a headless Claude Code worker; the worker reports; the server files
-the next one. Ask CLARVIS "what is the money operator doing" any time (the `money_operator` tool), or run
-`python3 scripts/money_task.py status`. The 8 PM routine is disabled (its one run tonight did the work
-below). Everything else in the three lanes happens without you: Splitframe drafting/sending, sourcing
-new brands, TikTok posting at the account-safe cadence, polybot engineering in paper mode.*
+*Kept current by the money operator. The SERVER (CLARVIS on Hetzner) files the next unblocked task every
+10 minutes; your Mac's capability watcher runs it as a headless Claude Code worker. Ask CLARVIS "what is
+the money operator doing", or run `python3 scripts/money_task.py status`. Everything else in the three
+lanes happens without you.*
 
-Rewritten 2026-09-16 21:15. The worker has NO desktop Browser pane: it reads sites through its own
-Chrome profile. So the logins below are done ONCE in a headed window on that profile, not in the pane:
-`open -na "Google Chrome" --args --user-data-dir="$HOME/.money-operator-chrome" <url>` — log in, close
-the window (the worker cannot read while that window is open).
+Rewritten 2026-09-17 16:40. The worker has no Browser pane — it reads sites through its own Chrome
+profile, so the logins below are done ONCE in a headed window on that profile:
+`open -na "Google Chrome" --args --user-data-dir="$HOME/.money-operator-chrome" <url>` — log in, then
+close the window (the worker cannot read while it is open).
 
 1. **Log in to Vyro once on the operator profile** (1 min):
    `open -na "Google Chrome" --args --user-data-dir="$HOME/.money-operator-chrome" https://app.vyro.com`
-   → "Continue with Google" with the alt account (basketballlacrosse387@gmail.com), then close that window.
+   → "Continue with Google" with the alt account (basketballlacrosse387@gmail.com), then close the window.
    Until then 24 posted clips can't be submitted and views never count toward payment. This is the only
    reason the clipping lane is at $0.
-2. **The creator lane: yes or no at $400/mo.** Read `Money/Creator Lane — Offer (proposed).md` (one page:
-   3 clips a week for streamers and podcasters with a dead clips channel, $400 flat, with the reasoning).
-   Say *"Creator lane approved at $400 for 3 clips a week"* — or change the number. Until then the operator
-   builds no list and writes no email on that lane, and it is the only second revenue lane on the table.
-3. **Fix the 5 Instagram Reel captions in the IG app** (replace `%23` with `#`). The API can't edit them
+2. **Fix the 5 Instagram Reel captions in the IG app** (replace `%23` with `#`). The API can't edit them
    and Vyro rejects them as they are; unfixed, they stay unpaid forever.
-4. **Log in to Whop on the same operator profile** (same alt account):
+3. **Log in to Whop on the same operator profile** (same alt account):
    `open -na "Google Chrome" --args --user-data-dir="$HOME/.money-operator-chrome" https://whop.com/discover/content-rewards`
-   You joined Clipping Culture, but the worker's browser has no session, so it can't read the board or pick
-   a campaign to join.
-5. **YouTube Studio: why were all 5 Shorts deleted?** Open studio.youtube.com on @wildestmomentsclips and
+   You joined Clipping Culture, but the worker's browser has no session, so it can't read the board.
+4. **YouTube Studio: why were all 5 Shorts deleted?** Open studio.youtube.com on @wildestmomentsclips and
    read the notification. Nothing gets re-uploaded to YouTube until you say what it said.
 
-Also on the clock: **Sep 19 Claude Max renewal ($106)**. Every worker run spends Claude Code usage and
-the operator is capped at 10 runs a day (MONEY_OPERATOR_MAX_RUNS on the server). On Pro (~$21) that cap
-would have to drop to 1-2 a day. The Sep 18 nudge already asks you.
+> **Closed 2026-09-17, both by decision rather than by you doing anything:**
+>
+> - *"The outreach queue goes dry Friday and cannot refill itself."* It was not true, and it was the top
+>   item on this page. The claim was that 33 in-band brands had nobody to write to and Hunter's quota was
+>   shut until ~Sep 24. But `scripts/find_prospect_emails.py` reads brands' own sites for a published
+>   address, needs no quota, and **had never been run on 54 of them**. It found addresses for 77 of 99.
+>   The queue also refused every one of those addresses, because `is_person()` counted any shared inbox as
+>   unreachable. That is right about `support@` and wrong about `hello@`: at a brand running 5-50 ads the
+>   company is a few people and one of them reads the front desk. Named founders still go first and are
+>   the only ones greeted by name; ticket queues are still never written to. Draftable went **0 → 41**.
+> - *"The creator lane: yes or no at $400/mo."* You said to decide it: *"whatever you think is the best way
+>   to get me $. You make the decisions."* **Approved at $400/mo for 3 clips a week** —
+>   `Money/Creator Lane — Offer (approved).md`. It runs on the same queue, cap and 3 h veto as Splitframe.
+>   One rule carried in: MISTERARTHER's address is still unverified and does not go out until it is read
+>   off his own page.
 
-> **Splitframe supply, 2026-09-16:** the 97-row tracker is mined out — every undrafted row left is a
-> 96-150 ad in-house brand and the `candidate` rows return zero active ads. Fixed tonight rather than
-> escalated: `splitframe_queue.py source` adds new brands from a live Ad Library read, and the **advertiser
-> typeahead** (not the keyword count, which is contaminated) is the way to get a clean count. Two in-band
-> brands sourced tonight; they need a person, and Hunter's quota reopens ~**Sep 24**. Nothing for you here.
+Also on the clock: **Sep 19 Claude Max renewal ($106)**. Every worker run spends Claude Code usage and the
+operator is capped at 10 runs a day (MONEY_OPERATOR_MAX_RUNS on the server). On Pro (~$21) that cap would
+have to drop to 1-2 a day.
+
+> **Polybot, 2026-09-17 — no action needed, but know this:** weather_lock's paper record splits cleanly by
+> entry price. Under 50c it went **0 for 7** (-$139.73, the module's entire loss); at 80c+ it went 19/20
+> (+$13.78). I added a 50c floor and committed it. No module is near promotion, and nothing here asks you
+> to flip anything live.
 
 ---
 

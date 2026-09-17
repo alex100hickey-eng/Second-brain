@@ -64,10 +64,12 @@ def test_bands():
 
 
 def test_next_targets_filters_and_orders():
+    """A named person outranks a front desk at a better-fitting brand, because who reads it
+    moves the reply rate more than five ads either way does. Inside a tier, band decides."""
     rows = [
-        _row(),                                                              # in band
-        _row(brand="Emi Jay", email="julianne@emijay.com", notes="adlib 84 active; id=4542"),   # out
-        _row(brand="Fresh", email="x@fresh.com", notes="page=Fresh id=1234567"),                # unknown
+        _row(),                                                              # person, in band
+        _row(brand="Emi Jay", email="julianne@emijay.com", notes="adlib 84 active; id=4542"),   # person, out
+        _row(brand="Fresh", email="hello@fresh.com", notes="page=Fresh id=1234567"),            # desk, unknown
         _row(brand="Momentous", email="jeff@livemomentous.com", notes="adlib 110 active [read live 2026-09-16]"),
         _row(brand="Wild One", email="bill@wildone.com", notes="adlib 0 active [read live 2026-09-16]"),
         _row(brand="Sent", email="sent@x.com", sent_date="2026-09-15"),
@@ -78,9 +80,40 @@ def test_next_targets_filters_and_orders():
     ]
     queue = [{"to": "q@x.com", "released": "2026-09-15T13:00:00-04:00"}]
     got = sq.next_targets(rows, queue)
-    assert [t["brand"] for t in got] == ["Obvi", "Fresh", "Emi Jay"]
+    assert [t["brand"] for t in got] == ["Obvi", "Emi Jay", "Fresh"]
+    assert [t["tier"] for t in got] == ["person", "person", "shared"]
     assert got[0]["page_id"] == "2431731276838642"
-    assert got[0]["band"] == "in" and got[1]["band"] == "unknown" and got[2]["band"] == "out"
+    assert got[0]["band"] == "in" and got[1]["band"] == "out" and got[2]["band"] == "unknown"
+
+
+def test_address_tiers():
+    """Person needs positive evidence; anything else that is not a ticket queue is a front desk.
+
+    The old rule was one blocklist of role prefixes, so every address that was not on it counted
+    as a person — `goodday@`, `store@` and `oudwarellc@` would all have been greeted by name.
+    """
+    named = _row(email="maxx.appelman@trulybeauty.com", contact_name="Maxx Appelman")
+    assert sq.target_address(named) == ("maxx.appelman@trulybeauty.com", "person")
+    assert sq.target_address(_row(email="pveksler@universalstandard.com",
+                                  contact_name="Polina Veksler"))[1] == "person"
+    assert sq.target_address(_row(email="gillian@beautyfrombees.ca", contact_name=""))[1] == "person"
+
+    # No name in the address: reachable, but nobody to greet.
+    for addr in ("goodday@brightland.co", "justdoughit@twisteddough.shop",
+                 "oudwarellc@oudware.com", "press@moonjuice.com", "hello@calypsa.com"):
+        assert sq.target_address(_row(email=addr, contact_name=""))[1] == "shared", addr
+
+    # A ticket queue is not a target at all.
+    for addr in ("support@zitsticka.com", "store@primogolfapparel.com",
+                 "wholesale@manduka.com", "sup@curiebod.com", "orders@x.com"):
+        assert sq.target_address(_row(email=addr, contact_name="")) == ("", ""), addr
+
+    # A person on the row beats a front desk on the same row, whichever column holds it.
+    both = _row(email="hello@fishwife.com", email_generic="becca@fishwife.com", contact_name="")
+    assert sq.target_address(both) == ("becca@fishwife.com", "person")
+
+    # A contact_name that does not match any known address does not invent a person.
+    assert sq.target_address(_row(email="hello@x.com", contact_name="Natasha Oakley"))[1] == "shared"
 
 
 def test_candidates_and_hunter_targets():
@@ -112,6 +145,7 @@ def test_guard_body_catches_the_tells():
 def test_plan_add_refuses_everything_that_must_not_go_out():
     rows = [_row(), _row(brand="Sent", email="sent@x.com", sent_date="2026-09-15"),
             _row(brand="Support", email="support@zitsticka.com"),
+            _row(brand="Desk", email="hello@desk.com", contact_name=""),
             _row(brand="Cand", email="c@x.com", status="candidate"),
             _row(brand="Replied", email="r@x.com", replied="2026-09-15")]
     queue = [{"to": "ankit@myobvi.com", "released": ""}]
@@ -125,7 +159,11 @@ def test_plan_add_refuses_everything_that_must_not_go_out():
     _, p = sq.plan_add(rows, [], "sent@x.com", "s", GOOD_BODY_PROSE, 19)
     assert any("already emailed" in x for x in p)
     _, p = sq.plan_add(rows, [], "support@zitsticka.com", "s", GOOD_BODY_PROSE, 19)
-    assert any("shared inbox" in x for x in p)
+    assert any("ticket queue" in x for x in p)
+
+    # A front desk is allowed through now — it is the only address most small brands publish.
+    row, p = sq.plan_add(rows, [], "hello@desk.com", "s", GOOD_BODY_PROSE, 19)
+    assert row is not None and p == []
     _, p = sq.plan_add(rows, [], "c@x.com", "s", GOOD_BODY_PROSE, 19)
     assert any("not qualified" in x for x in p)
     _, p = sq.plan_add(rows, [], "r@x.com", "s", GOOD_BODY_PROSE, 19)
