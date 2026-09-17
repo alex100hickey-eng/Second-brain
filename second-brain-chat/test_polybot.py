@@ -189,6 +189,10 @@ def test_low_market_adjust_and_lock():
     assert ctx.running == 63 and ctx.remaining_extreme == 67.0
     locked, winner = lock_state(ctx)
     assert locked and winner.title == "62-63°F"
+    # The book here is 0.10/0.12. The lock is real, but a market pricing it at 12 cents is the
+    # case that went 0/7 in paper, so `lock_min_price` refuses it however sure the model is.
+    assert WeatherLock(_cfg()).scan(ctx) == []
+    winner.best_bid, winner.best_ask = 0.90, 0.92
     sigs = WeatherLock(_cfg()).scan(ctx)
     assert sigs and sigs[0].side == "BUY_YES" and sigs[0].label.endswith("62-63°F")
 
@@ -773,3 +777,26 @@ def test_weather_lock_skips_an_empty_book_and_may_cross():
     # and nothing is left to win once the ask is at the ceiling
     winner.best_bid, winner.best_ask = 0.97, 0.98
     assert WeatherLock(cfg).scan(ctx) == []
+
+
+def test_weather_lock_refuses_a_cheap_ask_even_on_a_tight_book():
+    """The spread filter catches empty books; it does not catch a liquid book that simply
+    disagrees. Closed paper 2026-09-12..16: lock entries under 0.50 went 0/7 for -$139.73 — the
+    whole of the module's loss — and one of those filled at 0.03 on a 1-cent spread, so width was
+    never the tell. A 20:1 disagreement between the remaining-hours forecast and a real book is
+    the forecast being wrong, so `lock_min_price` refuses it."""
+    cfg = _cfg()
+    ctx = _ctx(obs=[("2026-09-12T15:51:00+00:00", 76), ("2026-09-12T18:51:00+00:00", 79),
+                    ("2026-09-12T19:51:00+00:00", 78), ("2026-09-12T20:51:00+00:00", 77)],
+               hourly=[("2026-09-12T17:00", 74.0), ("2026-09-12T18:00", 73.0), ("2026-09-12T20:00", 70.0)])
+    _, winner = lock_state(ctx)
+    # a tight book — the spread filter has no objection — but priced at 3 cents
+    winner.best_bid, winner.best_ask = 0.02, 0.03
+    assert WeatherLock(cfg).scan(ctx) == [], "a 3-cent ask on a 1-cent spread is the market, not an edge"
+    # 0.28 on an 8-cent spread is the live shape of signal #909; still refused
+    winner.best_bid, winner.best_ask = 0.20, 0.28
+    assert WeatherLock(cfg).scan(ctx) == []
+    # and the band that actually paid is untouched
+    winner.best_bid, winner.best_ask = 0.88, 0.90
+    sigs = WeatherLock(cfg).scan(ctx)
+    assert len(sigs) == 1 and sigs[0].price == 0.90 and sigs[0].taker

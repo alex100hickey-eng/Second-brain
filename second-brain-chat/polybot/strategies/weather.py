@@ -288,6 +288,15 @@ class WeatherLock(Strategy):
         ask = round(winner.best_ask, 2)
         if ask > 0.97:
             return []                      # nothing left to win
+        if ask < self.cfg.lock_min_price:
+            # A cheap ask on a book with a real spread is not free money, it is the market saying
+            # the day's extreme is not in yet — and on the paper record it was right every time.
+            # Closed paper 2026-09-12..16: entries under 0.50 went 0/7 for -$139.73, which is the
+            # whole of weather_lock's loss; entries at 0.80+ went 19/20 for +$13.78. The losers are
+            # not all wide books either (one filled at 0.03 on a 1-cent spread), so the spread
+            # filter above cannot catch them. When the model's remaining-hours forecast and a
+            # liquid book disagree 20:1, the forecast is the side that has been wrong.
+            return []
         edge = (1 - ask) * 100 - fees.leg_cost(ask, 1, ctx.venue, False) * 100
         if edge < max(self.cfg.lock_min_edge_cents, self.cfg.lock_take_min_edge_cents):
             return []
