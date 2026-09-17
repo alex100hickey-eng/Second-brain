@@ -337,6 +337,62 @@ def hunter_targets(rows: list) -> list:
 
 # ---------------------------------------------------------------- pure: guarding a draft
 
+# ---------------------------------------------------------------- the close, as an experiment
+
+# Eighteen sent, zero replies. That is not evidence the email is bad — at a normal cold-email
+# reply rate of 1-5%, eighteen sends expects well under one reply, so 0 is the likeliest single
+# outcome even for a campaign that works. It is evidence of nothing at all, which is the problem:
+# the funnel is about to send forty more and would learn just as little from those.
+#
+# So the one thing every email has in common gets split. The body, the voice and the observation
+# are untouched — they are the part there is no reason to doubt. Only the last line changes:
+#
+#   question  what has always been sent. Names the service, then asks something real about their
+#             business. Low pressure, and the reply it invites is about them, not about hiring.
+#   offer     names the service, then offers to make the specific test the email just described,
+#             free. Removes the decision — the founder is agreeing to see work, not to buy it.
+#
+# Assignment alternates on what is already in the queue rather than at random, because at this
+# sample size a coin flip can hand one arm twelve of twenty and the result reads as a difference.
+CLOSE_VARIANTS = ("question", "offer")
+
+
+def next_close_variant(queue: list) -> str:
+    """Whichever arm has fewer emails behind it.
+
+    An entry with no `close_variant` counts as "question", because that is what it was — every
+    email written before this split ended with the curious question. Reading them as unassigned
+    would make the offer arm look like it was already even and hand the next twenty to question.
+    """
+    counts = {v: 0 for v in CLOSE_VARIANTS}
+    for e in queue:
+        counts[_c(e.get("close_variant")) or "question"] = \
+            counts.get(_c(e.get("close_variant")) or "question", 0) + 1
+    return min(CLOSE_VARIANTS, key=lambda v: (counts[v], CLOSE_VARIANTS.index(v)))
+
+
+def close_report(rows: list, queue: list) -> dict:
+    """Sent and replied per arm. Reads the tracker for outcomes and the queue for assignment, so
+    it stays right even for rows queued before the column existed (those are 'question')."""
+    by_addr = {}
+    for e in queue:
+        addr = _c(e.get("to")).lower()
+        if addr:
+            by_addr[addr] = _c(e.get("close_variant")) or "question"
+    out = {v: {"sent": 0, "replied": 0} for v in CLOSE_VARIANTS}
+    for r in rows:
+        if not _c(r.get("sent_date")):
+            continue
+        addr = _c(r.get("email")).lower() or _c(r.get("email_generic")).lower()
+        arm = _c(r.get("close_variant")) or by_addr.get(addr) or "question"
+        if arm not in out:
+            continue
+        out[arm]["sent"] += 1
+        if _c(r.get("replied")):
+            out[arm]["replied"] += 1
+    return out
+
+
 def guard_body(body: str) -> list:
     """Every reason a first-touch body must not go out. The whole pitch rests on the email
     reading as a person who actually opened the account, and on every claim being true."""
@@ -708,6 +764,8 @@ def status_report(rows: list, queue: list, today: str) -> dict:
         "next_targets": next_targets(rows, queue),
         "candidates_to_qualify": candidates_to_qualify(rows, today),
         "hunter_targets": hunter_targets(rows),
+        "next_close": next_close_variant(queue),
+        "close_report": close_report(rows, queue),
     }
 
 
@@ -729,6 +787,11 @@ def _print_status(rep: dict) -> None:
         who = t["contact"] or ("front desk" if t["tier"] == "shared" else "(no name)")
         print(f"  [{t['band']:>7}] {t['brand']} <{t['to']}> {who} "
               f"— {known} — page id {t['page_id'] or '?'}")
+    cr = rep["close_report"]
+    print(f"\nClose experiment — write the next one with the {rep['next_close'].upper()} close.")
+    for arm in CLOSE_VARIANTS:
+        print(f"  {arm:9} {cr[arm]['sent']:>3} sent, {cr[arm]['replied']} replied")
+
     print(f"\nCandidates worth a live read ({len(rep['candidates_to_qualify'])}):")
     for c in rep["candidates_to_qualify"]:
         print(f"  {c['brand']} — page id {c['page_id'] or '?'}")
@@ -770,13 +833,18 @@ def cmd_add(args) -> int:
         # the ref — so a queue entry here would be a written email that can never go out.
         print(f"NOT queued: no draft id came back from Gmail — {msg[:200]}")
         return 1
+    variant = _c(args.close) or next_close_variant(queue)
     queue.append({"brand": brand, "to": _c(args.to).lower(), "subject": _c(args.subject),
                   "body": body, "draft_id": draft_id, "ad_count": args.ad_count,
+                  "close_variant": variant,
                   "evidence": _c(args.evidence), "queued_at": datetime.now(LOCAL_TZ).isoformat(),
                   "queued_by": "money-shift"})
     save_queue(q, queue)
     notes, status, changes = stamp_count(row, args.ad_count, today)
     row["notes"], row["status"] = notes, status
+    row["close_variant"] = variant
+    if "close_variant" not in fields:
+        fields = fields + ["close_variant"]
     write_tracker(rows, fields, "shift")
     doc = record_draft_doc(brand, args.to, args.subject, body, args.ad_count, args.evidence, today)
     print(f"QUEUED: {brand} <{args.to}> draft {draft_id}; tracker {', '.join(changes) or 'unchanged'}; "
@@ -834,6 +902,8 @@ def main(argv=None) -> int:
     a.add_argument("--ad-count", type=int, required=True, help="active ads counted live tonight")
     a.add_argument("--brand", default="", help="sanity check against the tracker row")
     a.add_argument("--evidence", default="", help="one line: what the ads actually showed")
+    a.add_argument("--close", default="", choices=("", "question", "offer"),
+                   help="which close this email used; default alternates to balance the arms")
     a.add_argument("--dry-run", action="store_true", help="run every guard, draft nothing")
     a.set_defaults(fn=cmd_add)
     so = sub.add_parser("source", help="add a brand nobody had, from a live Ad Library read")

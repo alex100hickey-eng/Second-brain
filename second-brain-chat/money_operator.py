@@ -470,7 +470,12 @@ def brief_sf_topup(sf: dict, need: int) -> str:
             f"read with `python3 scripts/adlib_read.py --page-id <id>` (0 active → `note --ad-count 0`; over "
             f"100 → `note` and skip), write the email in Alex's voice with the splitframe-outreach skill from "
             f"what you just read, save the body to a temp file, then `splitframe_queue.py add ... --ad-count N "
-            f"--evidence \"...\"`. Never work around the script. Targets marked 'front desk' have no named "
+            f"--evidence \"...\" --close <arm>`, where <arm> is the one `status` names under 'Close "
+            f"experiment' — it alternates, so read it before EACH email, not once per run. The QUESTION "
+            f"close is the one that has always been sent: name the service, then ask something real "
+            f"about their business. The OFFER close names the service, then offers to make the specific "
+            f"test the email just described, free, theirs to use either way — no other part of the email "
+            f"changes between arms. Never work around the script. Targets marked 'front desk' have no named "
             f"person: open with the observation, never with an invented greeting, and write to the company "
             f"('your ads', not 'your team's ads'). Report facts drafts_queued=<n>.")
 

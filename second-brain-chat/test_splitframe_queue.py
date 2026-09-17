@@ -401,3 +401,36 @@ def test_creator_state_counts_who_is_left():
     # A Splitframe entry is not a creator entry.
     queue = [{"to": "eric@bigbarker.com", "released": ""}]
     assert sq.creator_state(CREATOR_LIST, queue)["queued_pending"] == 0
+
+
+def test_close_variant_alternates_and_counts_history():
+    # Everything written before the split ended with the question close, so an entry with no
+    # variant is a question — not an unassigned one that would let question take the next run too.
+    queue = [{"to": "a@x.com"}, {"to": "b@x.com"}]
+    assert sq.next_close_variant(queue) == "offer"
+
+    queue += [{"to": "c@x.com", "close_variant": "offer"},
+              {"to": "d@x.com", "close_variant": "offer"}]
+    assert sq.next_close_variant(queue) == "question"
+
+    # A tie goes to the arm already being sent: the experiment adds to its record, never restarts it.
+    assert sq.next_close_variant([{"to": "a@x.com", "close_variant": "question"},
+                                  {"to": "b@x.com", "close_variant": "offer"}]) == "question"
+    assert sq.next_close_variant([]) == "question"
+
+
+def test_close_report_reads_outcomes_per_arm():
+    rows = [_row(brand="Q1", email="q1@x.com", sent_date="2026-09-15"),
+            _row(brand="Q2", email="q2@x.com", sent_date="2026-09-15", replied="2026-09-16"),
+            _row(brand="O1", email="o1@x.com", sent_date="2026-09-17"),
+            _row(brand="Never", email="n@x.com")]
+    queue = [{"to": "q1@x.com"},                                    # pre-split, so question
+             {"to": "q2@x.com", "close_variant": "question"},
+             {"to": "o1@x.com", "close_variant": "offer"}]
+    assert sq.close_report(rows, queue) == {"question": {"sent": 2, "replied": 1},
+                                            "offer": {"sent": 1, "replied": 0}}
+
+    # The tracker's own column wins over the queue, so a row still reads right once the queue
+    # entry has aged out of it.
+    rows[0]["close_variant"] = "offer"
+    assert sq.close_report(rows, [])["offer"]["sent"] == 1
