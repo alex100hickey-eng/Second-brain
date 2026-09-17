@@ -173,14 +173,53 @@ def run(days: int = 7, cities: list | None = None, kinds=("high",), cfg: config.
                 net = sum(s["pnl"] for s in res["signals"])
                 log(f"  {city} {day['date']} {kind} [{day['station']}/{day['rule']}] winner {day['winner']} "
                     f"obs={len(day['obs'])} members={len(day['members'])} signals={len(res['signals'])} net=${net:+.2f}")
-    summary = summarize(all_signals, disc, days_done)
+    summary = summarize(all_signals, disc, days_done,
+                        liquidity_reality(max_spread_cents=cfg.lock_max_spread_cents))
     if out_path:
         with open(out_path, "w") as f:
             json.dump({"summary": summary, "signals": all_signals, "built": datetime.now().isoformat()}, f, indent=1)
     return summary
 
 
-def summarize(signals: list, disc: dict, days_done: int) -> dict:
+TAKER_BAND = (0.80, 0.97)     # where a locked winner actually trades
+
+
+def liquidity_reality(db_path: str | None = None, max_spread_cents: float = 10.0,
+                      band: tuple = TAKER_BAND, days: int = 7, venue: str = "offshore") -> dict | None:
+    """How much of this replay could have happened against the real book.
+
+    `_synthetic_event` hangs a bid and an ask `SPREAD` either side of every recorded price, so the
+    replay trades a 2c book on every bucket of every day. The live offshore books in the band where
+    a locked winner sits are mostly 0.03 bid against 0.95 ask — not a price — and `WeatherLock`
+    refuses them on `lock_max_spread_cents`. That is the whole distance between a backtest that
+    finds 180 lock signals and a live week that finds one, and it is a property of the venue rather
+    than a bug in either. Measured from the snapshots the loop already writes, so the number ages
+    with the books instead of living in a comment.
+
+    Returns None when there are no snapshots to measure (a fresh checkout, or an offline test)."""
+    import sqlite3
+    from . import config as _config
+    path = db_path or _config.DB_PATH
+    try:
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        rows = conn.execute(
+            "SELECT bid, ask FROM snapshots WHERE venue=? AND bid IS NOT NULL AND ask IS NOT NULL "
+            "AND ask BETWEEN ? AND ? AND ts > ?",
+            (venue, band[0], band[1], time.time() - days * 86400)).fetchall()
+        conn.close()
+    except Exception:
+        return None
+    spreads = sorted((a - b) * 100 for b, a in rows)
+    if not spreads:
+        return None
+    tradable = [s for s in spreads if s <= max_spread_cents]
+    return {"venue": venue, "days": days, "band": list(band), "n": len(spreads),
+            "median_spread_cents": round(spreads[len(spreads) // 2], 1),
+            "max_spread_cents": max_spread_cents,
+            "tradable_share": round(len(tradable) / len(spreads), 3)}
+
+
+def summarize(signals: list, disc: dict, days_done: int, liquidity: dict | None = None) -> dict:
     by_mod = {}
     for s in signals:
         m = by_mod.setdefault(s["module"], {"signals": 0, "filled": 0, "wins": 0, "losses": 0, "net": 0.0, "staked": 0.0})
@@ -196,7 +235,10 @@ def summarize(signals: list, disc: dict, days_done: int) -> dict:
     disc_avg = {}
     for rule, rows in disc.items():
         disc_avg[rule] = {k: round(sum(r[k] for r in rows) / len(rows), 3) for k in rows[0]} if rows else {}
-    return {"days": days_done, "modules": by_mod, "discount_loglik_by_rule": disc_avg}
+    out = {"days": days_done, "modules": by_mod, "discount_loglik_by_rule": disc_avg}
+    if liquidity:
+        out["liquidity"] = liquidity
+    return out
 
 
 def format_summary(s: dict) -> str:
@@ -204,6 +246,15 @@ def format_summary(s: dict) -> str:
     for name, m in s["modules"].items():
         lines.append(f"  {name:<14} signals={m['signals']:<4} filled={m['filled']:<4} W/L={m['wins']}/{m['losses']} "
                      f"net=${m['net']:+.2f} on ${m['staked']:.0f} staked (ROI {m['roi_pct']:+.1f}%)")
+    liq = s.get("liquidity")
+    if liq:
+        lock = s["modules"].get("weather_lock", {})
+        live_n = round(lock.get("signals", 0) * liq["tradable_share"])
+        lines.append(f"  {liq['venue']} book reality ({liq['days']}d, ask {liq['band'][0]:.2f}-{liq['band'][1]:.2f}, "
+                     f"n={liq['n']}): median spread {liq['median_spread_cents']:.0f}c · "
+                     f"{liq['tradable_share']:.0%} clear the {liq['max_spread_cents']:.0f}c filter")
+        lines.append(f"  → of {lock.get('signals', 0)} replayed lock signals, about {live_n} have a book live. "
+                     "The ROI above is an upper bound, not a forecast.")
     for rule, sc in s["discount_loglik_by_rule"].items():
         best = max(sc, key=sc.get) if sc else "?"
         lines.append(f"  discount fit [{rule} rule]: " + "  ".join(f"{k}°F→{v}" for k, v in sc.items()) + f"  → best {best}°F")

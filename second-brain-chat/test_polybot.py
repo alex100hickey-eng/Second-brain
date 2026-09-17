@@ -232,6 +232,34 @@ def test_backtest_replay_offline():
     assert summary["modules"]["weather_hold"]["net"] > 0 and "weather_lock" in backtest.format_summary(summary)
 
 
+def test_backtest_reports_the_book_it_could_not_trade():
+    """The replay trades a 2c book on every bucket; the live offshore book in the band where a
+    locked winner sits is mostly no market at all. A backtest that does not say so reads as a
+    forecast, which is how weather_lock came to show 180 signals against a live week with one."""
+    import sqlite3
+    from polybot import backtest
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "snap.db")
+        conn = sqlite3.connect(path)
+        conn.execute("CREATE TABLE snapshots (ts REAL, venue TEXT, market TEXT, bid REAL, ask REAL, mid REAL, last REAL)")
+        now = time.time()
+        rows = [(now - 3600, "offshore", f"t{i}", 0.03, 0.95, None, None) for i in range(87)]      # empty books
+        rows += [(now - 3600, "offshore", f"u{i}", 0.88, 0.92, None, None) for i in range(13)]     # real ones
+        rows += [(now - 30 * 86400, "offshore", "old", 0.90, 0.92, None, None)]                    # outside the window
+        rows += [(now - 3600, "offshore", "cheap", 0.10, 0.12, None, None)]                        # outside the band
+        conn.executemany("INSERT INTO snapshots VALUES (?,?,?,?,?,?,?)", rows)
+        conn.commit()
+        liq = backtest.liquidity_reality(db_path=path, max_spread_cents=10.0)
+    assert liq["n"] == 100 and liq["tradable_share"] == 0.13
+    assert liq["median_spread_cents"] > 50                       # the typical offshore book is not a price
+    s = backtest.summarize([{"module": "weather_lock", "filled": True, "pnl": 1.0, "size_usd": 20.0}] * 180,
+                           {}, 208, liq)
+    text = backtest.format_summary(s)
+    assert "13% clear the 10c filter" in text and "about 23 have a book live" in text
+    assert "upper bound" in text
+    assert backtest.liquidity_reality(db_path=os.path.join("/nonexistent", "x.db")) is None
+
+
 def test_pairs_matching():
     from polybot import pairs
     us = [{"slug": "fed-cut-sep", "title": "Will the Fed cut rates in September?", "end": "2026-09-17T18:00:00Z"},
