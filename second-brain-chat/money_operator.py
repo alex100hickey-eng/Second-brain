@@ -48,7 +48,12 @@ FIELD_CAP = 4000
 TICK_SECONDS = 600
 MAX_RUNS_PER_DAY = int(os.environ.get("MONEY_OPERATOR_MAX_RUNS", "10"))
 MIN_GAP_MIN = int(os.environ.get("MONEY_OPERATOR_MIN_GAP_MIN", "20"))
-IN_FLIGHT_TIMEOUT_MIN = 75                 # a worker that started and never reported
+IN_FLIGHT_TIMEOUT_MIN = 120                # a worker that started and never reported.
+# 2026-09-17: was 75, which was SHORTER than the work actually takes. The sf_source worker
+# picked up at 09:50 reported done at 11:26 (96 min, rc=0, six real brands in the tracker) —
+# but the server had already marked it "worker timed out" at 11:05. A successful run recorded
+# as a failure burns a governor slot, drops the facts, and makes the ladder repeat the work.
+# The server must not give up while the Mac is still legitimately running the worker.
 PICKUP_TIMEOUT_MIN = 120                   # nobody picked the task up (Mac asleep, watcher down)
 PER_KIND_DAILY = {"sf_topup": 3, "clip_post": 3, "sf_hunter": 1, "sf_source": 2,
                   "poly_review": 1, "creator_list": 1, "whop_board": 1}

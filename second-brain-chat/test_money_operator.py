@@ -258,7 +258,13 @@ def test_a_worker_that_started_and_never_reported_times_out(monkeypatch):
     monkeypatch.setattr(mo, "_now_iso", lambda: (T(12, 1)).isoformat())
     sb.rows[-1]["output_text"] = json.dumps({**json.loads(sb.rows[-1]["output_text"]),
                                              "updated_at": T(12, 1).isoformat()})
-    mo.tick(T(13, 30))
+    # 96 min in, the worker is STILL WORKING and must not be written off. On 2026-09-17 the real
+    # sf_source worker picked up at 09:50 reported done at 11:26 with six brands in the tracker,
+    # and the old 75-min cap had already recorded it as "worker timed out" at 11:05.
+    mo.tick(T(13, 37))
+    assert mo.latest_update(r1["filed"])["status"] == "in_progress"
+    # past the cap it is retired, so a genuinely hung worker still frees the slot
+    mo.tick(T(14, 10))
     assert mo.latest_update(r1["filed"])["status"] == "failed"
 
 
