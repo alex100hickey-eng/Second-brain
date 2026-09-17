@@ -86,9 +86,9 @@ PICKUP_TIMEOUT_MIN = 120                   # nobody picked the task up (Mac asle
 # posting_policy — the account-safety rule that exists BECAUSE 13 clips in 5 hours killed the
 # account — is the real limit there, and spending credit is not a reason to push it.
 PER_KIND_NORMAL = {"sf_topup": 3, "clip_post": 3, "sf_hunter": 1, "sf_source": 2,
-                   "poly_review": 1, "creator_list": 1, "whop_board": 1}
+                   "poly_review": 1, "creator_list": 1, "whop_board": 1, "creator_draft": 2}
 PER_KIND_BURST = {"sf_topup": 8, "clip_post": 3, "sf_hunter": 1, "sf_source": 8,
-                  "poly_review": 3, "creator_list": 2, "whop_board": 2}
+                  "poly_review": 3, "creator_list": 2, "whop_board": 2, "creator_draft": 2}
 
 
 def per_kind_daily(now: datetime | None = None) -> dict:
@@ -97,6 +97,11 @@ def per_kind_daily(now: datetime | None = None) -> dict:
 
 PER_KIND_DAILY = PER_KIND_BURST   # back-compat for anything reading the old name
 QUEUE_TARGET = 10                          # two release days of first touches in stock
+# Creator entries to hold in that queue. It is one lane's slice of a shared 5-a-day release, so
+# 2 of 10 is about one creator email a day — enough to test the offer, not enough to stall the
+# funnel that already has a reply clock running on it. A creator email costs a watched VOD, so
+# this is also as fast as the lane can honestly go.
+CREATOR_RESERVE = 2
 POST_WINDOW = (17.0, 22.5)                 # local hours: the evening window the research points at
 ACCOUNT_CREATED = date(2026, 9, 12)        # @wildest_moments
 MIN_POST_GAP_S = 3 * 3600
@@ -285,8 +290,22 @@ def splitframe_inputs(today: date) -> dict:
             "hunter_left": max(0, HUNTER_PER_CYCLE - used),
             "candidates_unread": len(sq.candidates_to_qualify(rows, today.isoformat(), limit=99)),
         })
+        out["creator"] = creator_inputs(sq, queue)
     except Exception as e:                                   # noqa: BLE001
         out["reason"] = f"tracker/queue unreadable: {str(e)[:120]}"
+    return out
+
+
+def creator_inputs(sq, queue: list) -> dict:
+    """The creator lane's slice of the same queue. Its own file, read fail-soft: the lane is
+    newer than everything around it and must not be able to stop the funnel."""
+    out = {"approved": False, "available": 0, "queued_pending": 0}
+    try:
+        out["approved"] = os.path.exists(sq.CREATOR_OFFER)
+        with open(sq.CREATOR_PROSPECTS, encoding="utf-8") as f:
+            out.update(sq.creator_state(f.read(), queue))
+    except Exception:                                        # noqa: BLE001
+        pass
     return out
 
 
@@ -359,7 +378,16 @@ def next_task(snap: dict, now: datetime, counts: dict) -> dict | None:
     hour = now.hour + now.minute / 60
     quiet = hour < QUIET_UNTIL_HOUR
 
-    # 1. keep the funnel stocked
+    # 1. hold a slice of the queue open for the creator lane. Splitframe shares the same queue
+    # and the same 5-a-day release, and it has 40-odd brands ready — so a lane that always
+    # yields to it is a lane that was approved and then never sent anything.
+    cr = sf.get("creator") or {}
+    if not quiet and cr.get("approved") and cr.get("available", 0) > 0 \
+            and cr.get("queued_pending", 0) < CREATOR_RESERVE and can("creator_draft"):
+        return _task("creator_draft", "creator", "Write one creator-retainer first touch",
+                     brief_creator_draft(cr))
+
+    # 2. keep the funnel stocked
     if sf.get("ok"):
         need = max(0, QUEUE_TARGET - sf["pending"])
         if need == 0:
@@ -372,7 +400,7 @@ def next_task(snap: dict, now: datetime, counts: dict) -> dict | None:
     else:
         reasons.append(f"splitframe: {sf.get('reason') or 'no data'}")
 
-    # 2. post a clip inside the evening window, at the account-safe cadence
+    # 3. post a clip inside the evening window, at the account-safe cadence
     if clip.get("staged", 0) > 0:
         if POST_WINDOW[0] <= hour < POST_WINDOW[1]:
             last = clip.get("last_post_ts")
@@ -393,7 +421,7 @@ def next_task(snap: dict, now: datetime, counts: dict) -> dict | None:
         reasons.append("quiet hours: nothing else before 06:00")
         return None
 
-    # 3. verified addresses, inside the Hunter quota (once a day)
+    # 4. verified addresses, inside the Hunter quota (once a day)
     hunter_possible = False
     if sf.get("ok"):
         if sf["hunter_left"] <= 0:
@@ -407,20 +435,20 @@ def next_task(snap: dict, now: datetime, counts: dict) -> dict | None:
     if hunter_possible and can("sf_hunter"):
         return _task("sf_hunter", "splitframe", "Find founder emails for in-band brands", brief_sf_hunter(sf))
 
-    # 4. nothing to draft and Hunter cannot help right now: source new in-band brands
+    # 5. nothing to draft and Hunter cannot help right now: source new in-band brands
     if sf.get("ok") and sf["draftable_in_band"] == 0 and not hunter_possible and can("sf_source"):
         return _task("sf_source", "splitframe", "Source new in-band brands from the Ad Library",
                      brief_sf_source(sf))
 
-    # 5. polybot engineering, once a day
+    # 6. polybot engineering, once a day
     if once_today("poly_review"):
         return _task("poly_review", "polybot", "Daily polybot review, one improvement", brief_poly_review(poly))
 
-    # 6. the creator-retainer list, once a day
+    # 7. the creator-retainer list, once a day
     if once_today("creator_list"):
         return _task("creator_list", "creator", "Five creator-retainer prospects", brief_creator_list())
 
-    # 7. the Whop board, once a day, only when the operator profile is logged in
+    # 8. the Whop board, once a day, only when the operator profile is logged in
     if facts.get("whop_logged_in"):
         if once_today("whop_board"):
             return _task("whop_board", "clipping", "Read the Whop Content Rewards board", brief_whop_board())
@@ -499,6 +527,22 @@ def brief_poly_review(poly: dict) -> str:
             + (f"Modules ready to promote: {ready} — put the exact one-line go-live edit in NEEDS_ALEX; never make it. "
                if ready else "")
             + "Report facts poly_note=<one line>.")
+
+
+def brief_creator_draft(cr: dict) -> str:
+    return (f"The creator retainer is approved at $400/mo for 3 clips a week and "
+            f"{cr['available']} verified creator(s) on the list have never been written to. Write "
+            "ONE first touch. Read \"<Money folder>/Creator Lane — Offer (approved).md\" for the "
+            "terms and the sending rules, pick the top un-queued creator from \"Creator Lane — "
+            "Prospects.md\", then actually watch a recent VOD or clip of theirs and find the "
+            "moment you would have cut. The email opens with that moment — which stream, what "
+            "happened — and says what you would have made of it. Use the splitframe-outreach "
+            "skill for the voice. Queue it with `python3 scripts/splitframe_queue.py creator "
+            "--to ... --subject ... --body-file <tmp> --evidence \"<stream + moment + date>\"`; "
+            "the script refuses an address the list marks UNVERIFIED, so confirm one off their own "
+            "page before writing to them. An agency address (evolved.gg) reaches a manager — write "
+            "to the manager as the manager. Never work around the script. "
+            "Report facts creator_drafts_queued=<n>.")
 
 
 def brief_creator_list() -> str:

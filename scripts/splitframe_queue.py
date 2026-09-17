@@ -13,6 +13,8 @@ runs this every evening instead.
   add               validate a drafted first touch, create the studio Gmail draft WITHOUT filing
                     an outbox row (the server's cadence, not this script, decides when it goes),
                     append it to the queue, stamp the live ad count into the tracker
+  creator           the same, for the creator-retainer lane: the address must be in the creator
+                    prospect list, not marked UNVERIFIED there, and the offer must be approved
   note              stamp a live Ad Library read into the tracker: 0 active -> hold,
                     5-50 active on a `candidate` row -> qualified
   source            add a brand the tracker never had, from a live Ad Library read: the
@@ -51,6 +53,8 @@ VAULT = os.environ.get("VAULT_PATH") or os.path.expanduser(
     "~/Library/Mobile Documents/com~apple~CloudDocs/Obsidian/Second brain")
 TRACKER = os.path.join(VAULT, "Money", "prospect-tracker.csv")
 DRAFT_DOC_DIR = os.path.join(VAULT, "Money", "Clients")
+CREATOR_PROSPECTS = os.path.join(VAULT, "Money", "Creator Lane — Prospects.md")
+CREATOR_OFFER = os.path.join(VAULT, "Money", "Creator Lane — Offer (approved).md")
 QUEUE_KEY = "splitframe:firsttouch_queue"
 PER_DAY = 5
 RUNWAY_TARGET = 2 * PER_DAY            # two release days in stock at every evening shift
@@ -552,6 +556,142 @@ def record_draft_doc(brand: str, to: str, subject: str, body: str, ad_count: int
     return path
 
 
+# ---------------------------------------------------------------- the creator lane
+
+# Approving the offer does not make the lane earn anything: the only way an email reaches anyone
+# is the queue below, and `add` is shaped entirely around a DTC brand (a tracker row, a live ad
+# count). A streamer has neither. So the creator lane gets its own door into the SAME queue —
+# same 5-a-day release, same 3 h veto, same body guards — with its own proof of work.
+#
+# Its list is a markdown file rather than a CSV because that is what the operator writes, and a
+# brittle parser over it would be a worse guard than a plain containment check: the address has
+# to appear in the file, and the file is the only place an address can come from.
+
+def creator_entry(text: str, email: str) -> dict:
+    """What the prospect list says about one address: {found, unverified, name}.
+
+    `unverified` is the whole point. The list marks an address UNVERIFIED when it came from a
+    search-result summary instead of a page that was actually read, and an address like that is
+    a guess — it bounces, or worse, reaches a stranger under Alex's name.
+    """
+    want = _c(email).lower()
+    out = {"found": False, "unverified": False, "name": ""}
+    if not want:
+        return out
+    name, lines = "", (text or "").splitlines()
+    for i, line in enumerate(lines):
+        if line.startswith("### "):
+            name = line[4:].split("—")[0].strip()
+        if want in line.lower():
+            out["found"] = True
+            out["name"] = name
+            window = " ".join(lines[i:i + 3]).upper()
+            out["unverified"] = "UNVERIFIED" in window
+            return out
+    return out
+
+
+EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+
+
+def creator_state(list_text: str, queue: list) -> dict:
+    """{available, queued_pending} — how many creators can still be written to, and how many are
+    already waiting in the queue. The operator uses this to hold a slice of the queue open: with
+    41 brands draftable, a lane that always yields to Splitframe is a lane that never sends."""
+    queued = {_c(e.get("to")).lower() for e in queue}
+    pending = sum(1 for e in queue if e.get("lane") == "creator" and not _released_date(e))
+    seen, available = set(), 0
+    for raw in EMAIL_RE.findall(list_text or ""):
+        addr = raw.lower().rstrip(".,;:)`")
+        if addr in seen:
+            continue
+        seen.add(addr)
+        entry = creator_entry(list_text, addr)
+        if entry["found"] and not entry["unverified"] and not is_ticket_desk(addr) \
+                and addr not in queued:
+            available += 1
+    return {"available": available, "queued_pending": pending}
+
+
+def plan_creator(list_text: str, queue: list, to: str, subject: str, body: str,
+                 evidence: str, offer_approved: bool) -> tuple:
+    """(entry, problems). An empty problems list is the only permission to queue."""
+    to = _c(to).lower()
+    problems = []
+    if not offer_approved:
+        problems.append("the creator offer is not approved — no email on this lane goes out "
+                        "until \"Creator Lane — Offer (approved).md\" exists")
+    entry = creator_entry(list_text, to)
+    if not entry["found"]:
+        problems.append(f"{to or '(empty)'} is not in the creator prospect list — the list is the "
+                        "only place an address on this lane may come from")
+    if entry["unverified"]:
+        problems.append("the list marks this address UNVERIFIED (it came from a search summary, "
+                        "not a page that was read) — confirm it off their own page first")
+    if is_ticket_desk(to):
+        problems.append("ticket queue — this never reaches the creator")
+    if any(_c(e.get("to")).lower() == to for e in queue):
+        problems.append("already in the queue")
+    if not _c(subject):
+        problems.append("no subject")
+    if len(_c(evidence)) < 25:
+        problems.append("--evidence must say which stream and which moment was actually watched: "
+                        "the pitch is their own footage back at them, and it is the one claim "
+                        "that cannot be bluffed")
+    problems += guard_body(body)
+    return entry, problems
+
+
+def record_creator_doc(name: str, to: str, subject: str, body: str,
+                       evidence: str, today: str) -> str:
+    os.makedirs(DRAFT_DOC_DIR, exist_ok=True)
+    path = os.path.join(DRAFT_DOC_DIR, f"creator-drafts-{today}.md")
+    new = not os.path.exists(path)
+    with open(path, "a", encoding="utf-8") as f:
+        if new:
+            f.write(f"# Creator lane drafts — {today}\n\nWritten from footage watched the same "
+                    "day. Queued for the same 5-a-day release as Splitframe; each sends itself "
+                    "3 h after release unless Alex taps Not doing it.\n")
+        f.write(f"\n## {name or to} — {to}\n**Watched {today}:** {_c(evidence)}\n\n"
+                f"**Subject:** {subject}\n\n{body.strip()}\n")
+    return path
+
+
+def cmd_creator(args) -> int:
+    list_text = ""
+    if os.path.exists(CREATOR_PROSPECTS):
+        with open(CREATOR_PROSPECTS, encoding="utf-8") as f:
+            list_text = f.read()
+    q, queue = load_queue()
+    with open(args.body_file, encoding="utf-8") as f:
+        body = f.read().strip()
+    entry, problems = plan_creator(list_text, queue, args.to, args.subject, body,
+                                   args.evidence, os.path.exists(CREATOR_OFFER))
+    if problems:
+        print("NOT queued:")
+        for p in problems:
+            print(f"  - {p}")
+        return 1
+    name = entry["name"] or _c(args.creator)
+    if args.dry_run:
+        print(f"OK (dry run): {name} <{args.to}> passes every guard; not drafted.")
+        return 0
+    draft_id, msg = create_studio_draft(args.to, args.subject, body)
+    if not draft_id:
+        print(f"NOT queued: no draft id came back from Gmail — {msg[:200]}")
+        return 1
+    today = today_local()
+    queue.append({"brand": name, "to": _c(args.to).lower(), "subject": _c(args.subject),
+                  "body": body, "draft_id": draft_id, "lane": "creator",
+                  "evidence": _c(args.evidence), "queued_at": datetime.now(LOCAL_TZ).isoformat(),
+                  "queued_by": "money-shift"})
+    save_queue(q, queue)
+    doc = record_creator_doc(name, args.to, args.subject, body, args.evidence, today)
+    print(f"QUEUED (creator): {name} <{args.to}> draft {draft_id}; record "
+          f"{os.path.basename(doc)}. It goes on the next 07:30 release (5/day) with the 3 h hold.")
+    return 0
+
+
 # ---------------------------------------------------------------- commands
 
 def status_report(rows: list, queue: list, today: str) -> dict:
@@ -705,6 +845,15 @@ def main(argv=None) -> int:
     so.add_argument("--evidence", default="", help="one line: what the ads actually showed")
     so.add_argument("--dry-run", action="store_true")
     so.set_defaults(fn=cmd_source)
+    c = sub.add_parser("creator", help="validate + draft + queue one creator-lane first touch")
+    c.add_argument("--to", required=True, help="must appear in the creator prospect list")
+    c.add_argument("--creator", default="", help="name, if the list heading does not give one")
+    c.add_argument("--subject", required=True)
+    c.add_argument("--body-file", required=True, help="plain-text body, 110-150 words")
+    c.add_argument("--evidence", required=True,
+                   help="which stream and which moment was watched, with the date")
+    c.add_argument("--dry-run", action="store_true", help="run every guard, draft nothing")
+    c.set_defaults(fn=cmd_creator)
     n = sub.add_parser("note", help="stamp a live Ad Library count into the tracker")
     n.add_argument("--brand", required=True)
     n.add_argument("--ad-count", type=int, required=True)

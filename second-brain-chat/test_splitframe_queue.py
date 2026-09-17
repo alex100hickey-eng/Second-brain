@@ -321,3 +321,83 @@ def test_add_dry_run_touches_nothing(monkeypatch, tmp_path):
     rc = sq.main(["add", "--to", "ankit@myobvi.com", "--subject", "s", "--body-file", str(body),
                   "--ad-count", "19", "--dry-run"])
     assert rc == 0 and "draft" not in calls
+
+
+CREATOR_LIST = """# Creator lane — prospect list
+
+## Qualified
+
+### MISTERARTHER — the best fit found so far
+- **Platform:** Twitch `twitch.tv/misterarther`
+- **Email:** `contact@misterarther.com` — **UNVERIFIED.** This came from a search-result
+  summary, not a page I read. Confirm from his Twitch About panel first.
+
+### Guzu
+- **Platform:** Twitch `twitch.tv/guzu`
+- **Email:** `guzubusiness@hotmail.com` — read directly off his own Twitch About panel.
+
+### Dishsoap
+- **Email:** `dishsoap@evolved.gg` — on his own Twitch About panel text.
+"""
+
+GOOD_EVIDENCE = "the 2026-09-14 GTA stream, the bank chase where he loses the car at 1:12:30"
+
+
+def test_creator_entry_reads_the_list():
+    got = sq.creator_entry(CREATOR_LIST, "guzubusiness@hotmail.com")
+    assert got == {"found": True, "unverified": False, "name": "Guzu"}
+
+    # The UNVERIFIED marker is on the same line and the one after it; both must count, because
+    # an address that came from a search summary is a guess with Alex's name on it.
+    bad = sq.creator_entry(CREATOR_LIST, "contact@misterarther.com")
+    assert bad["found"] and bad["unverified"] and bad["name"] == "MISTERARTHER"
+
+    assert sq.creator_entry(CREATOR_LIST, "nobody@nowhere.com")["found"] is False
+    assert sq.creator_entry(CREATOR_LIST, "")["found"] is False
+
+
+def test_plan_creator_refuses_everything_that_must_not_go_out():
+    ok = dict(list_text=CREATOR_LIST, queue=[], to="guzubusiness@hotmail.com", subject="s",
+              body=GOOD_BODY_PROSE, evidence=GOOD_EVIDENCE, offer_approved=True)
+
+    _, p = sq.plan_creator(**ok)
+    assert p == []
+
+    _, p = sq.plan_creator(**{**ok, "offer_approved": False})
+    assert any("not approved" in x for x in p)
+
+    _, p = sq.plan_creator(**{**ok, "to": "contact@misterarther.com"})
+    assert any("UNVERIFIED" in x for x in p)
+
+    _, p = sq.plan_creator(**{**ok, "to": "someone@elsewhere.com"})
+    assert any("not in the creator prospect list" in x for x in p)
+
+    _, p = sq.plan_creator(**{**ok, "evidence": "watched his stream"})
+    assert any("--evidence" in x for x in p)
+
+    _, p = sq.plan_creator(**{**ok, "queue": [{"to": "guzubusiness@hotmail.com"}]})
+    assert any("already in the queue" in x for x in p)
+
+    _, p = sq.plan_creator(**{**ok, "subject": ""})
+    assert any("no subject" in x for x in p)
+
+    # The body guards are the Splitframe ones, not a second copy that can drift away from them.
+    _, p = sq.plan_creator(**{**ok, "body": "too short"})
+    assert any("too short" in x for x in p)
+
+
+def test_creator_state_counts_who_is_left():
+    # Guzu and Dishsoap are verified; MISTERARTHER is not and never counts as available.
+    assert sq.creator_state(CREATOR_LIST, []) == {"available": 2, "queued_pending": 0}
+
+    queue = [{"to": "guzubusiness@hotmail.com", "lane": "creator", "released": ""}]
+    assert sq.creator_state(CREATOR_LIST, queue) == {"available": 1, "queued_pending": 1}
+
+    # A released entry is out of the queue's pending slice but still never re-queued.
+    queue = [{"to": "guzubusiness@hotmail.com", "lane": "creator",
+              "released": "2026-09-16T13:00:00-04:00"}]
+    assert sq.creator_state(CREATOR_LIST, queue) == {"available": 1, "queued_pending": 0}
+
+    # A Splitframe entry is not a creator entry.
+    queue = [{"to": "eric@bigbarker.com", "released": ""}]
+    assert sq.creator_state(CREATOR_LIST, queue)["queued_pending"] == 0
