@@ -92,8 +92,11 @@ def render_text(url: str, settle_ms: int = 20000, timeout_s: int = 75, find_re: 
                 page = ctx.new_page()
                 page.set_default_timeout(timeout_s * 1000)
                 page.goto(url, wait_until="domcontentloaded", timeout=45000)
+                # Wait for RESULTS, not for the page chrome: "Log in" sits in the Ad Library header
+                # from the first paint, so matching it returned before any ad had rendered.
                 try:
-                    page.wait_for_selector("text=/\\d[\\d,]* results|Sponsored|Log in/", timeout=settle_ms)
+                    page.wait_for_selector("text=/\\d[\\d,]* results|Sponsored|No ads match/", timeout=settle_ms)
+                    page.wait_for_timeout(1500)          # let the first cards finish rendering
                 except PWError:
                     page.wait_for_timeout(min(settle_ms, 8000))
                 text = _clean_text(page.inner_text("body"))
@@ -186,6 +189,9 @@ def main(argv=None) -> int:
     if a.url:
         print(text[:a.max_chars])
         return 0
+    if text.startswith("FOUND:"):                 # --find on an Ad Library page: ids first, then the ads
+        first, _, text = text.partition("\n")
+        print(first[:4000])
     parsed = parse_ads(text, a.max_ads)
     if parsed["count"] is None and not parsed["ads"]:
         print("NO RESULTS RENDERED — try a longer --settle-ms, or the page id is wrong. Page text head:")

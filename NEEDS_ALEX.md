@@ -21,7 +21,7 @@ the next one. Ask CLARVIS "what is the money operator doing" any time (the `mone
 below). Everything else in the three lanes happens without you: Splitframe drafting/sending, sourcing
 new brands, TikTok posting at the account-safe cadence, polybot engineering in paper mode.*
 
-Rewritten 2026-09-16 22:30. The worker has NO desktop Browser pane: it reads sites through its own
+Rewritten 2026-09-16 21:15. The worker has NO desktop Browser pane: it reads sites through its own
 Chrome profile. So the logins below are done ONCE in a headed window on that profile, not in the pane:
 `open -na "Google Chrome" --args --user-data-dir="$HOME/.money-operator-chrome" <url>` — log in, close
 the window (the worker cannot read while that window is open).
