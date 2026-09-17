@@ -46,8 +46,12 @@ VALID_STATUSES = ("in_progress",) + TERMINAL
 FIELD_CAP = 4000
 
 TICK_SECONDS = 600
-MAX_RUNS_PER_DAY = int(os.environ.get("MONEY_OPERATOR_MAX_RUNS", "10"))
-MIN_GAP_MIN = int(os.environ.get("MONEY_OPERATOR_MIN_GAP_MIN", "20"))
+# 2026-09-17: Alex has ~30% of his weekly subscription credit left, is away for 2+ hours, and asked
+# for it spent on money work rather than expiring at the Thursday reset. Unused weekly credit is
+# worth nothing, so the governor opens up until then. REVERT to 10 / 20 after 2026-09-18 10:00Z —
+# on Pro these numbers would otherwise starve the operator of credit before morning.
+MAX_RUNS_PER_DAY = int(os.environ.get("MONEY_OPERATOR_MAX_RUNS", "24"))
+MIN_GAP_MIN = int(os.environ.get("MONEY_OPERATOR_MIN_GAP_MIN", "8"))
 IN_FLIGHT_TIMEOUT_MIN = 120                # a worker that started and never reported.
 # 2026-09-17: was 75, which was SHORTER than the work actually takes. The sf_source worker
 # picked up at 09:50 reported done at 11:26 (96 min, rc=0, six real brands in the tracker) —
@@ -55,8 +59,12 @@ IN_FLIGHT_TIMEOUT_MIN = 120                # a worker that started and never rep
 # as a failure burns a governor slot, drops the facts, and makes the ladder repeat the work.
 # The server must not give up while the Mac is still legitimately running the worker.
 PICKUP_TIMEOUT_MIN = 120                   # nobody picked the task up (Mac asleep, watcher down)
-PER_KIND_DAILY = {"sf_topup": 3, "clip_post": 3, "sf_hunter": 1, "sf_source": 2,
-                  "poly_review": 1, "creator_list": 1, "whop_board": 1}
+# The per-kind caps bind harder than MAX_RUNS (they summed to 12), so they move too. sf_hunter
+# stays 1: it is bounded by the real Hunter quota, not by our appetite. clip_post stays 3 because
+# posting_policy — the account-safety rule that exists BECAUSE 13 clips in 5 hours killed the
+# account — is the real limit there, and spending credit is not a reason to push it.
+PER_KIND_DAILY = {"sf_topup": 8, "clip_post": 3, "sf_hunter": 1, "sf_source": 8,
+                  "poly_review": 3, "creator_list": 2, "whop_board": 2}
 QUEUE_TARGET = 10                          # two release days of first touches in stock
 POST_WINDOW = (17.0, 22.5)                 # local hours: the evening window the research points at
 ACCOUNT_CREATED = date(2026, 9, 12)        # @wildest_moments
