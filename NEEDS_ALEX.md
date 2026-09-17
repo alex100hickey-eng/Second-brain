@@ -18,40 +18,31 @@ section before every run and rewrites it; items disappear when they stop being t
 the three money lanes now happens without you: Splitframe drafting/sending, TikTok posting at the
 account-safe cadence, Vyro submissions once you're logged in, polybot engineering in paper mode.*
 
-Seeded 2026-09-16, highest leverage first:
+Rewritten 2026-09-16 22:10 after the first unattended run (it ran clean, no prompts — the "Run now"
+item is done and gone).
 
-> **Operator note added 2026-09-16 (read before topping the Splitframe queue):** every remaining
-> undrafted tracker prospect is **96-150 active ads** (Momentous 110, Needed 120, Pet Honesty 110,
-> Wild One 96, Fishwife 150, Canvas Beauty 130, Apothékary 120, Emi Jay 150, Halfdays 110) — all
-> in-house-team brands, the worst odds for a 19-year-old with no portfolio. The 5-50 ad band that
-> actually converts is EXHAUSTED. Do not burn Hunter quota or draft time on the giants; the funnel
-> needs NEW in-band candidates, not more rows from this tracker.
-> **And the 36 'candidate' rows are dead too** — 6 of 6 sampled (DEUX, Muddy Bites, GOODLES,
-> Golde, Taika, OffLimits) return ZERO active ads, and OffLimits' stored page id resolves to an
-> unrelated page. The tracker is mined out end to end. **Source new brands from the Ad Library
-> KEYWORD search** (`&q=<category>&search_type=keyword_unordered`) — every advertiser it returns
-> is currently spending, which is the qualification test. Source → qualify → then Hunter.
-
-1. **Click "Run now" once on the Scheduled task "Money operator (nightly)"** while you're at the Mac (30 s).
-   The first run asks for Browser / Bash / connector permissions; approvals get stored, and every night
-   after that runs unattended. Until then the 8 PM run can stall on a prompt nobody sees.
-2. **Log in to Vyro once in the Mac's Browser pane** — app.vyro.com → "Continue with Google" with the alt
-   account (basketballlacrosse387@gmail.com) (1 min). The pane is logged out right now, so posts can't be
-   submitted for payment and the new-account gate can't be checked. Views only count after submission.
-3. ~~Join Whop Content Rewards~~ **DONE 2026-09-16** — joined Clipping Culture (472.7K members, 4.7★)
-   as basketballlacrosse387@gmail.com; onboarding complete (Gaming/Sports/Basketball, on-camera
-   "Sometimes", Start Earning). **The board is live and readable in the pane.** See
-   [[side-hustles-clipping-polymarket]] for live rates and the iframe trap.
-4. **YouTube Studio: why were all 5 Shorts deleted?** Open studio.youtube.com on @wildestmomentsclips and
-   read the notification. Nothing gets re-uploaded to YouTube until you say what it said.
-5. **Fix the 5 Instagram Reel captions in the IG app** (replace `%23` with `#`). The API can't edit them
+1. **Log in to Vyro once in the Mac's Browser pane** — app.vyro.com → "Continue with Google" with the alt
+   account (basketballlacrosse387@gmail.com) (1 min). The pane is logged out, so 24 posted clips can't be
+   submitted and views never count toward payment. This is the only reason the clipping lane is at $0.
+2. **The creator lane: yes or no at $400/mo.** Read `Money/Creator Lane — Offer (proposed).md` (one page:
+   3 clips a week for streamers and podcasters with a dead clips channel, $400 flat, with the reasoning).
+   Say *"Creator lane approved at $400 for 3 clips a week"* — or change the number. Until then the operator
+   builds no list and writes no email on that lane, and it is the only second revenue lane on the table.
+3. **Fix the 5 Instagram Reel captions in the IG app** (replace `%23` with `#`). The API can't edit them
    and Vyro rejects them as they are; unfixed, they stay unpaid forever.
-6. ~~Polymarket: what are the two positions~~ **ANSWERED 2026-09-16** — Alex: "I messed around with the
-   money but there is a little more than $200 tradable dollars in there right now. All yours."
-   polybot reads bankroll from `account_value_usd()` ($201.35) and must still never assume his manual
-   positions are its own.
+4. **Log in to Whop in the same Browser pane** (same alt account). You joined Clipping Culture, but this
+   browser has no session, so the operator can't read the board or pick a campaign to join.
+5. **YouTube Studio: why were all 5 Shorts deleted?** Open studio.youtube.com on @wildestmomentsclips and
+   read the notification. Nothing gets re-uploaded to YouTube until you say what it said.
+
 Also on the clock: **Sep 19 Claude Max renewal ($106)**. The nightly operator spends Claude Code usage;
 on Pro (~$21) one run a night is about the ceiling. The Sep 18 nudge already asks you.
+
+> **Splitframe supply, 2026-09-16:** the 97-row tracker is mined out — every undrafted row left is a
+> 96-150 ad in-house brand and the `candidate` rows return zero active ads. Fixed tonight rather than
+> escalated: `splitframe_queue.py source` adds new brands from a live Ad Library read, and the **advertiser
+> typeahead** (not the keyword count, which is contaminated) is the way to get a clean count. Two in-band
+> brands sourced tonight; they need a person, and Hunter's quota reopens ~**Sep 24**. Nothing for you here.
 
 ---
 
