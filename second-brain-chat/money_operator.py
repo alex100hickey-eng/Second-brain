@@ -182,7 +182,13 @@ def pending_tasks() -> list:
 
 def file_task(task: dict, now: datetime | None = None) -> str:
     now = now or datetime.now(LOCAL_TZ)
-    slug = f"{task['kind']}-{now.strftime('%Y%m%d-%H%M')}"
+    # Seconds, not minutes. The server files the next task in the same tick that the last one
+    # reports, so two tasks of the same kind land in the SAME MINUTE routinely — and did on
+    # 2026-09-17, twice for creator_draft. A repeated slug is not cosmetic: pending_tasks reads
+    # the newest update for a slug, finds the FIRST task's "done", and drops the second task from
+    # the pending list while its worker is still running. The guard below then cannot see it, so
+    # a third task of the same kind can be filed on top of a live worker.
+    slug = f"{task['kind']}-{now.strftime('%Y%m%d-%H%M%S')}"
     for t in pending_tasks():
         if t.get("kind") == task["kind"]:
             return t["slug"]               # never two of the same kind open at once

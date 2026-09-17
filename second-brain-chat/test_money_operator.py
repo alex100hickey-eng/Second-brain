@@ -354,3 +354,23 @@ def test_watcher_prompt_carries_rules_brief_and_report_commands():
     assert "money_task.py done --slug sf_topup-20260916-2010" in p
     assert "money_task.py blocked --slug sf_topup-20260916-2010" in p
     assert "never ask a question" in p
+
+
+def test_slugs_are_unique_within_a_minute():
+    """The server files the next task in the same tick the last one reports, so two tasks of one
+    kind land in the same minute routinely. A repeated slug makes pending_tasks read the FIRST
+    task's terminal update and drop the second while its worker is still running — after which
+    the "never two of the same kind open at once" guard cannot see it either."""
+    from datetime import datetime
+    mo.pending_tasks = lambda: []
+    filed = []
+    mo.supabase = type("S", (), {
+        "table": lambda self, _n: type("T", (), {
+            "insert": lambda self, row: type("E", (), {
+                "execute": lambda self: filed.append(row)})()})()})()
+    t0 = datetime(2026, 9, 17, 17, 15, 18)
+    t1 = datetime(2026, 9, 17, 17, 15, 49)
+    a = mo.file_task({"kind": "creator_draft", "lane": "creator", "title": "x", "brief": "y"}, t0)
+    b = mo.file_task({"kind": "creator_draft", "lane": "creator", "title": "x", "brief": "y"}, t1)
+    assert a != b, f"same slug for two tasks 31s apart: {a}"
+    assert a.startswith("creator_draft-20260917-1715")
