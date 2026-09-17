@@ -199,8 +199,24 @@ def test_governor_caps_runs_and_enforces_the_gap():
     assert "gap" in mo.governor_blocks(st, now)
     st = {"runs": [(now - timedelta(minutes=30)).isoformat()]}
     assert mo.governor_blocks(st, now) is None
-    st = {"runs": [(now - timedelta(hours=h)).isoformat() for h in range(1, mo.MAX_RUNS_PER_DAY + 1)]}
+    cap = mo.max_runs_per_day(now)
+    st = {"runs": [(now - timedelta(hours=h)).isoformat() for h in range(1, cap + 1)]}
     assert "usage cap" in mo.governor_blocks(st, now)
+
+
+def test_the_burst_window_closes_itself():
+    """The governor was opened on 2026-09-17 to spend weekly credit that would otherwise expire.
+    It has to shut on its own: an opened governor that outlives the credit starves the operator
+    every following day, and 'someone remembers to revert it' is not a mechanism."""
+    from datetime import timezone as _tz
+    during = datetime(2026, 9, 17, 18, 0, tzinfo=_tz.utc)
+    after = datetime(2026, 9, 19, 12, 0, tzinfo=_tz.utc)
+    assert mo.max_runs_per_day(during) == mo.BURST_RUNS
+    assert mo.min_gap_min(during) == mo.BURST_GAP
+    assert mo.per_kind_daily(during)["sf_source"] == 8
+    assert mo.max_runs_per_day(after) == mo.NORMAL_RUNS == 10
+    assert mo.min_gap_min(after) == mo.NORMAL_GAP == 20
+    assert mo.per_kind_daily(after)["sf_source"] == 2
 
 
 def test_tick_files_waits_settles_and_keeps_going(monkeypatch):

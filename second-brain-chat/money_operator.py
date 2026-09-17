@@ -50,8 +50,30 @@ TICK_SECONDS = 600
 # for it spent on money work rather than expiring at the Thursday reset. Unused weekly credit is
 # worth nothing, so the governor opens up until then. REVERT to 10 / 20 after 2026-09-18 10:00Z —
 # on Pro these numbers would otherwise starve the operator of credit before morning.
-MAX_RUNS_PER_DAY = int(os.environ.get("MONEY_OPERATOR_MAX_RUNS", "24"))
-MIN_GAP_MIN = int(os.environ.get("MONEY_OPERATOR_MIN_GAP_MIN", "8"))
+BURST_UNTIL = "2026-09-18T10:00:00+00:00"   # Alex's weekly subscription credit resets here
+NORMAL_RUNS, NORMAL_GAP = 10, 20
+BURST_RUNS, BURST_GAP = 24, 8
+
+
+def _bursting(now: datetime | None = None) -> bool:
+    """Is the spend-it-before-it-expires window still open?
+
+    The window self-closes instead of waiting for someone to remember a revert. An opened governor
+    that outlives the credit it was opened for just starves the operator every following day."""
+    try:
+        return (now or datetime.now(timezone.utc)) < datetime.fromisoformat(BURST_UNTIL)
+    except (TypeError, ValueError):
+        return False
+
+
+def max_runs_per_day(now: datetime | None = None) -> int:
+    env = os.environ.get("MONEY_OPERATOR_MAX_RUNS")
+    return int(env) if env else (BURST_RUNS if _bursting(now) else NORMAL_RUNS)
+
+
+def min_gap_min(now: datetime | None = None) -> int:
+    env = os.environ.get("MONEY_OPERATOR_MIN_GAP_MIN")
+    return int(env) if env else (BURST_GAP if _bursting(now) else NORMAL_GAP)
 IN_FLIGHT_TIMEOUT_MIN = 120                # a worker that started and never reported.
 # 2026-09-17: was 75, which was SHORTER than the work actually takes. The sf_source worker
 # picked up at 09:50 reported done at 11:26 (96 min, rc=0, six real brands in the tracker) —
@@ -63,8 +85,17 @@ PICKUP_TIMEOUT_MIN = 120                   # nobody picked the task up (Mac asle
 # stays 1: it is bounded by the real Hunter quota, not by our appetite. clip_post stays 3 because
 # posting_policy — the account-safety rule that exists BECAUSE 13 clips in 5 hours killed the
 # account — is the real limit there, and spending credit is not a reason to push it.
-PER_KIND_DAILY = {"sf_topup": 8, "clip_post": 3, "sf_hunter": 1, "sf_source": 8,
+PER_KIND_NORMAL = {"sf_topup": 3, "clip_post": 3, "sf_hunter": 1, "sf_source": 2,
+                   "poly_review": 1, "creator_list": 1, "whop_board": 1}
+PER_KIND_BURST = {"sf_topup": 8, "clip_post": 3, "sf_hunter": 1, "sf_source": 8,
                   "poly_review": 3, "creator_list": 2, "whop_board": 2}
+
+
+def per_kind_daily(now: datetime | None = None) -> dict:
+    return dict(PER_KIND_BURST if _bursting(now) else PER_KIND_NORMAL)
+
+
+PER_KIND_DAILY = PER_KIND_BURST   # back-compat for anything reading the old name
 QUEUE_TARGET = 10                          # two release days of first touches in stock
 POST_WINDOW = (17.0, 22.5)                 # local hours: the evening window the research points at
 ACCOUNT_CREATED = date(2026, 9, 12)        # @wildest_moments
@@ -314,7 +345,7 @@ def next_task(snap: dict, now: datetime, counts: dict) -> dict | None:
     facts, done = snap.get("facts") or {}, snap.get("done") or {}
 
     def can(kind):
-        if counts.get(kind, 0) >= PER_KIND_DAILY[kind]:
+        if counts.get(kind, 0) >= per_kind_daily(now)[kind]:
             reasons.append(f"{kind}: daily cap reached")
             return False
         return True
@@ -496,12 +527,14 @@ def runs_in_last_24h(st: dict, now: datetime) -> int:
 
 
 def governor_blocks(st: dict, now: datetime) -> str | None:
-    if runs_in_last_24h(st, now) >= MAX_RUNS_PER_DAY:
-        return f"{MAX_RUNS_PER_DAY} runs in the last 24 h (usage cap)"
+    cap = max_runs_per_day(now)
+    if runs_in_last_24h(st, now) >= cap:
+        return f"{cap} runs in the last 24 h (usage cap)"
     runs = st.get("runs") or []
     last = _parse(runs[-1]) if runs else None
-    if last and (now - last) < timedelta(minutes=MIN_GAP_MIN):
-        return f"last task filed {int((now - last).total_seconds() // 60)} min ago (gap {MIN_GAP_MIN} min)"
+    gap = min_gap_min(now)
+    if last and (now - last) < timedelta(minutes=gap):
+        return f"last task filed {int((now - last).total_seconds() // 60)} min ago (gap {gap} min)"
     return None
 
 
@@ -669,7 +702,7 @@ def status_text() -> str:
     st = load_state()
     now = datetime.now(LOCAL_TZ)
     lines = [f"Money operator — {'PAUSED' if st.get('paused') else 'running'}; "
-             f"{runs_in_last_24h(st, now)}/{MAX_RUNS_PER_DAY} runs in the last 24 h."]
+             f"{runs_in_last_24h(st, now)}/{max_runs_per_day(now)} runs in the last 24 h."]
     inf = st.get("in_flight")
     lines.append(f"In flight: {inf['slug']} (filed {inf['filed_at'][:16]})" if inf else "In flight: nothing.")
     for h in (st.get("history") or [])[-5:]:
