@@ -176,7 +176,9 @@ def test_quiet_hours_and_per_kind_daily_caps():
     assert mo.next_task(s, T(3), {}) is None
     assert any("quiet hours" in r for r in s["idle_reasons"])
     s = snap(splitframe={"pending": 2, "draftable_in_band": 3})
-    t = mo.next_task(s, T(12), {"sf_topup": 3})
+    # read the cap from the constant: hardcoding it meant tuning the governor turned this red
+    # (2026-09-17, when sf_topup went 3 -> 8) instead of testing the behaviour it names
+    t = mo.next_task(s, T(12), {"sf_topup": mo.PER_KIND_DAILY["sf_topup"]})
     assert t["kind"] != "sf_topup" and any("daily cap" in r for r in s["idle_reasons"])
 
 
