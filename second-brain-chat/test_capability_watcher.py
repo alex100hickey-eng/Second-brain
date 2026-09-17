@@ -48,17 +48,36 @@ def _sandbox():
     return d
 
 
+money_spawns = []
+
+
+class _FakeMO:
+    """Stands in for money_operator so main() cannot reach the real queue from a test."""
+
+    def latest_update(self, _slug):
+        return {}
+
+    def mark(self, *_a, **_k):
+        return ""
+
+
 def _run(queue, argv=("capability_watcher.py",)):
     """Run main() with a faked queue; returns (rc, spawned_count_or_None)."""
     spawned = []
-    orig_pending, orig_spawn, orig_argv = w.pending, w.spawn_build, sys.argv
+    orig = (w.pending, w.spawn_build, w.money_pending, w.spawn_money_task, sys.argv)
     w.pending = (queue if callable(queue) else (lambda: queue))
     w.spawn_build = lambda n: spawned.append(n)
+    # The money path MUST be faked too. Without these, main() fell through to a live Supabase
+    # read and spawned a real `claude -p` worker against a real task, then blocked on it — which
+    # is how running the test suite came to orphan a production worker and wedge its task.
+    w.money_pending = lambda: (_FakeMO(), [])
+    w.spawn_money_task = lambda *_a, **_k: money_spawns.append(_a)
     sys.argv = list(argv)
     try:
         rc = w.main()
     finally:
-        w.pending, w.spawn_build, sys.argv = orig_pending, orig_spawn, orig_argv
+        (w.pending, w.spawn_build, w.money_pending,
+         w.spawn_money_task, sys.argv) = orig
     return rc, (spawned[0] if spawned else None)
 
 
@@ -390,6 +409,42 @@ def test_logging_can_never_kill_the_watcher():
     check("an unwritable log file does not raise either", ok)
 
 
+def test_tests_can_never_spawn_a_real_money_worker():
+    """The bug that caused a real outage on 2026-09-17, twice. _run faked the capability queue
+    but not the money one, so main() read live Supabase and spawned an actual `claude -p` worker
+    against a real task, then blocked on it. run_tests kills a module at 300 s, which orphaned the
+    worker and left the task in_progress — unrecoverable, because the watcher will not re-spawn an
+    in_progress task. The spawn wrote no line to the real log either, because the test had
+    redirected LOG to a temp dir, so nothing anywhere recorded what had happened."""
+    _sandbox()
+    money_spawns.clear()
+    _run([])
+    check("a faked run never spawns a money worker", money_spawns == [])
+
+    # Belt and braces: even a test that forgets to fake it cannot reach the real queue, because
+    # the watcher itself refuses the money path in test mode. Checked by making the real call
+    # explode — if the guard ever stops working, this is a loud failure rather than a live spawn.
+    _sandbox()
+    orig_mode, orig_money = w.TEST_MODE, w.money_pending
+    w.TEST_MODE = True
+    w.money_pending = lambda: (_ for _ in ()).throw(
+        AssertionError("test mode reached the real money queue"))
+    try:
+        orig_pending, orig_argv = w.pending, sys.argv
+        w.pending, sys.argv = (lambda: []), ["capability_watcher.py"]
+        try:
+            rc = w.main()
+            ok = rc == 0
+        finally:
+            w.pending, sys.argv = orig_pending, orig_argv
+    except AssertionError as e:
+        ok = False
+        print(f"   {e}")
+    finally:
+        w.TEST_MODE, w.money_pending = orig_mode, orig_money
+    check("the watcher refuses the money queue in test mode", ok)
+
+
 if __name__ == "__main__":
     test_fire_rules()
     test_heartbeat_always()
@@ -403,6 +458,7 @@ if __name__ == "__main__":
     test_vanished_worker_is_reported()
     test_vanished_check_fails_closed()
     test_logging_can_never_kill_the_watcher()
+    test_tests_can_never_spawn_a_real_money_worker()
     total, passed = len(_results), sum(_results)
     print("\n" + "=" * 48)
     print(f"{passed}/{total} checks passed")

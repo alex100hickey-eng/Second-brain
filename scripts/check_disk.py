@@ -29,10 +29,25 @@ import os
 import ssl
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+TREND = os.path.join(REPO, "scripts", ".disk_trend.json")
+
+# The bands answer "how full is it". They cannot answer "how fast is it filling", and this
+# module's own opening line is that the slope was visible for hours before both outages and
+# nothing was watching it. On 2026-09-17 the server went 17.4 GB free -> 6.9 GB in about two
+# hours (thirteen deploys in one working session) and every single reading was inside NOTICE,
+# which is silent by design. Level alone would have said nothing until roughly an hour before
+# builds started dying.
+#
+# So a fall steep enough to run the box out inside this window escalates on its own, whatever
+# the band says. Two readings are enough to see it; anything older is a different day's story.
+HOURS_TO_FULL_WARNING = 6.0
+TREND_MAX_AGE_H = 3.0
+MIN_FALL_GB = 0.5              # below this it is noise, not a trend
 
 # Thresholds are PER NODE, because the same percentage means different things.
 #
@@ -96,6 +111,45 @@ def report(level: str, message: str, detail: str = "") -> None:
         print(f"  (could not record event: {e})")
 
 
+def _load_trend() -> dict:
+    try:
+        with open(TREND, encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_trend(trend: dict) -> None:
+    try:
+        with open(TREND, "w", encoding="utf-8") as fh:
+            json.dump(trend, fh)
+    except OSError:
+        pass
+
+
+def hours_to_full(previous: dict, free_gb: float, now_ts: float):
+    """Hours until this node runs out at the rate it is currently falling, or None.
+
+    None means "no usable trend": no previous reading, one too old to mean anything, or a
+    change too small to be more than noise. It never means "healthy" — the caller still has
+    the band for that.
+    """
+    if not previous:
+        return None
+    try:
+        then_ts = float(previous["at"])
+        then_free = float(previous["free_gb"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    elapsed_h = (now_ts - then_ts) / 3600.0
+    if elapsed_h <= 0 or elapsed_h > TREND_MAX_AGE_H:
+        return None
+    fallen = then_free - free_gb
+    if fallen < MIN_FALL_GB:
+        return None
+    return free_gb / (fallen / elapsed_h)
+
+
 def band(pct: int, thresholds: tuple = (75, 85, 92)) -> str:
     notice, warning, critical = thresholds
     if pct >= critical:
@@ -110,6 +164,7 @@ def band(pct: int, thresholds: tuple = (75, 85, 92)) -> str:
 def main() -> int:
     quiet = "--quiet" in sys.argv
     worst_exit = 0
+    trend, now_ts = _load_trend(), time.time()
 
     for name, url, thresholds in NODES:
         data, why = probe(url)
@@ -130,8 +185,17 @@ def main() -> int:
 
         pct, free = disk.get("pct_used", 0), disk.get("free_gb", 0)
         level = band(pct, thresholds)
+        eta = hours_to_full(trend.get(name), float(free), now_ts)
+        trend[name] = {"at": now_ts, "free_gb": free}
+
+        slope = ""
+        if eta is not None and eta <= HOURS_TO_FULL_WARNING:
+            slope = f" — FALLING, full in ~{eta:.1f} h at this rate"
+            if level in ("ok", "notice"):
+                level = "warning"
+
         line = (f"[{name}] disk {pct}% used, {free} GB free "
-                f"of {disk.get('total_gb', '?')} GB — {level.upper()}")
+                f"of {disk.get('total_gb', '?')} GB — {level.upper()}{slope}")
 
         if level == "ok":
             if not quiet:
@@ -144,10 +208,12 @@ def main() -> int:
 
         worst_exit = max(worst_exit, 1)
         report(level,
-               f"{name} node disk at {pct}% ({free} GB free)",
+               f"{name} node disk at {pct}% ({free} GB free)"
+               + (f", full in ~{eta:.1f} h at the current rate" if slope else ""),
                "Free space with: docker builder prune -af  (see NEEDS_ALEX.md §0a). "
                "Builds fail and Coolify's Redis stops persisting when this hits 100%.")
 
+    _save_trend(trend)
     return worst_exit
 
 

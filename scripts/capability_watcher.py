@@ -52,6 +52,7 @@ CLAUDE_BIN = os.path.join(HOME, ".local", "bin", "claude")
 # Long enough that a worker still starting up is never mistaken for a dead one; short enough
 # that a dead one costs minutes, not the server's two-hour pickup timeout.
 VANISHED_AFTER_MIN = 6
+TEST_MODE = os.environ.get("JARVIS_TEST", "").strip().lower() in ("1", "true", "yes")
 HEARTBEAT = os.path.join(ROOT, ".capability_watcher_heartbeat")
 WATCHER_LOCK = os.path.join(ROOT, ".capability_watcher.lock")   # holds spawned PID
 FAILSTREAK = os.path.join(ROOT, ".capability_watcher_failstreak")
@@ -468,6 +469,15 @@ def main() -> int:
     # A task already in_progress belongs to a worker (alive or dead) — the server's own
     # timeout retires it; re-spawning here would double the work.
     if os.path.exists(MONEY_PAUSE):
+        return 0
+    if TEST_MODE:
+        # A test that calls main() must never reach the real money queue. test_capability_watcher
+        # faked `pending` and `spawn_build` but not these, so every suite run fell through to a
+        # live Supabase read and spawned an actual `claude -p` worker against a real task — then
+        # run_tests killed the module at its 300 s timeout, orphaning the worker and leaving the
+        # task in_progress with nothing able to recover it. That is where
+        # creator_draft-20260917-1715 got stuck, and why its spawn wrote no line to the real
+        # log: the test had redirected LOG to a temp dir.
         return 0
     try:
         mo, tasks = money_pending()
