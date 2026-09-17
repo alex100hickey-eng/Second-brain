@@ -356,6 +356,40 @@ def test_vanished_check_fails_closed():
         w.subprocess.run = real
 
 
+def test_logging_can_never_kill_the_watcher():
+    """The print sat outside log()'s guard, so a broken stdout under launchd raised out of log(),
+    out of spawn_money_task and out of main. The line right after that is the one following
+    mark(in_progress) — so the failure mode is a task recorded as running by a worker that never
+    started, which is unrecoverable from either side."""
+    import builtins
+    _sandbox()
+    real_print = builtins.print
+    builtins.print = lambda *_a, **_k: (_ for _ in ()).throw(BrokenPipeError("stdout is gone"))
+    try:
+        w.log("a line written while stdout is broken")
+        ok = True
+    except Exception:                                            # noqa: BLE001
+        ok = False
+    finally:
+        builtins.print = real_print
+    check("a broken stdout does not raise out of log()", ok)
+    check("and the line still reached the file",
+          "stdout is broken" in open(w.LOG).read())
+
+    # An unwritable log file: point LOG somewhere that cannot exist rather than breaking the
+    # builtin, which would take the rest of the process down with it.
+    real_log = w.LOG
+    w.LOG = "/nonexistent-directory-for-tests/watcher.log"
+    try:
+        w.log("neither half available")
+        ok = True
+    except Exception:                                            # noqa: BLE001
+        ok = False
+    finally:
+        w.LOG = real_log
+    check("an unwritable log file does not raise either", ok)
+
+
 if __name__ == "__main__":
     test_fire_rules()
     test_heartbeat_always()
@@ -368,6 +402,7 @@ if __name__ == "__main__":
     test_fail_streak()
     test_vanished_worker_is_reported()
     test_vanished_check_fails_closed()
+    test_logging_can_never_kill_the_watcher()
     total, passed = len(_results), sum(_results)
     print("\n" + "=" * 48)
     print(f"{passed}/{total} checks passed")

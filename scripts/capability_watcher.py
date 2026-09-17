@@ -80,12 +80,17 @@ def log(msg: str) -> None:
     """Only meaningful events land here — a no-op poll writes nothing but the
     heartbeat, so this log stays readable instead of 720 'queue empty' lines/day."""
     line = f"[{datetime.now().isoformat(timespec='seconds')}] {msg}\n"
-    try:
-        with open(LOG, "a") as fh:
-            fh.write(line)
-    except OSError:
-        pass
-    print(line.rstrip())
+    # Nothing about logging may be able to kill the watcher. The print sat outside this guard,
+    # so a closed or broken stdout under launchd raised BrokenPipeError out of log(), out of
+    # spawn_money_task, and out of main — and the one place that happens is the line immediately
+    # AFTER the task is marked in_progress. The task would be recorded as running by a worker
+    # that never started, which is exactly the stuck state seen on 2026-09-17: two spawns at
+    # 16:54 and 17:18 that marked in_progress and wrote no log line at all.
+    for emit in (lambda: open(LOG, "a").write(line), lambda: print(line.rstrip())):
+        try:
+            emit()
+        except Exception:                                        # noqa: BLE001
+            pass
 
 
 def beat() -> None:
