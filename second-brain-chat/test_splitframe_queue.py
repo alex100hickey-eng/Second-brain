@@ -434,3 +434,21 @@ def test_close_report_reads_outcomes_per_arm():
     # entry has aged out of it.
     rows[0]["close_variant"] = "offer"
     assert sq.close_report(rows, [])["offer"]["sent"] == 1
+
+
+def test_creator_entry_verified_beats_a_nearby_warning():
+    """"UNVERIFIED" contains "VERIFIED", and the note that clears an address usually explains
+    what it used to say. Neither may be read as the other."""
+    cleared = """### MISTERARTHER
+- **Email:** `contact@misterarther.com` — **VERIFIED 2026-09-17.** Read off the About panel.
+  (It was listed UNVERIFIED because the address had only come from a search result.)
+"""
+    assert sq.creator_entry(cleared, "contact@misterarther.com")["unverified"] is False
+
+    # The warning still stands when it is the address's own line that carries it...
+    warned = "- **Email:** `x@y.com` — **UNVERIFIED.** From a search summary.\n"
+    assert sq.creator_entry(warned, "x@y.com")["unverified"] is True
+
+    # ...or the line under it, where the operator usually writes the caveat.
+    below = "- **Email:** `x@y.com`\n  This is UNVERIFIED — confirm it off their own page.\n"
+    assert sq.creator_entry(below, "x@y.com")["unverified"] is True

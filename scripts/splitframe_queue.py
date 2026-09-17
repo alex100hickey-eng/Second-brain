@@ -623,6 +623,12 @@ def record_draft_doc(brand: str, to: str, subject: str, body: str, ad_count: int
 # brittle parser over it would be a worse guard than a plain containment check: the address has
 # to appear in the file, and the file is the only place an address can come from.
 
+# Whole words, not substrings: "UNVERIFIED" contains "VERIFIED", and a marker that matched on
+# substrings would read every warning as a clearance.
+UNVERIFIED_RE = re.compile(r"\bUNVERIFIED\b")
+VERIFIED_RE = re.compile(r"\bVERIFIED\b")
+
+
 def creator_entry(text: str, email: str) -> dict:
     """What the prospect list says about one address: {found, unverified, name}.
 
@@ -641,8 +647,17 @@ def creator_entry(text: str, email: str) -> dict:
         if want in line.lower():
             out["found"] = True
             out["name"] = name
-            window = " ".join(lines[i:i + 3]).upper()
-            out["unverified"] = "UNVERIFIED" in window
+            own = line.upper()
+            if VERIFIED_RE.search(own):
+                # The address's own line states it outright. This wins over anything nearby,
+                # including a note explaining what the address USED to be marked as — which is
+                # otherwise indistinguishable from a live warning.
+                out["unverified"] = False
+            elif UNVERIFIED_RE.search(own):
+                out["unverified"] = True
+            else:
+                out["unverified"] = bool(
+                    UNVERIFIED_RE.search(" ".join(lines[i + 1:i + 3]).upper()))
             return out
     return out
 
