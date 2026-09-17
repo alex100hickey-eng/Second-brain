@@ -49,6 +49,9 @@ SKILL = os.path.join(HOME, ".claude", "scheduled-tasks",
                      "clarvis-capability-processor", "SKILL.md")
 CLAUDE_BIN = os.path.join(HOME, ".local", "bin", "claude")
 
+# Long enough that a worker still starting up is never mistaken for a dead one; short enough
+# that a dead one costs minutes, not the server's two-hour pickup timeout.
+VANISHED_AFTER_MIN = 6
 HEARTBEAT = os.path.join(ROOT, ".capability_watcher_heartbeat")
 WATCHER_LOCK = os.path.join(ROOT, ".capability_watcher.lock")   # holds spawned PID
 FAILSTREAK = os.path.join(ROOT, ".capability_watcher_failstreak")
@@ -322,6 +325,64 @@ def money_prompt(task: dict, rules_text: str) -> str:
     )
 
 
+def _parse_iso(value: str):
+    """A timestamp from the update row, always as UTC. A naive one is treated as UTC rather than
+    local: guessing local here would shift the age by four hours and either retire a live worker
+    or wait out the very timeout this exists to avoid."""
+    try:
+        dt = datetime.fromisoformat((value or "").strip())
+    except (TypeError, ValueError):
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def money_worker_running(slug: str) -> bool:
+    """A worker for this slug still on the machine — including one orphaned by a watcher that
+    died supervising it. Fails CLOSED: if the process table cannot be read, assume it is alive,
+    because the cost of being wrong the other way is two workers on one task."""
+    try:
+        out = subprocess.run(["ps", "-Axww", "-o", "command"],
+                             capture_output=True, text=True, timeout=15)
+    except Exception:                                            # noqa: BLE001
+        return True
+    return slug in (out.stdout or "")
+
+
+def recover_vanished(mo, tasks: list, now: datetime | None = None) -> list:
+    """Report tasks whose worker is gone, so the server can file the next one now.
+
+    Re-spawning an in_progress task would double the work, which is why this watcher has always
+    left them alone. But leaving them alone silently is not the only alternative: a worker can
+    die without ever reaching the `mark(failed)` at the end of spawn_money_task — SIGKILL, an
+    OOM, the Mac sleeping, the watcher itself being killed mid-supervision — and then nothing on
+    either side knows. The server's PICKUP_TIMEOUT is 120 minutes and is tuned for "nobody picked
+    it up", so a worker that dies at minute two costs nearly two hours of an operator that is
+    supposed to be filing a task every eight.
+
+    Reaching this point already means no supervising run is active here (main returns early
+    otherwise), so the only thing left to rule out is an orphan still running.
+    """
+    now = now or datetime.now(timezone.utc)
+    out = []
+    for t in tasks:
+        slug = t.get("slug", "")
+        if not slug or t.get("status") != "in_progress":
+            continue
+        started = _parse_iso(mo.latest_update(slug).get("updated_at", ""))
+        if started is None or (now - started) < timedelta(minutes=VANISHED_AFTER_MIN):
+            continue
+        if money_worker_running(slug):
+            continue
+        mo.mark(slug, "failed",
+                f"no worker for this task is running and nothing reported it in "
+                f"{VANISHED_AFTER_MIN}+ min — the worker died before it could report. "
+                f"Anything it finished is in the queue or the tracker; the server files the next "
+                f"task now instead of waiting out the pickup timeout.")
+        log(f"money task {slug}: worker vanished — marked failed so the server can move on")
+        out.append(slug)
+    return out
+
+
 def spawn_money_task(mo, task: dict) -> None:
     slug = task.get("slug", "?")
     try:
@@ -408,6 +469,10 @@ def main() -> int:
     except Exception as e:                                       # noqa: BLE001
         log(f"money queue check failed: {str(e)[:200]}")
         return 1
+    try:
+        recover_vanished(mo, tasks)
+    except Exception as e:                                       # noqa: BLE001
+        log(f"vanished-worker check failed: {str(e)[:200]}")
     waiting = [t for t in tasks if t.get("status") == "pending"]
     if not waiting:
         return 0

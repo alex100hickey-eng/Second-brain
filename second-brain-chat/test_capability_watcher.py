@@ -288,6 +288,74 @@ def test_fail_streak():
           w._read_fail_streak() == 1)
 
 
+def test_vanished_worker_is_reported():
+    """A worker can die before it reaches the mark(failed) at the end of spawn_money_task —
+    SIGKILL, an OOM, the Mac sleeping, the watcher itself killed mid-supervision. It happened on
+    2026-09-17: creator_draft-20260917-1715 queued its email, exited without reporting, and sat
+    in_progress with nothing on either side knowing. The server's pickup timeout is 120 minutes
+    and is tuned for "nobody picked it up", so that is nearly two hours of an operator meant to
+    file a task every eight."""
+    from datetime import datetime, timedelta, timezone
+    _sandbox()
+    now = datetime(2026, 9, 17, 21, 45, tzinfo=timezone.utc)
+    marked = []
+
+    class _MO:
+        def __init__(self, started):
+            self._started = started
+
+        def latest_update(self, _slug):
+            return {"status": "in_progress", "updated_at": self._started.isoformat()}
+
+        def mark(self, slug, status, note=""):
+            marked.append((slug, status, note))
+
+    task = [{"slug": "creator_draft-20260917-1715", "status": "in_progress"}]
+    old = now - timedelta(minutes=30)
+    real_running = w.money_worker_running
+
+    w.money_worker_running = lambda _slug: False
+    check("a vanished worker is marked failed so the server files the next task",
+          w.recover_vanished(_MO(old), task, now) == ["creator_draft-20260917-1715"]
+          and marked and marked[0][1] == "failed")
+
+    # The three ways it must NOT fire — every one of them would put two workers on one task.
+    marked.clear()
+    w.money_worker_running = lambda _slug: True
+    check("a worker still running is left alone, even orphaned by a dead watcher",
+          w.recover_vanished(_MO(old), task, now) == [] and not marked)
+
+    marked.clear()
+    w.money_worker_running = lambda _slug: False
+    check("a worker that only just started is not mistaken for a dead one",
+          w.recover_vanished(_MO(now - timedelta(minutes=1)), task, now) == [])
+
+    marked.clear()
+    check("a pending task is not touched — it has no worker yet by definition",
+          w.recover_vanished(_MO(old), [{"slug": "x", "status": "pending"}], now) == [])
+
+    marked.clear()
+    check("an unreadable timestamp is left alone rather than guessed at",
+          w.recover_vanished(
+              type("M", (), {"latest_update": lambda s, _x: {"updated_at": "not a date"},
+                             "mark": lambda s, *a, **k: marked.append(a)})(),
+              task, now) == [])
+    w.money_worker_running = real_running
+
+
+def test_vanished_check_fails_closed():
+    """If the process table cannot be read, assume the worker is alive: being wrong that way
+    costs one idle poll, and being wrong the other way puts two workers on one task."""
+    _sandbox()
+    real = w.subprocess.run
+    w.subprocess.run = lambda *a, **k: (_ for _ in ()).throw(OSError("no ps"))
+    try:
+        check("an unreadable process table means 'assume alive'",
+              w.money_worker_running("any-slug") is True)
+    finally:
+        w.subprocess.run = real
+
+
 if __name__ == "__main__":
     test_fire_rules()
     test_heartbeat_always()
@@ -298,6 +366,8 @@ if __name__ == "__main__":
     test_token_reaches_the_child()
     test_read_retry()
     test_fail_streak()
+    test_vanished_worker_is_reported()
+    test_vanished_check_fails_closed()
     total, passed = len(_results), sum(_results)
     print("\n" + "=" * 48)
     print(f"{passed}/{total} checks passed")
