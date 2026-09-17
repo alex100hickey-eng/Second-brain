@@ -9,11 +9,13 @@
         <string>/Library/Frameworks/Python.framework/Versions/3.14/bin/python3</string>
         <string>/Users/alexhickey24/second-brain/scripts/capability_watcher.py</string>
     </array>
-    <!-- 2 min: the poll is one Supabase SELECT, so frequency is nearly free.
-         launchd will not start a second copy of this label while a build from the
-         previous one is still running. -->
+    <!-- Re-enabled 2026-09-16 as the hands of the server's money operator
+         (second-brain-chat/money_operator.py): the server files one money_task at a time,
+         this job runs it. 10 min, not the old 2: the operator itself only decides every
+         10 min, so a faster poll buys nothing. launchd will not start a second copy of this
+         label while a worker from the previous one is still running. -->
     <key>StartInterval</key>
-    <integer>120</integer>
+    <integer>600</integer>
     <key>RunAtLoad</key>
     <true/>
     <key>StandardOutPath</key>

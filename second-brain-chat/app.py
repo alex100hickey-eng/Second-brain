@@ -4915,6 +4915,8 @@ def _dispatch_tool_call(tool_name: str, tool_input: dict) -> str:
         return outbox.handle_tool_call(tool_name, tool_input)
     if tool_name in ("request_capability", "check_capability_requests"):
         return capability_escalation.handle_tool_call(tool_name, tool_input)
+    if tool_name == "money_operator":
+        return money_operator.handle_tool_call(tool_name, tool_input)
     if tool_name in ("list_generated_files", "remove_generated_file", "restore_generated_file"):
         return generated_files.handle_tool_call(tool_name, tool_input)
     if tool_name in browser_sandbox.TOOL_NAMES:
@@ -6312,6 +6314,34 @@ if task_manager.RUNTIME == "server":
         threading.Thread(target=_business_monitor_loop, daemon=True,
                          name="jarvis-business-monitor").start()
     print("Business monitor started (splitframe / polybot / clipbot).")
+
+
+# The always-on money operator. Alex, 2026-09-16: "something running on my hetzner server that
+# prompts you/CLARVIS to make me more money ... whenever you finish the current task, it tells
+# you to keep going and you find a new task." The SERVER owns the loop (deterministic ladder,
+# caps, gates — no model calls here) and files ONE task at a time as a `money_task` row; the
+# Mac's capability watcher spawns a headless Claude Code worker for it; the worker reports and
+# the next tick files the next task. MONEY_OPERATOR=0 in the env turns it off without a deploy;
+# the `money_operator` chat tool pauses/resumes it. See money_operator.py.
+import money_operator  # noqa: E402
+
+money_operator.init(supabase, intake, monitor, proactive)
+TOOLS.extend(money_operator.TOOL_SCHEMAS)
+TOOL_STATUS_LABELS.update(money_operator.TOOL_STATUS_LABELS)
+
+
+def _money_operator_loop():
+    observability.set_trigger("agent")
+    money_operator.loop()
+
+
+if task_manager.RUNTIME == "server" and os.environ.get("MONEY_OPERATOR", "1") != "0":
+    if not TEST_MODE:
+        threading.Thread(target=_money_operator_loop, daemon=True,
+                         name="jarvis-money-operator").start()
+    print("Money operator started (the server drives, the Mac executes).")
+else:
+    print("Money operator OFF on this node (server-only; MONEY_OPERATOR=0 also disables it).")
 
 
 # ------------------------------------------------------------

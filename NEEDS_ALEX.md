@@ -13,30 +13,40 @@ is still yours to do.
 ---
 
 ## 💰 Money lanes — what only you can do
-*Kept current by the nightly "Money operator" scheduled task (8 PM, Scheduled sidebar). It reads this
-section before every run and rewrites it; items disappear when they stop being true. Everything else in
-the three money lanes now happens without you: Splitframe drafting/sending, TikTok posting at the
-account-safe cadence, Vyro submissions once you're logged in, polybot engineering in paper mode.*
+*Kept current by the money operator. Since 2026-09-16 night it is not a scheduled routine any more:
+the SERVER (CLARVIS on Hetzner) decides the next unblocked task every 10 minutes and files it; your
+Mac's capability watcher runs it as a headless Claude Code worker; the worker reports; the server files
+the next one. Ask CLARVIS "what is the money operator doing" any time (the `money_operator` tool), or run
+`python3 scripts/money_task.py status`. The 8 PM routine is disabled (its one run tonight did the work
+below). Everything else in the three lanes happens without you: Splitframe drafting/sending, sourcing
+new brands, TikTok posting at the account-safe cadence, polybot engineering in paper mode.*
 
-Rewritten 2026-09-16 22:10 after the first unattended run (it ran clean, no prompts — the "Run now"
-item is done and gone).
+Rewritten 2026-09-16 22:30. The worker has NO desktop Browser pane: it reads sites through its own
+Chrome profile. So the logins below are done ONCE in a headed window on that profile, not in the pane:
+`open -na "Google Chrome" --args --user-data-dir="$HOME/.money-operator-chrome" <url>` — log in, close
+the window (the worker cannot read while that window is open).
 
-1. **Log in to Vyro once in the Mac's Browser pane** — app.vyro.com → "Continue with Google" with the alt
-   account (basketballlacrosse387@gmail.com) (1 min). The pane is logged out, so 24 posted clips can't be
-   submitted and views never count toward payment. This is the only reason the clipping lane is at $0.
+1. **Log in to Vyro once on the operator profile** (1 min):
+   `open -na "Google Chrome" --args --user-data-dir="$HOME/.money-operator-chrome" https://app.vyro.com`
+   → "Continue with Google" with the alt account (basketballlacrosse387@gmail.com), then close that window.
+   Until then 24 posted clips can't be submitted and views never count toward payment. This is the only
+   reason the clipping lane is at $0.
 2. **The creator lane: yes or no at $400/mo.** Read `Money/Creator Lane — Offer (proposed).md` (one page:
    3 clips a week for streamers and podcasters with a dead clips channel, $400 flat, with the reasoning).
    Say *"Creator lane approved at $400 for 3 clips a week"* — or change the number. Until then the operator
    builds no list and writes no email on that lane, and it is the only second revenue lane on the table.
 3. **Fix the 5 Instagram Reel captions in the IG app** (replace `%23` with `#`). The API can't edit them
    and Vyro rejects them as they are; unfixed, they stay unpaid forever.
-4. **Log in to Whop in the same Browser pane** (same alt account). You joined Clipping Culture, but this
-   browser has no session, so the operator can't read the board or pick a campaign to join.
+4. **Log in to Whop on the same operator profile** (same alt account):
+   `open -na "Google Chrome" --args --user-data-dir="$HOME/.money-operator-chrome" https://whop.com/discover/content-rewards`
+   You joined Clipping Culture, but the worker's browser has no session, so it can't read the board or pick
+   a campaign to join.
 5. **YouTube Studio: why were all 5 Shorts deleted?** Open studio.youtube.com on @wildestmomentsclips and
    read the notification. Nothing gets re-uploaded to YouTube until you say what it said.
 
-Also on the clock: **Sep 19 Claude Max renewal ($106)**. The nightly operator spends Claude Code usage;
-on Pro (~$21) one run a night is about the ceiling. The Sep 18 nudge already asks you.
+Also on the clock: **Sep 19 Claude Max renewal ($106)**. Every worker run spends Claude Code usage and
+the operator is capped at 10 runs a day (MONEY_OPERATOR_MAX_RUNS on the server). On Pro (~$21) that cap
+would have to drop to 1-2 a day. The Sep 18 nudge already asks you.
 
 > **Splitframe supply, 2026-09-16:** the 97-row tracker is mined out — every undrafted row left is a
 > 96-150 ad in-house brand and the `candidate` rows return zero active ads. Fixed tonight rather than

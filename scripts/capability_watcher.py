@@ -277,6 +277,93 @@ def spawn_build(count: int) -> None:
             pass
 
 
+# ---------------------------------------------------------------- money operator tasks
+# The server's money operator (second-brain-chat/money_operator.py) files ONE task at a
+# time as a `money_task` row; this watcher is its hands. The worker is a headless
+# `claude -p` given the operator rules plus the brief, and it reports through
+# scripts/money_task.py. The server files the next task the moment this one is reported.
+RULES = os.path.join(CHAT, "money_operator_rules.md")
+MONEY_PAUSE = os.path.join(ROOT, "scripts", "MONEY_OPERATOR_PAUSE")   # touch to stop taking work
+MONEY_TIMEOUT_S = 50 * 60
+
+
+def money_pending():
+    """(module, waiting tasks) via the same client + retry policy as the capability queue."""
+    sys.path.insert(0, CHAT)
+    from dotenv import load_dotenv
+    from supabase import create_client
+    import intake
+    import money_operator as mo
+
+    for env_path in (os.path.join(ROOT, ".env"), os.path.join(CHAT, ".env")):
+        load_dotenv(env_path)
+    url, key = os.environ.get("SUPABASE_URL"), os.environ.get("SUPABASE_KEY")
+    if not (url and key):
+        raise RuntimeError("SUPABASE_URL / SUPABASE_KEY not found in .env")
+    sb = create_client(url, key)
+    intake.supabase = sb
+    mo.init(sb, intake)
+    return mo, _read_with_retry(mo.pending_tasks)
+
+
+def money_prompt(task: dict, rules_text: str) -> str:
+    slug = task.get("slug", "")
+    return (
+        f"{rules_text.strip()}\n\n# YOUR TASK\n"
+        f"slug: {slug}\nlane: {task.get('lane', '')}\ntitle: {task.get('title', '')}\n\n"
+        f"{(task.get('brief') or '').strip()}\n\n"
+        "When you are finished, or as soon as you know you cannot finish, report with ONE of:\n"
+        f"  python3 scripts/money_task.py done --slug {slug} --note \"<what happened>\" --facts '<json object>'\n"
+        f"  python3 scripts/money_task.py blocked --slug {slug} --note \"<what only Alex can do>\" "
+        "--facts '{\"asks\": [\"<the exact action he needs to take>\"]}'\n"
+        f"  python3 scripts/money_task.py failed --slug {slug} --note \"<what you tried>\"\n"
+        "Alex is not present: never ask a question; make the call the rules allow and write it down. "
+        "The server files the next task the moment this one is reported."
+    )
+
+
+def spawn_money_task(mo, task: dict) -> None:
+    slug = task.get("slug", "?")
+    try:
+        with open(RULES, encoding="utf-8") as fh:
+            rules_text = fh.read()
+    except OSError as e:
+        log(f"money task {slug}: rules file missing ({e}) — not spawning")
+        return
+    with open(WATCHER_LOCK, "w") as fh:
+        fh.write(str(os.getpid()))
+    try:
+        mo.mark(slug, "in_progress", "worker started on the Mac")
+        log(f"money task {slug} ({task.get('kind')}) → starting Claude Code worker")
+        proc = subprocess.run(
+            [CLAUDE_BIN, "-p", money_prompt(task, rules_text), "--permission-mode", "auto"],
+            cwd=ROOT, timeout=MONEY_TIMEOUT_S, capture_output=True, text=True, env=build_env(),
+        )
+        tail = (proc.stdout or "").strip().splitlines()
+        log(f"money task {slug} finished rc={proc.returncode}; last line: "
+            f"{tail[-1][:300] if tail else '(no output)'}")
+        auth_failed = check_auth_failure(proc)
+        status = _read_with_retry(lambda: mo.latest_update(slug)).get("status")
+        if status not in mo.TERMINAL:
+            # A worker that never reported is a failed task, not a mystery: the server
+            # must be told so it can file the next one instead of waiting 75 minutes.
+            note = ("auth failure — the CLI could not log in" if auth_failed else
+                    f"worker exited rc={proc.returncode} without reporting; last output: "
+                    f"{(tail[-1] if tail else '')[:300]}")
+            mo.mark(slug, "failed", note)
+    except subprocess.TimeoutExpired:
+        log(f"money task {slug} exceeded {MONEY_TIMEOUT_S}s and was killed")
+        try:
+            mo.mark(slug, "failed", f"worker killed after {MONEY_TIMEOUT_S // 60} min")
+        except Exception as e:                                   # noqa: BLE001
+            log(f"could not mark {slug} failed: {e}")
+    finally:
+        try:
+            os.remove(WATCHER_LOCK)
+        except OSError:
+            pass
+
+
 def main() -> int:
     beat()
     dry = "--dry-run" in sys.argv
@@ -303,14 +390,31 @@ def main() -> int:
     # died mid-flight; re-spawning every 2 minutes would just restart it forever, so
     # the daily backstop owns that case instead.
     fresh = [r for r in reqs if r.get("status") == "pending"]
-    if not fresh:
-        if reqs:
-            log(f"{len(reqs)} request(s) in_progress, none new — leaving them alone")
+    if fresh:
+        if dry:
+            log(f"[dry-run] would build: {', '.join(r.get('slug', '?') for r in fresh)}")
+            return 0
+        spawn_build(len(fresh))
+        return 0
+    if reqs:
+        log(f"{len(reqs)} request(s) in_progress, none new — leaving them alone")
+    # Money operator: the server files one task at a time; run the one that is waiting.
+    # A task already in_progress belongs to a worker (alive or dead) — the server's own
+    # timeout retires it; re-spawning here would double the work.
+    if os.path.exists(MONEY_PAUSE):
+        return 0
+    try:
+        mo, tasks = money_pending()
+    except Exception as e:                                       # noqa: BLE001
+        log(f"money queue check failed: {str(e)[:200]}")
+        return 1
+    waiting = [t for t in tasks if t.get("status") == "pending"]
+    if not waiting:
         return 0
     if dry:
-        log(f"[dry-run] would build: {', '.join(r.get('slug', '?') for r in fresh)}")
+        log(f"[dry-run] would run money task: {waiting[0].get('slug')}")
         return 0
-    spawn_build(len(fresh))
+    spawn_money_task(mo, waiting[0])
     return 0
 
 

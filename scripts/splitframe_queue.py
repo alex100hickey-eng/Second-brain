@@ -45,7 +45,10 @@ except Exception:
     pass
 
 LOCAL_TZ = ZoneInfo("America/New_York")
-VAULT = os.path.expanduser("~/Library/Mobile Documents/com~apple~CloudDocs/Obsidian/Second brain")
+# The Mac reads and WRITES the iCloud vault; the server (money_operator) only READS its git-synced
+# copy at VAULT_PATH to size the funnel. Same rule as splitframe_daily.py.
+VAULT = os.environ.get("VAULT_PATH") or os.path.expanduser(
+    "~/Library/Mobile Documents/com~apple~CloudDocs/Obsidian/Second brain")
 TRACKER = os.path.join(VAULT, "Money", "prospect-tracker.csv")
 DRAFT_DOC_DIR = os.path.join(VAULT, "Money", "Clients")
 QUEUE_KEY = "splitframe:firsttouch_queue"
