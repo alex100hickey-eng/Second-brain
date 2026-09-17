@@ -217,16 +217,20 @@ CLOSE_VARIANTS = ("question", "offer")
 
 
 def next_close_variant(queue: list) -> str:
-    """Whichever arm has fewer emails behind it.
+    """Whichever arm has fewer emails IN THE EXPERIMENT behind it.
 
-    An entry with no `close_variant` counts as "question", because that is what it was — every
-    email written before this split ended with the curious question. Reading them as unassigned
-    would make the offer arm look like it was already even and hand the next twenty to question.
+    Only entries carrying an explicit variant count. The eighteen sent before the split were all
+    the question close, and counting them would have the arms balance against history instead of
+    against each other: the offer arm would take every email until it caught up to eighteen.
+    That is not a slower experiment, it is a different and worse one — the offer arm would get
+    this week's list (front desks, sourced today) while the question arm's record is last week's
+    (named founders), and the close would be confounded with who was written to. The arms have to
+    run side by side over the same list to be comparable at all.
+
+    close_report still credits those eighteen to question; that is the honest account of what was
+    sent. It is only the assignment that ignores them.
     """
-    counts = {v: 0 for v in CLOSE_VARIANTS}
-    for e in queue:
-        counts[_c(e.get("close_variant")) or "question"] = \
-            counts.get(_c(e.get("close_variant")) or "question", 0) + 1
+    counts = {v: sum(1 for e in queue if _c(e.get("close_variant")) == v) for v in CLOSE_VARIANTS}
     return min(CLOSE_VARIANTS, key=lambda v: (counts[v], CLOSE_VARIANTS.index(v)))
 
 

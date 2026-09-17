@@ -403,18 +403,19 @@ def test_creator_state_counts_who_is_left():
     assert sq.creator_state(CREATOR_LIST, queue)["queued_pending"] == 0
 
 
-def test_close_variant_alternates_and_counts_history():
-    # Everything written before the split ended with the question close, so an entry with no
-    # variant is a question — not an unassigned one that would let question take the next run too.
-    queue = [{"to": "a@x.com"}, {"to": "b@x.com"}]
-    assert sq.next_close_variant(queue) == "offer"
+def test_close_variant_alternates_within_the_experiment_only():
+    """Assignment balances the two arms against EACH OTHER, not against the eighteen emails sent
+    before the split. Counting those would send every email to the offer arm until it caught up
+    to eighteen — and the offer arm would then be running against this week's list while the
+    question arm's record came from last week's, so the close would be confounded with who was
+    written to."""
+    pre = [{"to": f"{i}@x.com"} for i in range(18)]          # no variant: written before the split
+    assert sq.next_close_variant(pre) == "question"
 
-    queue += [{"to": "c@x.com", "close_variant": "offer"},
-              {"to": "d@x.com", "close_variant": "offer"}]
-    assert sq.next_close_variant(queue) == "question"
-
-    # A tie goes to the arm already being sent: the experiment adds to its record, never restarts it.
-    assert sq.next_close_variant([{"to": "a@x.com", "close_variant": "question"},
+    assert sq.next_close_variant(pre + [{"to": "a@x.com", "close_variant": "question"}]) == "offer"
+    assert sq.next_close_variant(pre + [{"to": "a@x.com", "close_variant": "question"},
+                                        {"to": "b@x.com", "close_variant": "offer"}]) == "question"
+    assert sq.next_close_variant([{"to": "a@x.com", "close_variant": "offer"},
                                   {"to": "b@x.com", "close_variant": "offer"}]) == "question"
     assert sq.next_close_variant([]) == "question"
 
