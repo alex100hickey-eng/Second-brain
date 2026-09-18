@@ -177,10 +177,13 @@ class Universe:
         markets = event.get("markets") or []
         if not settled(event) or one_winner(markets) is not True:
             return False
+        series = series_key(slug)
+        if series in self.proven_series():
+            return False          # already known; `INSERT OR IGNORE` would report a success it did not have
         self.conn.execute("INSERT OR IGNORE INTO series_proof (series, proved_by, proved_ts) VALUES (?,?,?)",
-                          (series_key(slug), slug, time.time()))
+                          (series, slug, time.time()))
         self.conn.execute("UPDATE universe SET tier=?, why=? WHERE series=? AND tier=?",
-                          (TIER_PROVEN, f"series proved by {slug}", series_key(slug), TIER_WATCH))
+                          (TIER_PROVEN, f"series proved by {slug}", series, TIER_WATCH))
         self.conn.commit()
         return True
 
@@ -190,6 +193,17 @@ class Universe:
         return [r[0] for r in self.conn.execute(
             "SELECT slug, series FROM universe WHERE tier=? ORDER BY last_seen", (TIER_WATCH,))
             if r[1] not in proven]
+
+    def dated_unproven_series(self) -> list:
+        """Recurring series (their slug carries a date) with no proof yet — the ones a sweep of
+        past dates can settle today instead of in weeks."""
+        proven = self.proven_series()
+        out = []
+        for series, slug in self.conn.execute(
+                "SELECT series, slug FROM universe WHERE tier=? GROUP BY series", (TIER_WATCH,)):
+            if series not in proven and _SERIES_DATE.search(slug or ""):
+                out.append(series)
+        return out
 
     def tradable(self) -> list:
         return [dict(r) for r in self.conn.execute(

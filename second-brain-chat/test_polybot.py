@@ -5,7 +5,7 @@ import os
 os.environ.setdefault("JARVIS_TEST", "1")   # no real sleeps for the US call budget
 import tempfile
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -799,6 +799,37 @@ def test_universe_tiers_partitions_and_rejects_ladders():
     assert u.series_key("scotus") == "scotus"
     # a proven series short-circuits the price test for every future instance
     assert u.classify(ev("usfed-fomc-2027-01-27", [0.9, 0.9, 0.9]), {"usfed-fomc"})[0] == u.TIER_PROVEN
+
+
+def test_universe_proves_a_recurring_series_from_its_own_past():
+    """A series is otherwise unprovable until its next instance resolves -- banxico meets eight
+    times a year, an election is once. events.list takes twenty slugs a call and returns closed
+    events, so sweeping past dates costs ~10 calls and needs no knowledge of the schedule."""
+    from polybot import runner as runner_mod
+    cfg, led = _cfg(), _ledger()
+    asked = []
+
+    class Venue:
+        available = True
+
+        def events_by_slug(self, slugs, batch=20):
+            asked.extend(slugs)
+            hit = "banxico-" + (datetime.now() - timedelta(days=43)).date().isoformat()
+            if hit not in slugs:
+                return {}
+            return {hit: {"slug": hit, "category": "macro", "closed": True,
+                          "markets": [{"outcomePrices": p, "closed": True,
+                                       "status": "MARKET_STATUS_RESOLVED"}
+                                      for p in ('["1","0"]', '["0","1"]', '["0","1"]')]}}
+
+    r = runner_mod.Runner(cfg, led, log=lambda *_: None)
+    r.us = Venue()
+    assert r.prove_by_date_sweep(days_back=200, series=["banxico"]) == 1
+    assert r.uni.proven_series() == {"banxico"}
+    assert len(asked) == 200                                  # one slug per day, batched by the venue
+    # proving is idempotent and stops after the first settled instance
+    asked.clear()
+    assert r.prove_by_date_sweep(days_back=200, series=["banxico"]) == 0
 
 
 def test_universe_will_not_prove_a_series_from_prices_alone():

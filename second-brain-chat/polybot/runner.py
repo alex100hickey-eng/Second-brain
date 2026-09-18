@@ -249,6 +249,34 @@ class Runner:
             n += self.handle_arb_set(list(self.arb.scan(ctx)))
         return n
 
+    def prove_by_date_sweep(self, days_back: int = 200, series=None, max_series: int = 6) -> int:
+        """Prove a recurring series by finding ANY past instance of it that settled.
+
+        A series otherwise sits unprovable until its next instance resolves — banxico meets eight
+        times a year, an election is once. But `events.list(slug=[...])` takes twenty slugs per
+        call and returns closed events with their markets, so asking "did <series>-<date> exist?"
+        for every date in the last N days costs ~10 calls and needs no knowledge of the schedule.
+        This is how usfed-fomc became tradable today instead of on 2026-10-28.
+        """
+        from datetime import date, timedelta
+        # Each series costs ~10 calls (200 dates, 20 to a request), so cap the batch: the venue's
+        # quota is five requests per window and this IP is shared with the whole campus.
+        targets = series if series is not None else self.uni.dated_unproven_series()[:max_series]
+        if not targets:
+            return 0
+        today = date.today()
+        proved = 0
+        for ser in targets:
+            slugs = [f"{ser}-{(today - timedelta(days=d)).isoformat()}" for d in range(1, days_back + 1)]
+            found = self.us.events_by_slug(slugs)
+            for slug, e in found.items():
+                if self.uni.prove(e):
+                    self.log(f"  universe: series {ser} PROVED by {slug} "
+                             f"({len(e.get('markets') or [])} legs, exactly one winner)")
+                    proved += 1
+                    break            # one settled instance is enough for the whole series
+        return proved
+
     def prove_pending(self, extra_slugs=()) -> int:
         """Re-ask the venue about unproven WATCH events and promote any series that has settled.
 
@@ -585,6 +613,12 @@ class Runner:
                     # proof is permanent and every future instance of that series is tradable.
                     if now.hour in (6, 18) and now.minute == 30:
                         self.log(self.refresh_universe())
+                    # Weekly: try to prove recurring series from their own past instances instead
+                    # of waiting for the next one to settle. banxico meets every six weeks;
+                    # usfed-fomc eight times a year. Both became tradable this way on 2026-09-18.
+                    if now.weekday() == 6 and now.hour == 5 and now.minute == 30:
+                        n = self.prove_by_date_sweep()
+                        self.log(f"universe: date sweep proved {n} series")
                     if now.hour == 3 and now.minute == 0:
                         calibration.save_table(calibration.build(log=self.log))
                         self.log(f"pruned {self.ledger.prune_snapshots(self.cfg.snapshot_keep_days)} snapshots older than {self.cfg.snapshot_keep_days}d")
