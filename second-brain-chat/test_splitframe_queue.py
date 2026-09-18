@@ -227,15 +227,44 @@ def test_plan_source_only_adds_brands_nobody_had_and_on_a_live_count():
     assert "search_type=keyword_unordered" in sq.plan_source(rows, "No Page", "nopage.com", 9, TODAY)[0]["adlib_url"]
 
 
-def test_status_report_runway_math():
-    rows = [_row()]
-    queue = [{"to": "a@x.com", "brand": "A", "subject": "s", "released": ""},
-             {"to": "b@x.com", "brand": "B", "subject": "s", "released": "2026-09-16T07:30:00-04:00"},
-             {"to": "c@x.com", "brand": "C", "subject": "s", "released": "2026-09-15T07:30:00-04:00"}]
-    rep = sq.status_report(rows, queue, TODAY)
+def _queue_of_three():
+    return [{"to": "a@x.com", "brand": "A", "subject": "s", "released": ""},
+            {"to": "b@x.com", "brand": "B", "subject": "s", "released": "2026-09-16T07:30:00-04:00"},
+            {"to": "c@x.com", "brand": "C", "subject": "s", "released": "2026-09-15T07:30:00-04:00"}]
+
+
+def test_status_report_runway_math(monkeypatch):
+    # Pinned to a cadence rather than read from the live delivery record, so the arithmetic
+    # under test is the queue's and not today's bounce count.
+    monkeypatch.setattr(sq, "current_per_day", lambda: (5, "pinned"))
+    rep = sq.status_report([_row()], _queue_of_three(), TODAY)
     assert rep["pending_count"] == 1 and rep["released_today"] == 1
     assert rep["runway_days"] == 0.2 and rep["need_drafts"] == 9
     assert [t["brand"] for t in rep["next_targets"]] == ["Obvi"]
+
+
+def test_stock_target_tracks_the_cadence():
+    """A hard-coded 10 would starve the queue the day the cap went to 8, and nothing would
+    have said so until it ran dry."""
+    assert sq.current_runway_target(5) == 10
+    assert sq.current_runway_target(8) == 16
+    assert sq.current_runway_target(10) == 20
+
+
+def test_status_report_reads_the_live_cadence(monkeypatch):
+    monkeypatch.setattr(sq, "current_per_day", lambda: (8, "30 sends, 0 bounces"))
+    rep = sq.status_report([_row()], _queue_of_three(), TODAY)
+    assert rep["per_day"] == 8
+    assert rep["need_drafts"] == 15          # 2 x 8 in stock, 1 pending
+    assert rep["runway_days"] == 0.1
+
+
+def test_cadence_falls_back_to_the_floor_if_it_cannot_be_read(monkeypatch):
+    def boom():
+        raise RuntimeError("no state")
+    monkeypatch.setattr(sq._sfd, "current_cap", boom)
+    cap, why = sq.current_per_day()
+    assert cap == sq.PER_DAY and "floor" in why
 
 
 def _fake_gmail(monkeypatch, draft_id="r123"):
@@ -486,3 +515,56 @@ def test_plan_add_only_demands_the_photo_for_the_offer_arm():
     _, p = sq.plan_add(rows, [], "ankit@myobvi.com", "s", GOOD_BODY_PROSE, 19, "", "offer",
                        "https://myobvi.com/cdn/shop/files/tub.jpg")
     assert p == []
+
+
+# ---------------------------------------------------------------------------
+# Greeting policy. All 23 first touches ever sent went to a named founder; every
+# in-band brand left carries only a front-desk address, so the next 150 emails
+# were all going to open cold. A name found on the brand's OWN about page fixes
+# that — but only a found one. An invented name is worse than no greeting.
+# ---------------------------------------------------------------------------
+
+def test_a_found_name_is_usable_at_a_front_desk():
+    assert sq.greeting_for("shared", "Gillian", "hello@x.com") == "Gillian"
+    assert sq.greeting_for("shared", "Amanda Chantal Bacon", "press@x.com") == "Amanda"
+    assert sq.greeting_for("person", "Dana Reed", "dana@x.com") == "Dana"
+
+
+def test_a_greeting_is_never_invented():
+    assert sq.greeting_for("shared", "", "hello@x.com") == ""
+    assert sq.greeting_for("shared", "   ", "info@x.com") == ""
+    # A ticket desk is not written to at all, named or not.
+    assert sq.greeting_for("ticket", "Dana Reed", "support@x.com") == ""
+    assert sq.greeting_for("", "Dana Reed", "dana@x.com") == ""
+
+
+def test_the_address_outranks_the_tracker_when_they_name_different_people():
+    """Beauty From Bees publishes "A note from our Founder, Michelle" and answers at gillian@.
+    Greeting Gillian's inbox as Michelle is worse than not greeting her — it is exactly what a
+    mail merge looks like. Whoever the address names is who opens it."""
+    assert sq.greeting_for("person", "Michelle", "gillian@beautyfrombees.ca") == "Gillian"
+    # They agree: the tracker's spelling wins, because it carries the real capitalisation.
+    assert sq.greeting_for("person", "Maxx Appelman", "maxx.appelman@x.com") == "Maxx"
+    # No tracker name at all, but the address is plainly a person's.
+    assert sq.greeting_for("person", "", "gillian@x.com") == "Gillian"
+
+
+def test_name_in_address_ignores_role_inboxes():
+    for addr in ("hello@x.com", "info@x.com", "support@x.com", "oudwarellc@x.com",
+                 "justdoughit@x.com", "goodday@x.com"):
+        assert sq.name_in_address(addr) == "", addr
+    assert sq.name_in_address("jennifer@x.com") == "Jennifer"
+    assert sq.name_in_address("brittany.stone@x.com") == "Brittany"
+
+
+def test_named_front_desks_are_drafted_before_anonymous_ones():
+    rows = [
+        _row(brand="Anon", email="", email_generic="hello@anon.com", contact_name="",
+             notes="adlib 20 active [read live 2026-09-17]"),
+        _row(brand="Named", email="", email_generic="hello@named.com", contact_name="Gillian Ray",
+             notes="adlib 20 active [read live 2026-09-17]"),
+    ]
+    order = [t["brand"] for t in sq.next_targets(rows, [])]
+    assert order.index("Named") < order.index("Anon")
+    named = [t for t in sq.next_targets(rows, []) if t["brand"] == "Named"][0]
+    assert named["greet"] == "Gillian"

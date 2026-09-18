@@ -35,6 +35,7 @@ except Exception:  # pragma: no cover - import guard
     PolymarketUS = None
 
 RATE_LIMIT_BACKOFF_S = 600  # 10 minutes: long enough to outlast a Cloudflare 1015 window
+MISSING_EVENT_RETRY_S = 3600  # an event slug that 404s is not asked for again this hour
 
 
 def _is_rate_limited(exc: Exception) -> bool:
@@ -126,6 +127,17 @@ def _unwrap(d):
     return (d or {}).get("marketData") or d or {}
 
 
+def _unwrap_event(d):
+    """`GET /v1/event/slug/{slug}` answers `{"event": {...}}` (SDK `GetEventResponse`), while
+    `search.query` answers the event objects bare. Reading `markets` off the envelope found
+    nothing, so every weather lookup fell through to the search fallback — two calls per city
+    per scan against a Cloudflare-fronted host that rate-limits this campus IP (error 1015,
+    2026-09-17). Unwrap, and the slug path works on one call again."""
+    if isinstance(d, dict) and "event" in d and isinstance(d["event"], dict):
+        return d["event"]
+    return d
+
+
 def _is_not_found(exc: Exception) -> bool:
     return "NotFound" in type(exc).__name__ or "not found" in str(exc).lower()
 
@@ -141,6 +153,7 @@ class USVenue:
         self._client = PolymarketUS(key_id=self.key_id, secret_key=self.secret) if self._base_available else None
         self._backoff_until = 0.0
         self._backoff_reason = ""
+        self._missing: dict[str, float] = {}   # event slug -> retry-after ts
 
     @property
     def available(self) -> bool:
@@ -215,9 +228,19 @@ class USVenue:
         d = self._guarded(lambda: _unwrap(self._client.markets.book(slug)))
         if d is None:
             return None
-        bids = sorted(((_price(x.get("px")), float(x.get("qty") or 0)) for x in d.get("bids", []) if _price(x.get("px")) is not None), reverse=True)
-        asks = sorted(((_price(x.get("px")), float(x.get("qty") or 0)) for x in d.get("asks", []) if _price(x.get("px")) is not None))
-        return {"bids": bids, "asks": asks, "last": _price(d.get("lastTradePx")), "tick": 0.01}
+        # The venue calls the ask side "offers" (SDK `MarketBook`: bids / offers). Reading "asks"
+        # returned [] on every US market ever sampled, so this book looked one-sided — which is
+        # exactly the shape that makes `(1 - post)` read as phantom edge. Accept both names.
+        levels = lambda key, alt: [x for x in (d.get(key) or d.get(alt) or [])]
+        bids = sorted(((_price(x.get("px")), float(x.get("qty") or 0)) for x in levels("bids", "bid")
+                       if _price(x.get("px")) is not None), reverse=True)
+        asks = sorted(((_price(x.get("px")), float(x.get("qty") or 0)) for x in levels("offers", "asks")
+                       if _price(x.get("px")) is not None))
+        last = _price(d.get("lastTradePx"))
+        if last is None:  # moved under stats.lastPriceSample.longPx
+            sample = ((d.get("stats") or {}).get("lastPriceSample") or {})
+            last = _price(sample.get("longPx") or sample.get("px"))
+        return {"bids": bids, "asks": asks, "last": last, "tick": 0.01}
 
     # ---- weather events (the five US cities) ----------------------------------------------
     def find_weather_event(self, city_slug: str, date: datetime, kind: str = "high") -> WeatherEvent | None:
@@ -225,9 +248,12 @@ class USVenue:
         if not self.available:
             return None
         slug = us_event_slug(city_slug, date, kind)
+        retry_at = self._missing.get(slug)
+        if retry_at and time.time() < retry_at:
+            return None
         e = None
         try:
-            e = self._client.events.retrieve_by_slug(slug)
+            e = _unwrap_event(self._client.events.retrieve_by_slug(slug))
         except Exception as exc:
             if _is_rate_limited(exc):
                 self._enter_backoff(exc)
@@ -246,7 +272,15 @@ class USVenue:
                 raise
             items = res if isinstance(res, list) else (res.get("events") or res.get("results") or [])
             e = next((x for x in items if isinstance(x, dict) and x.get("slug") == slug), None)
-        return weather_event_from_us(e, city_slug, kind) if e else None
+        if not e:
+            # Polymarket US lists a HIGH market per city per day and no LOW market at all, so the
+            # `low` half of every scan was two wasted calls per city per hour against the host that
+            # rate-limits us. Remember the miss for an hour instead of asking again every tick; an
+            # hour is short enough to pick up a market the venue posts later in the day.
+            self._missing[slug] = time.time() + MISSING_EVENT_RETRY_S
+            return None
+        self._missing.pop(slug, None)
+        return weather_event_from_us(e, city_slug, kind)
 
     def resolution(self, slug: str) -> int | None:
         """1/0 once the market settled, else None. Settlement is a 404 until it exists."""

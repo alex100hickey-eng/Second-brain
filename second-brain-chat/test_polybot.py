@@ -126,6 +126,15 @@ def test_weather_obs_sells_dead_buckets_only():
     assert labels == {"78-79°F", "76-77°F"}          # bid 0.67 and 0.19 are dead once 80 was observed; 0.01 bids are skipped
     assert all(s.side == "BUY_NO" for s in sigs)
     assert not WeatherObs(cfg).scan(_ctx(obs=[]))
+    # A bucket our feed calls dead that the book prices at 96c is our feed being wrong about
+    # something that has already happened: 0/6 for -$70 in paper, and the trade risks the whole
+    # stake to win four cents, so one bad observation costs twenty good ones.
+    ev = _event()
+    ev.buckets[5].best_bid, ev.buckets[5].best_ask = 0.96, 0.98
+    labels = {s.label.split()[-1] for s in WeatherObs(cfg).scan(_ctx(event=ev, obs=obs))}
+    assert labels == {"76-77°F"} and "78-79°F" not in labels
+    cfg.dead_bucket_max_bid = 0.99                                   # ceiling lifted: it trades again
+    assert "78-79°F" in {s.label.split()[-1] for s in WeatherObs(cfg).scan(_ctx(event=ev, obs=obs))}
 
 
 def test_weather_lock_requires_peak_passed_and_falling_obs():
@@ -135,11 +144,17 @@ def test_weather_lock_requires_peak_passed_and_falling_obs():
     ctx = _ctx(obs=obs, hourly=hourly)
     locked, winner = lock_state(ctx)
     assert locked and winner.title == "78-79°F"
-    sigs = WeatherLock(cfg).scan(ctx)
-    # It TAKES the ask (0.69), it does not rest a maker bid at 0.68. A locked bucket only walks
+    # A bucket the model calls locked but the book prices at 0.69 is a disagreement about a fact
+    # that has already happened, and the book wins that argument: paper entries under 0.80 went
+    # 2/12 for -$168, entries at 0.80+ went 21/22 for +$17. `lock_min_price` refuses the cheap half.
+    assert WeatherLock(cfg).scan(ctx) == []
+    ev = _event()
+    ev.buckets[5].best_bid, ev.buckets[5].best_ask = 0.84, 0.86
+    sigs = WeatherLock(cfg).scan(_ctx(event=ev, obs=obs, hourly=hourly))
+    # It TAKES the ask (0.86), it does not rest a maker bid at 0.85. A locked bucket only walks
     # toward 1.00, so a bid under the market fills when someone sells back into a settled fact —
     # live paper 2026-09-15 filled 27% of these and the misses were structural, not luck.
-    assert len(sigs) == 1 and sigs[0].side == "BUY_YES" and sigs[0].price == 0.69
+    assert len(sigs) == 1 and sigs[0].side == "BUY_YES" and sigs[0].price == 0.86
     assert sigs[0].size_usd == 20.0 and sigs[0].taker and sigs[0].taker_ok
     # still rising → no lock
     rising = [("2026-09-12T15:51:00+00:00", 76), ("2026-09-12T16:51:00+00:00", 77), ("2026-09-12T17:51:00+00:00", 79)]
@@ -504,24 +519,43 @@ def test_gate_uses_mark_to_market_and_us_paper():
         led.upsert_paper(sid, filled_ts=t0, fill_price=0.1, status="closed" if i < 20 else "filled",
                          pnl_usd=1.0 if i < 20 else -0.5, exit_ts=t0 + 60 if i < 20 else None)
         ids.append(sid)
+    # 30 offshore signals and a healthy mark-to-market are NOT a licence to spend real money: offshore
+    # is a read-only proxy on a different settlement rule. The gate wants evidence from the US books.
     ok, why = led.promotion_check("weather_obs")
-    assert ok and "mtm +15.00" in why                               # closed +20, open marked -5
-    # the same closed net with the open positions deep underwater is a hold
+    assert not ok and why.startswith("0/10 US signals")
+    # the same closed net with the open positions deep underwater is a hold on mtm, before US is reached
     for sid in ids[20:]:
         led.upsert_paper(sid, pnl_usd=-3.0)
     ok, why = led.promotion_check("weather_obs")
     assert not ok and why.startswith("mark-to-market -10.00")
     for sid in ids[20:]:
-        led.upsert_paper(sid, pnl_usd=0.5)
-    assert led.promotion_check("weather_obs")[0]
+        led.upsert_paper(sid, pnl_usd=0.5)                          # closed +20, open marked +5
+    # a thin US record is still not a record: nine signals hold
+    us_ids = []
+    for i in range(9):
+        sid = led.add_signal(Signal("weather_obs", "us", f"s{i}", "x", "BUY_NO", 0.9, 10, 10, "r", ts=t0), "paper")
+        led.upsert_paper(sid, filled_ts=t0, fill_price=0.1, status="closed", pnl_usd=0.4, exit_ts=t0 + 60)
+        us_ids.append(sid)
+    ok, why = led.promotion_check("weather_obs")
+    assert not ok and why.startswith("9/10 US signals")
+    # ten US signals that have not settled yet are marks, not results
+    sid = led.add_signal(Signal("weather_obs", "us", "s9", "x", "BUY_NO", 0.9, 10, 10, "r", ts=t0), "paper")
+    led.upsert_paper(sid, filled_ts=t0, fill_price=0.1, status="filled", pnl_usd=0.4)
+    us_ids.append(sid)
+    for u in us_ids[:9]:
+        led.upsert_paper(u, status="filled", exit_ts=None)
+    ok, why = led.promotion_check("weather_obs")
+    assert not ok and why.startswith("US paper: 10 signals, none settled")
+    for u in us_ids[:9]:
+        led.upsert_paper(u, status="closed", exit_ts=t0 + 60)
     # a losing US-venue paper record blocks promotion even when the offshore proxy passes
-    sid = led.add_signal(Signal("weather_obs", "us", "slug", "x", "BUY_NO", 0.9, 10, 10, "r", ts=t0), "paper")
-    led.upsert_paper(sid, filled_ts=t0, fill_price=0.1, status="filled", pnl_usd=-2.0)
+    led.upsert_paper(us_ids[0], pnl_usd=-20.0)
     ok, why = led.promotion_check("weather_obs")
-    assert not ok and why.startswith("US paper mark-to-market -2.00")
-    led.upsert_paper(sid, pnl_usd=0.4)
+    assert not ok and why.startswith("US paper mark-to-market -16.40")
+    led.upsert_paper(us_ids[0], pnl_usd=0.4)
     ok, why = led.promotion_check("weather_obs")
-    assert ok and "US 1 signals +0.40" in why
+    assert ok and "US 10 signals +4.00" in why
+    assert "mtm +29.00" in why                                      # offshore +25 and the US +4, together
     assert "Polymarket US books only" in led.report(1)
     assert "gate PASS: weather_obs" in led.summary(1)
     # evidence before a rule change stops counting
@@ -703,6 +737,122 @@ def test_us_venue_parses_live_shapes(monkeypatch):
     ev = v.find_weather_event("nyc", datetime(2026, 9, 13), "high")
     assert ev is not None and len(ev.buckets) == 4 and ev.slug == "temp-nychigh-2026-09-13"
     assert v.find_weather_event("nyc", datetime(2026, 9, 14), "high") is None
+
+
+def test_backtest_refuses_to_report_a_run_with_no_book():
+    """A replay with no price history produces no signals and prints a tidy net=$0.00 for every
+    city-day — indistinguishable from a strategy that simply found nothing. On 2026-09-18 a
+    `--days 30` run 400'd on all 987 buckets (the CLOB rejects that window at fidelity=5) and
+    reported a clean zero. A run that could not read the book is not a result."""
+    from polybot import backtest as bt
+    empty = bt.summarize([], {}, days_done=40, coverage=0.0)
+    assert empty["book_coverage"] == 0.0
+    out = bt.format_summary(empty)
+    assert "NO RESULT" in out and "0% of buckets" in out
+    ok = bt.summarize([{"module": "weather_lock", "filled": True, "pnl": 2.0, "size_usd": 20.0}],
+                      {}, days_done=40, coverage=0.95)
+    assert "NO RESULT" not in bt.format_summary(ok)
+    assert ok["modules"]["weather_lock"]["net"] == 2.0
+
+
+def test_us_event_lookup_unwraps_the_envelope_and_skips_the_search_fallback():
+    """GET /v1/event/slug/{slug} answers {"event": {...}}; search.query answers events bare.
+
+    Reading `markets` off the envelope always found nothing, so every city fell through to the
+    search fallback: two calls per city per kind per scan against the host that rate-limits this
+    campus IP. One call is the whole point.
+    """
+    from polybot.feeds import usvenue
+
+    event = {"slug": "temp-nychigh-2026-09-19", "endDate": "2026-09-19T23:59:59Z", "markets": [
+        {"slug": "tc-temp-nychigh-2026-09-19-lt69f", "title": "68 or below",
+         "description": "at Central Park (KNYC)", "bestBidQuote": {"value": "0.01"},
+         "bestAskQuote": {"value": "0.05"}, "outcomePrices": '["0.02","0.98"]'},
+        {"slug": "tc-temp-nychigh-2026-09-19-gte69lt70f", "title": "69 to 70",
+         "description": "at Central Park (KNYC)", "bestBidQuote": {"value": "0.40"},
+         "bestAskQuote": {"value": "0.43"}, "outcomePrices": '["0.41","0.59"]'}]}
+    calls = []
+
+    class Events:
+        def retrieve_by_slug(self, slug):
+            calls.append(("event", slug))
+            return {"event": event}                    # the envelope the venue actually sends
+
+    class Search:
+        def query(self, q):
+            calls.append(("search", q))
+            return {"events": [event]}
+
+    class Client:
+        events, search = Events(), Search()
+
+    v = usvenue.USVenue()
+    v.available, v._client = True, Client()
+    ev = v.find_weather_event("nyc", datetime(2026, 9, 19, tzinfo=ZoneInfo("America/New_York")), "high")
+    assert ev is not None and ev.slug == "temp-nychigh-2026-09-19"
+    assert [b.title for b in ev.buckets] == ["68 or below", "69 to 70"]
+    assert ev.station == "KNYC" and ev.rule == "cli"
+    assert calls == [("event", "temp-nychigh-2026-09-19")]           # the search fallback never ran
+
+
+def test_us_missing_event_is_not_asked_for_again_this_hour():
+    """Polymarket US lists a HIGH market per city per day and no LOW market, so the `low` half of
+    every scan was two wasted calls per city per hour at a host that bans this IP for volume."""
+    from polybot.feeds import usvenue
+    calls = []
+
+    class NotFound(Exception):
+        pass
+
+    class Events:
+        def retrieve_by_slug(self, slug):
+            calls.append(slug)
+            raise NotFound("not found")
+
+    class Search:
+        def query(self, q):
+            calls.append(q)
+            return {"events": []}
+
+    class Client:
+        events, search = Events(), Search()
+
+    v = usvenue.USVenue()
+    v.available, v._client = True, Client()
+    day = datetime(2026, 9, 19, tzinfo=ZoneInfo("America/New_York"))
+    assert v.find_weather_event("nyc", day, "low") is None
+    assert len(calls) == 2                                            # slug miss, then the search miss
+    assert v.find_weather_event("nyc", day, "low") is None
+    assert len(calls) == 2                                            # second scan asks nobody
+    v._missing["temp-nyclow-2026-09-19"] = time.time() - 1            # an hour later it tries again
+    assert v.find_weather_event("nyc", day, "low") is None
+    assert len(calls) == 4
+
+
+def test_us_book_reads_the_offer_side():
+    """The venue calls the ask side "offers" (SDK MarketBook: bids / offers). Reading "asks" came
+    back empty on every US market, which is the exact shape that made `(1 - post)` look like 90c of
+    free edge on an empty book — the bug that cost weather_lock its fills."""
+    from polybot.feeds import usvenue
+
+    class Markets:
+        def book(self, slug):
+            return {"marketData": {
+                "marketSlug": slug,
+                "bids": [{"px": {"value": "0.0100"}, "qty": "100.0000"}],
+                "offers": [{"px": {"value": "0.5000"}, "qty": "100.0000"},
+                           {"px": {"value": "0.4000"}, "qty": "50.0000"}],
+                "stats": {"lastPriceSample": {"longPx": {"value": "0.2500"}}}}}
+
+    class Client:
+        markets = Markets()
+
+    v = usvenue.USVenue()
+    v.available, v._client = True, Client()
+    b = v.book("tc-temp-nychigh-2026-09-19-lt69f")
+    assert b["bids"] == [(0.01, 100.0)]
+    assert b["asks"] == [(0.40, 50.0), (0.50, 100.0)]                 # offers, cheapest first
+    assert b["last"] == 0.25                                          # moved under stats.lastPriceSample
 
 
 def test_us_venue_backs_off_on_rate_limit_instead_of_hammering():

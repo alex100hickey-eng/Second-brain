@@ -56,8 +56,12 @@ DRAFT_DOC_DIR = os.path.join(VAULT, "Money", "Clients")
 CREATOR_PROSPECTS = os.path.join(VAULT, "Money", "Creator Lane — Prospects.md")
 CREATOR_OFFER = os.path.join(VAULT, "Money", "Creator Lane — Offer (approved).md")
 QUEUE_KEY = "splitframe:firsttouch_queue"
-PER_DAY = 5
-RUNWAY_TARGET = 2 * PER_DAY            # two release days in stock at every evening shift
+# The release cadence is the daily job's to decide — it earns its way up from the delivery
+# record (splitframe_daily.daily_cap). Reading it here rather than keeping a second 5 means
+# the stock target rises with the cadence automatically; a hard-coded 10 would have starved
+# the queue the day the cap went to 8 and nobody would have noticed until it ran dry.
+PER_DAY = 5                            # floor only; see current_per_day()
+RUNWAY_TARGET = 2 * PER_DAY            # floor only; see current_runway_target()
 MIN_WORDS, MAX_WORDS = 80, 180         # the skill targets 110-150; past 170 is padding
 IN_BAND = (5, 50)                      # the sweet spot: enough ads to have a problem, no in-house team
 TOO_BIG = 100                          # 100+ active ads means an in-house team — out of band
@@ -131,6 +135,53 @@ def released_on(queue: list, day) -> list:
     return [e for e in queue if _released_date(e) == day]
 
 
+def name_in_address(email: str) -> str:
+    """The first name an address itself carries — gillian@ -> "Gillian", maxx.appelman@ -> "Maxx".
+
+    Empty for anything that is not plainly a person's address.
+    """
+    local = _c(email).lower().split("@")[0]
+    if not local or local in _sfd.TICKET_LOCALS or local in _sfd.FRONT_LOCALS:
+        return ""
+    if _sfd.DOTTED_NAME.match(local):
+        first = re.split(r"[._-]", local)[0]
+        return first.capitalize() if len(first) > 1 else ""
+    letters = re.sub(r"[^a-z]", "", local)
+    if letters in _sfd.FIRST_NAMES:
+        return letters.capitalize()
+    return ""
+
+
+def greeting_for(tier: str, contact_name: str, email: str = "") -> str:
+    """The first name this email may open with, or "" for no greeting at all.
+
+    A greeting invented for a shared inbox is the tell that a machine wrote the email, so the
+    rule was "front desk gets no name". But that threw away a real case: these are five-to-
+    twenty-person brands, and when their OWN about page names the founder, hello@ is read by
+    that person. So an evidence-backed name is usable at a front desk; an absent one is still
+    never invented. Ticket desks are not written to at all.
+
+    THE ADDRESS OUTRANKS THE TRACKER when the two name different people. Beauty From Bees
+    publishes "A note from our Founder, Michelle" and answers at gillian@ — greeting Gillian's
+    inbox as Michelle is worse than not greeting her at all, and it is the exact mistake that
+    reads as a mail merge. Whoever the address names is who opens it.
+    """
+    if tier not in ("person", "shared"):
+        return ""
+    name = _c(contact_name)
+    from_addr = name_in_address(email)
+    if from_addr:
+        # A person's address. Prefer the tracker's spelling only when they agree.
+        if name and matches_contact(email, name):
+            first = re.split(r"[^A-Za-z\'\u2019-]+", name.strip())[0]
+            return first if len(first) > 1 else from_addr
+        return from_addr
+    if not name:
+        return ""
+    first = re.split(r"[^A-Za-z\'\u2019-]+", name.strip())[0]
+    return first if len(first) > 1 else ""
+
+
 def next_targets(rows: list, queue: list) -> list:
     """Who a first touch can be written for: qualified, real person, never emailed, no reply
     or outcome, not already in the queue (released or not — a released entry is in the
@@ -150,15 +201,21 @@ def next_targets(rows: list, queue: list) -> list:
         b = band(n)
         if b in ("zero", "big"):
             continue
+        contact = _c(r.get("contact_name"))
         out.append({"brand": _c(r.get("brand")), "to": email, "tier": tier,
-                    "contact": _c(r.get("contact_name")), "page_id": page_id(r),
+                    "contact": contact, "page_id": page_id(r),
+                    "contact_source": _c(r.get("contact_name_source")),
+                    "greet": greeting_for(tier, contact, email),
                     "adlib_url": _c(r.get("adlib_url")), "known_count": n,
                     "count_read_live": when, "band": b})
     # A named founder outranks a front desk at a better-fitting brand: who reads it moves the
-    # reply rate more than five ads either way does.
+    # reply rate more than five ads either way does. A front desk we can NAME sits between the
+    # two — hello@ at an eight-person brand is read by the founder, and "Gillian —" is the
+    # difference between a person's email and a blast.
     tier_order = {"person": 0, "shared": 1}
     order = {"in": 0, "unknown": 1, "out": 2}
-    out.sort(key=lambda t: (tier_order[t["tier"]], order[t["band"]], t["brand"].lower()))
+    out.sort(key=lambda t: (tier_order[t["tier"]], 0 if t["greet"] else 1,
+                            order[t["band"]], t["brand"].lower()))
     return out
 
 
@@ -679,17 +736,34 @@ def cmd_creator(args) -> int:
 
 # ---------------------------------------------------------------- commands
 
+def current_per_day() -> tuple:
+    """(cap, why) — the live release cadence, or the floor if it cannot be read."""
+    try:
+        return _sfd.current_cap()
+    except Exception as e:                       # noqa: BLE001
+        return PER_DAY, f"floor: {type(e).__name__}"
+
+
+def current_runway_target(per_day: int) -> int:
+    """Two release days of drafts in stock, whatever the cadence is today."""
+    return 2 * per_day
+
+
 def status_report(rows: list, queue: list, today: str) -> dict:
     pending = pending_entries(queue)
     day = datetime.fromisoformat(today).date()
+    per_day, cap_why = current_per_day()
+    runway_target = current_runway_target(per_day)
     return {
         "today": today,
         "pending": [{"brand": e.get("brand"), "to": e.get("to"), "subject": e.get("subject")}
                     for e in pending],
         "pending_count": len(pending),
         "released_today": len(released_on(queue, day)),
-        "runway_days": round(len(pending) / PER_DAY, 1),
-        "need_drafts": max(0, RUNWAY_TARGET - len(pending)),
+        "runway_days": round(len(pending) / per_day, 1),
+        "need_drafts": max(0, runway_target - len(pending)),
+        "per_day": per_day,
+        "cap_why": cap_why,
         "next_targets": next_targets(rows, queue),
         "candidates_to_qualify": candidates_to_qualify(rows, today),
         "hunter_targets": hunter_targets(rows),
@@ -700,21 +774,26 @@ def status_report(rows: list, queue: list, today: str) -> dict:
 
 
 def _print_status(rep: dict) -> None:
+    per_day = rep.get("per_day", PER_DAY)
     print(f"First-touch queue, {rep['today']}: {rep['pending_count']} pending "
-          f"({rep['runway_days']} days of runway at {PER_DAY}/day), "
+          f"({rep['runway_days']} days of runway at {per_day}/day), "
           f"{rep['released_today']} released today. Need {rep['need_drafts']} more draft(s) "
-          f"to hold {RUNWAY_TARGET} in stock.")
+          f"to hold {2 * per_day} in stock.")
+    if rep.get("cap_why"):
+        print(f"  cadence: {per_day}/day — {rep['cap_why']}")
     for e in rep["pending"]:
         print(f"  queued: {e['brand']} <{e['to']}> — {e['subject']}")
     people = sum(1 for t in rep["next_targets"] if t["tier"] == "person")
     shared = len(rep["next_targets"]) - people
     print(f"\nCan be drafted next ({len(rep['next_targets'])}: "
-          f"{people} named, {shared} front desk):")
+          f"{people} named, {shared} front desk; "
+          f"{sum(1 for t in rep['next_targets'] if t['greet'])} greetable by name):")
     for t in rep["next_targets"]:
         known = ("never read live" if t["known_count"] is None else
                  f"{t['known_count']} active" + (f" (live {t['count_read_live']})"
                                                  if t["count_read_live"] else " (old note)"))
-        who = t["contact"] or ("front desk" if t["tier"] == "shared" else "(no name)")
+        who = (f'greet "{t["greet"]}"' if t["greet"]
+               else ("front desk, NO greeting" if t["tier"] == "shared" else "(no name)"))
         print(f"  [{t['band']:>7}] {t['brand']} <{t['to']}> {who} "
               f"— {known} — page id {t['page_id'] or '?'}")
     cr = rep["close_report"]

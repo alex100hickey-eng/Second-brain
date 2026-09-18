@@ -5,9 +5,13 @@ Alex's multi-strategy Polymarket bot. Design doc: vault `Money/Polymarket Bot �
 ## What it is
 - Strategy modules, each with a mode `off → paper → signal → live`. The ledger decides who is ready
   (`report` prints the gate for every module: ≥30 signals, ≥50% fills, mark-to-market positive —
-  closed net PLUS the open positions marked at the last price — and the Polymarket US paper record
-  not negative). `promote` flips passing modules to live; `auto_promote: true` in config.json lets the
-  07:00 report do it alone. Signals before `gate_since_ts` don't count (a rule change resets the evidence).
+  closed net PLUS the open positions marked at the last price — **and ≥`min_us_signals` (10) settled
+  signals on the Polymarket US books, in profit**). That last clause is the one that matters: most
+  signals are offshore, which is a read-only proxy settling on a different rule, and until 2026-09-18
+  a module could pass on offshore evidence alone and go live having never produced a single signal on
+  the venue it would be spending real money on. `promote` flips passing modules to live; `auto_promote:
+  true` in config.json lets the 07:00 report do it alone. Signals before `gate_since_ts` don't count
+  (a rule change resets the evidence).
 - One position per market in every mode (paper included). Model modules (`weather_hold`,
   `weather_model_update`) only trade buckets the market prices inside `hold_price_band` (6-94c) and
   skip any "edge" over `hold_edge_max_cents` (30c): the 2026-09-12 paper run lost $412 on 1-5c long
@@ -21,14 +25,28 @@ Alex's multi-strategy Polymarket bot. Design doc: vault `Money/Polymarket Bot �
 ## Modules
 | module | reference the market lags | status today |
 |---|---|---|
-| weather_hold | Open-Meteo ensemble vs bucket price | paper on offshore books |
-| weather_obs | NWS hourly observation kills buckets | paper on offshore books |
-| weather_lock | day's max locked after the peak | paper on offshore books |
-| weather_model_update | new model run vs last run | paper on offshore books |
+| weather_lock | day's max locked after the peak | **paper — the candidate.** Only entries ≥ `lock_min_price` |
+| weather_obs | NWS hourly observation kills buckets | paper. Skips buckets the book prices over `dead_bucket_max_bid` |
+| weather_hold | Open-Meteo ensemble vs bucket price | **off** — backtest −8.9%, paper −$2,456 |
+| weather_model_update | new model run vs last run | **off** — 71 closed paper trades, 63% wins, −$291, losing in every edge band |
 | bucket_sum | mutually-exclusive buckets ≠ $1 | paper on offshore books |
 | hold_favorites | our own calibration table (run `calibrate`) | paper on offshore books |
-| leadlag | offshore price vs US book | idle until key + `pairs.json` |
-| maker_rewards | incentive-program quoting | idle until key |
+| leadlag | offshore price vs US book | idle until `pairs.json` |
+| maker_rewards | incentive-program quoting | idle |
+
+### Why lock and obs have a price floor/ceiling
+Both modules trade on a fact that has **already happened** — the day's peak is in, or a bucket can no
+longer win. When our feed says that and a liquid book disagrees, the book has been right essentially
+every time. Paper 2026-09-12..18:
+
+| | with the guard | without it |
+|---|---|---|
+| `weather_lock` entries | ≥0.80: **21/22 wins, +$16.78** | <0.50: 0/8, −$160 · 0.50–0.80: 2/4, −$8 |
+| `weather_obs` vs the bid | ≤0.95: the rest of the book | >0.95: **0/6, −$70** |
+
+The shape behind it: every winner is capped (a 0.90 favorite pays 10c) and every loser costs the whole
+stake, so `weather_lock` needs an **87% win rate just to break even**. One bad entry erases twenty good
+ones, which is why these guards are price filters and not size tweaks.
 
 ## Run
 ```bash
@@ -75,3 +93,13 @@ tuned from data. Output: `backtest-latest.json` + a summary in the log.
   1-2°F above the hourly METAR (KSFO 2026-09-12: 72 vs a 70-71 settlement), which is why the first paper
   day's offshore "dead" and "locked" buckets went the wrong way.
 - Polymarket US fees (2026-07-01): taker 0.06·p·(1−p), maker rebate 0.0125·p·(1−p).
+- **Response shapes that have already cost us.** `GET /v1/event/slug/{slug}` answers `{"event": {...}}`
+  and `GET /v1/market/slug/{slug}` answers `{"market": {...}}`, while `search.query` answers them bare;
+  reading `markets` off the envelope found nothing, so every weather lookup fell through to a second
+  search call — 20 calls a scan against a Cloudflare-fronted host that rate-limits the CWRU campus IP
+  (error 1015). And the ask side of `markets.book` is **`offers`**, never `asks`: reading `asks` made
+  every US book look one-sided, which is the exact shape that turns `(1 - post)` into phantom edge.
+- Polymarket US lists a **high** market per city per day and **no low market**. A 404'd event slug is
+  remembered for an hour (`MISSING_EVENT_RETRY_S`) instead of being asked for every tick.
+- The US venue is scanned **4×/hour** (`minute % 15 == 10`), offshore once at `:55`. US signals are the
+  scarce resource — roughly one a day — and they are the only ones that can ever carry real money.

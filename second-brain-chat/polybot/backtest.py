@@ -95,7 +95,8 @@ def fetch_day(city: str, date: datetime, kind: str, log=print) -> dict | None:
         hourly = []
     return {"city": city, "date": event.date, "kind": kind, "tz": tz, "station": station, "rule": event.rule,
             "event": event, "winner": winner.title, "histories": histories, "obs": obs, "members": members,
-            "hourly": hourly, "unit": event.unit}
+            "hourly": hourly, "unit": event.unit,
+            "coverage": len([h for h in histories.values() if h]) / max(len(event.buckets), 1)}
 
 
 def replay_day(day: dict, cfg: config.Config, log=print) -> dict:
@@ -151,6 +152,7 @@ def run(days: int = 7, cities: list | None = None, kinds=("high",), cfg: config.
     cities = cities or config.all_city_slugs()
     all_signals, disc = [], {}
     days_done = 0
+    coverage = []
     for city in cities:
         meta = config.city_meta(city)
         if not meta:
@@ -168,13 +170,15 @@ def run(days: int = 7, cities: list | None = None, kinds=("high",), cfg: config.
                     continue
                 res = replay_day(day, cfg, log)
                 days_done += 1
+                coverage.append(day["coverage"])
                 all_signals.extend(res["signals"])
                 disc.setdefault(res["rule"], []).append(res["discount_scores"])
                 net = sum(s["pnl"] for s in res["signals"])
                 log(f"  {city} {day['date']} {kind} [{day['station']}/{day['rule']}] winner {day['winner']} "
                     f"obs={len(day['obs'])} members={len(day['members'])} signals={len(res['signals'])} net=${net:+.2f}")
     summary = summarize(all_signals, disc, days_done,
-                        liquidity_reality(max_spread_cents=cfg.lock_max_spread_cents))
+                        liquidity_reality(max_spread_cents=cfg.lock_max_spread_cents),
+                        coverage=sum(coverage) / len(coverage) if coverage else 0.0)
     if out_path:
         with open(out_path, "w") as f:
             json.dump({"summary": summary, "signals": all_signals, "built": datetime.now().isoformat()}, f, indent=1)
@@ -219,7 +223,8 @@ def liquidity_reality(db_path: str | None = None, max_spread_cents: float = 10.0
             "tradable_share": round(len(tradable) / len(spreads), 3)}
 
 
-def summarize(signals: list, disc: dict, days_done: int, liquidity: dict | None = None) -> dict:
+def summarize(signals: list, disc: dict, days_done: int, liquidity: dict | None = None,
+              coverage: float = 1.0) -> dict:
     by_mod = {}
     for s in signals:
         m = by_mod.setdefault(s["module"], {"signals": 0, "filled": 0, "wins": 0, "losses": 0, "net": 0.0, "staked": 0.0})
@@ -235,14 +240,27 @@ def summarize(signals: list, disc: dict, days_done: int, liquidity: dict | None 
     disc_avg = {}
     for rule, rows in disc.items():
         disc_avg[rule] = {k: round(sum(r[k] for r in rows) / len(rows), 3) for k in rows[0]} if rows else {}
-    out = {"days": days_done, "modules": by_mod, "discount_loglik_by_rule": disc_avg}
+    out = {"days": days_done, "modules": by_mod, "discount_loglik_by_rule": disc_avg,
+           "book_coverage": round(coverage, 3)}
     if liquidity:
         out["liquidity"] = liquidity
     return out
 
 
+MIN_BOOK_COVERAGE = 0.5   # below this the replay had no prices to trade and every number is a zero
+
+
 def format_summary(s: dict) -> str:
     lines = [f"backtest — {s['days']} city-days"]
+    cov = s.get("book_coverage", 1.0)
+    if cov < MIN_BOOK_COVERAGE:
+        # A replay with no price history produces no signals and reports a tidy net=$0.00 per day,
+        # which reads exactly like "the strategy did nothing wrong". It is not a result, it is a
+        # failed download: `prices-history` 400s when the window is too wide for fidelity=5, so a
+        # `--days 30` run silently answered $0.00 on 987 of 987 buckets on 2026-09-18.
+        lines.append(f"  *** NO RESULT: price history came back for {cov:.0%} of buckets (need "
+                     f"{MIN_BOOK_COVERAGE:.0%}). Nothing below is a measurement — shorten --days "
+                     f"and re-run. ***")
     for name, m in s["modules"].items():
         lines.append(f"  {name:<14} signals={m['signals']:<4} filled={m['filled']:<4} W/L={m['wins']}/{m['losses']} "
                      f"net=${m['net']:+.2f} on ${m['staked']:.0f} staked (ROI {m['roi_pct']:+.1f}%)")

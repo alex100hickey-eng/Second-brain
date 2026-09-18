@@ -107,6 +107,49 @@ def test_body_parsing_survives_a_chatty_model():
     assert sfd.parse_body('{"body": ""}') == '{"body": ""}'      # empty body is not a body
 
 
+class _FlakyClient:
+    """The real client, reproduced: a call that sometimes comes back with no text block at all."""
+
+    def __init__(self, replies):
+        self._replies = list(replies)
+        self.calls = 0
+        self.messages = self
+
+    def create(self, **_kw):
+        self.calls += 1
+        text = self._replies.pop(0) if self._replies else ""
+        blocks = [type("B", (), {"type": "text", "text": text})()] if text else []
+        return type("M", (), {"content": blocks})()
+
+
+GOOD = " ".join(["word"] * 40)
+
+
+def test_a_flaky_generation_is_retried_not_dropped():
+    """One call in a handful returns nothing (verified 2026-09-18 against Gunner Kennels touch 3).
+    Unretried that is a prospect's LAST touch dropped in silence: the caller rejects the short
+    body, the brand is marked drafted, and nobody ever writes to them again."""
+    c = _FlakyClient(["", "", GOOD])
+    body = sfd.write_followup(c, "Gunner Kennels", "Emily", 3, "the original email", 17)
+    assert len(body.split()) >= sfd.MIN_BODY_WORDS
+    assert c.calls == 3
+
+
+def test_a_good_first_answer_is_not_regenerated():
+    """The retry must not cost three calls per follow-up on the normal path."""
+    c = _FlakyClient([GOOD, GOOD, GOOD])
+    sfd.write_followup(c, "Gunner Kennels", "Emily", 3, "the original email", 17)
+    assert c.calls == 1
+
+
+def test_retrying_gives_up_rather_than_looping():
+    """Three empties in a row still returns, and returns something the caller will reject."""
+    c = _FlakyClient(["", "", ""])
+    body = sfd.write_followup(c, "Gunner Kennels", "Emily", 3, "the original email", 17)
+    assert len(body.split()) < sfd.MIN_BODY_WORDS
+    assert c.calls == 3
+
+
 # ---- the send path: where it is allowed to live, and where it must never appear ----
 
 SEND_MARKERS = ("GMAIL_SEND_DRAFT", "GMAIL_SEND_EMAIL", "GMAIL_REPLY_TO_THREAD",
@@ -552,3 +595,61 @@ def test_first_touch_waiting_list_counts_front_desks_too():
             {"brand": "Sent", "email": "eric@bigbarker.com", "email_generic": "",
              "contact_name": "", "sent_date": "2026-09-16"}]
     assert [r["brand"] for r in sfd.waiting_for_first_touch(rows)] == ["FrontDesk"]
+
+
+# ---------------------------------------------------------------------------
+# The daily cap. 5/day was quietly the binding constraint on the business — it
+# put the volume a first client needs past the kill date — and it stayed at 5
+# because raising it was a judgement nobody was scheduled to make. These pin
+# that the cadence now earns its way up from the delivery record, and drops
+# back to the floor on the first sign of trouble without anyone deciding to.
+# ---------------------------------------------------------------------------
+
+def test_daily_cap_ramps_with_clean_send_history():
+    assert sfd.daily_cap(0, 0, 0) == 5
+    assert sfd.daily_cap(29, 0, 29) == 5
+    assert sfd.daily_cap(30, 0, 30) == 8
+    assert sfd.daily_cap(69, 0, 69) == 8
+    assert sfd.daily_cap(70, 0, 70) == 10
+
+
+def test_daily_cap_never_exceeds_the_plans_own_ceiling():
+    """Workspace allows 2,000/day. The plan Alex approved says 8-10. Headroom at the
+    provider is not a reason to outrun the domain's reputation."""
+    assert sfd.daily_cap(10_000, 0, 10_000) == 10
+    assert max(cap for _thr, cap in sfd.RAMP) == 10
+
+
+def test_bounce_trouble_drops_the_cap_back_to_the_floor():
+    # 2 bounces in 25 sends = 8%, exactly the threshold the bounce nudge fires on.
+    assert sfd.daily_cap(200, 2, 25) == 5
+    # One bounce is not a pattern; a single bad address must not stall the pipeline.
+    assert sfd.daily_cap(200, 1, 25) == 10
+    # Nor is a high count against a large denominator below the rate.
+    assert sfd.daily_cap(200, 3, 200) == 10
+
+
+def test_unreadable_delivery_state_falls_back_to_the_floor(monkeypatch):
+    """An unreadable bounce record must never read as 'no bounces, send more'."""
+    monkeypatch.setattr(sfd, "_sent_counts", lambda *a, **k: (_ for _ in ()).throw(OSError("x")))
+    cap, why = sfd.current_cap()
+    assert cap == sfd.PER_DAY
+    assert "floor" in why
+
+
+def test_no_send_history_holds_at_the_floor(monkeypatch):
+    """sent_since returning 0 because a module was never init'd used to look exactly like
+    'no sends yet' — silent, and wrong in the direction that looks safe."""
+    monkeypatch.setattr(sfd, "_sent_counts", lambda *a, **k: (0, 0))
+    cap, why = sfd.current_cap()
+    assert cap == sfd.PER_DAY
+    assert "no send history" in why
+
+
+def test_release_uses_the_live_cap_when_no_limit_is_passed(monkeypatch):
+    """The release defaults to the earned cadence, not to the floor constant."""
+    import inspect
+    sig = inspect.signature(sfd.release_first_touches)
+    assert sig.parameters["limit"].default is None
+    src = inspect.getsource(sfd.release_first_touches)
+    assert "current_cap()" in src

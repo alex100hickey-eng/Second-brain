@@ -129,7 +129,8 @@ class Config:
     lock_min_edge_cents: float = 2.0       # weather_lock: 1 - ask must exceed this
     lock_max_spread_cents: float = 10.0    # weather_lock: wider is an empty book, not a price
     lock_take_min_edge_cents: float = 4.0  # weather_lock crosses the spread; make it worth the fee
-    lock_min_price: float = 0.50           # weather_lock: below this the market is calling the lock wrong, and it has been right every time (paper 2026-09-12..16: 0/7)
+    lock_min_price: float = 0.80           # weather_lock: below this the market is calling the lock wrong, and it has been right every time (paper 2026-09-12..18: <50c 0/8 -$160, 50-80c 2/4 -$8, 80c+ 21/22 +$17)
+    dead_bucket_max_bid: float = 0.95      # weather_obs: a bucket the market prices 95c+ is not dead, our feed is (paper 2026-09-12..18: 0/6, -$70)
     dead_bucket_min_bid: float = 0.03      # weather_obs: only sell dead buckets bid >= this
     model_update_min_shift: float = 0.10   # weather_model_update: probability shift that counts
     bucket_sum_min_net_cents: float = 1.0  # bucket_sum: net after fees must exceed this
@@ -144,6 +145,7 @@ class Config:
                                            # 95-99c carry information the model can't have (2026-09-12 paper: -$412 there)
     hold_edge_max_cents: float = 30.0      # a bigger model-vs-market gap is a model or venue-rule error, not an edge
     gate_since_ts: float = 0.0             # signals before this epoch don't count toward the report or the gate
+    min_us_signals: int = 10               # a module cannot go live on offshore evidence alone (see the gate)
     auto_promote: bool = False             # True: the 07:00 report flips PASS modules paper -> live by itself
     snapshot_keep_days: int = 7            # book snapshots older than this are pruned at 03:00
 

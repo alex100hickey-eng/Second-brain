@@ -102,6 +102,7 @@ class Runner:
         self.ledger = ledger or Ledger()
         self.log = log
         self.ledger.gate_since_ts = self.cfg.gate_since_ts
+        self.ledger.min_us_signals = self.cfg.min_us_signals
         self.us = USVenue()
         self.risk = RiskManager(self.cfg, self.ledger)
         self.paper = PaperEngine(self.ledger, history_fn=self._paper_history, resolution_fn=self._paper_resolution)
@@ -299,6 +300,7 @@ class Runner:
         before = dict(self.cfg.modes)
         self.cfg = config.load()
         self.ledger.gate_since_ts = self.cfg.gate_since_ts
+        self.ledger.min_us_signals = self.cfg.min_us_signals
         changed = {m: (before.get(m), v) for m, v in self.cfg.modes.items() if before.get(m) != v}
         if changed:
             self.log("  config reloaded: " + ", ".join(f"{m} {a}->{b}" for m, (a, b) in changed.items()))
@@ -361,8 +363,15 @@ class Runner:
                     # that way, starving the one strategy worth promoting.
                     if now.minute == 55:
                         self.scan_weather(modules=["weather_lock", "weather_model_update", "weather_hold", "weather_obs"])
-                        if self.us.available:
-                            self.scan_weather(modules=["weather_lock", "weather_model_update", "weather_hold", "weather_obs"], venue="us")
+                    # The US venue is scanned four times an hour, not once. It is the only venue that
+                    # can ever hold real money and it carries ~1 signal a day — the scarcest resource
+                    # in this bot — while offshore is 30 cities of proxy. A US pass used to cost ~20
+                    # calls (5 cities x high+low x a slug lookup that always missed plus a search
+                    # fallback); unwrapping the event envelope and remembering 404s for an hour cut
+                    # that to ~5, which is what buys the extra passes without walking back into the
+                    # Cloudflare rate limit that banned this IP on 2026-09-17.
+                    if now.minute % 15 == 10 and self.us.available:
+                        self.scan_weather(modules=["weather_lock", "weather_model_update", "weather_hold", "weather_obs"], venue="us")
                     if now.minute % 5 == 0:
                         self.scan_weather(modules=["bucket_sum"])
                         if self.us.available:

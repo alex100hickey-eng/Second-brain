@@ -114,11 +114,20 @@ step, and you need me to prompt you to say do the next step." So inside your tas
 
 ## Lane notes
 
-- Splitframe: the server job releases 5 queued first touches a day and arms each to send itself
+- Splitframe: the server job releases the day's queued first touches and arms each to send itself
   3 h later unless Alex vetoes; it drafts the follow-ups; replies are detected server-side. Your
   jobs are the live Ad Library read + the email in his voice (`add`), sourcing new in-band brands
   (`source`, 5-50 active ads, DTC brands only — never retailers, agencies or marketplaces), and
   Hunter inside quota. 0 active ads → `note --ad-count 0` (hold). Over 100 → note and skip.
+  **The daily cadence is not fixed at 5 any more** — `status` prints it ("cadence: N/day") and it
+  rises with the clean send record, so top the queue to the stock target `status` asks for, not to
+  a number you remember.
+  **The greeting is decided for you, in `status`.** Each target prints either `greet "Gillian"` or
+  `front desk, NO greeting`. Follow it exactly. A name there came off the brand's own about page
+  and is in `contact_name_source`; never invent one, never guess a founder from a brand name, and
+  never greet a target marked NO greeting. If a brand has no name and you find one on their site
+  while reading their ads, run `python3 scripts/find_founder_names.py --brand "<Brand>" --write`
+  rather than using it straight from memory — the evidence has to be on the row.
 - Clipping: @wildest_moments died from 13 clips in 5 hours on a day-old account. The repair is
   rhythm plus transformed clips: the brief states today's cap and the 3 h gap; `plan` gives the
   order; skip campaigns the runner flags with transformation_risk. Views (logged-out `playCount`)

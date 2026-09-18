@@ -45,6 +45,7 @@ CHAT = os.path.expanduser("~/second-brain/second-brain-chat")
 
 MODEL = "claude-sonnet-5"
 MAX_TOUCHES = 3          # first touch + 2 follow-ups, then the brand is left alone
+MIN_BODY_WORDS = 25      # below this the generation failed; it is not a short email
 # Shared inboxes. A first touch about ad creative dies in a support queue, and Hunter will
 # happily return one as "deliverable" — talktous@ and support@ both came back in the
 # 2026-09-15 pass looking exactly like a real person's address.
@@ -387,10 +388,19 @@ def write_followup(client, brand: str, contact: str, touch: int, original: str, 
            f"{'This is the LAST touch: give the explicit easy out.' if last else ''}\n"
            f"{'That gap is long enough to acknowledge plainly in a few words, without apologising twice.' if days_since > 7 else ''}\n\n"
            f"The email he already sent (do not repeat its points, build on them):\n---\n{original}\n---")
-    msg = client.messages.create(model=MODEL, max_tokens=700, system=VOICE,
-                                 messages=[{"role": "user", "content": ask}])
-    text = "".join(b.text for b in msg.content if getattr(b, "type", "") == "text").strip()
-    return parse_body(text)
+    # The call comes back empty often enough to matter — one run in a handful returns no text
+    # block at all (verified 2026-09-18 reproducing Gunner Kennels touch 3). Unretried, that is
+    # a prospect's LAST touch dropped in silence: the caller's word-count check rejects it, the
+    # brand is marked drafted, and nobody ever writes to them again. Retry before giving up.
+    body = ""
+    for _ in range(3):
+        msg = client.messages.create(model=MODEL, max_tokens=700, system=VOICE,
+                                     messages=[{"role": "user", "content": ask}])
+        text = "".join(b.text for b in msg.content if getattr(b, "type", "") == "text").strip()
+        body = parse_body(text)
+        if len(body.split()) >= MIN_BODY_WORDS:
+            return body
+    return body
 
 
 def parse_body(text: str) -> str:
@@ -440,7 +450,89 @@ QUEUE_KEY = "splitframe:firsttouch_queue"
 HOLD_HOURS = 3             # Alex asked for auto-send (2026-09-15). This is the window in which he
                            # can still kill one: he does nothing and it goes, which is the point,
                            # but nothing leaves the building the instant a model wrote it.
-PER_DAY = 5                # the plan's cadence: 5 a day, 25 a week
+PER_DAY = 5                # the floor, and where a cold or a troubled domain sends
+
+# The cadence is not a constant any more, because leaving it at 5 was quietly the binding
+# constraint on the whole business. 5/day is 25 a week; a first client needs on the order of
+# 150-250 first touches at a 1-3% positive-reply rate, so 5/day put the first realistic shot
+# past the Oct 15 kill date with no time left to actually close anyone.
+#
+# It stayed at 5 because raising it was a judgement nobody was scheduled to make. So it is a
+# function of delivery evidence instead of a number someone has to remember to change:
+#
+#   under 30 clean sends   5/day   still proving the current address quality
+#   30-69                  8/day
+#   70+                   10/day   the August plan's own stated ceiling; not exceeded
+#
+# and ANY sign of bounce trouble drops it straight back to the floor. The ceiling is the
+# plan's, deliberately — having headroom at the provider (Workspace allows 2,000/day) is not
+# a reason to outrun the reputation the domain spent three weeks earning.
+RAMP = ((70, 10), (30, 8), (0, 5))
+BOUNCE_WINDOW_DAYS = 14
+BOUNCE_HOLD_RATE, BOUNCE_HOLD_MIN = 0.08, 2   # same threshold the bounce nudge fires on
+BOUNCE_KEY = "splitframe:bounces"
+
+
+def daily_cap(sent_total: int, bounces_recent: int, sent_recent: int) -> int:
+    """How many first touches may go out today, from the delivery record.
+
+    Kept pure so the decision is testable without a mailbox: the caller supplies the counts.
+    """
+    rate = (bounces_recent / sent_recent) if sent_recent else 0.0
+    if bounces_recent >= BOUNCE_HOLD_MIN and rate >= BOUNCE_HOLD_RATE:
+        # Not a pause — a pause needs someone to un-pause it. Back to the floor, which keeps
+        # the business running while the addresses are looked at.
+        return PER_DAY
+    for threshold, cap in RAMP:
+        if sent_total >= threshold:
+            return cap
+    return PER_DAY
+
+
+def _sent_counts(since: str = "") -> tuple:
+    """(total sends, sends on/after `since`) straight from the tracker.
+
+    Deliberately reads the CSV here rather than calling ad_creative_pipeline.sent_since:
+    that helper needs the pipeline to have been init'd with a vault path, and when it has
+    not been it returns 0 — which this function would read as "no sends yet, stay at the
+    floor". Silent, and wrong in the direction that looks safe. This module already knows
+    where the tracker is.
+    """
+    total = recent = 0
+    try:
+        with open(TRACKER, newline="", encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                sent = _s(row.get("sent_date"))
+                if not sent:
+                    continue
+                total += 1
+                if since and sent >= since:
+                    recent += 1
+    except (OSError, csv.Error):
+        return 0, 0
+    return total, recent
+
+
+def current_cap() -> tuple:
+    """(cap, why) from live state. Falls back to the floor if anything is unreadable —
+    an unreadable bounce record must never read as "no bounces, send more"."""
+    try:
+        cutoff = datetime.now(LOCAL_TZ) - timedelta(days=BOUNCE_WINDOW_DAYS)
+        events = []
+        if _shared:
+            st = _shared._load_state(BOUNCE_KEY) or {}
+            events = [e for e in (st.get("events") or [])
+                      if _s(e.get("at")) >= cutoff.isoformat()]
+        sent_total, sent_recent = _sent_counts(cutoff.date().isoformat())
+    except Exception as e:                            # noqa: BLE001
+        return PER_DAY, f"floor: could not read delivery state ({type(e).__name__})"
+    if not sent_total:
+        return PER_DAY, "floor: no send history readable"
+    cap = daily_cap(sent_total, len(events), sent_recent)
+    if len(events) >= BOUNCE_HOLD_MIN and cap == PER_DAY:
+        return cap, f"floor: {len(events)} bounce(s) in {sent_recent} recent sends"
+    return cap, (f"{sent_total} sends all time, {len(events)} bounce(s) "
+                 f"in the last {BOUNCE_WINDOW_DAYS}d")
 
 
 def _released_date(entry):
@@ -462,11 +554,14 @@ def _released_date(entry):
     return dt.astimezone(LOCAL_TZ).date()
 
 
-def release_first_touches(outbox_mod, drafts_url: str, limit: int = PER_DAY) -> list:
+def release_first_touches(outbox_mod, drafts_url: str, limit: int = None) -> list:
     """Move up to `limit` already-written first-touch drafts into the outbox, which is what puts
     them in front of Alex. The drafts are written in a batch (they need a live Ad Library read,
-    which stays manual); releasing them on the plan's 5-a-day cadence is what stops that batch
-    landing as one unreadable pile of twelve notifications.
+    which stays manual); releasing them on a daily cadence is what stops that batch landing as
+    one unreadable pile of twelve notifications.
+
+    `limit` defaults to `current_cap()` — the cadence earns its way up from the delivery
+    record instead of sitting at the starting number forever.
 
     `limit` is per CALENDAR DAY, not per call. It used to cap only the current invocation, so a
     retry, a launchd overlap or one manual run released another five on top of the five already
@@ -474,6 +569,9 @@ def release_first_touches(outbox_mod, drafts_url: str, limit: int = PER_DAY) -> 
     """
     if not _shared:
         return []
+    if limit is None:
+        limit, why = current_cap()
+        log(f"daily cap {limit}/day ({why})")
     q = _shared._load_state(QUEUE_KEY)
     queue = q.get("queue") or []
     today = datetime.now(LOCAL_TZ).date()
@@ -597,7 +695,7 @@ def main() -> int:
         except Exception as exc:
             log(f"{brand}: draft generation failed — {str(exc)[:160]}")
             continue
-        if len(body.split()) < 25:
+        if len(body.split()) < MIN_BODY_WORDS:
             log(f"{brand}: touch {touch} REJECTED — body came back empty or too short to send")
             rejected.append(f"{brand} (touch {touch}): empty draft")
             continue

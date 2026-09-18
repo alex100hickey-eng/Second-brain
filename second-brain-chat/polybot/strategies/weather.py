@@ -226,6 +226,13 @@ class WeatherObs(Strategy):
             dead = (b.hi < ctx.running) if ctx.kind == "high" else (b.lo > ctx.running)
             if not dead or b.best_bid < self.cfg.dead_bucket_min_bid:
                 continue
+            if b.best_bid > self.cfg.dead_bucket_max_bid:
+                # Our observation feed says this bucket cannot win any more; the book says it is a
+                # 95c+ certainty. One of the two is wrong about something that has already happened,
+                # and on the paper record it is never the book: entries against a 95c+ bid went 0/6
+                # for -$70.00, the whole of weather_obs's loss. Buying NO at 0.01-0.05 also risks the
+                # entire stake to win a cent or two, so a single bad observation costs ~20 good ones.
+                continue
             no_price = round(1 - b.best_bid + 0.01, 2)
             size = self.cfg.caps.max_per_market_usd     # dead is dead: the only risk is the feed, so size to the cap
             out.append(Signal(self.name, ctx.venue, b.yes_token, _label(ctx, b), "BUY_NO", no_price, size,

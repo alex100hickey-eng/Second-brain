@@ -94,6 +94,7 @@ class Ledger:
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
         self.gate_since_ts = 0.0     # set by the runner from config: evidence before a rule change doesn't count
+        self.min_us_signals = 10     # set by the runner from config: the gate's US-evidence floor
 
     # ---- signals -------------------------------------------------------------------------
     def add_signal(self, sig, mode: str) -> int:
@@ -238,9 +239,19 @@ class Ledger:
             r["mtm"] = (r["pnl"] or 0.0) + (r["unreal"] or 0.0)
         return rows
 
-    def promotion_check(self, module: str, days: int = 30, min_signals: int = 30, min_fill_rate: float = 0.5):
-        """The gate: enough signals, enough fills, positive mark-to-market (not just closed net), and the
-        US-venue paper — the only books real money ever touches — not negative. Returns (ok, reason)."""
+    def promotion_check(self, module: str, days: int = 30, min_signals: int = 30, min_fill_rate: float = 0.5,
+                        min_us_signals: int | None = None):
+        """The gate: enough signals, enough fills, positive mark-to-market (not just closed net), and a
+        real track record on the Polymarket US books — the only books real money ever touches.
+
+        `min_us_signals` is the part that is easy to leave out and expensive to get wrong. Most signals
+        are offshore, which is a read-only proxy on a DIFFERENT settlement rule (hourly METAR at KLGA vs
+        the daily CLI report at KNYC). Until 2026-09-18 the US record was only consulted when it existed,
+        so a module could reach 30 offshore signals, pass, and be flipped live having never once produced
+        a signal on the venue it would be spending Alex's money on — weather_model_update was 17/30 with
+        exactly zero US signals when this was found. Offshore evidence is a hint; US evidence is the case."""
+        if min_us_signals is None:
+            min_us_signals = self.min_us_signals
         stats = [s for s in self.module_stats(days) if s["module"] == module]
         if not stats:
             return False, "no signals"
@@ -258,8 +269,13 @@ class Ledger:
             return False, f"mark-to-market {mtm:+.2f} not positive"
         us = [s for s in self.module_stats(days, venue="us") if s["module"] == module]
         us_n = sum(s["n"] for s in us)
+        us_closed = sum(s["closed"] or 0 for s in us)
         us_mtm = sum(s["mtm"] for s in us)
-        if us_n and us_mtm < 0:
+        if us_n < min_us_signals:
+            return False, f"{us_n}/{min_us_signals} US signals (offshore evidence does not count for live)"
+        if us_closed == 0:
+            return False, f"US paper: {us_n} signals, none settled yet"
+        if us_mtm < 0:
             return False, f"US paper mark-to-market {us_mtm:+.2f} negative over {us_n} signals"
         return True, f"{n} signals, {closed} closed, mtm {mtm:+.2f}, fills {filled / n:.0%}, US {us_n} signals {us_mtm:+.2f}"
 
