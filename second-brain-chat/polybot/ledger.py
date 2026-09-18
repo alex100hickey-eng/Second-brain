@@ -5,6 +5,7 @@ This is the thing that promotes a module from paper → signal → live. Nothing
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import time
 from datetime import datetime, timezone
@@ -64,7 +65,12 @@ CREATE TABLE IF NOT EXISTS snapshots (
     ts REAL NOT NULL,
     venue TEXT NOT NULL,
     market TEXT NOT NULL,
-    bid REAL, ask REAL, mid REAL, last REAL
+    bid REAL, ask REAL, mid REAL, last REAL,
+    -- Contracts resting at the best price. NULL means the book was never asked (the normal case:
+    -- quotes are free with the event, depth costs a call per bucket). Only the arb path fills
+    -- these in, and they are the record that answers the one question about bucket_sum that
+    -- history cannot: was the arb ever big enough to be worth taking?
+    bid_qty REAL, ask_qty REAL
 );
 CREATE INDEX IF NOT EXISTS snapshots_idx ON snapshots (venue, market, ts);
 CREATE TABLE IF NOT EXISTS model_runs (
@@ -93,6 +99,13 @@ class Ledger:
         self.conn = sqlite3.connect(path)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
+        # The depth columns arrived after the table did; CREATE TABLE IF NOT EXISTS will not add
+        # them to the 130 MB database already on disk.
+        have = {r[1] for r in self.conn.execute("PRAGMA table_info(snapshots)")}
+        for col in ("bid_qty", "ask_qty"):
+            if col not in have:
+                self.conn.execute(f"ALTER TABLE snapshots ADD COLUMN {col} REAL")
+        self.conn.commit()
         self.gate_since_ts = 0.0     # set by the runner from config: evidence before a rule change doesn't count
         self.min_us_signals = 10     # set by the runner from config: the gate's US-evidence floor
 
@@ -167,10 +180,12 @@ class Ledger:
         self.conn.execute("UPDATE orders SET status=? WHERE id=?", (status, order_id))
         self.conn.commit()
 
-    def add_snapshot(self, venue, market, bid, ask, last=None, ts=None) -> None:
+    def add_snapshot(self, venue, market, bid, ask, last=None, ts=None, bid_qty=None, ask_qty=None) -> None:
         mid = (bid + ask) / 2 if (bid is not None and ask is not None) else None
-        self.conn.execute("INSERT INTO snapshots (ts, venue, market, bid, ask, mid, last) VALUES (?,?,?,?,?,?,?)",
-                          (ts or _now(), venue, market, bid, ask, mid, last))
+        self.conn.execute(
+            "INSERT INTO snapshots (ts, venue, market, bid, ask, mid, last, bid_qty, ask_qty) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            (ts or _now(), venue, market, bid, ask, mid, last, bid_qty, ask_qty))
         self.conn.commit()
 
     def snapshots(self, venue, market, since_ts):
@@ -239,6 +254,20 @@ class Ledger:
             r["mtm"] = (r["pnl"] or 0.0) + (r["unreal"] or 0.0)
         return rows
 
+    def decision_count(self, module: str, days: int = 30, venue: str | None = None) -> int:
+        """Independent decisions, not rows. An arb set writes one signal per leg, so a six-bucket
+        bucket_sum episode looks like six pieces of evidence when it is one — and thirty rows would
+        let real money out after five observed sets. Signals carrying a `meta.group` are counted by
+        distinct group; everything else is one decision per row."""
+        since = max(_now() - days * 86400, float(self.gate_since_ts or 0.0))
+        q = ("SELECT COUNT(DISTINCT COALESCE(json_extract(meta,'$.group'), 'row:' || id)) AS n "
+             "FROM signals WHERE module=? AND ts>=?")
+        args = [module, since]
+        if venue:
+            q += " AND venue=?"
+            args.append(venue)
+        return int(self.conn.execute(q, args).fetchone()["n"] or 0)
+
     def promotion_check(self, module: str, days: int = 30, min_signals: int = 30, min_fill_rate: float = 0.5,
                         min_us_signals: int | None = None):
         """The gate: enough signals, enough fills, positive mark-to-market (not just closed net), and a
@@ -255,7 +284,8 @@ class Ledger:
         stats = [s for s in self.module_stats(days) if s["module"] == module]
         if not stats:
             return False, "no signals"
-        n = sum(s["n"] for s in stats)
+        n = self.decision_count(module, days)
+        rows = sum(s["n"] for s in stats)
         closed = sum(s["closed"] or 0 for s in stats)
         filled = sum(s["filled"] or 0 for s in stats)
         mtm = sum(s["mtm"] for s in stats)
@@ -263,12 +293,12 @@ class Ledger:
             return False, f"{n}/{min_signals} signals"
         if closed == 0:
             return False, "nothing closed yet"
-        if filled / max(n, 1) < min_fill_rate:
-            return False, f"fill rate {filled / n:.0%} < {min_fill_rate:.0%}"
+        if filled / max(rows, 1) < min_fill_rate:      # fills are per leg, so measure them per leg
+            return False, f"fill rate {filled / rows:.0%} < {min_fill_rate:.0%}"
         if mtm <= 0:
             return False, f"mark-to-market {mtm:+.2f} not positive"
         us = [s for s in self.module_stats(days, venue="us") if s["module"] == module]
-        us_n = sum(s["n"] for s in us)
+        us_n = self.decision_count(module, days, venue="us")
         us_closed = sum(s["closed"] or 0 for s in us)
         us_mtm = sum(s["mtm"] for s in us)
         if us_n < min_us_signals:
@@ -277,7 +307,47 @@ class Ledger:
             return False, f"US paper: {us_n} signals, none settled yet"
         if us_mtm < 0:
             return False, f"US paper mark-to-market {us_mtm:+.2f} negative over {us_n} signals"
-        return True, f"{n} signals, {closed} closed, mtm {mtm:+.2f}, fills {filled / n:.0%}, US {us_n} signals {us_mtm:+.2f}"
+        return True, (f"{n} signals, {closed} closed, mtm {mtm:+.2f}, fills {filled / rows:.0%}, "
+                      f"US {us_n} signals {us_mtm:+.2f}")
+
+    def arb_report(self, days: int = 7) -> str:
+        """Every moment the US books offered a complete bucket set under $1, and how deep it was.
+
+        bucket_sum is the only module whose profit does not depend on out-forecasting anyone, so
+        the question that decides whether it is a business is not "does the arb appear" (it does,
+        ~3 times a day) but "is it ever big enough to be worth taking". Only the rows written by
+        the arb path carry sizes; the rest are quote-only and show depth as `?`.
+        """
+        since = _now() - days * 86400
+        rows = [dict(r) for r in self.conn.execute(
+            "SELECT ts, market, bid, ask, bid_qty, ask_qty FROM snapshots "
+            "WHERE venue='us' AND ts>=? ORDER BY ts", (since,))]
+        events = {}
+        for r in rows:
+            m = re.match(r"^(tc-temp-[a-z]+(?:high|low)-\d{4}-\d{2}-\d{2})-", r["market"] or "")
+            if m:
+                events.setdefault((m.group(1), int(r["ts"] // 60)), {})[r["market"]] = r
+        lines = [f"arb candidates — last {days}d (US books)"]
+        found = 0
+        for (slug, minute), legs in sorted(events.items(), key=lambda kv: kv[0][1]):
+            if len(legs) < 2 or any(l["ask"] is None for l in legs.values()):
+                continue
+            ask_sum = sum(l["ask"] for l in legs.values())
+            if ask_sum >= 1.0:
+                continue
+            found += 1
+            qtys = [l["ask_qty"] for l in legs.values()]
+            depth = "?" if any(q is None for q in qtys) else f"{min(qtys):.0f} sets"
+            when = datetime.fromtimestamp(minute * 60).strftime("%m-%d %H:%M")
+            lines.append(f"  {when}  {slug:<32} ask_sum={ask_sum:.3f}  gross={100 * (1 - ask_sum):4.1f}c/set  "
+                         f"fillable={depth}")
+        if not found:
+            lines.append("  none")
+        else:
+            sized = [l for l in lines[1:] if "fillable=?" not in l]
+            lines.append(f"  {found} candidate event-minutes, {len(sized)} with depth recorded. "
+                         "Depth is only written when the arb path runs, so older rows read '?'.")
+        return "\n".join(lines)
 
     def report(self, days: int = 1) -> str:
         lines = [f"polybot report — last {days}d — {datetime.now().strftime('%Y-%m-%d %H:%M')}"]

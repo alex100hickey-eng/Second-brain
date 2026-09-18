@@ -348,8 +348,45 @@ def test_bucket_sum_arb_math():
         b.best_ask = round(b.best_ask * 0.90 / asks_sum, 4)
     kind, net, prices = arb_check(ev.buckets, "us")
     assert kind == "buy_all" and 5.0 < net < 10.0 and len(prices) == len(ev.buckets)   # 10c gross minus ~3.3c taker fees
+
+    # An arb the book cannot fill is not an arb. Depth is None until somebody asks the book, and
+    # None must block the trade rather than default to a size.
+    assert BucketSum(_cfg()).scan(_ctx(event=ev)) == []
+    for b in ev.buckets:
+        b.ask_qty = 40
+    ev.buckets[3].ask_qty = 12                                          # the thinnest leg is the set size
     sigs = BucketSum(_cfg()).scan(_ctx(event=ev))
     assert len(sigs) == len(ev.buckets) and all(s.taker and s.arb for s in sigs)
+    # every leg carries the SAME number of contracts — equal dollars per leg would be a random
+    # basket, not a set — and the count is the thinnest leg, not the average
+    assert {s.contracts for s in sigs} == {12}
+    assert all(s.size_usd == pytest.approx(s.price * 12) for s in sigs)
+    # a set costs about what the asks sum to, and it is one position in each of the legs' markets
+    assert sum(s.size_usd for s in sigs) == pytest.approx(0.90 * 12, abs=0.05)
+
+    # the per-market cap binds on the DEAREST leg, not on the set
+    cfg = _cfg()
+    cfg.caps.max_per_market_usd = 2.0
+    small = BucketSum(cfg).scan(_ctx(event=ev))
+    assert small and max(s.size_usd for s in small) <= 2.0 + 1e-9
+
+    # an empty book is not a 100% arb: a missing ask is unknown, never zero
+    empty = _event()
+    for b in empty.buckets:
+        b.best_bid = b.best_ask = None
+        b.ask_qty = 999
+    assert arb_check(empty.buckets, "us")[0] is None
+    assert BucketSum(_cfg()).scan(_ctx(event=empty)) == []
+
+    # buckets that do not tile every temperature cannot be arbed: one degree would pay nobody
+    from polybot.strategies.bucket_sum import exhaustive
+    assert exhaustive(ev.buckets)
+    gapped = _event()
+    del gapped.buckets[4]                                               # 76-77 removed: 75 and 78 no longer meet
+    assert not exhaustive(gapped.buckets)
+    for b in gapped.buckets:
+        b.best_ask, b.ask_qty = 0.05, 40
+    assert arb_check(gapped.buckets, "us")[0] is None
 
 
 def test_leadlag_and_noise_rules():
@@ -738,6 +775,65 @@ def test_us_venue_parses_live_shapes(monkeypatch):
     ev = v.find_weather_event("nyc", datetime(2026, 9, 13), "high")
     assert ev is not None and len(ev.buckets) == 4 and ev.slug == "temp-nychigh-2026-09-13"
     assert v.find_weather_event("nyc", datetime(2026, 9, 14), "high") is None
+
+
+def test_arb_set_is_all_or_nothing_never_unbalanced():
+    """An arb is N contracts of every leg. A set that ends up 11 of one and 12 of another is a
+    naked basket with a story attached, and that is exactly what 4-decimal prices produced before
+    the invariant existed. Better no trade than a half-set."""
+    from polybot.strategies.bucket_sum import BucketSum
+    ev = _event()
+    for b in ev.buckets:
+        b.best_bid, b.best_ask, b.ask_qty = 0.001, None, 30
+    asks = [0.0413, 0.0917, 0.1231, 0.0719, 0.1522, 0.1111, 0.0888, 0.1299, 0.0900]
+    for b, a in zip(ev.buckets, asks):
+        b.best_ask = a
+    sigs = BucketSum(_cfg()).scan(_ctx(event=ev))
+    # whatever it decides, it never emits a set whose legs disagree on the contract count
+    assert sigs == [] or len({s.contracts for s in sigs}) == 1
+
+
+def test_arb_legs_are_exempt_from_the_dust_floor():
+    """A leg priced at 1c is SUPPOSED to cost cents. Judging it by the min-order threshold meant
+    for single bets refuses the cheap legs and fills the dear ones — the naked basket again."""
+    cfg, led = _cfg(), _ledger()
+    rm = RiskManager(cfg, led)
+    penny = Signal("bucket_sum", "us", "leg", "x", "BUY_YES", 0.01, 0.30, 6, "r", taker=True, arb=True)
+    assert rm.allow(penny)[0]
+    lone = Signal("weather_lock", "us", "leg2", "x", "BUY_YES", 0.01, 0.30, 6, "r")
+    assert not rm.allow(lone)[0] and "below min order" in rm.allow(lone)[1]
+
+
+def test_live_arb_is_blocked_until_the_executor_can_unwind_a_partial_set():
+    """Six legs go out as six independent orders. Fill four and you hold a naked basket with no
+    unwind path — the very thing the set exists to avoid. Paper measures it; money waits."""
+    cfg, led = _cfg(), _ledger()
+    cfg.modes["bucket_sum"] = "live"
+    rm = RiskManager(cfg, led)
+    leg = Signal("bucket_sum", "us", "leg", "x", "BUY_YES", 0.20, 4.0, 6, "r", taker=True, arb=True)
+    ok, why = rm.allow(leg)
+    assert not ok and "group execution" in why
+    assert rm.allow(leg, mode="paper")[0]                 # paper still records it
+    cfg.arb_live_ok = True
+    assert rm.allow(leg)[0]
+
+
+def test_gate_counts_arb_sets_not_legs():
+    """Six legs of one episode are one piece of evidence, not six. Counting rows would let real
+    money out after five observed sets."""
+    led = _ledger()
+    t0 = time.time() - 600
+    for ep in range(5):
+        for leg in range(6):
+            led.add_signal(Signal("bucket_sum", "us", f"e{ep}l{leg}", "x", "BUY_YES", 0.2, 2.0, 6, "r",
+                                  ts=t0, arb=True, meta={"group": f"ev{ep}:buy_all:80"}), "paper")
+    assert led.decision_count("bucket_sum") == 5            # 30 rows, 5 decisions
+    ok, why = led.promotion_check("bucket_sum")
+    assert not ok and why.startswith("5/30 signals")
+    # a module without groups still counts one decision per row
+    for i in range(4):
+        led.add_signal(Signal("weather_lock", "us", f"m{i}", "x", "BUY_YES", 0.9, 18, 6, "r", ts=t0), "paper")
+    assert led.decision_count("weather_lock") == 4
 
 
 def test_backtest_refuses_to_report_a_run_with_no_book():

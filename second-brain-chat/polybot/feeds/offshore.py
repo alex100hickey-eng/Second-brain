@@ -46,6 +46,11 @@ class Bucket:
     closed: bool
     outcome: int | None          # 1 / 0 once resolved, else None
     liquidity: float = 0.0
+    # Contracts resting at best_bid / best_ask. None means "not looked up" — NOT zero. An arb sized
+    # off a quote it cannot actually fill is the same phantom-edge mistake as reading a missing ask
+    # as free money, so bucket_sum refuses to size a set until these are filled in from the book.
+    bid_qty: float | None = None
+    ask_qty: float | None = None
 
     def contains(self, temp: float) -> bool:
         return self.lo <= temp <= self.hi

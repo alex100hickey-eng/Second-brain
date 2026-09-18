@@ -31,7 +31,7 @@ from .feeds.usvenue import USVenue
 from .ledger import Ledger
 from .paper import PaperEngine, snapshot_history
 from .risk import RiskManager
-from .strategies.bucket_sum import BucketSum
+from .strategies.bucket_sum import BucketSum, arb_check
 from .strategies.hold_favorites import HoldFavorites
 from .strategies.leadlag import LeadLag
 from .strategies.maker_rewards import MakerRewards
@@ -216,6 +216,22 @@ class Runner:
                              f"remaining={ctx.remaining_extreme} | model {probs}")
                 for b in ctx.event.buckets:
                     self.ledger.add_snapshot(venue, b.yes_token, b.best_bid, b.best_ask, b.last)
+                # Cheap screen, expensive confirm. The quotes come free with the event (one call);
+                # depth costs a book call per bucket. bucket_sum needs depth to size a set at all,
+                # so look it up only when the quotes say a set might be there — 34 event-minutes
+                # out of 3,353 over 8 days of US books, i.e. ~1% of the scans pay for it.
+                if venue == "us" and "bucket_sum" in wanted:
+                    kind, net, _ = arb_check(ctx.event.buckets, venue)
+                    if kind is not None and net >= self.cfg.bucket_sum_min_net_cents:
+                        got = self.us.fill_depth(ctx.event)
+                        self.log(f"  arb candidate {venue} {city} {ctx.date} {kind} {net:.1f}c/set — "
+                                 f"depth {'read' if got else 'INCOMPLETE, standing down'}")
+                        # Record the book WITH sizes. Whether these arbs are big enough to be worth
+                        # taking is the one question the old snapshots cannot answer, so every
+                        # candidate now leaves evidence behind whether or not it trades.
+                        for b in ctx.event.buckets:
+                            self.ledger.add_snapshot(venue, b.yes_token, b.best_bid, b.best_ask, b.last,
+                                                     bid_qty=b.bid_qty, ask_qty=b.ask_qty)
                 for name in wanted:
                     try:
                         for sig in self.weather_modules[name].scan(ctx):
@@ -373,7 +389,10 @@ class Runner:
                     if now.minute % 15 == 10 and self.us.available:
                         self.scan_weather(modules=["weather_lock", "weather_model_update", "weather_hold", "weather_obs"], venue="us")
                     if now.minute % 5 == 0:
-                        self.scan_weather(modules=["bucket_sum"])
+                        # US only. bucket_sum cannot size a set without book depth, and depth is a
+                        # call per bucket that is only worth spending on a venue we can actually
+                        # trade — so the offshore pass could never emit a signal, while costing
+                        # ~60 gamma-api calls every five minutes (17k a day) for nothing.
                         if self.us.available:
                             self.scan_weather(modules=["bucket_sum"], venue="us")
                         self.scan_other(modules=["leadlag", "maker_rewards"])
@@ -431,7 +450,8 @@ def _stamped_log(*parts):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="polybot")
-    ap.add_argument("cmd", choices=["scan", "settle", "report", "calibrate", "status", "loop", "backtest", "pairs", "promote"])
+    ap.add_argument("cmd", choices=["scan", "settle", "report", "calibrate", "status", "loop", "backtest",
+                                   "pairs", "promote", "arbs"])
     ap.add_argument("--city", action="append")
     ap.add_argument("--modules", nargs="*")
     ap.add_argument("--venue", default="offshore", choices=["offshore", "us"], help="scan: which books to read")
@@ -440,6 +460,9 @@ def main(argv=None):
     ap.add_argument("--kinds", nargs="*", default=["high"])
     a = ap.parse_args(argv)
     r = Runner(log=_stamped_log if a.cmd == "loop" else print)
+    if a.cmd == "arbs":
+        print(r.ledger.arb_report(a.days if a.days > 1 else 7))
+        return 0
     if a.cmd == "backtest":
         print(r.backtest(a.days if a.days > 1 else 7, a.city, tuple(a.kinds)))
     elif a.cmd == "pairs":

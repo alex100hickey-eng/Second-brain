@@ -29,10 +29,46 @@ Alex's multi-strategy Polymarket bot. Design doc: vault `Money/Polymarket Bot �
 | weather_obs | NWS hourly observation kills buckets | paper. Skips buckets the book prices over `dead_bucket_max_bid` |
 | weather_hold | Open-Meteo ensemble vs bucket price | **off** — backtest −8.9%, paper −$2,456 |
 | weather_model_update | new model run vs last run | **off** — 71 closed paper trades, 63% wins, −$291, losing in every edge band |
-| bucket_sum | mutually-exclusive buckets ≠ $1 | paper on offshore books |
+| bucket_sum | mutually-exclusive buckets ≠ $1 | **paper — the one that doesn't need a forecast.** US only |
 | hold_favorites | our own calibration table (run `calibrate`) | paper on offshore books |
 | leadlag | offshore price vs US book | idle until `pairs.json` |
 | maker_rewards | incentive-program quoting | idle |
+
+### bucket_sum: the only module that isn't a forecast bet
+Every weather module bets our thermometer beats the book's, and the paper record says it doesn't.
+This one bets nothing. If six buckets tile every possible temperature, exactly one pays $1 at
+settlement, so buying one contract of each for under $1 is the difference — whatever the weather does.
+
+It had **never emitted a single signal**, for four independent reasons, all fixed 2026-09-18:
+
+1. `neg_risk` was `False` on every Polymarket US event (an adapter placeholder, not a finding) and
+   the old gate returned on that flag alone. A flag was the wrong thing to trust: what makes the arb
+   valid is that the buckets **tile**, so `exhaustive()` now checks the parsed ranges directly —
+   open-ended at both ends, `next.lo == prev.hi + 1`, no gap or overlap. Works on both venues.
+2. It demanded a **two-sided** quote everywhere. A buy-all set only needs asks: 50% of US
+   event-minutes have an ask on every bucket, but only 7% have both sides — that threw away 7 in 8.
+3. It sized legs in equal **dollars**. Across legs priced 1c and 73c that buys 500 of one and 7 of
+   the other: a random basket, not a set. A set is N contracts of every leg or it is nothing, and
+   `scan` drops the whole set if any leg's derived count disagrees.
+4. It sized off quotes with **no idea whether they could be filled**. Legs carry `ask_qty`/`bid_qty`
+   now, `None` means "never looked up" and blocks the trade rather than defaulting to a size.
+
+**Cheap screen, expensive confirm.** Quotes come free with the event (one call); depth costs a call
+per bucket. The runner spends that only when the quotes already show a set under $1 — 34
+event-minutes out of 3,353 over 8 days of US books, so ~1% of scans pay for it.
+
+**What the books actually offered** (8 days, `python3 -m polybot.runner arbs --days 8`): ~3 candidate
+event-minutes a day, most worth 1–5c per set, with occasional 10–48c. **Whether any of it is
+fillable is still unknown** — the old snapshots stored no sizes. Every candidate now records depth,
+which is the evidence that decides whether this is a business.
+
+Two rails, because an arb that half-fills is worse than no arb:
+- `arb_live_ok` is **off**: live arb legs are refused outright. `execution.py` places each leg as an
+  independent order with no notion of the group, so filling four of six leaves a naked basket with
+  no unwind path. Paper can measure that safely; money can't. Building group execution is what
+  flipping this knob waits on.
+- The gate counts **sets, not legs** (`decision_count`, via `meta.group`). Six rows from one episode
+  are one piece of evidence; counting rows would let real money out after five observed sets.
 
 ### Why lock and obs have a price floor/ceiling
 Both modules trade on a fact that has **already happened** — the day's peak is in, or a bucket can no
@@ -55,6 +91,7 @@ python3 -m polybot.runner status
 python3 -m polybot.runner scan                 # one pass over all 30 offshore cities, high + low markets
 python3 -m polybot.runner settle               # fill/close paper signals from what the market did next
 python3 -m polybot.runner report --days 7
+python3 -m polybot.runner arbs --days 7        # every moment the US books offered a set under $1, and how deep
 python3 -m polybot.runner promote              # flip every gate-passing paper module to live (writes config.json)
 python3 -m polybot.runner calibrate --events 300
 python3 -m polybot.runner backtest --days 7    # replay the weather modules on real past days (also Sundays 04:00)

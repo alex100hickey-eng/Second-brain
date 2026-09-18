@@ -282,6 +282,30 @@ class USVenue:
         self._missing.pop(slug, None)
         return weather_event_from_us(e, city_slug, kind)
 
+    def fill_depth(self, event) -> bool:
+        """Put real top-of-book sizes on an event's buckets. One call per bucket, so the caller
+        only spends it when the quotes already say an arb might be there (over 8 days of US
+        snapshots that was 34 event-minutes out of 3,353). Returns False if any leg could not be
+        read — a set sized off a partly-unknown book is the thing we are trying not to do."""
+        if not self.available:
+            return False
+        ok = True
+        for b in event.buckets:
+            book = self.book(b.yes_token)
+            if not book:
+                b.bid_qty = b.ask_qty = None
+                ok = False
+                continue
+            bids, asks = book.get("bids") or [], book.get("asks") or []
+            # Sum every level at the best price: the venue can split one price across entries.
+            b.bid_qty = sum(q for px, q in bids if bids and px == bids[0][0]) if bids else 0.0
+            b.ask_qty = sum(q for px, q in asks if asks and px == asks[0][0]) if asks else 0.0
+            if bids:
+                b.best_bid = bids[0][0]
+            if asks:
+                b.best_ask = asks[0][0]
+        return ok
+
     def resolution(self, slug: str) -> int | None:
         """1/0 once the market settled, else None. Settlement is a 404 until it exists."""
         if not self.available:

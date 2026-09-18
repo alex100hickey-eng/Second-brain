@@ -23,7 +23,12 @@ class RiskManager:
             return False, "kill switch on"
         if sig.size_usd <= 0 or sig.contracts <= 0:
             return False, "zero size"
-        if sig.size_usd < caps.min_order_usd:
+        if sig.size_usd < caps.min_order_usd and not sig.arb:
+            # An arb leg is not a standalone trade — it is one sixth of a set that either happens
+            # whole or not at all, and a leg priced at 1c is SUPPOSED to cost cents. Judging it by
+            # the dust threshold meant for single bets would refuse the cheap legs and leave the
+            # expensive ones filled: the exact naked-basket outcome the set exists to avoid.
+            # (The venue may enforce its own minimum; unverified until the first live arb.)
             return False, f"below min order ${caps.min_order_usd:.0f}"
         if sig.size_usd > caps.max_per_market_usd + 1e-9:
             return False, f"over per-market cap ${caps.max_per_market_usd:.0f}"
@@ -35,6 +40,13 @@ class RiskManager:
             return False, "taker order outside an arb"
         mode = mode or self.cfg.mode(sig.module)
         live_like = mode == "live"
+        if live_like and sig.arb and not self.cfg.arb_live_ok:
+            # An arb is all-or-nothing by definition, and `execution.py` places each leg as an
+            # independent order with no notion of the group. Fill four of six and you are not
+            # arbed — you are holding a naked basket that the set was built to avoid, with no
+            # unwind path. Paper can measure this safely; real money cannot until the executor
+            # can complete or unwind a partial set. Flip `arb_live_ok` when that exists.
+            return False, "arb legs need group execution before live (arb_live_ok is off)"
         # One position per market, in every mode: the 2026-09-12 paper run re-entered the same bucket
         # every 3 hours (133 extra entries), so one wrong call cost $40-60 instead of $20.
         existing = self.ledger.exposure_usd(sig.venue, sig.market, live_only=live_like)

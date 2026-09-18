@@ -137,7 +137,9 @@ class Config:
     dead_bucket_max_bid: float = 0.95      # weather_obs: a bucket the market prices 95c+ is not dead, our feed is (paper 2026-09-12..18: 0/6, -$70)
     dead_bucket_min_bid: float = 0.03      # weather_obs: only sell dead buckets bid >= this
     model_update_min_shift: float = 0.10   # weather_model_update: probability shift that counts
-    bucket_sum_min_net_cents: float = 1.0  # bucket_sum: net after fees must exceed this
+    bucket_sum_min_net_cents: float = 1.0  # bucket_sum: net per set after fees must exceed this
+    arb_max_sets: int = 200                # hard ceiling on one arb set, whatever the book offers
+    arb_live_ok: bool = False              # arb legs stay paper until the executor can unwind a partial set
     hourly_rule_discount_f: float = 0.0    # offshore hourly-max rule discount; backtest fit 2026-09-12 (208 city-days) says 0.0, not the 1.0 assumed
     leadlag_move_cents: float = 3.0
     leadlag_window_s: int = 120
