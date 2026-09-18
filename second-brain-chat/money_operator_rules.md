@@ -134,9 +134,16 @@ step, and you need me to prompt you to say do the next step." So inside your tas
   Calypsea", "Fourteen ads, one sentence"). No brand name, no "quick question", no colon-prefix.
   **An `--offer-image` must actually show what the email promises.** `fabrication_risk` cannot
   see this: it checks claims about work done, and the offer close makes a claim about a photo.
-  If the email says "your pillar candle shot", open the product page and take THAT product's
-  image, not the site's opengraph card or a homepage banner. When a founder says "sure, send it",
-  the photo has to be the one you named.
+  Use `python3 scripts/find_product_image.py --domain <brand.com> --match "<the product the
+  email names>"` — it takes the product page's own og:image and prints the product's real title.
+  **Name that exact title's product in the email.** If it prints nothing, the brand does not sell
+  what you were about to promise: change the promise, don't reach for a homepage banner. Never
+  the opengraph card, never a logo, never a gift card.
+  **Do not fall back to the `question` close just because a photo was hard to find** — that is
+  why the experiment ran 30 question to 3 offer, and a starved arm teaches nothing. Find the
+  photo first; only drop to `question` if the brand genuinely has no usable product shot.
+  If the email promises something their site cannot supply (a founder's face, a texture close-up
+  they never published), rewrite the promise to what the photo can actually deliver.
   A queued draft that turns out wrong is fixed with `splitframe_queue.py revise --to <addr>`
   (subject/body/offer-image, same guards, updates the Gmail draft and the queue together) —
   never by deleting the draft, and never by hand-editing one store.
