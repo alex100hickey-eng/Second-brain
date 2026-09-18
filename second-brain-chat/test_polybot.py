@@ -780,6 +780,39 @@ def test_us_venue_parses_live_shapes(monkeypatch):
     assert v.find_weather_event("nyc", datetime(2026, 9, 14), "high") is None
 
 
+def test_arb_screen_prices_unquoted_legs_before_believing_anything():
+    """The event object omits `bestAskQuote` on buckets that DO have resting offers, and arb_check
+    needs an ask on every leg — so the screen evaluated 36 of 1,570 candidate event-minutes over
+    9 days (2%). The bound is admissible (no leg costs less than a tick) but it is NOT evidence:
+    miami had four legs quoted at 0.04 and a favourite with no ask at any price, which the bound
+    alone calls a 96c arb."""
+    from polybot.strategies.bucket_sum import arb_possible, unpriced, arb_check
+    ev = _event()
+    for b in ev.buckets:
+        b.best_bid, b.best_ask = None, 0.10          # 9 legs x 0.10 = 0.90
+    assert arb_check(ev.buckets, "us")[0] == "buy_all"
+    ev.buckets[4].best_ask = None                    # one leg unquoted: arb_check now says nothing
+    assert arb_check(ev.buckets, "us")[0] is None
+    assert unpriced(ev.buckets) == [ev.buckets[4]]
+    assert arb_possible(ev.buckets)                  # 0.80 + 0.01 < 1.00, worth one book call
+    ev.buckets[4].best_ask = 0.10                    # ...and priced, it is a real set
+    assert arb_check(ev.buckets, "us")[0] == "buy_all"
+
+    # the miami shape: the cheap legs are quoted, the FAVOURITE is the one nobody offers
+    mia = _event()
+    for b in mia.buckets:
+        b.best_bid, b.best_ask = None, 0.01
+    mia.buckets[5].best_ask = None                   # no ask at any price
+    assert arb_possible(mia.buckets)                 # the bound cries wolf, as designed
+    assert arb_check(mia.buckets, "us")[0] is None   # and arb_check still refuses: unbuyable leg
+    # a quoted book that plainly sums over $1 never costs a call
+    rich = _event()
+    for b in rich.buckets:
+        b.best_bid, b.best_ask = None, 0.30
+    rich.buckets[0].best_ask = None
+    assert not arb_possible(rich.buckets)
+
+
 def test_us_settlement_is_read_from_the_bare_settlement_key():
     """The live endpoint answers {"slug": ..., "settlement": 0|1} — a bare number, not the
     `settlementPrice` Amount the SDK type hints promise. Reading only the hinted names returned

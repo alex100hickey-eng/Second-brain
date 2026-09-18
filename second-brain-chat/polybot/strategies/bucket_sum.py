@@ -81,6 +81,34 @@ def arb_check(buckets, venue: str, category: str = "weather"):
                        max(net_buy, net_sell) > -math.inf else 0.0, 2), []
 
 
+MIN_TICK = 0.01
+
+
+def unpriced(buckets) -> list:
+    """Buckets the event object gave no ask for. Not the same as "nobody is offering"."""
+    return [b for b in buckets if b.best_ask is None]
+
+
+def arb_possible(buckets, floor: float = MIN_TICK) -> bool:
+    """Could a buy-all set POSSIBLY be under $1, if every unquoted leg were as cheap as it can be?
+
+    The event object is what the screen gets for free, and it omits `bestAskQuote` on buckets that
+    do have resting offers — nyc's "86 or above" showed ask=None in the event and 0.01 x25,574 in
+    the book on 2026-09-18. `arb_check` needs an ask on every leg, so those ticks were never
+    evaluated at all: across 9 days it looked at 36 of 1,570 event-minutes that could have held a
+    set, i.e. 2%.
+
+    This is the admissible half of the fix — it never rules out a real arb, because no leg can cost
+    less than one tick. It is emphatically NOT evidence of an arb: miami the same day had four legs
+    quoted at 0.04 total and a favourite with NO ask in the book at any price, which this bound
+    would call a 96c opportunity. The caller must price the unquoted legs before believing anything.
+    """
+    known = [b.best_ask for b in buckets if b.best_ask is not None]
+    if not known or any(b.closed for b in buckets) or not exhaustive(buckets):
+        return False
+    return sum(known) + floor * (len(buckets) - len(known)) < 1.0
+
+
 def sets_available(buckets, kind: str) -> float | None:
     """How many complete sets the book can actually fill, or None if depth was never looked up.
 

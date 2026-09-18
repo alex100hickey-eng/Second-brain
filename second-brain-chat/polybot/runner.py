@@ -31,7 +31,7 @@ from .feeds.usvenue import USVenue
 from .ledger import Ledger
 from .paper import PaperEngine, snapshot_history
 from .risk import RiskManager
-from .strategies.bucket_sum import BucketSum, arb_check
+from .strategies.bucket_sum import BucketSum, arb_check, arb_possible, unpriced
 from .strategies.hold_favorites import HoldFavorites
 from .strategies.leadlag import LeadLag
 from .strategies.maker_rewards import MakerRewards
@@ -270,6 +270,17 @@ class Runner:
         # only when the quotes say a set might be there — 34 event-minutes out of 3,353 over 8 days
         # of US books, i.e. ~1% of the scans pay for it.
         if venue == "us" and "bucket_sum" in wanted:
+            # The event object omits `bestAskQuote` on buckets that DO have resting offers, and
+            # arb_check needs an ask on every leg — so across 9 days the screen evaluated 36 of
+            # 1,570 event-minutes that could have held a set (2%). Price the missing legs from the
+            # book first: usually one call, because the usual case is exactly one unquoted leg.
+            # This is not optimism — miami on 2026-09-18 had four legs quoted at 0.04 total and a
+            # favourite with no ask at ANY price, which the bound alone would call a 96c arb.
+            if unpriced(ctx.event.buckets) and arb_possible(ctx.event.buckets):
+                got = self.us.price_legs(ctx.event.buckets)
+                if got:
+                    self.log(f"  arb screen {venue} {city} {ctx.date} {kind}: priced {got} unquoted "
+                             f"leg(s) from the book")
             arb_kind, net, _ = arb_check(ctx.event.buckets, venue)
             if arb_kind is not None and net >= self.cfg.bucket_sum_min_net_cents:
                 got = self.us.fill_depth(ctx.event)

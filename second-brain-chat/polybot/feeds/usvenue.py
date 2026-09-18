@@ -350,6 +350,32 @@ class USVenue:
                 b.best_ask = asks[0][0]
         return ok
 
+    def price_legs(self, buckets, limit: int = 4) -> int:
+        """Fill in best_bid/best_ask for buckets the event object left unquoted, from the book.
+
+        One call per bucket, and the usual case is a single unquoted leg (1,329 of 1,570 candidate
+        event-minutes over 9 days), so this is cheap where a full depth read is not. `limit` caps
+        the damage on the rare event that is missing several. Returns how many were priced.
+        """
+        done = 0
+        for b in buckets:
+            if b.best_ask is not None or done >= limit:
+                continue
+            book = self.book(b.yes_token)
+            if book is None:
+                continue                      # rate limited: leave it unquoted, it stays a no-go
+            bids, asks = book.get("bids") or [], book.get("asks") or []
+            if asks:
+                b.best_ask = asks[0][0]
+                b.ask_qty = sum(q for px, q in asks if px == asks[0][0])
+            else:
+                b.ask_qty = 0.0               # genuinely nobody offering — the leg is unbuyable
+            if bids:
+                b.best_bid = bids[0][0]
+                b.bid_qty = sum(q for px, q in bids if px == bids[0][0])
+            done += 1
+        return done
+
     def resolution(self, slug: str) -> int | None:
         """1/0 once the market settled, else None. Settlement is a 404 until it exists."""
         if not self.available:
