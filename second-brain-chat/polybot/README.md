@@ -55,7 +55,18 @@ It had **never emitted a single signal**, for four independent reasons, all fixe
 
 **Cheap screen, expensive confirm.** Quotes come free with the event (one call); depth costs a call
 per bucket. The runner spends that only when the quotes already show a set under $1 — 34
-event-minutes out of 3,353 over 8 days of US books, so ~1% of scans pay for it.
+event-minutes out of 3,353 over 8 days of US books, so ~1% of scans pay for it. Tomorrow's event is
+scanned alongside today's for the arb path only: an arb doesn't care when the market settles, and
+tomorrow's thinner book is where a set under $1 is *more* likely.
+
+**The venue's rate limit is a quota, not a burst.** Measured three ways on 2026-09-18 (calls 0.05s,
+0.35s and 1.0s apart): the first five always succeed and the sixth is refused, so spacing buys
+nothing and a six-bucket depth read cannot be done in one window. It replenishes in seconds, not
+the ten minutes the old flat backoff assumed — that backoff cost a full depth read *and* blinded
+the next scan, which is why every arb candidate on 2026-09-18 stood down. `USVenue` now spends from
+a `CALL_BUDGET`/`CALL_WINDOW_S` token bucket (5 per 12s), so a depth read takes ~13s and completes.
+The reactive backoff survives as a safety net because the gateway sees the whole CWRU campus IP and
+other people spend from the same quota.
 
 **What the books actually offered** (8 days, `python3 -m polybot.runner arbs --days 8`): ~3 candidate
 event-minutes a day, most worth 1–5c per set, with occasional 10–48c. **Whether any of it is
@@ -63,10 +74,14 @@ fillable is still unknown** — the old snapshots stored no sizes. Every candida
 which is the evidence that decides whether this is a business.
 
 Two rails, because an arb that half-fills is worse than no arb:
-- `arb_live_ok` is **off**: live arb legs are refused outright. `execution.py` places each leg as an
-  independent order with no notion of the group, so filling four of six leaves a naked basket with
-  no unwind path. Paper can measure that safely; money can't. Building group execution is what
-  flipping this knob waits on.
+- **Group execution exists now** (`Executor.place_arb_set`): every leg goes out `FILL_OR_KILL`, so a
+  leg either fills whole at our price or does not exist — no partial fills, no resting remainder
+  that fills later at a price that is no longer part of any arb. If any leg is killed, the ones
+  that filled are sold straight back at the bid `IMMEDIATE_OR_CANCEL`: the spread on those legs is
+  a known bounded loss, an unhedged basket is not. `Runner.handle_arb_set` accepts or refuses the
+  set whole, so a cheap leg tripping a cap can't leave the dear legs filled.
+- `arb_live_ok` is still **off**. The unwind path above has never run against the real venue, and
+  the SELL_* intents are unverified. Flip it only after a live set has been watched.
 - The gate counts **sets, not legs** (`decision_count`, via `meta.group`). Six rows from one episode
   are one piece of evidence; counting rows would let real money out after five observed sets.
 

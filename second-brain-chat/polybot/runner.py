@@ -21,7 +21,7 @@ import sys
 import time
 import json
 import traceback
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from . import backtest, calibration, config, notify, pairs
@@ -172,6 +172,41 @@ class Runner:
                 return "error"
         return mode
 
+    def handle_arb_set(self, sigs) -> int:
+        """An arb set is one decision, so it is accepted or refused whole.
+
+        Checking legs one at a time is how you end up holding four of six: the dear legs pass, a
+        cheap one trips a cap, and what is left on the book is a bet nobody sized. Every leg must
+        clear risk before ANY of them is recorded, and in live mode the whole set goes to the
+        executor, which fills it all or unwinds what filled.
+        """
+        if not sigs:
+            return 0
+        mode = self.cfg.mode(sigs[0].module)
+        if mode == "off":
+            return 0
+        if mode == "live" and any(s.venue != "us" for s in sigs):
+            mode = "paper"
+        if any(self.ledger.recent_signal_exists(s.module, s.market, s.side, DEDUPE_S) for s in sigs):
+            return 0
+        for s in sigs:
+            ok, why = self.risk.allow(s, mode=mode)
+            if not ok:
+                self.log(f"    refused arb set {sigs[0].label}: leg {s.label}: {why}")
+                return 0
+        legs = [(self.ledger.add_signal(s, mode), s) for s in sigs]
+        cost = sum(s.size_usd for s in sigs)
+        self.log(f"    {mode.upper():<6} arb set {sigs[0].module} {len(sigs)} legs, {sigs[0].contracts} sets, "
+                 f"${cost:.2f} in for $1.00/set out — {sigs[0].reason}")
+        if mode == "signal":
+            notify.nudge(f"polybot arb: {sigs[0].label}",
+                         f"{len(sigs)} legs, {sigs[0].contracts} sets, ${cost:.2f} for "
+                         f"{sigs[0].edge_cents:.1f}c/set. Must be taken together.",
+                         key="polybot-arb", log=self.log)
+        if mode == "live":
+            self.executor.place_arb_set(legs)
+        return len(legs)
+
     # ---- scans -----------------------------------------------------------------------------
     def scan_weather(self, cities=None, modules=None, date: datetime | None = None, kinds=None,
                      venue: str = "offshore") -> int:
@@ -190,55 +225,73 @@ class Runner:
             return 0
         # bucket_sum only needs the books: skip the model/observation calls on the 5-minute path
         light = all(m == "bucket_sum" for m in wanted)
+        # An arb does not care which day the market settles: if the buckets tile, exactly one pays
+        # $1 whenever it resolves. Polymarket US lists tomorrow's event beside today's, and
+        # tomorrow's book is the thinner, worse-quoted one — which is where a set under $1 is MORE
+        # likely, not less. Only the arb path takes this: weather_lock and weather_obs trade on
+        # observations of a day in progress and have nothing to say about tomorrow.
+        offsets = (0, 1) if (light and venue == "us") else (0,)
         for city in cities:
             for kind in kinds:
-                try:
-                    now_local = datetime.now(ZoneInfo(config.city_meta(city)["tz"]))
-                    fetch = {"members": [], "obs": [], "hourly": []} if light else {}
-                    if venue == "us":
-                        event = self.us.find_weather_event(city, date or now_local, kind)
-                        if event is None:
-                            if kind == "high":
-                                self.log(f"  us {city} {kind}: no market today")
-                            continue
-                        fetch["event"] = event
-                    ctx = build_ctx(city, date or now_local, kind, self.cfg, venue=venue, fetch=fetch or None)
-                except Exception as exc:
-                    self.log(f"  {venue} {city} {kind}: context error: {exc}")
-                    continue
-                if ctx is None:
-                    if kind == "high":
-                        self.log(f"  {venue} {city} {kind}: no market today")
-                    continue
-                if not light:
-                    probs = " ".join(f"{b.title.split('°')[0]}={p:.0%}" for b, p in zip(ctx.event.buckets, ctx.probs) if p >= 0.03)
-                    self.log(f"  {venue} {city} {ctx.date} {kind} [{ctx.station}/{ctx.rule}] running={ctx.running} n_obs={ctx.n_obs} "
-                             f"remaining={ctx.remaining_extreme} | model {probs}")
+                for day_offset in offsets:
+                    n += self._scan_one(city, kind, day_offset, wanted, light, venue, date)
+        return n
+
+    def _scan_one(self, city, kind, day_offset, wanted, light, venue, date) -> int:
+        """One (city, kind, day): build the context, snapshot the book, run the wanted modules."""
+        n = 0
+        try:
+            now_local = datetime.now(ZoneInfo(config.city_meta(city)["tz"]))
+            scan_date = (date or now_local) + timedelta(days=day_offset)
+            fetch = {"members": [], "obs": [], "hourly": []} if light else {}
+            if venue == "us":
+                event = self.us.find_weather_event(city, scan_date, kind)
+                if event is None:
+                    if kind == "high" and day_offset == 0:
+                        self.log(f"  us {city} {kind}: no market today")
+                    return 0
+                fetch["event"] = event
+            ctx = build_ctx(city, scan_date, kind, self.cfg, venue=venue, fetch=fetch or None)
+        except Exception as exc:
+            self.log(f"  {venue} {city} {kind}: context error: {exc}")
+            return 0
+        if ctx is None:
+            if kind == "high" and day_offset == 0:
+                self.log(f"  {venue} {city} {kind}: no market today")
+            return 0
+        if not light:
+            probs = " ".join(f"{b.title.split('°')[0]}={p:.0%}" for b, p in zip(ctx.event.buckets, ctx.probs) if p >= 0.03)
+            self.log(f"  {venue} {city} {ctx.date} {kind} [{ctx.station}/{ctx.rule}] running={ctx.running} n_obs={ctx.n_obs} "
+                     f"remaining={ctx.remaining_extreme} | model {probs}")
+        for b in ctx.event.buckets:
+            self.ledger.add_snapshot(venue, b.yes_token, b.best_bid, b.best_ask, b.last)
+        # Cheap screen, expensive confirm. The quotes come free with the event (one call); depth
+        # costs a book call per bucket. bucket_sum needs depth to size a set at all, so look it up
+        # only when the quotes say a set might be there — 34 event-minutes out of 3,353 over 8 days
+        # of US books, i.e. ~1% of the scans pay for it.
+        if venue == "us" and "bucket_sum" in wanted:
+            arb_kind, net, _ = arb_check(ctx.event.buckets, venue)
+            if arb_kind is not None and net >= self.cfg.bucket_sum_min_net_cents:
+                got = self.us.fill_depth(ctx.event)
+                self.log(f"  arb candidate {venue} {city} {ctx.date} {kind} {arb_kind} {net:.1f}c/set — "
+                         f"depth {'read' if got else 'INCOMPLETE, standing down'}")
+                # Record the book WITH sizes. Whether these arbs are big enough to be worth taking
+                # is the one question the old snapshots cannot answer, so every candidate leaves
+                # evidence behind whether or not it trades.
                 for b in ctx.event.buckets:
-                    self.ledger.add_snapshot(venue, b.yes_token, b.best_bid, b.best_ask, b.last)
-                # Cheap screen, expensive confirm. The quotes come free with the event (one call);
-                # depth costs a book call per bucket. bucket_sum needs depth to size a set at all,
-                # so look it up only when the quotes say a set might be there — 34 event-minutes
-                # out of 3,353 over 8 days of US books, i.e. ~1% of the scans pay for it.
-                if venue == "us" and "bucket_sum" in wanted:
-                    kind, net, _ = arb_check(ctx.event.buckets, venue)
-                    if kind is not None and net >= self.cfg.bucket_sum_min_net_cents:
-                        got = self.us.fill_depth(ctx.event)
-                        self.log(f"  arb candidate {venue} {city} {ctx.date} {kind} {net:.1f}c/set — "
-                                 f"depth {'read' if got else 'INCOMPLETE, standing down'}")
-                        # Record the book WITH sizes. Whether these arbs are big enough to be worth
-                        # taking is the one question the old snapshots cannot answer, so every
-                        # candidate now leaves evidence behind whether or not it trades.
-                        for b in ctx.event.buckets:
-                            self.ledger.add_snapshot(venue, b.yes_token, b.best_bid, b.best_ask, b.last,
-                                                     bid_qty=b.bid_qty, ask_qty=b.ask_qty)
-                for name in wanted:
-                    try:
-                        for sig in self.weather_modules[name].scan(ctx):
-                            if self.handle(sig) in ("paper", "signal", "live"):
-                                n += 1
-                    except Exception as exc:
-                        self.log(f"  {name} error: {exc}\n{traceback.format_exc(limit=2)}")
+                    self.ledger.add_snapshot(venue, b.yes_token, b.best_bid, b.best_ask, b.last,
+                                             bid_qty=b.bid_qty, ask_qty=b.ask_qty)
+        for name in wanted:
+            try:
+                sigs = list(self.weather_modules[name].scan(ctx))
+                if sigs and all(s.arb for s in sigs):
+                    n += self.handle_arb_set(sigs)      # all legs or none
+                    continue
+                for sig in sigs:
+                    if self.handle(sig) in ("paper", "signal", "live"):
+                        n += 1
+            except Exception as exc:
+                self.log(f"  {name} error: {exc}\n{traceback.format_exc(limit=2)}")
         return n
 
     def scan_other(self, modules=None) -> int:

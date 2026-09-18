@@ -351,6 +351,15 @@ class Ledger:
 
     def report(self, days: int = 1) -> str:
         lines = [f"polybot report — last {days}d — {datetime.now().strftime('%Y-%m-%d %H:%M')}"]
+        gate_since = float(self.gate_since_ts or 0.0)
+        if gate_since > _now() - days * 86400:
+            # A rule change resets gate_since_ts so old evidence stops counting — correct, but a
+            # module reading "no signals" right after a reset looks identical to one that stalled
+            # for the whole window. This is the difference between the two (found 2026-09-18: the
+            # gate had reset 4h earlier and every "no signals" line below was read as a dead module).
+            age_h = (_now() - gate_since) / 3600
+            lines.append(f"  gate evidence reset {datetime.fromtimestamp(gate_since).strftime('%Y-%m-%d %H:%M')} "
+                         f"({age_h:.1f}h ago) — counts and gates below only reflect signals since then")
         stats = self.module_stats(days)
         if not stats:
             lines.append("  no signals")

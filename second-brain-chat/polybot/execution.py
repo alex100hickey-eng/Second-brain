@@ -32,6 +32,71 @@ class Executor:
         self.ledger, self.us, self.cfg, self.log = ledger, us, cfg, log
         self._killed = False
 
+    # ---- arb sets: all legs or none ------------------------------------------------------
+    def place_arb_set(self, legs) -> dict:
+        """Place every leg of an arb, or leave the account flat.
+
+        `legs` is [(signal_id, sig), ...] for one `meta.group`. The set is only worth anything
+        whole: six legs bought for 92c pay $1, but four of the six bought for 80c pay $1 only if
+        the temperature lands in one of the four, which is a bet, not an arb — and a bet nobody
+        sized or measured. So:
+
+          1. every leg goes out FILL_OR_KILL, so a leg either fills completely at our price or
+             does not exist. No partial fills, no resting remainder that fills later at a price
+             that is no longer part of any arb.
+          2. if any leg is killed, the legs that DID fill are sold straight back at the bid
+             (immediate-or-cancel). That costs the spread on those legs — a known, small, bounded
+             loss — instead of leaving an unhedged basket on the book.
+
+        Returns {'placed': n, 'filled': n, 'unwound': n, 'ok': bool}.
+        """
+        out = {"placed": 0, "filled": 0, "unwound": 0, "ok": False}
+        if not self.us.available:
+            self.log("  arb set: venue unavailable, nothing sent")
+            return out
+        filled = []
+        for sid, sig in legs:
+            try:
+                order = self.us.place_limit(sig.market, sig.side, sig.price, sig.contracts, tif="fok")
+                out["placed"] += 1
+            except Exception as exc:
+                self.ledger.add_order(sid, "us", sig.market, sig.side, sig.price, sig.contracts, f"error: {exc}")
+                self.log(f"  arb leg {sig.label}: ORDER ERROR {exc}")
+                order = None
+            status = str(_pick(order or {}, "status", "state", default="")).upper()
+            got = bool(order) and "KILL" not in status and "CANCEL" not in status and "REJECT" not in status
+            self.ledger.add_order(sid, "us", sig.market, sig.side, sig.price, sig.contracts,
+                                  "filled" if got else "killed", venue_order_id=_id(order or {}), raw=order)
+            if got:
+                filled.append((sid, sig))
+                out["filled"] += 1
+            else:
+                self.ledger.set_signal_status(sid, "unfilled")
+                self.log(f"  arb leg {sig.label}: killed (status {status or 'no order'})")
+        if out["filled"] == len(legs):
+            for sid, sig in legs:
+                self.ledger.upsert_paper(sid, filled_ts=time.time(), fill_price=sig.price, status="filled",
+                                         note="live arb leg")
+            out["ok"] = True
+            self.log(f"  arb set COMPLETE: {len(legs)} legs")
+            return out
+        # Partial. Unwind what filled, at whatever the bid is now.
+        self.log(f"  arb set INCOMPLETE ({out['filled']}/{len(legs)} legs) — unwinding")
+        for sid, sig in filled:
+            exit_side = "SELL_YES" if sig.side == "BUY_YES" else "SELL_NO"
+            bid, ask = self.us.bbo(sig.market)
+            px = bid if sig.side == "BUY_YES" else (None if ask is None else round(1 - ask, 2))
+            if px is None:
+                self.log(f"  arb unwind {sig.label}: NO BID — leg left open, needs a human")
+                continue
+            try:
+                o = self.us.place_limit(sig.market, exit_side, px, sig.contracts, tif="ioc")
+                self.ledger.add_order(sid, "us", sig.market, exit_side, px, sig.contracts, "unwind", raw=o)
+                out["unwound"] += 1
+            except Exception as exc:
+                self.log(f"  arb unwind {sig.label} FAILED: {exc} — leg left open, needs a human")
+        return out
+
     def sync(self) -> dict:
         counts = {"filled": 0, "cancelled": 0, "tp_placed": 0, "open": 0}
         if not self.us.available:

@@ -34,7 +34,24 @@ try:  # the SDK is optional until the key exists
 except Exception:  # pragma: no cover - import guard
     PolymarketUS = None
 
-RATE_LIMIT_BACKOFF_S = 600  # 10 minutes: long enough to outlast a Cloudflare 1015 window
+# Measured against the live gateway on 2026-09-18, three separate runs: the SIXTH call is refused
+# and the first five always succeed — at 0.05s apart, at 0.35s apart, and at a full 1.0s apart
+# (5 calls / 5.4s). So this is a QUOTA of five requests per window, not a burst-rate limit, and
+# spacing calls out does not buy a sixth. The quota then replenishes within seconds, not the ten
+# minutes the old flat backoff assumed — that backoff cost the bot ten minutes of blindness per
+# depth read, in the afternoon window where the arbs actually appear.
+#
+# So: spend from a budget instead of reacting to a ban. The reactive backoff stays as a safety
+# net because gateway.polymarket.us sees the whole CWRU campus IP (129.22.1.29) and other people
+# on that network spend from the same quota.
+CALL_BUDGET = 5                    # requests allowed per window
+CALL_WINDOW_S = 12.0               # measured recovery is seconds; 12 leaves room for the shared IP
+RATE_LIMIT_BACKOFF_S = 15          # first offence — short, because recovery is short
+RATE_LIMIT_BACKOFF_MAX_S = 120     # ceiling if it keeps happening
+# The budget throttles real network calls. Tests inject a fake client and must not sleep for it:
+# a suite that takes 25 seconds instead of 1 is a suite that stops being run. Same JARVIS_TEST
+# switch app.py and capability_watcher.py use.
+TEST_MODE = os.environ.get("JARVIS_TEST", "").strip().lower() in ("1", "true", "yes")
 MISSING_EVENT_RETRY_S = 3600  # an event slug that 404s is not asked for again this hour
 
 
@@ -153,6 +170,8 @@ class USVenue:
         self._client = PolymarketUS(key_id=self.key_id, secret_key=self.secret) if self._base_available else None
         self._backoff_until = 0.0
         self._backoff_reason = ""
+        self._backoff_s = RATE_LIMIT_BACKOFF_S
+        self._calls: list[float] = []      # timestamps of recent requests, the token bucket
         self._missing: dict[str, float] = {}   # event slug -> retry-after ts
 
     @property
@@ -175,20 +194,43 @@ class USVenue:
         return ""
 
     def _enter_backoff(self, exc: Exception) -> None:
-        self._backoff_until = time.time() + RATE_LIMIT_BACKOFF_S
-        self._backoff_reason = f"{type(exc).__name__}: {str(exc).splitlines()[0][:120]}"
+        self._backoff_until = time.time() + self._backoff_s
+        self._backoff_reason = f"{type(exc).__name__}: {str(exc).splitlines()[0][:120]} ({self._backoff_s:.0f}s)"
+        self._backoff_s = min(self._backoff_s * 2, RATE_LIMIT_BACKOFF_MAX_S)
+
+    def _space(self) -> None:
+        """Spend one request from the budget, waiting for the window to roll if it is empty.
+
+        A six-bucket depth read is six requests, so it costs one window plus a moment — about
+        fifteen seconds. The arb episodes in the snapshot record lasted one to four minutes, so
+        that is affordable; being banned for ten minutes was not.
+        """
+        if TEST_MODE:
+            return
+        now = time.time()
+        self._calls = [t for t in self._calls if now - t < CALL_WINDOW_S]
+        if len(self._calls) >= CALL_BUDGET:
+            wait = CALL_WINDOW_S - (now - self._calls[0]) + 0.05
+            if wait > 0:
+                time.sleep(wait)
+            now = time.time()
+            self._calls = [t for t in self._calls if now - t < CALL_WINDOW_S]
+        self._calls.append(now)
 
     def _guarded(self, fn, default=None):
         """Run an SDK call; on a rate limit, back off instead of calling a banned host again next
         tick, and return `default` instead of the raw (often HTML) error body every caller would
         otherwise have to log in full."""
+        self._space()
         try:
-            return fn()
+            out = fn()
         except Exception as exc:
             if _is_rate_limited(exc):
                 self._enter_backoff(exc)
                 return default
             raise
+        self._backoff_s = RATE_LIMIT_BACKOFF_S   # a clean call resets the escalation
+        return out
 
     # ---- market data ---------------------------------------------------------------------
     def search(self, query: str):
@@ -253,6 +295,7 @@ class USVenue:
             return None
         e = None
         try:
+            self._space()
             e = _unwrap_event(self._client.events.retrieve_by_slug(slug))
         except Exception as exc:
             if _is_rate_limited(exc):
@@ -264,6 +307,7 @@ class USVenue:
             word = "Highest" if kind == "high" else "Lowest"
             query = (config.city_meta(city_slug) or {}).get("query", city_slug)
             try:
+                self._space()
                 res = self._client.search.query({"query": f"{word} temperature in {query}"}) or []
             except Exception as exc:
                 if _is_rate_limited(exc):
@@ -311,6 +355,7 @@ class USVenue:
         if not self.available:
             return None
         try:
+            self._space()
             s = self._client.markets.settlement(slug) or {}
         except Exception as exc:
             if _is_rate_limited(exc):
@@ -391,20 +436,28 @@ class USVenue:
     INTENTS = {"BUY_YES": "ORDER_INTENT_BUY_LONG", "BUY_NO": "ORDER_INTENT_BUY_SHORT",
                "SELL_YES": "ORDER_INTENT_SELL_LONG", "SELL_NO": "ORDER_INTENT_SELL_SHORT"}
 
-    def place_limit(self, slug: str, side: str, price: float, contracts: int):
-        """side: BUY_YES (open long) · BUY_NO (open short) · SELL_YES / SELL_NO (close). Limit + GTC only.
+    TIF = {"gtc": "TIME_IN_FORCE_GOOD_TILL_CANCEL",
+           "ioc": "TIME_IN_FORCE_IMMEDIATE_OR_CANCEL",
+           "fok": "TIME_IN_FORCE_FILL_OR_KILL"}
+
+    def place_limit(self, slug: str, side: str, price: float, contracts: int, tif: str = "gtc"):
+        """side: BUY_YES (open long) · BUY_NO (open short) · SELL_YES / SELL_NO (close). Limit only.
         The SELL_* intent names follow the SDK's BUY_LONG/BUY_SHORT pattern and are unverified until
-        the first live take-profit; the executor logs the venue's reply either way."""
+        the first live take-profit; the executor logs the venue's reply either way.
+
+        `tif='fok'` is what an arb leg wants: fill the whole quantity at my price or do not exist.
+        A partly-filled leg is the worst outcome for a set — you pay for an unbalanced basket AND
+        still have a resting order that may fill later at a price that is no longer part of any arb.
+        """
         if not self.available:
             raise RuntimeError(self.why_unavailable)
-        intent = self.INTENTS[side]
         return self._client.orders.create({
             "marketSlug": slug,
-            "intent": intent,
+            "intent": self.INTENTS[side],
             "type": "ORDER_TYPE_LIMIT",
             "price": {"value": f"{price:.2f}", "currency": "USD"},
             "quantity": int(contracts),
-            "tif": "TIME_IN_FORCE_GOOD_TILL_CANCEL",
+            "tif": self.TIF[tif],
         })
 
     def cancel(self, order_id: str, slug: str):

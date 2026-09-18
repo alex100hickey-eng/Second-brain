@@ -21,8 +21,26 @@ def _yes_entry(sig) -> float:
     return sig["price"] if sig["side"] == "BUY_YES" else round(1 - sig["price"], 2)
 
 
+def is_taker(sig) -> bool:
+    try:
+        return bool(json.loads(sig.get("meta") or "{}").get("taker", False))
+    except (TypeError, ValueError):
+        return False
+
+
 def fill_from_history(sig, history):
-    """Return (fill_ts, fill_price_yes) or (None, None)."""
+    """Return (fill_ts, fill_price_yes) or (None, None).
+
+    A RESTING order fills only if the market later trades through our level — someone has to come
+    and hit it. A TAKER order does not wait for anybody: crossing the spread is the fill, at the
+    price we crossed at, at the moment we sent it. Modelling a taker as a resting order made the
+    cheap legs of an arb set depend on a 1c bucket printing a trade, so a set could "fill" four
+    legs of six in the paper record — which is not an arb, and would have quietly poisoned the
+    only evidence bucket_sum is being judged on. (weather_lock's taker entries filled anyway, by
+    accident: the mid always sits below the ask we bought at.)
+    """
+    if is_taker(sig):
+        return sig["ts"], _yes_entry(sig)
     lvl = _yes_entry(sig)
     for t, p in history:
         if t < sig["ts"]:

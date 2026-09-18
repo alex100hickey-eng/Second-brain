@@ -2,6 +2,7 @@
 import json
 import math
 import os
+os.environ.setdefault("JARVIS_TEST", "1")   # no real sleeps for the US call budget
 import tempfile
 import time
 from datetime import datetime
@@ -599,7 +600,9 @@ def test_gate_uses_mark_to_market_and_us_paper():
     # evidence before a rule change stops counting
     led.gate_since_ts = time.time() + 1
     assert led.promotion_check("weather_obs") == (False, "no signals")
+    assert "gate evidence reset" in led.report(1)                      # else "no signals" reads as a dead module
     led.gate_since_ts = 0.0
+    assert "gate evidence reset" not in led.report(1)
     led.add_snapshot("offshore", "old", 0.1, 0.2, ts=time.time() - 10 * 86400)
     led.add_snapshot("offshore", "new", 0.1, 0.2)
     assert led.prune_snapshots(7) == 1 and len(led.snapshots("offshore", "new", 0)) == 1
@@ -775,6 +778,71 @@ def test_us_venue_parses_live_shapes(monkeypatch):
     ev = v.find_weather_event("nyc", datetime(2026, 9, 13), "high")
     assert ev is not None and len(ev.buckets) == 4 and ev.slug == "temp-nychigh-2026-09-13"
     assert v.find_weather_event("nyc", datetime(2026, 9, 14), "high") is None
+
+
+def test_arb_set_unwinds_what_filled_when_a_leg_is_killed():
+    """Six legs bought for 92c pay $1. Four of the six pay $1 only if the temperature lands in one
+    of the four — a bet nobody sized. So every leg goes out FILL_OR_KILL, and if one is killed the
+    fills are sold straight back: the spread on those legs is a known bounded loss, an unhedged
+    basket is not."""
+    from polybot.execution import Executor
+    sent, killed_leg = [], "leg3"
+
+    class Venue:
+        available = True
+
+        def place_limit(self, slug, side, price, contracts, tif="gtc"):
+            sent.append((slug, side, price, contracts, tif))
+            if slug == killed_leg and side.startswith("BUY"):
+                return {"id": "o", "status": "ORDER_STATUS_KILLED"}
+            return {"id": "o", "status": "ORDER_STATUS_FILLED"}
+
+        def bbo(self, slug):
+            return 0.30, 0.34
+
+    led = _ledger()
+    ex = Executor(led, Venue(), _cfg(), log=lambda *_: None)
+    legs = []
+    for i in range(1, 5):
+        sig = Signal("bucket_sum", "us", f"leg{i}", f"L{i}", "BUY_YES", 0.25, 5.0, 6, "r", taker=True, arb=True)
+        legs.append((led.add_signal(sig, "live"), sig))
+    out = ex.place_arb_set(legs)
+    assert out["ok"] is False and out["filled"] == 3
+    assert out["unwound"] == 3                                  # every filled leg sold back
+    assert all(t == "fok" for *_r, t in sent if _r[1].startswith("BUY"))
+    assert [t for *_r, t in sent if _r[1].startswith("SELL")] == ["ioc"] * 3
+    assert led.paper_row(legs[2][0]) is None or led.paper_row(legs[2][0]).get("status") != "filled"
+
+    # and the happy path leaves the set whole, with no unwind
+    sent.clear()
+    killed_leg = "none"
+    led2 = _ledger()
+    ex2 = Executor(led2, Venue(), _cfg(), log=lambda *_: None)
+    legs2 = []
+    for i in range(1, 5):
+        sig = Signal("bucket_sum", "us", f"leg{i}", f"L{i}", "BUY_YES", 0.25, 5.0, 6, "r", taker=True, arb=True)
+        legs2.append((led2.add_signal(sig, "live"), sig))
+    out2 = ex2.place_arb_set(legs2)
+    assert out2["ok"] and out2["filled"] == 4 and out2["unwound"] == 0
+    assert all(led2.paper_row(sid)["status"] == "filled" for sid, _ in legs2)
+
+
+def test_arb_set_is_refused_whole_when_any_leg_fails_risk():
+    """Checking legs one at a time is how you end up holding four of six."""
+    cfg, led = _cfg(), _ledger()
+    cfg.modes["bucket_sum"] = "paper"
+    from polybot import runner as runner_mod
+    r = runner_mod.Runner(cfg, led, log=lambda *_: None)
+    good = [Signal("bucket_sum", "us", f"m{i}", f"L{i}", "BUY_YES", 0.20, 4.0, 6, "r", taker=True, arb=True)
+            for i in range(3)]
+    assert r.handle_arb_set(good) == 3
+    led2 = _ledger()
+    r2 = runner_mod.Runner(cfg, led2, log=lambda *_: None)
+    bad = [Signal("bucket_sum", "us", f"n{i}", f"L{i}", "BUY_YES", 0.20, 4.0, 6, "r", taker=True, arb=True)
+           for i in range(3)]
+    bad[1].size_usd = 999.0                                      # one leg over the per-market cap
+    assert r2.handle_arb_set(bad) == 0
+    assert led2.conn.execute("SELECT COUNT(*) c FROM signals").fetchone()["c"] == 0   # nothing recorded
 
 
 def test_arb_set_is_all_or_nothing_never_unbalanced():
