@@ -435,3 +435,29 @@ def test_only_the_revenue_lane_was_raised():
     assert mo.PER_KIND_NORMAL["clip_post"] == 3
     assert mo.PER_KIND_NORMAL["sf_hunter"] == 1      # bounded by the real Hunter quota
     assert mo.PER_KIND_NORMAL["poly_review"] == 1
+
+
+# ---------------------------------------------------------------------------
+# The creator lane's share of the shared queue. It was a flat count sized
+# against a 10-deep queue; doubling the queue target silently halved the lane's
+# share, quieting the lane that has never sent an email in favour of the one
+# with 23 sends and 0 replies. Same bug as the hard-coded QUEUE_TARGET.
+# ---------------------------------------------------------------------------
+
+def test_creator_reserve_holds_its_share_as_the_queue_grows(monkeypatch):
+    for target, expected in ((10, 2), (20, 4), (40, 8)):
+        monkeypatch.setattr(mo, "queue_target", lambda t=target: t)
+        assert mo.creator_reserve() == expected, target
+
+
+def test_creator_reserve_never_drops_below_the_floor(monkeypatch):
+    """Below 2 the lane cannot test its offer at all."""
+    monkeypatch.setattr(mo, "queue_target", lambda: 5)
+    assert mo.creator_reserve() == mo.CREATOR_RESERVE == 2
+
+
+def test_creator_draft_is_gated_by_the_share_not_the_constant():
+    import inspect
+    src = inspect.getsource(mo.next_task)
+    assert "creator_reserve()" in src
+    assert "< CREATOR_RESERVE" not in src, "still reading the flat constant"

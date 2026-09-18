@@ -125,11 +125,22 @@ def queue_target() -> int:
         return sq.current_runway_target(per_day)
     except Exception:                                 # noqa: BLE001
         return QUEUE_TARGET
-# Creator entries to hold in that queue. It is one lane's slice of a shared 5-a-day release, so
-# 2 of 10 is about one creator email a day — enough to test the offer, not enough to stall the
-# funnel that already has a reply clock running on it. A creator email costs a watched VOD, so
-# this is also as fast as the lane can honestly go.
-CREATOR_RESERVE = 2
+# Creator entries to hold in that queue — one lane's slice of a shared release. It was a flat 2
+# of a 10-deep queue, about one creator email a day, sized when the cadence was 5/day.
+#
+# Raising the queue target to 2x the cadence silently HALVED that slice: 2 of 20 is 10% where it
+# had been 20%, so the lane that has never sent a single email got quieter the moment the lane
+# with 23 sends and 0 replies got louder. That is the same bug as the hard-coded QUEUE_TARGET —
+# a constant sized against another constant that then moved — so it is a share now, not a count.
+#
+# The floor of 2 stays: below that the lane cannot test its offer at all. A creator email costs a
+# watched VOD, so this is still about as fast as the lane can honestly go.
+CREATOR_RESERVE = 2                        # floor / back-compat; see creator_reserve()
+
+
+def creator_reserve() -> int:
+    """How many creator entries to hold, as a fifth of the queue — the original 2-of-10 share."""
+    return max(CREATOR_RESERVE, queue_target() // 5)
 # Drafts one worker run may add. Raised from 5 with the cadence: a bigger batch in one run is
 # cheaper per draft than the same drafts spread over more runs, because each run pays the cost
 # of establishing its own context before it writes anything.
@@ -421,7 +432,7 @@ def next_task(snap: dict, now: datetime, counts: dict) -> dict | None:
     # yields to it is a lane that was approved and then never sent anything.
     cr = sf.get("creator") or {}
     if not quiet and cr.get("approved") and cr.get("available", 0) > 0 \
-            and cr.get("queued_pending", 0) < CREATOR_RESERVE and can("creator_draft"):
+            and cr.get("queued_pending", 0) < creator_reserve() and can("creator_draft"):
         return _task("creator_draft", "creator", "Write one creator-retainer first touch",
                      brief_creator_draft(cr))
 
