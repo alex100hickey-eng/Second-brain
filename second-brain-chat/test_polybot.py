@@ -405,6 +405,7 @@ def test_size_for_quarter_kelly_and_caps():
 
 def test_risk_manager_caps():
     cfg, led = _cfg(), _ledger()
+    cfg.modes["weather_hold"] = "paper"      # off by default now; this test is about the caps, not the mode
     rm = RiskManager(cfg, led)
     sig = Signal("weather_hold", "offshore", "tok", "x", "BUY_YES", 0.5, 20, 6, "r")
     assert rm.allow(sig)[0]

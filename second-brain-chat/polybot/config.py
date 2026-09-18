@@ -119,7 +119,11 @@ class Caps:
 @dataclass
 class Config:
     caps: Caps = field(default_factory=Caps)
-    modes: dict = field(default_factory=lambda: {m: "paper" for m in MODULES})
+    # A fresh checkout starts where the evidence left it, not at a hopeful "paper" for everything.
+    # weather_hold: 1,744 backtested signals at -8.9%, -$2,456 in paper. weather_model_update:
+    # 71 closed paper trades, 63% wins, -$291, negative in every edge band (2026-09-18).
+    modes: dict = field(default_factory=lambda: {
+        m: ("off" if m in ("weather_hold", "weather_model_update") else "paper") for m in MODULES})
     cities: list = field(default_factory=lambda: list(CITIES))
     all_cities: bool = True                # paper on every offshore city (28) instead of the US five
     kinds: list = field(default_factory=lambda: ["high", "low"])

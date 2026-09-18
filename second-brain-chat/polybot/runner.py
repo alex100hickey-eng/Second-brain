@@ -421,6 +421,14 @@ class Runner:
             time.sleep(20)
 
 
+def _stamped_log(*parts):
+    """The loop's log had no timestamps, which on 2026-09-14 made a 20-minute DNS blackout
+    indistinguishable from a bug, and again on 2026-09-18 made it impossible to tell a fresh
+    sqlite error from one written on day one. launchd appends this file forever, so every line
+    carries the wall clock."""
+    print(datetime.now(ET).strftime("%m-%d %H:%M:%S"), *parts, flush=True)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="polybot")
     ap.add_argument("cmd", choices=["scan", "settle", "report", "calibrate", "status", "loop", "backtest", "pairs", "promote"])
@@ -431,7 +439,7 @@ def main(argv=None):
     ap.add_argument("--events", type=int, default=300)
     ap.add_argument("--kinds", nargs="*", default=["high"])
     a = ap.parse_args(argv)
-    r = Runner()
+    r = Runner(log=_stamped_log if a.cmd == "loop" else print)
     if a.cmd == "backtest":
         print(r.backtest(a.days if a.days > 1 else 7, a.city, tuple(a.kinds)))
     elif a.cmd == "pairs":
