@@ -780,6 +780,53 @@ def test_us_venue_parses_live_shapes(monkeypatch):
     assert v.find_weather_event("nyc", datetime(2026, 9, 14), "high") is None
 
 
+def test_universe_tiers_partitions_and_rejects_ladders():
+    """Buying every leg of a set is only an arb when exactly one leg pays. The venue is full of
+    ladders that look like sets and are not — 'CPI YoY above 2.0 / 2.5 / 3.0' are simultaneously
+    true, and their prices sum to 7.12, not 1.00."""
+    from polybot import universe as u
+
+    def ev(slug, prices, cat="macro", closed=False, status="MARKET_STATUS_OPEN"):
+        return {"slug": slug, "category": cat, "closed": closed,
+                "markets": [{"outcomePrices": f'["{p}","{1-p:.2f}"]', "closed": closed,
+                             "status": status} for p in prices]}
+
+    assert u.classify(ev("usfed-fomc-2026-10-28", [0.6, 0.2, 0.1, 0.1, 0.04]))[0] == u.TIER_WATCH
+    assert u.classify(ev("uscpi-september-yoy-2026-10-14", [0.9, 0.8, 0.7, 0.6, 0.5]))[0] == u.TIER_REJECT
+    assert u.classify(ev("nfl-min-chi", [0.5] * 810, cat="sports"))[0] == u.TIER_REJECT
+    assert u.classify(ev("solo", [1.0]))[0] == u.TIER_REJECT
+    assert u.series_key("usfed-fomc-2026-10-28") == "usfed-fomc"
+    assert u.series_key("scotus") == "scotus"
+    # a proven series short-circuits the price test for every future instance
+    assert u.classify(ev("usfed-fomc-2027-01-27", [0.9, 0.9, 0.9]), {"usfed-fomc"})[0] == u.TIER_PROVEN
+
+
+def test_universe_will_not_prove_a_series_from_prices_alone():
+    """An uncontested 2026-11-03 race sits at 0.99/0.01 six weeks before anyone votes, which reads
+    exactly like a settled market. Proving off that marks a series tradable on evidence that does
+    not exist yet — usltgov-tx and usltgov-vt did exactly that on the first run."""
+    import sqlite3
+    from polybot import universe as u
+
+    def ev(slug, prices, closed, status):
+        return {"slug": slug, "category": "politics", "closed": closed,
+                "markets": [{"outcomePrices": f'["{p}","{1-p:.2f}"]', "closed": closed,
+                             "status": status} for p in prices]}
+
+    uni = u.Universe(sqlite3.connect(":memory:"))
+    future = ev("usltgov-tx-2026-11-03", [0.99, 0.01], closed=False, status="MARKET_STATUS_OPEN")
+    assert u.one_winner(future["markets"]) is True        # the PRICES do look decided...
+    assert u.settled(future) is False                     # ...but nothing has settled
+    assert uni.prove(future) is False
+    assert uni.proven_series() == set()
+    real = ev("usltgov-tx-2026-11-03", [0.99, 0.01], closed=True, status="MARKET_STATUS_RESOLVED")
+    assert uni.prove(real) is True
+    assert uni.proven_series() == {"usltgov-tx"}
+    # a settled event with two winners proves nothing
+    two = ev("bad-2026-01-01", [0.99, 0.99], closed=True, status="MARKET_STATUS_RESOLVED")
+    assert uni.prove(two) is False
+
+
 def test_arb_screen_prices_unquoted_legs_before_believing_anything():
     """The event object omits `bestAskQuote` on buckets that DO have resting offers, and arb_check
     needs an ask on every leg — so the screen evaluated 36 of 1,570 candidate event-minutes over
@@ -789,11 +836,11 @@ def test_arb_screen_prices_unquoted_legs_before_believing_anything():
     from polybot.strategies.bucket_sum import arb_possible, unpriced, arb_check
     ev = _event()
     for b in ev.buckets:
-        b.best_bid, b.best_ask = None, 0.10          # 9 legs x 0.10 = 0.90
+        b.best_bid, b.best_ask = 0.09, 0.10          # 9 legs x 0.10 = 0.90 asks, 0.81 bids
     assert arb_check(ev.buckets, "us")[0] == "buy_all"
     ev.buckets[4].best_ask = None                    # one leg unquoted: arb_check now says nothing
     assert arb_check(ev.buckets, "us")[0] is None
-    assert unpriced(ev.buckets) == [ev.buckets[4]]
+    assert unpriced(ev.buckets) == [ev.buckets[4]]   # half-quoted counts: either side missing
     assert arb_possible(ev.buckets)                  # 0.80 + 0.01 < 1.00, worth one book call
     ev.buckets[4].best_ask = 0.10                    # ...and priced, it is a real set
     assert arb_check(ev.buckets, "us")[0] == "buy_all"
@@ -805,12 +852,23 @@ def test_arb_screen_prices_unquoted_legs_before_believing_anything():
     mia.buckets[5].best_ask = None                   # no ask at any price
     assert arb_possible(mia.buckets)                 # the bound cries wolf, as designed
     assert arb_check(mia.buckets, "us")[0] is None   # and arb_check still refuses: unbuyable leg
-    # a quoted book that plainly sums over $1 never costs a call
+    # a quoted book that plainly sums over $1 on BOTH sides never costs a call
     rich = _event()
     for b in rich.buckets:
-        b.best_bid, b.best_ask = None, 0.30
+        b.best_bid, b.best_ask = 0.02, 0.30
     rich.buckets[0].best_ask = None
     assert not arb_possible(rich.buckets)
+
+    # the SELL side: tight books sum their BIDS over $1, which is the fomc shape and which a
+    # buy-only screen looks straight past
+    tight = _event()
+    for b in tight.buckets:
+        b.best_bid, b.best_ask = 0.12, 0.13          # 9 x 0.12 = 1.08 of bids
+    assert arb_check(tight.buckets, "us")[0] == "sell_all"
+    tight.buckets[3].best_bid = None                 # one bid missing: cannot sell that leg
+    assert arb_check(tight.buckets, "us")[0] is None
+    assert unpriced(tight.buckets) == [tight.buckets[3]]
+    assert arb_possible(tight.buckets)               # its bid can be at most its ask: still > $1
 
 
 def test_us_settlement_is_read_from_the_bare_settlement_key():

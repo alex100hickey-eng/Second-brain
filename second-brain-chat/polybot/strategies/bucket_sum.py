@@ -54,7 +54,7 @@ def exhaustive(buckets) -> bool:
     return True
 
 
-def arb_check(buckets, venue: str, category: str = "weather"):
+def arb_check(buckets, venue: str, category: str = "weather", assume_exhaustive: bool = False):
     """Return (kind, net_cents_per_set, prices) with kind in {'buy_all', 'sell_all', None}.
 
     A buy-all set needs an ask on every bucket; a sell-all set needs a bid on every bucket. A
@@ -62,7 +62,11 @@ def arb_check(buckets, venue: str, category: str = "weather"):
     arb (Polymarket US had two cities quoted on neither side on 2026-09-18, and a naive sum called
     them free money). Fees are charged per leg at the taker rate, on the real price of that leg.
     """
-    if any(b.closed for b in buckets) or not exhaustive(buckets):
+    # Weather buckets PROVE exhaustiveness by tiling a number line. Everything else on the venue
+    # (a Fed decision, an election) has labelled outcomes with no number line to tile, so the proof
+    # comes from `universe`: a settled instance of the same series with exactly one winner. That is
+    # the only thing `assume_exhaustive` may ever mean — never a guess, never a price heuristic.
+    if any(b.closed for b in buckets) or not (assume_exhaustive or exhaustive(buckets)):
         return None, 0.0, []
     asks = [b.best_ask for b in buckets]
     bids = [b.best_bid for b in buckets]
@@ -85,11 +89,17 @@ MIN_TICK = 0.01
 
 
 def unpriced(buckets) -> list:
-    """Buckets the event object gave no ask for. Not the same as "nobody is offering"."""
-    return [b for b in buckets if b.best_ask is None]
+    """Buckets the event object left half-quoted. Not the same as "nobody is trading them".
+
+    Both sides matter. A buy-all set needs an ask on every leg; a SELL-all set (buy NO on every
+    leg) needs a bid on every leg, and pays when the bids sum to over $1. The sell side is the one
+    that tight books produce — usfed-fomc's four quoted legs bid 1.03 on 2026-09-18 while its asks
+    summed to 1.08 — so screening only for missing asks would have looked straight past it.
+    """
+    return [b for b in buckets if b.best_ask is None or b.best_bid is None]
 
 
-def arb_possible(buckets, floor: float = MIN_TICK) -> bool:
+def arb_possible(buckets, floor: float = MIN_TICK, assume_exhaustive: bool = False) -> bool:
     """Could a buy-all set POSSIBLY be under $1, if every unquoted leg were as cheap as it can be?
 
     The event object is what the screen gets for free, and it omits `bestAskQuote` on buckets that
@@ -103,10 +113,22 @@ def arb_possible(buckets, floor: float = MIN_TICK) -> bool:
     quoted at 0.04 total and a favourite with NO ask in the book at any price, which this bound
     would call a 96c opportunity. The caller must price the unquoted legs before believing anything.
     """
-    known = [b.best_ask for b in buckets if b.best_ask is not None]
-    if not known or any(b.closed for b in buckets) or not exhaustive(buckets):
+    if any(b.closed for b in buckets) or not (assume_exhaustive or exhaustive(buckets)):
         return False
-    return sum(known) + floor * (len(buckets) - len(known)) < 1.0
+    known_asks = [b.best_ask for b in buckets if b.best_ask is not None]
+    if known_asks:
+        # BUY side: an unquoted leg can be no cheaper than one tick.
+        if sum(known_asks) + floor * (len(buckets) - len(known_asks)) < 1.0:
+            return True
+    # SELL side: an unquoted leg's bid can be no HIGHER than its own ask (and never above 0.99),
+    # which is a tight bound rather than a hopeful one.
+    best_case = 0.0
+    for b in buckets:
+        if b.best_bid is not None:
+            best_case += b.best_bid
+        else:
+            best_case += min(b.best_ask if b.best_ask is not None else 0.99, 0.99)
+    return best_case > 1.0
 
 
 def sets_available(buckets, kind: str) -> float | None:
@@ -129,7 +151,8 @@ class BucketSum(Strategy):
 
     def scan(self, ctx) -> list:
         ev = ctx.event
-        kind, net, prices = arb_check(ev.buckets, ctx.venue)
+        proven = bool(getattr(ctx, "proven_exhaustive", False))
+        kind, net, prices = arb_check(ev.buckets, ctx.venue, assume_exhaustive=proven)
         if kind is None or net < self.cfg.bucket_sum_min_net_cents:
             return []
         sets = sets_available(ev.buckets, kind)

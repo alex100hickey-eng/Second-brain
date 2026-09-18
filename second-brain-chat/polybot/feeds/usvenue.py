@@ -120,6 +120,25 @@ def bucket_from_us_market(m: dict) -> Bucket:
                   closed=closed, outcome=outcome, liquidity=0.0)
 
 
+def buckets_from_markets(markets: list) -> list:
+    """Bucket objects for a NON-weather event (a Fed decision, an election).
+
+    The arb code is written against Bucket because that is what weather produced first, but the
+    only fields it needs are the quotes, the depth and `closed`. lo/hi are filled with the leg's
+    index purely so the object is well-formed; they are deliberately NOT a tiling, and callers on
+    this path must carry `universe`'s settlement proof instead (`assume_exhaustive`).
+    """
+    out = []
+    for i, m in enumerate(markets):
+        slug = m.get("slug") or ""
+        out.append(Bucket(title=m.get("title") or m.get("titleShort") or slug, lo=float(i), hi=float(i),
+                          unit="", yes_token=slug, no_token=slug, market_id=slug,
+                          condition_id=str(m.get("id") or ""), best_bid=_price(m.get("bestBidQuote")),
+                          best_ask=_price(m.get("bestAskQuote")), last=_yes_price(m),
+                          closed=_market_closed(m), outcome=None, liquidity=0.0))
+    return out
+
+
 def us_event_slug(city_slug: str, date: datetime, kind: str = "high") -> str:
     meta = config.city_meta(city_slug) or {}
     code = (meta.get("cli_location") or "").lower()
@@ -326,6 +345,39 @@ class USVenue:
         self._missing.pop(slug, None)
         return weather_event_from_us(e, city_slug, kind)
 
+    def event(self, slug: str):
+        """One event by slug, envelope unwrapped, closed events included."""
+        if not self.available:
+            return None
+        try:
+            self._space()
+            return _unwrap_event(self._client.events.retrieve_by_slug(slug))
+        except Exception as exc:
+            if _is_rate_limited(exc):
+                self._enter_backoff(exc)
+                return None
+            if _is_not_found(exc):
+                return None
+            raise
+
+    def fill_depth_buckets(self, buckets) -> bool:
+        """`fill_depth` for a bare list of legs (the universe path has no WeatherEvent)."""
+        ok = True
+        for b in buckets:
+            book = self.book(b.yes_token)
+            if not book:
+                b.bid_qty = b.ask_qty = None
+                ok = False
+                continue
+            bids, asks = book.get("bids") or [], book.get("asks") or []
+            b.bid_qty = sum(q for px, q in bids if px == bids[0][0]) if bids else 0.0
+            b.ask_qty = sum(q for px, q in asks if px == asks[0][0]) if asks else 0.0
+            if bids:
+                b.best_bid = bids[0][0]
+            if asks:
+                b.best_ask = asks[0][0]
+        return ok
+
     def fill_depth(self, event) -> bool:
         """Put real top-of-book sizes on an event's buckets. One call per bucket, so the caller
         only spends it when the quotes already say an arb might be there (over 8 days of US
@@ -333,22 +385,46 @@ class USVenue:
         read — a set sized off a partly-unknown book is the thing we are trying not to do."""
         if not self.available:
             return False
-        ok = True
-        for b in event.buckets:
-            book = self.book(b.yes_token)
-            if not book:
-                b.bid_qty = b.ask_qty = None
-                ok = False
+        return self.fill_depth_buckets(event.buckets)
+
+    def discover(self, queries) -> dict:
+        """{slug: event} for every open non-sports event with 2+ markets the queries can reach.
+
+        `events.list` answers only sports and ignores tagSlug, so search is the only door to the
+        rest of the catalogue. One call per query.
+        """
+        found = {}
+        for q in queries:
+            res = self.search(q)
+            if not res:
                 continue
-            bids, asks = book.get("bids") or [], book.get("asks") or []
-            # Sum every level at the best price: the venue can split one price across entries.
-            b.bid_qty = sum(q for px, q in bids if bids and px == bids[0][0]) if bids else 0.0
-            b.ask_qty = sum(q for px, q in asks if asks and px == asks[0][0]) if asks else 0.0
-            if bids:
-                b.best_bid = bids[0][0]
-            if asks:
-                b.best_ask = asks[0][0]
-        return ok
+            items = res if isinstance(res, list) else (res.get("events") or res.get("results") or [])
+            for e in items:
+                if not isinstance(e, dict) or not e.get("slug"):
+                    continue
+                if len(e.get("markets") or []) < 2:
+                    continue
+                found[e["slug"]] = e
+        return found
+
+    def events_by_slug(self, slugs, batch: int = 20) -> dict:
+        """{slug: event} for specific slugs, CLOSED ones included, many per call.
+
+        `events.list` ignores seriesSlug and tagSlug (it answers sports whatever you ask), but it
+        honours `slug=[...]` and returns closed events with their full markets. That is what lets
+        the universe prove its own series: ask once for twenty slugs and see which have settled.
+        """
+        out = {}
+        slugs = list(slugs)
+        for i in range(0, len(slugs), batch):
+            chunk = slugs[i:i + batch]
+            r = self._guarded(lambda c=chunk: self._client.events.list({"slug": c, "limit": len(c)}), default=None)
+            if not r:
+                continue
+            for e in (r.get("events", []) if isinstance(r, dict) else r):
+                if isinstance(e, dict) and e.get("slug"):
+                    out[e["slug"]] = e
+        return out
 
     def price_legs(self, buckets, limit: int = 4) -> int:
         """Fill in best_bid/best_ask for buckets the event object left unquoted, from the book.
@@ -359,7 +435,7 @@ class USVenue:
         """
         done = 0
         for b in buckets:
-            if b.best_ask is not None or done >= limit:
+            if (b.best_ask is not None and b.best_bid is not None) or done >= limit:
                 continue
             book = self.book(b.yes_token)
             if book is None:

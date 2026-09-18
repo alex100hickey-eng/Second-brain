@@ -27,10 +27,28 @@ from zoneinfo import ZoneInfo
 from . import backtest, calibration, config, notify, pairs
 from .execution import Executor
 from .feeds import offshore
-from .feeds.usvenue import USVenue
+from .feeds.usvenue import USVenue, buckets_from_markets
 from .ledger import Ledger
 from .paper import PaperEngine, snapshot_history
 from .risk import RiskManager
+from . import universe
+
+
+class _Ev:
+    """The two attributes the arb code reads off a weather event."""
+
+    def __init__(self, slug, buckets):
+        self.slug, self.buckets = slug, buckets
+
+
+class _UniverseCtx:
+    """A weather ctx has a model and observations; a Fed decision has neither. The arb only ever
+    reads event/venue/city/date/kind, plus the settlement proof that stands in for tiling."""
+
+    proven_exhaustive = True
+
+    def __init__(self, event, venue, city, date, kind):
+        self.event, self.venue, self.city, self.date, self.kind = event, venue, city, date, kind
 from .strategies.bucket_sum import BucketSum, arb_check, arb_possible, unpriced
 from .strategies.hold_favorites import HoldFavorites
 from .strategies.leadlag import LeadLag
@@ -107,6 +125,8 @@ class Runner:
         self.risk = RiskManager(self.cfg, self.ledger)
         self.paper = PaperEngine(self.ledger, history_fn=self._paper_history, resolution_fn=self._paper_resolution)
         self.executor = Executor(self.ledger, self.us, self.cfg, self.log)
+        self.uni = universe.Universe(self.ledger.conn)
+        self.arb = BucketSum(self.cfg)      # the universe path runs the arb outside scan_weather
         if self.us.available:
             # Account VALUE, not buying power: money already in positions is still the bankroll.
             # Reading buying power halted the bot at "bankroll under floor" the moment anything
@@ -171,6 +191,82 @@ class Runner:
                 self.log(f"    ORDER ERROR: {exc}")
                 return "error"
         return mode
+
+    def refresh_universe(self) -> str:
+        """Re-discover the multi-outcome catalogue, re-tier it, and promote any series a settled
+        instance has now proved. ~20 API calls, so this runs twice a day, not every tick."""
+        if not self.us.available:
+            return f"universe: venue unavailable ({self.us.why_unavailable})"
+        found = self.us.discover(universe.DISCOVERY_QUERIES)
+        tiers = {}
+        for slug, e in found.items():
+            tier, _ = self.uni.record(e)
+            tiers[tier] = tiers.get(tier, 0) + 1
+            # A closed event with exactly one winner proves its whole series for good.
+            if self.uni.prove(e):
+                self.log(f"  universe: series {universe.series_key(slug)} PROVED by {slug}")
+        proved = self.prove_pending()
+        return (f"universe: {len(found)} multi-outcome events — "
+                + ", ".join(f"{n} {t}" for t, n in sorted(tiers.items()))
+                + (f"; proved {proved} series" if proved else ""))
+
+    def scan_universe(self) -> int:
+        """Run the arb over every PROVEN multi-outcome event, not just the ten weather markets.
+
+        This is the whole point of the universe. Weather is five cities, one market each, inside a
+        six-hour window — about two signals a day, which is why the bot has so few shots. The same
+        arb applies to every one-winner event on the venue, and the registry is what makes that
+        safe: only series a SETTLED instance has proved may trade here.
+        """
+        if not self.us.available:
+            return 0
+        n = 0
+        for row in self.uni.tradable():
+            slug = row["slug"]
+            e = self.us.event(slug)
+            markets = (e or {}).get("markets") or []
+            if not markets:
+                continue
+            buckets = buckets_from_markets(markets)
+            if any(b.closed for b in buckets):
+                continue
+            if unpriced(buckets) and arb_possible(buckets, assume_exhaustive=True):
+                got = self.us.price_legs(buckets)
+                if got:
+                    self.log(f"  arb screen us {slug}: priced {got} unquoted leg(s)")
+            kind, net, _ = arb_check(buckets, "us", assume_exhaustive=True)
+            for b in buckets:
+                self.ledger.add_snapshot("us", b.yes_token, b.best_bid, b.best_ask, b.last)
+            if kind is None or net < self.cfg.bucket_sum_min_net_cents:
+                continue
+            self.us.fill_depth_buckets(buckets)
+            self.log(f"  arb candidate us {slug} {kind} {net:.1f}c/set ({len(buckets)} legs)")
+            for b in buckets:
+                self.ledger.add_snapshot("us", b.yes_token, b.best_bid, b.best_ask, b.last,
+                                         bid_qty=b.bid_qty, ask_qty=b.ask_qty)
+            ctx = _UniverseCtx(event=_Ev(slug, buckets), venue="us", city=row["series"],
+                               date=slug[-10:], kind=row["category"] or "event")
+            n += self.handle_arb_set(list(self.arb.scan(ctx)))
+        return n
+
+    def prove_pending(self, extra_slugs=()) -> int:
+        """Re-ask the venue about unproven WATCH events and promote any series that has settled.
+
+        This is what makes the universe compound: a series sits in WATCH until one of its
+        instances closes with exactly one winner, and then every future instance is tradable
+        without asking again. `events.list(slug=[...])` returns closed events with their markets,
+        twenty to a call, so checking the whole watchlist costs one or two requests.
+        """
+        slugs = list(self.uni.unproven_slugs()) + list(extra_slugs)
+        if not slugs:
+            return 0
+        proved = 0
+        for slug, e in self.us.events_by_slug(slugs).items():
+            if self.uni.prove(e):
+                self.log(f"  universe: series {universe.series_key(slug)} PROVED by {slug} "
+                         f"({len(e.get('markets') or [])} legs, exactly one winner)")
+                proved += 1
+        return proved
 
     def handle_arb_set(self, sigs) -> int:
         """An arb set is one decision, so it is accepted or refused whole.
@@ -459,6 +555,11 @@ class Runner:
                         # ~60 gamma-api calls every five minutes (17k a day) for nothing.
                         if self.us.available:
                             self.scan_weather(modules=["bucket_sum"], venue="us")
+                            # The same arb over every PROVEN one-winner event, not just weather.
+                            # Weather is 10 markets in a 6-hour window; this is where extra shots
+                            # on goal come from, and `universe` is what keeps it safe.
+                            if self.cfg.mode("bucket_sum") != "off":
+                                self.scan_universe()
                         self.scan_other(modules=["leadlag", "maker_rewards"])
                         if self.us.available:
                             self.executor.sync()
@@ -479,6 +580,11 @@ class Runner:
                             if ready:
                                 line += f" — say the word to go live: {', '.join(ready)}"
                         notify.nudge("polybot daily", line, key="polybot-daily", log=self.log)
+                    # Re-discover the catalogue twice a day (~20 search calls) and promote any
+                    # series a settled instance has now proved. The registry compounds: every
+                    # proof is permanent and every future instance of that series is tradable.
+                    if now.hour in (6, 18) and now.minute == 30:
+                        self.log(self.refresh_universe())
                     if now.hour == 3 and now.minute == 0:
                         calibration.save_table(calibration.build(log=self.log))
                         self.log(f"pruned {self.ledger.prune_snapshots(self.cfg.snapshot_keep_days)} snapshots older than {self.cfg.snapshot_keep_days}d")
@@ -515,7 +621,7 @@ def _stamped_log(*parts):
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="polybot")
     ap.add_argument("cmd", choices=["scan", "settle", "report", "calibrate", "status", "loop", "backtest",
-                                   "pairs", "promote", "arbs"])
+                                   "pairs", "promote", "arbs", "universe"])
     ap.add_argument("--city", action="append")
     ap.add_argument("--modules", nargs="*")
     ap.add_argument("--venue", default="offshore", choices=["offshore", "us"], help="scan: which books to read")
@@ -524,6 +630,10 @@ def main(argv=None):
     ap.add_argument("--kinds", nargs="*", default=["high"])
     a = ap.parse_args(argv)
     r = Runner(log=_stamped_log if a.cmd == "loop" else print)
+    if a.cmd == "universe":
+        print(r.refresh_universe())
+        print(r.uni.report())
+        return 0
     if a.cmd == "arbs":
         print(r.ledger.arb_report(a.days if a.days > 1 else 7))
         return 0
