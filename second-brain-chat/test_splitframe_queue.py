@@ -568,3 +568,59 @@ def test_named_front_desks_are_drafted_before_anonymous_ones():
     assert order.index("Named") < order.index("Anon")
     named = [t for t in sq.next_targets(rows, []) if t["brand"] == "Named"][0]
     assert named["greet"] == "Gillian"
+
+
+# ---------------------------------------------------------------------------
+# revise: fixing a queued first touch in place. The email lives in two stores —
+# the Gmail draft the sender will send, and the queue entry that is the record.
+# Editing one by hand drifts them apart, and the sender sends the draft. One
+# command, both stores, the same guards as `add`.
+# ---------------------------------------------------------------------------
+
+def _queued(**kw):
+    e = {"brand": "Acme", "to": "hello@acme.com", "subject": "s", "body": "b",
+         "draft_id": "r1", "close_variant": "question", "released": None}
+    e.update(kw)
+    return e
+
+
+def test_revise_refuses_a_released_entry():
+    """Once released it is in the outbox on a 3 h timer or already sent. Editing then either
+    races the sender or silently differs from what actually went out."""
+    q = [_queued(released="2026-09-15T07:30:00-04:00")]
+    _e, problems = sq.plan_revise(q, "hello@acme.com", None, None, None, "acme.com")
+    assert any("already released" in p for p in problems)
+
+
+def test_revise_refuses_an_address_not_in_the_queue():
+    _e, problems = sq.plan_revise([], "nobody@nowhere.com", None, None, None, "")
+    assert any("not in the first-touch queue" in p for p in problems)
+
+
+def test_revise_refuses_an_entry_with_no_draft_to_rewrite():
+    _e, problems = sq.plan_revise([_queued(draft_id="")], "hello@acme.com",
+                                  None, None, None, "acme.com")
+    assert any("no draft id" in p for p in problems)
+
+
+def test_revise_applies_the_same_body_guards_as_add():
+    """A fix must not be a way around the guards that stop a bad email going out."""
+    _e, problems = sq.plan_revise([_queued()], "hello@acme.com", "subj", "too short", None,
+                                  "acme.com")
+    assert problems, "a body that add would reject must be rejected here too"
+
+
+def test_revise_keeps_the_offer_arm_honest():
+    """An offer email promises a static built from a named photo. Swapping the body without
+    a valid photo on the brand's own domain is the Antler Farms failure again."""
+    q = [_queued(close_variant="offer", offer_image="https://acme.com/a.jpg")]
+    _e, problems = sq.plan_revise(q, "hello@acme.com", None, None,
+                                  "https://someone-else.com/b.jpg", "acme.com")
+    assert problems, "an offer image off the brand's own domain must be refused"
+
+
+def test_revise_leaves_fields_alone_when_not_given():
+    """Omitting --subject/--body-file keeps what is there; only what was passed changes."""
+    q = [_queued(close_variant="offer", offer_image="https://acme.com/a.jpg")]
+    entry, problems = sq.plan_revise(q, "hello@acme.com", None, None, None, "acme.com")
+    assert problems == [] and entry["subject"] == "s" and entry["body"] == "b"

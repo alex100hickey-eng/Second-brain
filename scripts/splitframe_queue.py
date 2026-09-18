@@ -566,6 +566,57 @@ def create_studio_draft(to: str, subject: str, body: str):
     return (m.group(1) if m else None), result
 
 
+def update_studio_draft(draft_id: str, to: str, subject: str, body: str):
+    """Rewrite an existing studio draft IN PLACE. Never deletes — Alex's drafts are his, and a
+    delete-and-recreate would also change the draft id the sender was armed with.
+    Returns (ok, message)."""
+    from composio import Composio                   # type: ignore
+    import mail_drafts                              # type: ignore
+    mail_drafts._file_in_outbox = lambda *a, **k: None
+    mail_drafts.init(Composio(api_key=os.environ["COMPOSIO_API_KEY"]),
+                     os.environ.get("PERSONAL_GMAIL_ENTITY", "alex"),
+                     os.environ.get("SCHOOL_GMAIL_ENTITY", "alex-school"),
+                     os.environ.get("STUDIO_GMAIL_ENTITY", ""))
+    try:
+        result = mail_drafts._composio.tools.execute(
+            "GMAIL_UPDATE_DRAFT", user_id=mail_drafts._ENTITIES["studio"],
+            dangerously_skip_version_check=True,
+            arguments={"draft_id": draft_id, "recipient_email": to, "subject": subject,
+                       "body": body, "is_html": False})
+    except Exception as e:                                   # noqa: BLE001
+        return False, f"update failed: {str(e)[:200]}"
+    if isinstance(result, dict) and result.get("successful") is False:
+        return False, f"update failed: {str(result.get('error'))[:200]}"
+    return True, "draft updated in place"
+
+
+def plan_revise(queue: list, to: str, subject: str, body: str, offer_image: str, domain: str):
+    """(entry, problems) for revising a queued first touch.
+
+    Only a PENDING entry may change. Once released it is in Alex's outbox with a 3 h timer, or
+    already sent — editing the Gmail draft then would either race the sender or silently differ
+    from what actually went out.
+    """
+    to = _c(to).lower()
+    entry = next((e for e in queue if _c(e.get("to")).lower() == to), None)
+    if entry is None:
+        return None, [f"{to or '(empty)'} is not in the first-touch queue"]
+    problems = []
+    if entry.get("released"):
+        problems.append(f"already released on {_c(entry.get('released'))[:10]} — too late to edit; "
+                        "it is in the outbox or already sent")
+    if not _c(entry.get("draft_id")):
+        problems.append("queue entry has no draft id, so there is no Gmail draft to rewrite")
+    if subject is not None and not _c(subject):
+        problems.append("no subject")
+    if body is not None:
+        problems += guard_body(body)
+    img = offer_image if offer_image is not None else _c(entry.get("offer_image"))
+    if _c(entry.get("close_variant")) == "offer":
+        problems += offer_image_problems(img, domain)
+    return entry, problems
+
+
 def record_draft_doc(brand: str, to: str, subject: str, body: str, ad_count: int,
                      evidence: str, today: str) -> str:
     """The same evidence-plus-email record the wave docs kept, so Alex (or a later session)
@@ -869,6 +920,53 @@ def cmd_add(args) -> int:
     return 0
 
 
+def cmd_revise(args) -> int:
+    """Fix a queued first touch in place — the draft AND the queue entry together.
+
+    Autonomous drafting is good but not perfect, and the two defects it actually produces are
+    a weak subject line and an offer that names a photo the stored URL is not. Fixing those by
+    hand risked the Gmail draft and the queue entry drifting apart, which is worse than the
+    defect: the sender sends the draft, the record shows the queue. One command, both stores,
+    same guards as `add`.
+    """
+    rows, _fields = tracker_rows()
+    q, queue = load_queue()
+    body = None
+    if args.body_file:
+        with open(args.body_file, encoding="utf-8") as f:
+            body = f.read().strip()
+    row = next((r for r in rows
+                if _c(args.to).lower() in {_c(r.get("email")).lower(),
+                                           _c(r.get("email_generic")).lower()}), None)
+    entry, problems = plan_revise(queue, args.to, args.subject, body,
+                                  args.offer_image, _c(row.get("domain")) if row else "")
+    if problems:
+        print("NOT revised:")
+        for p in problems:
+            print(f"  - {p}")
+        return 1
+    new_subject = _c(args.subject) or _c(entry.get("subject"))
+    new_body = body if body is not None else _c(entry.get("body"))
+    if args.dry_run:
+        print(f"OK (dry run): {entry.get('brand')} <{args.to}> passes every guard; nothing written.")
+        return 0
+    ok, msg = update_studio_draft(_c(entry.get("draft_id")), _c(args.to), new_subject, new_body)
+    if not ok:
+        print(f"NOT revised: {msg}")
+        return 1
+    was = _c(entry.get("subject"))
+    entry["subject"], entry["body"] = new_subject, new_body
+    if args.offer_image is not None:
+        entry["offer_image"] = _c(args.offer_image)
+    entry["revised_at"] = datetime.now(LOCAL_TZ).isoformat()
+    entry["revised_why"] = _c(args.why)
+    save_queue(q, queue)
+    print(f"REVISED: {entry.get('brand')} <{args.to}> draft {entry.get('draft_id')} — {msg}")
+    if new_subject != was:
+        print(f'  subject: "{was}" -> "{new_subject}"')
+    return 0
+
+
 def cmd_note(args) -> int:
     rows, fields = tracker_rows()
     row = next((r for r in rows if _c(r.get("brand")).lower() == _c(args.brand).lower()), None)
@@ -944,6 +1042,15 @@ def main(argv=None) -> int:
                    help="which stream and which moment was watched, with the date")
     c.add_argument("--dry-run", action="store_true", help="run every guard, draft nothing")
     c.set_defaults(fn=cmd_creator)
+    rv = sub.add_parser("revise", help="fix a PENDING queued first touch in place (draft + queue)")
+    rv.add_argument("--to", required=True, help="the queued recipient")
+    rv.add_argument("--subject", default=None, help="new subject; omit to keep")
+    rv.add_argument("--body-file", default=None, help="new body; omit to keep")
+    rv.add_argument("--offer-image", default=None,
+                    help="replace the photo the offer would be built from")
+    rv.add_argument("--why", default="", help="one line: what was wrong")
+    rv.add_argument("--dry-run", action="store_true")
+    rv.set_defaults(fn=cmd_revise)
     n = sub.add_parser("note", help="stamp a live Ad Library count into the tracker")
     n.add_argument("--brand", required=True)
     n.add_argument("--ad-count", type=int, required=True)

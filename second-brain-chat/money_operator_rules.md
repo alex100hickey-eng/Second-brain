@@ -128,6 +128,18 @@ step, and you need me to prompt you to say do the next step." So inside your tas
   pool empties in days, so on an `sf_source` task keep going until you have added the number the
   brief asks for, using the Ad Library keyword search across NEW categories rather than re-reading
   ones already mined.
+  **The subject line is part of the email, not a label.** "your ad account" is a wasted subject —
+  it is the one line that decides whether any of the work below it gets read. Make it the single
+  most specific finding you have, the way the body's first sentence is ("Two of your ads spell it
+  Calypsea", "Fourteen ads, one sentence"). No brand name, no "quick question", no colon-prefix.
+  **An `--offer-image` must actually show what the email promises.** `fabrication_risk` cannot
+  see this: it checks claims about work done, and the offer close makes a claim about a photo.
+  If the email says "your pillar candle shot", open the product page and take THAT product's
+  image, not the site's opengraph card or a homepage banner. When a founder says "sure, send it",
+  the photo has to be the one you named.
+  A queued draft that turns out wrong is fixed with `splitframe_queue.py revise --to <addr>`
+  (subject/body/offer-image, same guards, updates the Gmail draft and the queue together) —
+  never by deleting the draft, and never by hand-editing one store.
   **The greeting is decided for you, in `status`.** Each target prints either `greet "Gillian"` or
   `front desk, NO greeting`. Follow it exactly. A name there came off the brand's own about page
   and is in `contact_name_source`; never invent one, never guess a founder from a brand name, and
