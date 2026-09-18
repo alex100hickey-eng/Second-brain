@@ -365,16 +365,25 @@ class USVenue:
                 return None
             raise
         s = _unwrap(s)
-        px = _price(s.get("settlementPx") or s.get("settlementPrice") or s.get("price") or s.get("px"))
-        if px is None:
-            for k in ("result", "outcome", "winningOutcome", "winner"):
-                v = str(s.get(k, "")).lower()
-                if v in ("yes", "long", "1"):
-                    return 1
-                if v in ("no", "short", "0"):
-                    return 0
-            return None
-        return 1 if px >= 0.99 else 0 if px <= 0.01 else None
+        # The live endpoint answers {"slug": ..., "settlement": 0|1} — a bare number under
+        # `settlement`, not the `settlementPrice` Amount the SDK's type hints promise. Reading only
+        # the hinted names meant resolution() returned None for markets that had plainly RESOLVED,
+        # so no US paper trade ever closed: they sat marked-to-market forever, the gate's "US paper
+        # has closed trades and is in profit" clause could never be satisfied, and NO module could
+        # ever be promoted. This was the hard blocker on going live at all, and it read as a rate
+        # limit for days. Note `settlement` is legitimately 0, so it cannot be chained with `or`.
+        for key in ("settlement", "settlementPx", "settlementPrice", "price", "px"):
+            if s.get(key) is not None:
+                px = _price(s[key])
+                if px is not None:
+                    return 1 if px >= 0.99 else 0 if px <= 0.01 else None
+        for k in ("result", "outcome", "winningOutcome", "winner"):
+            v = str(s.get(k, "")).lower()
+            if v in ("yes", "long", "1"):
+                return 1
+            if v in ("no", "short", "0"):
+                return 0
+        return None
 
     # ---- account -------------------------------------------------------------------------
     def balance_usd(self) -> float | None:

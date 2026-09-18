@@ -780,6 +780,40 @@ def test_us_venue_parses_live_shapes(monkeypatch):
     assert v.find_weather_event("nyc", datetime(2026, 9, 14), "high") is None
 
 
+def test_us_settlement_is_read_from_the_bare_settlement_key():
+    """The live endpoint answers {"slug": ..., "settlement": 0|1} — a bare number, not the
+    `settlementPrice` Amount the SDK type hints promise. Reading only the hinted names returned
+    None for markets that had plainly RESOLVED, so no US paper trade ever closed, the gate's
+    "US paper has closed trades and is in profit" clause could never be satisfied, and NO module
+    could ever be promoted. `settlement` is legitimately 0, so it must not be chained with `or`."""
+    from polybot.feeds import usvenue
+
+    class NotFound(Exception):
+        pass
+
+    answers = {"win": {"slug": "win", "settlement": 1},
+               "lose": {"slug": "lose", "settlement": 0},
+               "amount": {"slug": "amount", "settlementPrice": {"value": "1.0000"}},
+               "mid": {"slug": "mid", "settlement": 0.5}}
+
+    class Markets:
+        def settlement(self, slug):
+            if slug not in answers:
+                raise NotFound("Settlement not found for market " + slug)
+            return answers[slug]
+
+    class Client:
+        markets = Markets()
+
+    v = usvenue.USVenue()
+    v.available, v._client = True, Client()
+    assert v.resolution("win") == 1
+    assert v.resolution("lose") == 0                 # the falsy 0 is an ANSWER, not a missing key
+    assert v.resolution("amount") == 1               # the documented shape still works
+    assert v.resolution("mid") is None               # neither side: not resolved
+    assert v.resolution("open-market") is None       # 404 until it settles
+
+
 def test_arb_set_unwinds_what_filled_when_a_leg_is_killed():
     """Six legs bought for 92c pay $1. Four of the six pay $1 only if the temperature lands in one
     of the four — a bet nobody sized. So every leg goes out FILL_OR_KILL, and if one is killed the
