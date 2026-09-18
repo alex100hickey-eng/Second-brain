@@ -51,7 +51,11 @@ TICK_SECONDS = 600
 # worth nothing, so the governor opens up until then. REVERT to 10 / 20 after 2026-09-18 10:00Z —
 # on Pro these numbers would otherwise starve the operator of credit before morning.
 BURST_UNTIL = "2026-09-18T10:00:00+00:00"   # Alex's weekly subscription credit resets here
-NORMAL_RUNS, NORMAL_GAP = 10, 20
+# 2026-09-18: 10 runs / 20 min gap could not fund the raised splitframe cadence — the per-kind
+# caps alone now ask for up to 12 splitframe runs a day. Raised to cover them with headroom for
+# the other lanes. Still far below the 24 of the burst window, and the gap stays wide enough
+# that a run is never filed on top of one still working.
+NORMAL_RUNS, NORMAL_GAP = 18, 12
 BURST_RUNS, BURST_GAP = 24, 8
 
 
@@ -85,7 +89,15 @@ PICKUP_TIMEOUT_MIN = 120                   # nobody picked the task up (Mac asle
 # stays 1: it is bounded by the real Hunter quota, not by our appetite. clip_post stays 3 because
 # posting_policy — the account-safety rule that exists BECAUSE 13 clips in 5 hours killed the
 # account — is the real limit there, and spending credit is not a reason to push it.
-PER_KIND_NORMAL = {"sf_topup": 3, "clip_post": 3, "sf_hunter": 1, "sf_source": 2,
+#
+# 2026-09-18: the SEND cadence now ramps to 20/day (splitframe_daily.RAMP), and a send cap with
+# no drafts behind it is theatre. At 3 topup runs x 5 drafts the ceiling was 15 drafts a day and
+# sourcing added ~12 brands — both under 20, so the queue would have run dry in two days and the
+# raised cap would have released nothing. Splitframe is the only lane with a real path to
+# revenue, so it is the only lane raised: clip_post, poly_review and whop_board stay exactly
+# where they were. The cost of this is Alex's Claude subscription usage, which is the honest
+# trade and is why the other lanes do not move.
+PER_KIND_NORMAL = {"sf_topup": 6, "clip_post": 3, "sf_hunter": 1, "sf_source": 5,
                    "poly_review": 1, "creator_list": 1, "whop_board": 1, "creator_draft": 2}
 PER_KIND_BURST = {"sf_topup": 8, "clip_post": 3, "sf_hunter": 1, "sf_source": 8,
                   "poly_review": 3, "creator_list": 2, "whop_board": 2, "creator_draft": 2}
@@ -96,12 +108,32 @@ def per_kind_daily(now: datetime | None = None) -> dict:
 
 
 PER_KIND_DAILY = PER_KIND_BURST   # back-compat for anything reading the old name
-QUEUE_TARGET = 10                          # two release days of first touches in stock
+QUEUE_TARGET = 10                          # floor / back-compat; see queue_target()
+
+
+def queue_target() -> int:
+    """Two release days of first touches in stock, at whatever cadence is live today.
+
+    Hard-coding 10 was safe while the cadence was 5. It is not now: the day the cap steps to
+    15 a fixed 10 becomes two thirds of one day's stock, the queue empties mid-morning and the
+    raised cap silently releases nothing. The release and the stocking target have to read the
+    same number, so both read it from the same place.
+    """
+    try:
+        sq = _sq()                                    # defined below; resolved at call time
+        per_day, _why = sq.current_per_day()
+        return sq.current_runway_target(per_day)
+    except Exception:                                 # noqa: BLE001
+        return QUEUE_TARGET
 # Creator entries to hold in that queue. It is one lane's slice of a shared 5-a-day release, so
 # 2 of 10 is about one creator email a day — enough to test the offer, not enough to stall the
 # funnel that already has a reply clock running on it. A creator email costs a watched VOD, so
 # this is also as fast as the lane can honestly go.
 CREATOR_RESERVE = 2
+# Drafts one worker run may add. Raised from 5 with the cadence: a bigger batch in one run is
+# cheaper per draft than the same drafts spread over more runs, because each run pays the cost
+# of establishing its own context before it writes anything.
+DRAFTS_PER_RUN = 8
 POST_WINDOW = (17.0, 22.5)                 # local hours: the evening window the research points at
 ACCOUNT_CREATED = date(2026, 9, 12)        # @wildest_moments
 MIN_POST_GAP_S = 3 * 3600
@@ -395,7 +427,7 @@ def next_task(snap: dict, now: datetime, counts: dict) -> dict | None:
 
     # 2. keep the funnel stocked
     if sf.get("ok"):
-        need = max(0, QUEUE_TARGET - sf["pending"])
+        need = max(0, queue_target() - sf["pending"])
         if need == 0:
             reasons.append("splitframe: queue full")
         elif sf["draftable_in_band"] == 0:
@@ -470,8 +502,9 @@ def _task(kind, lane, title, brief) -> dict:
 # ------------------------------------------------------------------ briefs
 
 def brief_sf_topup(sf: dict, need: int) -> str:
-    return (f"The first-touch queue holds {sf['pending']} of the {QUEUE_TARGET} it should (5 release a "
-            f"day). Queue up to {min(5, need)} new first touches. Run `python3 scripts/splitframe_queue.py "
+    target, per_day = queue_target(), queue_target() // 2
+    return (f"The first-touch queue holds {sf['pending']} of the {target} it should "
+            f"({per_day} release a day). Queue up to {min(DRAFTS_PER_RUN, need)} new first touches. Run `python3 scripts/splitframe_queue.py "
             f"status`; work 'Can be drafted next' top to bottom, in-band brands first. For each brand: live "
             f"read with `python3 scripts/adlib_read.py --page-id <id>` (0 active → `note --ad-count 0`; over "
             f"100 → `note` and skip), write the email in Alex's voice with the splitframe-outreach skill from "

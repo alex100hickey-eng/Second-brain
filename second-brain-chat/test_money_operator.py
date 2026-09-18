@@ -79,6 +79,16 @@ def T(h, m=0, day=16):
     return datetime(2026, 9, day, h, m, tzinfo=TZ)
 
 
+@pytest.fixture(autouse=True)
+def _pinned_queue_target(monkeypatch):
+    """The stock target now follows the live send cadence (money_operator.queue_target), which
+    made every ladder test depend on the real tracker's send count. These tests are about which
+    task comes next, so pin it."""
+    real = mo.queue_target
+    monkeypatch.setattr(mo, "_real_queue_target", real, raising=False)
+    monkeypatch.setattr(mo, "queue_target", lambda: 10)
+
+
 def snap(**kw):
     base = {
         "splitframe": {"ok": True, "pending": 10, "draftable_in_band": 0, "hunter_targets_in_band": 0,
@@ -214,9 +224,11 @@ def test_the_burst_window_closes_itself():
     assert mo.max_runs_per_day(during) == mo.BURST_RUNS
     assert mo.min_gap_min(during) == mo.BURST_GAP
     assert mo.per_kind_daily(during)["sf_source"] == 8
-    assert mo.max_runs_per_day(after) == mo.NORMAL_RUNS == 10
-    assert mo.min_gap_min(after) == mo.NORMAL_GAP == 20
-    assert mo.per_kind_daily(after)["sf_source"] == 2
+    assert mo.max_runs_per_day(after) == mo.NORMAL_RUNS == 18
+    assert mo.min_gap_min(after) == mo.NORMAL_GAP == 12
+    assert mo.per_kind_daily(after)["sf_source"] == 5
+    # The burst still has to be the wider setting, or "burst" means nothing.
+    assert mo.BURST_RUNS > mo.NORMAL_RUNS and mo.BURST_GAP < mo.NORMAL_GAP
 
 
 def test_tick_files_waits_settles_and_keeps_going(monkeypatch):
@@ -374,3 +386,52 @@ def test_slugs_are_unique_within_a_minute():
     b = mo.file_task({"kind": "creator_draft", "lane": "creator", "title": "x", "brief": "y"}, t1)
     assert a != b, f"same slug for two tasks 31s apart: {a}"
     assert a.startswith("creator_draft-20260917-1715")
+
+
+# ---------------------------------------------------------------------------
+# Supply has to be able to feed demand. A send cap with no drafts behind it is
+# theatre: at 3 topup runs x 5 drafts the ceiling was 15 a day against a cap
+# that now ramps to 20, so the queue would have emptied in two days and the
+# raised cap would have released nothing. This is the invariant to keep if
+# anyone moves either number again.
+# ---------------------------------------------------------------------------
+
+def test_drafting_capacity_can_feed_the_send_cap():
+    import importlib.util as _ilu
+    spec = _ilu.spec_from_file_location(
+        "sfd", os.path.expanduser("~/second-brain/scripts/splitframe_daily.py"))
+    sfd = _ilu.module_from_spec(spec)
+    spec.loader.exec_module(sfd)
+    max_cap = max(cap for _thr, cap in sfd.RAMP)
+    capacity = mo.PER_KIND_NORMAL["sf_topup"] * mo.DRAFTS_PER_RUN
+    assert capacity >= max_cap, (
+        f"{capacity} drafts/day cannot feed a {max_cap}/day send cap")
+
+
+def test_the_run_budget_can_fund_the_splitframe_lane():
+    """The per-kind caps bind harder than MAX_RUNS — if they sum past it, the lane that
+    matters silently loses the tail of its day to whatever ran first."""
+    sf_runs = sum(mo.PER_KIND_NORMAL[k] for k in ("sf_topup", "sf_source", "sf_hunter"))
+    assert mo.NORMAL_RUNS >= sf_runs, "splitframe alone cannot fit in the daily run budget"
+
+
+def test_the_stock_target_follows_the_send_cadence(monkeypatch):
+    fake = type("Q", (), {"current_per_day": staticmethod(lambda: (15, "x")),
+                          "current_runway_target": staticmethod(lambda n: 2 * n)})
+    monkeypatch.setattr(mo, "_sq", lambda: fake)
+    assert mo._real_queue_target() == 30
+
+
+def test_stock_target_falls_back_when_the_cadence_is_unreadable(monkeypatch):
+    def boom():
+        raise RuntimeError("no queue module")
+    monkeypatch.setattr(mo, "_sq", boom)
+    assert mo._real_queue_target() == mo.QUEUE_TARGET
+
+
+def test_only_the_revenue_lane_was_raised():
+    """Clip posting is bounded by the account-safety rule that exists because 13 clips in
+    5 hours killed @wildest_moments. Having budget is not a reason to push it."""
+    assert mo.PER_KIND_NORMAL["clip_post"] == 3
+    assert mo.PER_KIND_NORMAL["sf_hunter"] == 1      # bounded by the real Hunter quota
+    assert mo.PER_KIND_NORMAL["poly_review"] == 1

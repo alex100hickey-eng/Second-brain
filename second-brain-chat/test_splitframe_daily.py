@@ -401,6 +401,9 @@ def test_the_five_a_day_cap_is_per_day_not_per_invocation(monkeypatch, quiet_log
     five already waiting — the exact pile of notifications the cadence exists to prevent."""
     queue = [_entry(n) for n in range(1, 8)]          # seven written drafts
     monkeypatch.setattr(sfd, "_shared", _FakeShared(queue))
+    # Pin the cadence: what is under test is "per day, not per invocation", not today's
+    # position on the ramp. Reading the live record here made the test depend on the tracker.
+    monkeypatch.setattr(sfd, "current_cap", lambda: (5, "pinned"))
     box = _FakeOutbox()
 
     first = sfd.release_first_touches(box, "https://mail")
@@ -607,26 +610,31 @@ def test_first_touch_waiting_list_counts_front_desks_too():
 
 def test_daily_cap_ramps_with_clean_send_history():
     assert sfd.daily_cap(0, 0, 0) == 5
-    assert sfd.daily_cap(29, 0, 29) == 5
-    assert sfd.daily_cap(30, 0, 30) == 8
-    assert sfd.daily_cap(69, 0, 69) == 8
-    assert sfd.daily_cap(70, 0, 70) == 10
+    assert sfd.daily_cap(19, 0, 19) == 5
+    assert sfd.daily_cap(20, 0, 20) == 10
+    assert sfd.daily_cap(59, 0, 59) == 10
+    assert sfd.daily_cap(60, 0, 60) == 15
+    assert sfd.daily_cap(119, 0, 119) == 15
+    assert sfd.daily_cap(120, 0, 120) == 20
 
 
-def test_daily_cap_never_exceeds_the_plans_own_ceiling():
-    """Workspace allows 2,000/day. The plan Alex approved says 8-10. Headroom at the
-    provider is not a reason to outrun the domain's reputation."""
-    assert sfd.daily_cap(10_000, 0, 10_000) == 10
-    assert max(cap for _thr, cap in sfd.RAMP) == 10
+def test_daily_cap_has_a_hard_ceiling():
+    """Workspace allows 2,000/day; that is never the binding number. Alex raised the ceiling to
+    20 on 2026-09-18 after the reputation risk was named to him. It is still a CEILING — the
+    cap must not keep climbing with volume."""
+    assert sfd.daily_cap(10_000, 0, 10_000) == 20
+    assert max(cap for _thr, cap in sfd.RAMP) == 20
 
 
 def test_bounce_trouble_drops_the_cap_back_to_the_floor():
     # 2 bounces in 25 sends = 8%, exactly the threshold the bounce nudge fires on.
     assert sfd.daily_cap(200, 2, 25) == 5
     # One bounce is not a pattern; a single bad address must not stall the pipeline.
-    assert sfd.daily_cap(200, 1, 25) == 10
+    assert sfd.daily_cap(200, 1, 25) == 20
     # Nor is a high count against a large denominator below the rate.
-    assert sfd.daily_cap(200, 3, 200) == 10
+    assert sfd.daily_cap(200, 3, 200) == 20
+    # The drop is from the TOP of the ramp too: high volume is no defence against bad delivery.
+    assert sfd.daily_cap(5_000, 40, 200) == 5
 
 
 def test_unreadable_delivery_state_falls_back_to_the_floor(monkeypatch):

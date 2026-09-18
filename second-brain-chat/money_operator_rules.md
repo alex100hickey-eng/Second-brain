@@ -120,8 +120,14 @@ step, and you need me to prompt you to say do the next step." So inside your tas
   (`source`, 5-50 active ads, DTC brands only — never retailers, agencies or marketplaces), and
   Hunter inside quota. 0 active ads → `note --ad-count 0` (hold). Over 100 → note and skip.
   **The daily cadence is not fixed at 5 any more** — `status` prints it ("cadence: N/day") and it
-  rises with the clean send record, so top the queue to the stock target `status` asks for, not to
-  a number you remember.
+  ramps to 20/day on a clean send record, so top the queue to the stock target `status` asks for
+  ("Need N more draft(s) to hold M in stock"), not to a number you remember. Your brief names how
+  many you may add in one run; do the whole batch in that one run rather than stopping early —
+  a run that writes two drafts costs nearly as much as one that writes eight.
+  **Sourcing is now the thing most likely to starve the send.** At 15-20 sends a day the in-band
+  pool empties in days, so on an `sf_source` task keep going until you have added the number the
+  brief asks for, using the Ad Library keyword search across NEW categories rather than re-reading
+  ones already mined.
   **The greeting is decided for you, in `status`.** Each target prints either `greet "Gillian"` or
   `front desk, NO greeting`. Follow it exactly. A name there came off the brand's own about page
   and is in `contact_name_source`; never invent one, never guess a founder from a brand name, and

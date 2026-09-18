@@ -460,14 +460,20 @@ PER_DAY = 5                # the floor, and where a cold or a troubled domain se
 # It stayed at 5 because raising it was a judgement nobody was scheduled to make. So it is a
 # function of delivery evidence instead of a number someone has to remember to change:
 #
-#   under 30 clean sends   5/day   still proving the current address quality
-#   30-69                  8/day
-#   70+                   10/day   the August plan's own stated ceiling; not exceeded
+#   under 20 clean sends   5/day   a cold or unproven domain
+#   20-59                 10/day   the August plan's stated ceiling
+#   60-119                15/day
+#   120+                  20/day
 #
-# and ANY sign of bounce trouble drops it straight back to the floor. The ceiling is the
-# plan's, deliberately — having headroom at the provider (Workspace allows 2,000/day) is not
-# a reason to outrun the reputation the domain spent three weeks earning.
-RAMP = ((70, 10), (30, 8), (0, 5))
+# and ANY sign of bounce trouble drops it straight back to the floor. 2026-09-18, Alex, asked
+# whether to go past the plan's 10: "Raise whatever needs to be raised to get me money." The
+# risk was named to him first — this is his domain's reputation, and it is the asset that makes
+# any of this reach an inbox. What makes 20 defensible rather than reckless: the domain is seven
+# weeks old with clean auth (mail-tester 10/10), 31 sends have produced zero bounces and zero
+# DSNs, and a single warmed mailbox on Workspace sustains this comfortably (the provider limit is
+# 2,000/day — never the binding number). The bounce gate below is what keeps it honest, and it
+# needs no one to remember it.
+RAMP = ((120, 20), (60, 15), (20, 10), (0, 5))
 BOUNCE_WINDOW_DAYS = 14
 BOUNCE_HOLD_RATE, BOUNCE_HOLD_MIN = 0.08, 2   # same threshold the bounce nudge fires on
 BOUNCE_KEY = "splitframe:bounces"
