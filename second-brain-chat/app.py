@@ -6462,6 +6462,58 @@ def _prospect_bounce_pass() -> str:
     return "; ".join(f"{h['brand']} <{h['address']}>" for h in hits)
 
 
+_DMARC_KEY = "splitframe:dmarc"
+
+
+def _dmarc_pass() -> str:
+    """Read the DMARC aggregate reports once a day, and say if the domain is going bad.
+
+    Twelve of these had arrived from Google since August and not one had been opened, while
+    the only question that mattered was whether 23 cold emails were even arriving. They are
+    the single third-party delivery signal this setup has: how many messages each receiver
+    saw, whether SPF and DKIM passed, and what the receiver did with them.
+
+    It matters more now than it did: the daily cap ramps toward 20/day, and a domain that
+    starts failing at that volume burns weeks of warmup before a human would notice.
+
+    Runs once per calendar day — the reports are daily, so a 15-minute poll would be 96
+    pointless mailbox reads. What it CANNOT tell anyone is inbox versus spam placement; that
+    is not observable at this volume, and the summary says so rather than implying otherwise.
+    """
+    today = datetime.now(LOCAL_TZ).date().isoformat()
+    st = intake._load_state(_DMARC_KEY) or {}
+    if st.get("checked") == today:
+        return "already today"
+    # app.py imports sys as _sys, so a plain `sys` here would NameError — and _try() would
+    # swallow it into "dmarc: FAILED" forever without anyone learning why.
+    _sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))), "scripts"))
+    import dmarc_check                                        # type: ignore
+    reports = dmarc_check.fetch_reports(days=14)
+    if not reports:
+        # Deliberately not an alert on its own: a brand-new mailbox or a quiet fortnight both
+        # look like this. summarise() raises the staleness alert when there IS history and it
+        # stopped, which is the case that means something broke.
+        st.update({"key": _DMARC_KEY, "checked": today, "last": "no reports"})
+        intake._save_state(st)
+        return "no reports"
+    s = dmarc_check.summarise(reports, today)
+    st.update({"key": _DMARC_KEY, "checked": today, "total": s["total"],
+               "failed": s["failed"], "fail_rate": s["fail_rate"],
+               "by_disposition": s["by_disposition"], "latest_day": s["latest_day"],
+               "alerts": s["alerts"]})
+    intake._save_state(st)
+    for alert in s["alerts"]:
+        try:
+            proactive.send_nudge(
+                "splitframe-dmarc", "⚠️ Splitframe sending is degrading", alert,
+                priority="high", tags="warning", renudge_hours=12)
+        except Exception as e:                                # noqa: BLE001
+            print(f"dmarc nudge failed: {e}")
+    return (f"{s['total']} seen, {s['failed']} failed auth"
+            + (f"; {len(s['alerts'])} alert(s)" if s["alerts"] else ""))
+
+
 def _outbox_sent_pass() -> str:
     """Close outbox items whose Gmail draft is no longer in Drafts. Rides the
     15-minute mail worker: the same poll that reads the mailbox can see that
@@ -6494,6 +6546,7 @@ def _mail_scan_pass() -> dict:
     _try("prospect_replies", _prospect_reply_pass)
     _try("prospect_bounces", _prospect_bounce_pass)
     _try("outbox_sent", _outbox_sent_pass)
+    _try("dmarc", _dmarc_pass)
     # Beat even when individual accounts failed — those already report their own
     # warnings above. This heartbeat answers a different question: is the WORKER
     # still making passes at all? (2h staleness on a 15-min cadence.)
