@@ -157,6 +157,12 @@ class Config:
     # cents-per-set threshold cannot see. Without this the bot locks the bankroll in the worst
     # trade available and misses every good one for a month.
     arb_min_roc_per_day_pct: float = 0.5
+    # An arb that does not complete has to be unwound, and unwinding means selling every filled
+    # leg back at the bid — one full spread per leg. The first real set (chicago 2026-09-19)
+    # offered 6.0c a set against 20c of spread across its six legs: $0.12 of profit risking $0.40
+    # to get it. Both scale with the number of sets, so the test is size-free: the arb must pay
+    # for its own unwind. Lower this only when live fills prove reliable.
+    arb_unwind_cover: float = 1.0
     arb_live_ok: bool = False              # arb legs stay paper until the executor can unwind a partial set
     hourly_rule_discount_f: float = 0.0    # offshore hourly-max rule discount; backtest fit 2026-09-12 (208 city-days) says 0.0, not the 1.0 assumed
     leadlag_move_cents: float = 3.0

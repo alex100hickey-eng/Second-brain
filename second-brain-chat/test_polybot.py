@@ -345,10 +345,12 @@ def test_bucket_sum_arb_math():
     # Real venue prices are whole cents, and the fixture must be too: 4-decimal asks produced
     # sub-tick legs at 0.0082 that risk rightly refuses ("price outside 1-99c"), and earlier the
     # same unrealism silently sized 11 contracts on one leg and 12 on another.
-    for b in ev.buckets:                                               # 9 legs x 0.10 = 0.90
-        b.best_bid, b.best_ask = 0.09, 0.10
+    # 9 legs at a 1c tick carry at least 9c of spread between them, and an arb has to pay for its
+    # own unwind — so a worthwhile set here is nearer 0.81 than 0.90.
+    for b in ev.buckets:                                               # 9 legs x 0.09 = 0.81
+        b.best_bid, b.best_ask = 0.08, 0.09
     kind, net, prices = arb_check(ev.buckets, "us")
-    assert kind == "buy_all" and 5.0 < net < 10.0 and len(prices) == len(ev.buckets)   # 10c gross minus fees
+    assert kind == "buy_all" and 14.0 < net < 19.0 and len(prices) == len(ev.buckets)  # 19c gross minus fees
 
     # An arb the book cannot fill is not an arb. Depth is None until somebody asks the book, and
     # None must block the trade rather than default to a size.
@@ -363,7 +365,7 @@ def test_bucket_sum_arb_math():
     assert {s.contracts for s in sigs} == {12}
     assert all(s.size_usd == pytest.approx(s.price * 12) for s in sigs)
     # a set costs about what the asks sum to, and it is one position in each of the legs' markets
-    assert sum(s.size_usd for s in sigs) == pytest.approx(0.90 * 12, abs=0.05)
+    assert sum(s.size_usd for s in sigs) == pytest.approx(0.81 * 12, abs=0.05)
     assert all(0.01 <= s.price <= 0.99 for s in sigs)                   # every leg is a real tick
 
     # the SET cost is what binds, not the per-market cap: a completed set pays $1 whatever the
@@ -1022,8 +1024,8 @@ def test_sell_all_is_sized_on_what_a_leg_costs_not_on_the_bid():
     from polybot import runner as runner_mod
     cfg = _cfg()
     ev = _event()
-    for b in ev.buckets:                                  # 9 legs bidding 0.12 = 1.08 of bids
-        b.best_bid, b.best_ask, b.bid_qty, b.ask_qty = 0.12, 0.30, 500, 500
+    for b in ev.buckets:                                  # 9 legs bidding 0.14 = 1.26 of bids
+        b.best_bid, b.best_ask, b.bid_qty, b.ask_qty = 0.14, 0.15, 500, 500
     kind, net, prices = arb_check(ev.buckets, "us")
     assert kind == "sell_all" and net > 0
     sigs = BucketSum(cfg).scan(_ctx(event=ev))
@@ -1038,6 +1040,31 @@ def test_sell_all_is_sized_on_what_a_leg_costs_not_on_the_bid():
     assert r.handle_arb_set(sigs) == len(sigs)
 
 
+def test_arb_must_pay_for_its_own_unwind():
+    """A set that half-fills is unwound by selling every filled leg back at the bid -- one full
+    spread each. The first real set (chicago, 2026-09-19) paid 6.0c against 20c of spread across
+    six legs: $0.12 of profit risking $0.40 to get it. Both scale with the number of sets, so the
+    test is size-free.
+
+    Structural consequence: at a 1c tick an N-leg set carries at least Nc of spread, so an arb has
+    to be worth more than a cent a leg before it is worth attempting at all."""
+    from polybot.strategies.bucket_sum import BucketSum
+    cfg = _cfg()
+    ev = _event()
+
+    def book(bid, ask):
+        for b in ev.buckets:
+            b.best_bid, b.best_ask, b.ask_qty, b.bid_qty = bid, ask, 500, 500
+        return _ctx(event=ev)
+
+    # the chicago shape: a real arb, too thin to survive its own unwind
+    assert BucketSum(cfg).scan(book(0.09, 0.10)) == []      # ~7c net against 9c of spread
+    # widen the edge, keep the spread: now it pays for the unwind twice over
+    assert BucketSum(cfg).scan(book(0.08, 0.09))            # ~16c net against 9c of spread
+    cfg.arb_unwind_cover = 0.0                              # knob off -> the thin set comes back
+    assert BucketSum(cfg).scan(book(0.09, 0.10))
+
+
 def test_arb_refuses_a_set_that_locks_capital_for_weeks_to_earn_cents():
     """Cents per set is not profit -- profit is per dollar TIED UP until settlement. On 2026-09-19
     a boc sell-all paid 1c on a $3.96 set settling in 39 days (0.006%/day) while a weather set
@@ -1046,8 +1073,8 @@ def test_arb_refuses_a_set_that_locks_capital_for_weeks_to_earn_cents():
     from polybot.strategies.bucket_sum import BucketSum
     cfg = _cfg()
     ev = _event()
-    for b in ev.buckets:                                   # 9 legs, asks sum 0.90: 10c gross
-        b.best_bid, b.best_ask, b.ask_qty, b.bid_qty = 0.09, 0.10, 500, 500
+    for b in ev.buckets:                                   # 9 legs, asks sum 0.81: 19c gross
+        b.best_bid, b.best_ask, b.ask_qty, b.bid_qty = 0.08, 0.09, 500, 500
 
     class Ctx:
         proven_exhaustive = False
@@ -1056,7 +1083,7 @@ def test_arb_refuses_a_set_that_locks_capital_for_weeks_to_earn_cents():
             self.event, self.venue, self.city, self.kind = ev, "us", "nyc", "high"
             self.date, self.settles_in_days = "2026-09-19", days
 
-    assert BucketSum(cfg).scan(Ctx(1.25))                  # ~6% on capital overnight: take it
+    assert BucketSum(cfg).scan(Ctx(1.25))                  # ~20% on capital overnight: take it
     assert BucketSum(cfg).scan(Ctx(39.0)) == []            # same cents, six weeks: not worth it
     cfg.arb_min_roc_per_day_pct = 0.0                      # knob off -> horizon stops mattering
     assert BucketSum(cfg).scan(Ctx(39.0))

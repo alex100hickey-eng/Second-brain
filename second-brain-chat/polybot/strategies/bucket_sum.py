@@ -178,6 +178,14 @@ class BucketSum(Strategy):
         set_cost = sum(leg_costs)
         # The cap is on the SET, not the leg. A completed set pays $1 whatever the world does, so
         # per-leg direction risk is the wrong ruler; what an arb can lose is a set that half-fills.
+        # A set that half-fills must be unwound: every filled leg sold back at the bid, one full
+        # spread each. That cost scales with the number of sets exactly as the profit does, so the
+        # test is size-free — the arb has to pay for its own unwind or it is not worth attempting.
+        spreads = [(b.best_ask - b.best_bid) * 100 for b in ev.buckets
+                   if b.best_ask is not None and b.best_bid is not None]
+        if len(spreads) == len(ev.buckets):
+            if net < self.cfg.arb_unwind_cover * sum(spreads):
+                return []
         # Profit is per dollar-DAY, not per set. A set that pays 1c on $3.96 and settles in 39
         # days is a worse use of the bankroll than leaving it idle for the next weather arb.
         days = getattr(ctx, "settles_in_days", None)
