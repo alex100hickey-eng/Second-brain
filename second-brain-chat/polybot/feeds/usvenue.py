@@ -46,7 +46,9 @@ except Exception:  # pragma: no cover - import guard
 # on that network spend from the same quota.
 SCREEN_BOOK_TTL_S = 90             # how stale a book may be for SCREENING (never for trading)
 CALL_BUDGET = 5                    # requests allowed per window
-CALL_WINDOW_S = 12.0               # measured recovery is seconds; 12 leaves room for the shared IP
+CALL_WINDOW_S = 12.0               # STARTING window; widened automatically when the venue refuses
+CALL_WINDOW_MAX_S = 60.0           # ceiling on the self-tuned window
+CLEAN_CALLS_TO_RELAX = 40          # a long clean run earns the window back
 RATE_LIMIT_BACKOFF_S = 15          # first offence — short, because recovery is short
 RATE_LIMIT_BACKOFF_MAX_S = 120     # ceiling if it keeps happening
 # The budget throttles real network calls. Tests inject a fake client and must not sleep for it:
@@ -192,6 +194,9 @@ class USVenue:
         self._backoff_reason = ""
         self._backoff_s = RATE_LIMIT_BACKOFF_S
         self._calls: list[float] = []      # timestamps of recent requests, the token bucket
+        self._window_s = CALL_WINDOW_S     # self-tuning: the campus IP's spare quota varies
+        self._clean = 0
+        self.on_backoff = None             # set by the runner so a blind venue is never silent
         self._missing: dict[str, float] = {}   # event slug -> retry-after ts
         self._book_cache: dict[str, tuple] = {}   # market slug -> (ts, book), for the SCREEN only
 
@@ -217,6 +222,20 @@ class USVenue:
     def _enter_backoff(self, exc: Exception) -> None:
         self._backoff_until = time.time() + self._backoff_s
         self._backoff_reason = f"{type(exc).__name__}: {str(exc).splitlines()[0][:120]} ({self._backoff_s:.0f}s)"
+        # The budget was tuned on a probe that had the campus IP to itself. It does not, so let the
+        # window find its own level rather than pretending 5-per-12s is a law.
+        self._window_s = min(self._window_s * 1.5, CALL_WINDOW_MAX_S)
+        self._clean = 0
+        # A venue that has gone blind used to do so in total silence: scan_weather returns 0
+        # without logging, so the 2-minute arb scan simply did not happen and nothing said why.
+        # That is this system's signature failure and it cost 12-to-16-minute holes in the window
+        # on 2026-09-19.
+        if self.on_backoff:
+            try:
+                self.on_backoff(f"us venue blind for {self._backoff_s:.0f}s "
+                                f"(budget now {CALL_BUDGET}/{self._window_s:.0f}s) — {self._backoff_reason}")
+            except Exception:
+                pass
         self._backoff_s = min(self._backoff_s * 2, RATE_LIMIT_BACKOFF_MAX_S)
 
     def _space(self) -> None:
@@ -229,13 +248,13 @@ class USVenue:
         if TEST_MODE:
             return
         now = time.time()
-        self._calls = [t for t in self._calls if now - t < CALL_WINDOW_S]
+        self._calls = [t for t in self._calls if now - t < self._window_s]
         if len(self._calls) >= CALL_BUDGET:
-            wait = CALL_WINDOW_S - (now - self._calls[0]) + 0.05
+            wait = self._window_s - (now - self._calls[0]) + 0.05
             if wait > 0:
                 time.sleep(wait)
             now = time.time()
-            self._calls = [t for t in self._calls if now - t < CALL_WINDOW_S]
+            self._calls = [t for t in self._calls if now - t < self._window_s]
         self._calls.append(now)
 
     def _guarded(self, fn, default=None):
@@ -251,6 +270,10 @@ class USVenue:
                 return default
             raise
         self._backoff_s = RATE_LIMIT_BACKOFF_S   # a clean call resets the escalation
+        self._clean += 1
+        if self._clean >= CLEAN_CALLS_TO_RELAX and self._window_s > CALL_WINDOW_S:
+            self._window_s = max(self._window_s / 1.5, CALL_WINDOW_S)
+            self._clean = 0
         return out
 
     # ---- market data ---------------------------------------------------------------------

@@ -1040,6 +1040,39 @@ def test_sell_all_is_sized_on_what_a_leg_costs_not_on_the_bid():
     assert r.handle_arb_set(sigs) == len(sigs)
 
 
+def test_a_blind_venue_says_so_and_the_budget_retunes_itself():
+    """scan_weather returns 0 the moment the venue is unavailable, and it logs nothing -- so a
+    rate-limited bot simply stops scanning and nothing says why. That produced 12-to-16 minute
+    holes in a 2-minute window on 2026-09-19, invisible in the log. The budget was also tuned on a
+    probe that had the campus IP to itself, which it does not."""
+    from polybot.feeds import usvenue
+    said = []
+
+    class RateLimited(Exception):
+        pass
+
+    class Markets:
+        def book(self, slug):
+            raise RateLimited("<!doctype html>...You are being rate limited...")
+
+    class Client:
+        markets = Markets()
+
+    v = usvenue.USVenue()
+    v.available, v._client = True, Client()
+    v.on_backoff = said.append
+    start_window = v._window_s
+    assert v.book("x") is None
+    assert v.available is False
+    assert said and "blind" in said[0] and "budget now" in said[0]
+    assert v._window_s > start_window            # the window widens rather than insisting it knows
+    v._backoff_until = 0.0                       # a second refusal widens it again
+    v.available = True
+    v.book("x")
+    assert v._window_s > start_window * 1.5 - 1e-9
+    assert len(said) == 2
+
+
 def test_the_screen_may_reuse_a_recent_book_but_a_trade_never_does():
     """Re-pricing the same 1c tail leg every two minutes is most of what the screen spends, and at
     five requests per twelve seconds that housekeeping can queue ahead of a real candidate's depth

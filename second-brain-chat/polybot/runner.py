@@ -139,6 +139,7 @@ class Runner:
         self.ledger.gate_since_ts = self.cfg.gate_since_ts
         self.ledger.min_us_signals = self.cfg.min_us_signals
         self.us = USVenue()
+        self.us.on_backoff = lambda msg: self.log(f"  {msg}")
         self.risk = RiskManager(self.cfg, self.ledger)
         self.paper = PaperEngine(self.ledger, history_fn=self._paper_history, resolution_fn=self._paper_resolution)
         self.executor = Executor(self.ledger, self.us, self.cfg, self.log)
@@ -352,7 +353,7 @@ class Runner:
 
     # ---- scans -----------------------------------------------------------------------------
     def scan_weather(self, cities=None, modules=None, date: datetime | None = None, kinds=None,
-                     venue: str = "offshore") -> int:
+                     venue: str = "offshore", day_offsets=None) -> int:
         """venue='offshore': the paper proxy over every city. venue='us': the five Polymarket US cities on
         the venue's own books — the only signals that can ever be sent live."""
         n = 0
@@ -373,7 +374,7 @@ class Runner:
         # tomorrow's book is the thinner, worse-quoted one — which is where a set under $1 is MORE
         # likely, not less. Only the arb path takes this: weather_lock and weather_obs trade on
         # observations of a day in progress and have nothing to say about tomorrow.
-        offsets = (0, 1) if (light and venue == "us") else (0,)
+        offsets = day_offsets if day_offsets is not None else ((0, 1) if (light and venue == "us") else (0,))
         for city in cities:
             for kind in kinds:
                 for day_offset in offsets:
@@ -616,11 +617,15 @@ class Runner:
                         # trade — so the offshore pass could never emit a signal, while costing
                         # ~60 gamma-api calls every five minutes (17k a day) for nothing.
                         if self.us.available:
-                            self.scan_weather(modules=["bucket_sum"], venue="us")
-                            # The same arb over every PROVEN one-winner event, not just weather.
-                            # Weather is 10 markets in a 6-hour window; this is where extra shots
-                            # on goal come from, and `universe` is what keeps it safe.
-                            if self.cfg.mode("bucket_sum") != "off":
+                            # The budget is five requests a window and the window is shared with
+                            # the campus, so spend it where arbs are actually brief: TODAY's five
+                            # weather markets. Tomorrow's books and the central banks settle weeks
+                            # out and were costing ten of the fifteen calls a pass — which is what
+                            # pushed the venue into repeated silent backoffs and left 12-to-16
+                            # minute holes in the 2-minute scan on 2026-09-19.
+                            self.scan_weather(modules=["bucket_sum"], venue="us", day_offsets=(0,))
+                            if now.minute % 10 == 0 and self.cfg.mode("bucket_sum") != "off":
+                                self.scan_weather(modules=["bucket_sum"], venue="us", day_offsets=(1,))
                                 self.scan_universe()
                     if now.minute % 5 == 0:
                         self.scan_other(modules=["leadlag", "maker_rewards"])
