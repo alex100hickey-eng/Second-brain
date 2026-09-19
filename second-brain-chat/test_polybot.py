@@ -1172,6 +1172,37 @@ def test_hopeless_candidates_are_refused_before_the_depth_call_is_paid_for():
     assert not worth_confirming(book(0.08, 0.09), 0.2, cfg, days=1.25)
 
 
+def test_an_empty_ladder_clears_the_stale_quote_it_replaces():
+    """Once the book has answered, the book is the truth. miahigh's "92 or above" showed ask=0.04
+    from the event object and NO offers at all in the book on 2026-09-19; leaving the stale quote
+    in place made arb_check report a 4.4c buy-all on a leg that could not be bought at any price
+    -- the phantom-edge trap wearing a new hat."""
+    from polybot.feeds import usvenue
+    from polybot.strategies.bucket_sum import arb_check
+
+    class Markets:
+        def book(self, slug):
+            if slug.endswith("t8"):                 # the favourite nobody will sell
+                return {"marketData": {"bids": [{"px": {"value": "0.03"}, "qty": "5"}], "offers": []}}
+            return {"marketData": {"bids": [{"px": {"value": "0.09"}, "qty": "50"}],
+                                   "offers": [{"px": {"value": "0.10"}, "qty": "50"}]}}
+
+    class Client:
+        markets = Markets()
+
+    v = usvenue.USVenue()
+    v.available, v._client = True, Client()
+    ev = _event()
+    for b in ev.buckets:                            # the event object quotes every leg
+        b.best_bid, b.best_ask = 0.09, 0.10
+    assert arb_check(ev.buckets, "us")[0] == "buy_all"     # 0.90 of asks: looks like an arb
+    v.fill_depth_buckets(ev.buckets)
+    assert ev.buckets[8].best_ask is None           # the book says nobody is offering that leg
+    assert ev.buckets[8].ask_levels == []
+    assert arb_check(ev.buckets, "us")[0] is None   # so there is no buy-all set to be had
+    assert ev.buckets[8].best_bid == 0.03           # the side that DOES exist is kept
+
+
 def test_sizing_walks_the_ladder_for_dollars_not_cents_per_set():
     """Top-of-book sizing picks the best cents-per-set and the worst dollars. Chicago's "71 or
     below" bid 3 contracts at 0.16 and 100 at 0.15 on 2026-09-19: one cent of price is the

@@ -417,10 +417,13 @@ class USVenue:
             b.bid_levels, b.ask_levels = bids, asks
             b.bid_qty = sum(q for px, q in bids if px == bids[0][0]) if bids else 0.0
             b.ask_qty = sum(q for px, q in asks if px == asks[0][0]) if asks else 0.0
-            if bids:
-                b.best_bid = bids[0][0]
-            if asks:
-                b.best_ask = asks[0][0]
+            # Once the book has answered, the book is the truth. Leaving the event object's stale
+            # quote in place when the ladder comes back EMPTY is the phantom-edge trap wearing a
+            # new hat: miahigh's "92 or above" showed ask=0.04 from the event and no offers at all
+            # in the book on 2026-09-19, and arb_check duly reported a 4.4c buy-all on a leg that
+            # could not be bought at any price.
+            b.best_bid = bids[0][0] if bids else None
+            b.best_ask = asks[0][0] if asks else None
         return ok
 
     def fill_depth(self, event) -> bool:
