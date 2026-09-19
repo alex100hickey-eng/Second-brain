@@ -1040,6 +1040,41 @@ def test_sell_all_is_sized_on_what_a_leg_costs_not_on_the_bid():
     assert r.handle_arb_set(sigs) == len(sigs)
 
 
+def test_the_screen_may_reuse_a_recent_book_but_a_trade_never_does():
+    """Re-pricing the same 1c tail leg every two minutes is most of what the screen spends, and at
+    five requests per twelve seconds that housekeeping can queue ahead of a real candidate's depth
+    read. A stale screen costs at worst a second look; a stale FILL is a bad trade, so the decision
+    to trade always reads fresh."""
+    from polybot.feeds import usvenue
+    calls = []
+
+    class Markets:
+        def book(self, slug):
+            calls.append(slug)
+            return {"marketData": {"bids": [{"px": {"value": "0.02"}, "qty": "40"}],
+                                   "offers": [{"px": {"value": "0.03"}, "qty": "40"}]}}
+
+    class Client:
+        markets = Markets()
+
+    v = usvenue.USVenue()
+    v.available, v._client = True, Client()
+    ev = _event()
+    for b in ev.buckets:
+        b.best_bid = b.best_ask = None
+    # the screen prices the legs, then reuses them on the next pass without spending a call
+    assert v.price_legs(ev.buckets, limit=2) == 2
+    first = len(calls)
+    assert first == 2
+    for b in ev.buckets[:2]:
+        b.best_bid = b.best_ask = None
+    assert v.price_legs(ev.buckets, limit=2) == 2
+    assert len(calls) == first                       # served from the cache
+    # the trade path re-reads every leg regardless of how recently the screen looked
+    v.fill_depth_buckets(ev.buckets[:2])
+    assert len(calls) == first + 2
+
+
 def test_hopeless_candidates_are_refused_before_the_depth_call_is_paid_for():
     """The depth read is the expensive half of the screen -- one book call per leg. The two tests
     that kill most candidates need only prices and a settlement date, so running them afterwards

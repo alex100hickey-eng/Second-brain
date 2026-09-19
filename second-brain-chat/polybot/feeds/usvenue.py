@@ -44,6 +44,7 @@ except Exception:  # pragma: no cover - import guard
 # So: spend from a budget instead of reacting to a ban. The reactive backoff stays as a safety
 # net because gateway.polymarket.us sees the whole CWRU campus IP (129.22.1.29) and other people
 # on that network spend from the same quota.
+SCREEN_BOOK_TTL_S = 90             # how stale a book may be for SCREENING (never for trading)
 CALL_BUDGET = 5                    # requests allowed per window
 CALL_WINDOW_S = 12.0               # measured recovery is seconds; 12 leaves room for the shared IP
 RATE_LIMIT_BACKOFF_S = 15          # first offence — short, because recovery is short
@@ -192,6 +193,7 @@ class USVenue:
         self._backoff_s = RATE_LIMIT_BACKOFF_S
         self._calls: list[float] = []      # timestamps of recent requests, the token bucket
         self._missing: dict[str, float] = {}   # event slug -> retry-after ts
+        self._book_cache: dict[str, tuple] = {}   # market slug -> (ts, book), for the SCREEN only
 
     @property
     def available(self) -> bool:
@@ -282,10 +284,21 @@ class USVenue:
             return {}
         return self._guarded(lambda: _unwrap(self._client.markets.bbo(slug)), default={})
 
-    def book(self, slug: str):
-        """{'bids': [(px, qty)...] high→low, 'asks': [(px, qty)...] low→high, 'last': float|None}."""
+    def book(self, slug: str, max_age_s: float = 0.0):
+        """{'bids': [(px, qty)...] high→low, 'asks': [(px, qty)...] low→high, 'last': float|None}.
+
+        `max_age_s` serves the SCREEN, never a trade. Re-pricing the same 1c tail leg every two
+        minutes is most of what the screen spends — one tick on 2026-09-18 burned 19 calls doing it
+        across five cities — and at five requests per twelve seconds that housekeeping can put a
+        real candidate's depth read behind it in the queue. The decision to trade always reads
+        fresh (`fill_depth_buckets` leaves this at 0), so a stale screen can only cost a second
+        look, never a bad fill."""
         if not self.available:
             return None
+        if max_age_s > 0:
+            hit = self._book_cache.get(slug)
+            if hit and time.time() - hit[0] <= max_age_s:
+                return hit[1]
         d = self._guarded(lambda: _unwrap(self._client.markets.book(slug)))
         if d is None:
             return None
@@ -301,7 +314,9 @@ class USVenue:
         if last is None:  # moved under stats.lastPriceSample.longPx
             sample = ((d.get("stats") or {}).get("lastPriceSample") or {})
             last = _price(sample.get("longPx") or sample.get("px"))
-        return {"bids": bids, "asks": asks, "last": last, "tick": 0.01}
+        out = {"bids": bids, "asks": asks, "last": last, "tick": 0.01}
+        self._book_cache[slug] = (time.time(), out)
+        return out
 
     # ---- weather events (the five US cities) ----------------------------------------------
     def find_weather_event(self, city_slug: str, date: datetime, kind: str = "high") -> WeatherEvent | None:
@@ -437,7 +452,7 @@ class USVenue:
         for b in buckets:
             if (b.best_ask is not None and b.best_bid is not None) or done >= limit:
                 continue
-            book = self.book(b.yes_token)
+            book = self.book(b.yes_token, max_age_s=SCREEN_BOOK_TTL_S)
             if book is None:
                 continue                      # rate limited: leave it unquoted, it stays a no-go
             bids, asks = book.get("bids") or [], book.get("asks") or []
