@@ -58,7 +58,11 @@ CLEAN_CALLS_TO_RELAX = 40          # a long clean run earns the window back
 # because a leg's book call came back empty, and an empty book call on this venue means the quota
 # was gone. Screening now runs on a smaller budget so there is always something left for the call
 # that actually trades.
-DEPTH_RESERVE = 2
+# 1, not 2: the reserve costs screening throughput at CALL_BUDGET=5, and holding back two of
+# five tokens made a cold pass miss its 45s budget entirely ("skipped 10 city-day(s)"). One token
+# still means a depth read never has to wait a full window to make its first call, which is the
+# part that matters -- _space() sleeps rather than failing, so the rest of the read always lands.
+DEPTH_RESERVE = 1
 # How long a depth read will WAIT OUT a cooldown before giving up on the set. book() fails on
 # exactly one path -- the quota -- so "ask again immediately" is useless: the venue is in backoff
 # and the retry fails the same way. Serving the cooldown is the only retry that means anything.
