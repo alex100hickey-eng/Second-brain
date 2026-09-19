@@ -2029,6 +2029,21 @@ def test_a_big_paper_arb_is_announced_and_a_small_one_is_not():
         assert len(sent) == 1
         assert "$3.23" in sent[0][0]
         assert "arb_live_ok is off" in sent[0][1]
+
+        # "You missed $3.23" means something different depending on whether the money was there.
+        # On 2026-09-19 the account held $272.50 of value and $0.06 of spendable cash, all of it
+        # in positions Alex had opened himself; an alert that leaves that out invites him to flip
+        # the switch into an order that cannot fill.
+        sent.clear()
+        r.us = type("V", (), {"available": True, "balance_usd": staticmethod(lambda: 0.06)})()
+        r.handle_arb_set(legs(15.5, 21))
+        assert len(sent) == 1 and "could NOT have taken it" in sent[0][1]
+        assert "$0.06" in sent[0][1]
+
+        sent.clear()
+        r.us = type("V", (), {"available": True, "balance_usd": staticmethod(lambda: 10_000.0)})()
+        r.handle_arb_set(legs(15.6, 21))
+        assert len(sent) == 1 and "could NOT have taken it" not in sent[0][1]
     finally:
         notify.nudge = old
 

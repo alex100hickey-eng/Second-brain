@@ -411,10 +411,23 @@ class Runner:
             # different event: it is the case the whole strategy exists for, it lasts about a
             # minute, and while arb_live_ok is off it passes by with nobody told. Say so, so the
             # decision to go live is made against a real opportunity rather than a backtest.
+            #
+            # And say whether it was even takeable. "You missed $6.84" means something different
+            # depending on whether the money was there: on 2026-09-19 the account held $272.50 of
+            # value and $0.06 of spendable cash, all of it in positions Alex had opened himself.
+            # An alert that leaves that out invites him to flip the switch into an order that
+            # cannot fill.
+            why = f"Paper only: arb_live_ok is off."
+            try:
+                cash = self.us.balance_usd()
+            except Exception:
+                cash = None
+            if cash is not None and cash + 1e-9 < cost:
+                why += (f" Live could NOT have taken it either: buying power ${cash:.2f} "
+                        f"against a ${cost:.2f} set.")
             notify.nudge(f"polybot arb (paper): ${profit:.2f} on the table",
                          f"{sigs[0].label} — {len(sigs)} legs, {sigs[0].contracts} sets, "
-                         f"${cost:.2f} in at {sigs[0].edge_cents:.1f}c/set. Paper only: "
-                         f"arb_live_ok is off.",
+                         f"${cost:.2f} in at {sigs[0].edge_cents:.1f}c/set. {why}",
                          key="polybot-arb-big", log=self.log)
         if mode == "live":
             self.executor.place_arb_set(legs)
