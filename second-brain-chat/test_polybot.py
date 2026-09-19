@@ -1605,6 +1605,127 @@ def test_us_venue_backs_off_on_rate_limit_instead_of_hammering():
     assert calls["n"] == 1                              # tries again once backoff has passed
 
 
+def _fake_us_weather_event(slug, n_markets=3):
+    """An events.list-shaped event for `slug`, with quoted markets."""
+    city = "New York City"
+    return {"slug": slug, "endDate": "2026-09-20T05:00:00Z", "markets": [
+        {"slug": f"tc-{slug}-lt{69 + i}f", "active": True, "closed": False,
+         "title": f"{69 + i * 2} to {70 + i * 2}",
+         "question": "Highest temperature in NYC on September 19?",
+         "description": f"Will the highest temperature recorded at Central Park (KNYC) in {city} "
+                        f"for 2026-09-19 ... be less than or equal to {69 + i}F?",
+         "outcomes": '["Yes","No"]', "outcomePrices": '["0.30","0.70"]',
+         "bestBidQuote": {"value": "0.30"}, "bestAskQuote": {"value": "0.34"}}
+        for i in range(n_markets)]}
+
+
+def test_us_prefetch_fetches_a_whole_pass_in_one_call():
+    """A pass over five cities and two days asked the venue for up to TEN separate events, one
+    `retrieve_by_slug` each. The venue allows five requests per window, so the pass spent more than
+    its entire quota on lookups before pricing a single leg — which is why a scan configured for
+    every minute actually ran every two, against arb episodes that last about a minute.
+
+    `events.list({"slug": [...]})` returns the same objects (verified field-for-field against the
+    live gateway 2026-09-19, quote blocks included), so the whole pass is one call."""
+    from polybot.feeds import usvenue
+
+    calls = {"list": 0, "retrieve": 0}
+    slugs = [usvenue.us_event_slug(c, datetime(2026, 9, 19), "high")
+             for c in ("nyc", "chicago", "miami")]
+
+    class Events:
+        def list(self, params):
+            calls["list"] += 1
+            return {"events": [_fake_us_weather_event(s) for s in params["slug"]]}
+
+        def retrieve_by_slug(self, slug):
+            calls["retrieve"] += 1
+            raise AssertionError("prefetched events must not be fetched again one at a time")
+
+    class Client:
+        events = Events()
+
+    v = usvenue.USVenue()
+    v.available, v._client = True, Client()
+
+    n = v.prefetch_weather_events((c, datetime(2026, 9, 19), "high")
+                                  for c in ("nyc", "chicago", "miami"))
+    assert n == 3
+    assert calls["list"] == 1                      # THE point: three events, one request
+
+    for city in ("nyc", "chicago", "miami"):
+        ev = v.find_weather_event(city, datetime(2026, 9, 19), "high")
+        assert ev is not None and ev.buckets        # served from the batch...
+    assert calls["retrieve"] == 0                   # ...costing nothing extra
+    assert calls["list"] == 1
+
+    # A prefetched quote is good for its own pass only: past the TTL we pay for a fresh look
+    # rather than screen on the previous pass's paper.
+    v._prefetch = {s: (time.time() - usvenue.EVENT_PREFETCH_TTL_S - 1, e)
+                   for s, (_, e) in v._prefetch.items()}
+    with pytest.raises(AssertionError):
+        v.find_weather_event("nyc", datetime(2026, 9, 19), "high")
+
+
+def test_us_prefetch_failure_falls_back_to_per_event_lookups():
+    """The batch is an optimisation, never a dependency: if the list call is rate limited or comes
+    back empty, every caller must still find its event the old way. A cheaper pass that goes blind
+    when the venue hiccups is worse than the slow one it replaced."""
+    from polybot.feeds import usvenue
+
+    class RateLimited(Exception):
+        status_code = 429
+
+    calls = {"retrieve": 0}
+
+    class Events:
+        def list(self, params):
+            raise RateLimited("<!doctype html>...You are being rate limited...")
+
+        def retrieve_by_slug(self, slug):
+            calls["retrieve"] += 1
+            return {"event": _fake_us_weather_event(slug)}
+
+    class Client:
+        events = Events()
+
+    v = usvenue.USVenue()
+    v.available, v._client = True, Client()
+
+    assert v.prefetch_weather_events([("nyc", datetime(2026, 9, 19), "high")]) == 0
+    assert v._prefetch == {}                 # nothing cached, nothing half-cached
+    v._backoff_until = 0.0                   # the rate limit tripped a cooldown; let it elapse
+    ev = v.find_weather_event("nyc", datetime(2026, 9, 19), "high")
+    assert ev is not None and ev.buckets     # still found, the old way
+    assert calls["retrieve"] == 1
+
+
+def test_us_prefetch_skips_slugs_known_missing():
+    """Polymarket US lists no `low` market and often no tomorrow market yet. Those 404s are already
+    remembered for an hour; the batch must honour that rather than re-asking for ten dead slugs."""
+    from polybot.feeds import usvenue
+
+    asked = {}
+
+    class Events:
+        def list(self, params):
+            asked["slugs"] = list(params["slug"])
+            return {"events": [_fake_us_weather_event(s) for s in params["slug"]]}
+
+    class Client:
+        events = Events()
+
+    v = usvenue.USVenue()
+    v.available, v._client = True, Client()
+    dead = usvenue.us_event_slug("nyc", datetime(2026, 9, 20), "high")
+    v._missing[dead] = time.time() + usvenue.MISSING_EVENT_RETRY_S
+
+    v.prefetch_weather_events([("nyc", datetime(2026, 9, 19), "high"),
+                               ("nyc", datetime(2026, 9, 20), "high")])
+    assert dead not in asked["slugs"]
+    assert asked["slugs"] == [usvenue.us_event_slug("nyc", datetime(2026, 9, 19), "high")]
+
+
 def test_us_scan_records_us_signals_and_snapshots(monkeypatch):
     from polybot import runner as runner_mod
     from polybot.feeds import usvenue

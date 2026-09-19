@@ -58,6 +58,10 @@ RATE_LIMIT_BACKOFF_MAX_S = 120     # ceiling if it keeps happening
 # switch app.py and capability_watcher.py use.
 TEST_MODE = os.environ.get("JARVIS_TEST", "").strip().lower() in ("1", "true", "yes")
 MISSING_EVENT_RETRY_S = 3600  # an event slug that 404s is not asked for again this hour
+# A prefetched event is good for the pass that fetched it and no longer. Screening on a quote
+# from the PREVIOUS pass is the phantom-edge trap again, so this is deliberately shorter than
+# the gap between passes: miss the cache and pay for the call rather than trade on stale paper.
+EVENT_PREFETCH_TTL_S = 45
 
 
 def _is_rate_limited(exc: Exception) -> bool:
@@ -206,6 +210,7 @@ class USVenue:
         self.on_backoff = None             # set by the runner so a blind venue is never silent
         self._missing: dict[str, float] = {}   # event slug -> retry-after ts
         self._book_cache: dict[str, tuple] = {}   # market slug -> (ts, book), for the SCREEN only
+        self._prefetch: dict[str, tuple] = {}     # event slug -> (ts, event), one batched pass
 
     @property
     def available(self) -> bool:
@@ -349,6 +354,42 @@ class USVenue:
         return out
 
     # ---- weather events (the five US cities) ----------------------------------------------
+    def prefetch_weather_events(self, triples) -> int:
+        """Fetch a whole pass's weather events in ONE call. `triples` is (city_slug, date, kind).
+
+        `events.list({"slug": [...]})` returns the same event objects `retrieve_by_slug` does —
+        checked field-for-field against the live gateway on 2026-09-19: identical key sets, the
+        `bestBidQuote`/`bestAskQuote` blocks present, same count of unquoted legs. So a pass over
+        five cities and two days, which asked for up to TEN separate events, can ask once.
+
+        That was the real cadence limit. At five requests per window a ten-event pass needed two
+        full windows before it priced a single leg, which is why a scan configured for every
+        minute actually ran every two — and arb episodes last about a minute. It also makes
+        TOMORROW's event free to watch on every pass instead of once an hour, and tomorrow's book
+        is the thinner, worse-quoted one, i.e. where a set under $1 is MORE likely.
+
+        Returns how many events were cached. Any failure leaves the cache empty and every caller
+        falls through to the per-event path, so this can make a pass cheaper but never wronger.
+        """
+        self._prefetch.clear()
+        if not self.available:
+            return 0
+        want = []
+        for city_slug, date, kind in triples:
+            slug = us_event_slug(city_slug, date, kind)
+            retry_at = self._missing.get(slug)
+            if retry_at and time.time() < retry_at:
+                continue          # known 404 this hour — a batch slot is cheap, not free
+            if slug not in want:
+                want.append(slug)
+        if not want:
+            return 0
+        now = time.time()
+        for slug, e in self.events_by_slug(want).items():
+            if e.get("markets"):
+                self._prefetch[slug] = (now, e)
+        return len(self._prefetch)
+
     def find_weather_event(self, city_slug: str, date: datetime, kind: str = "high") -> WeatherEvent | None:
         """The US venue's own temperature event for a city/day, or None. Slug first, then search."""
         if not self.available:
@@ -357,6 +398,9 @@ class USVenue:
         retry_at = self._missing.get(slug)
         if retry_at and time.time() < retry_at:
             return None
+        hit = self._prefetch.get(slug)
+        if hit and time.time() - hit[0] <= EVENT_PREFETCH_TTL_S:
+            return weather_event_from_us(hit[1], city_slug, kind)
         e = None
         try:
             self._space()

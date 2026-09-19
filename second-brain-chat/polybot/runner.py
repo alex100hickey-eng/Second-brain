@@ -53,6 +53,17 @@ class _UniverseCtx:
         self.settles_in_days = settles_in_days
 
 
+def _scan_date(city: str, date, day_offset: int):
+    """The calendar day a (city, day_offset) pass asks for — the CITY's own day, not the Mac's.
+
+    One place on purpose: the prefetch has to build exactly the slugs `_scan_one` will go on to
+    ask for, and near midnight New York and Los Angeles are on different dates. A mismatch here
+    would not error, it would just turn every prefetch into a miss and quietly undo the batching.
+    """
+    now_local = datetime.now(ZoneInfo(config.city_meta(city)["tz"]))
+    return (date or now_local) + timedelta(days=day_offset)
+
+
 def _days_until(iso: str | None) -> float | None:
     """Days from now to an ISO timestamp, floored at half a day. None when unparseable — and the
     arb then falls back to the flat cents threshold rather than inventing a horizon."""
@@ -380,6 +391,16 @@ class Runner:
         # pass stalled after its first city and held the loop for fifteen minutes, which no amount
         # of cadence tuning upstream can fix. Abandon the tail and let the next tick start clean.
         deadline = time.time() + self.cfg.arb_pass_budget_s if venue == "us" else None
+        # Ask for every event this pass needs in ONE request before touching the first city. Ten
+        # separate lookups was more than the venue's whole per-window quota, so the pass spent its
+        # budget on housekeeping and finished a minute late — see prefetch_weather_events.
+        if venue == "us":
+            try:
+                self.us.prefetch_weather_events(
+                    (city, _scan_date(city, date, off), kind)
+                    for city in cities for kind in kinds for off in offsets)
+            except Exception as exc:
+                self.log(f"  us prefetch failed ({exc}) — falling back to per-event lookups")
         skipped = 0
         for city in cities:
             for kind in kinds:
@@ -397,8 +418,7 @@ class Runner:
         """One (city, kind, day): build the context, snapshot the book, run the wanted modules."""
         n = 0
         try:
-            now_local = datetime.now(ZoneInfo(config.city_meta(city)["tz"]))
-            scan_date = (date or now_local) + timedelta(days=day_offset)
+            scan_date = _scan_date(city, date, day_offset)
             fetch = {"members": [], "obs": [], "hourly": []} if light else {}
             if venue == "us":
                 event = self.us.find_weather_event(city, scan_date, kind)
