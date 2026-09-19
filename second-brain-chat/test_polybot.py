@@ -1701,6 +1701,29 @@ def test_the_best_book_on_record_is_sized_and_taken():
     assert contracts * net_n / 100 >= cfg.arb_min_profit_usd
 
 
+def test_us_settle_stays_out_of_the_hours_the_arb_sweep_owns():
+    """Every open US position costs a resolution() call, so an hourly settle is a ~25-request
+    burst into a budget of five per window. On 2026-09-19 it tripped the limiter at 14:20:53 and
+    blinded the arb sweep for 15s, then widened the window on top — for answers that could not
+    exist, because US weather settles on the NWS climate report at 8 AM ET the morning AFTER the
+    market's date.
+
+    Nothing settles later as a result: the calls that stop happening are only the ones that were
+    always going to say "not yet"."""
+    from polybot.runner import Runner
+
+    at = lambda h: datetime(2026, 9, 19, h, 20)
+    due = Runner._us_settle_due
+    for h in range(9, 17):
+        assert due(None, at(h)) is False, f"{h}:20 is inside the fast arb sweep"
+    # 08:20 runs, immediately after the 8 AM ET settlement that the whole day's positions wait on
+    assert due(None, at(8)) is True
+    for h in list(range(17, 24)) + list(range(0, 9)):
+        assert due(None, at(h)) is True
+    # sixteen opportunities a day for something that happens once
+    assert sum(1 for h in range(24) if due(None, at(h))) == 16
+
+
 def test_paper_cannot_buy_the_same_liquidity_twice(tmp_path):
     """Paper orders do not consume the book, so a persistent mispricing gets bought over and over
     against the same contracts. Miami on 2026-09-19 was booked twice five minutes apart, 62 sets

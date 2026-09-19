@@ -597,12 +597,30 @@ class Runner:
 
     def settle(self) -> dict:
         counts = self.paper.settle_open("offshore", self.log)
-        if self.us.available:
+        if self.us.available and self._us_settle_due():
             us_counts = self.paper.settle_open("us", self.log)
             for k, v in us_counts.items():
                 counts[k] = counts.get(k, 0) + v
         self.log(f"settle: {counts}")
         return counts
+
+    def _us_settle_due(self, now=None) -> bool:
+        """Is this an hour where asking the US venue for settlements is worth the quota?
+
+        Every open US position costs a resolution() call, so an hourly settle is a burst of ~25
+        requests into a budget of five per window. It tripped the limiter at 14:20:53 on
+        2026-09-19 and blinded the arb sweep for fifteen seconds, then widened the window on top
+        of that — for answers that could not exist: US weather settles on the NWS climate report
+        at 8 AM ET the morning AFTER the market's date, so every mid-day call asks a question
+        whose answer is certainly "not yet".
+
+        So stay out of the hours the arb sweep owns. 08:20 still runs, right after settlement,
+        and so does every hour through the evening and overnight — sixteen chances a day at
+        something that happens once. Nothing settles later than it would have; the calls that
+        stop happening are only the ones that were always going to say no.
+        """
+        hour = (now or datetime.now(ET)).hour
+        return not (9 <= hour <= 16)
 
     def backtest(self, days: int = 7, cities=None, kinds=("high",)) -> str:
         out = f"{config.ROOT}/backtest-latest.json"
