@@ -1001,6 +1001,50 @@ def test_arb_set_is_refused_whole_when_any_leg_fails_risk():
     assert led2.conn.execute("SELECT COUNT(*) c FROM signals").fetchone()["c"] == 0   # nothing recorded
 
 
+def test_sell_all_is_sized_on_what_a_leg_costs_not_on_the_bid():
+    """Buying NO on every leg costs (1 - bid) per leg, not the bid. Sizing off the bid let the
+    dearest legs blow the per-market cap, risk refused them, and the whole set was thrown away --
+    which is why no sell-all set ever reached the ledger even though the bids summed over $1 in a
+    third of the event-minutes that had a full set of them."""
+    from polybot.strategies.bucket_sum import BucketSum, arb_check
+    from polybot import runner as runner_mod
+    cfg = _cfg()
+    ev = _event()
+    for b in ev.buckets:                                  # 9 legs bidding 0.12 = 1.08 of bids
+        b.best_bid, b.best_ask, b.bid_qty, b.ask_qty = 0.12, 0.30, 500, 500
+    kind, net, prices = arb_check(ev.buckets, "us")
+    assert kind == "sell_all" and net > 0
+    sigs = BucketSum(cfg).scan(_ctx(event=ev))
+    assert sigs and all(s.side == "BUY_NO" for s in sigs)
+    # each leg costs 1 - 0.12 = 0.88, so NO leg may exceed the $20 per-market cap...
+    assert max(s.size_usd for s in sigs) <= cfg.caps.max_per_market_usd + 1e-9
+    # ...and the whole set must fit the exposure cap on its REAL cost, not on the bids
+    assert sum(s.size_usd for s in sigs) <= cfg.caps.max_exposure_usd + 1e-9
+    assert len({s.contracts for s in sigs}) == 1
+    # every leg passes risk, so the set is accepted whole rather than silently dropped
+    r = runner_mod.Runner(cfg, _ledger(), log=lambda *_: None)
+    assert r.handle_arb_set(sigs) == len(sigs)
+
+
+def test_arb_picks_the_direction_with_the_better_return_on_capital():
+    """A buy-all set ties up ~$0.88 to make 12c; the same six legs sold tie up ~$4.92 to make 8c.
+    Choosing on cents-per-set picks the one that earns an eighth as much per dollar deployed."""
+    from polybot.strategies.bucket_sum import arb_check
+    ev = _event()
+    n = len(ev.buckets)
+    # asks sum to 0.90 (buy nets ~10c on $0.90) and bids sum to 1.12 (sell nets ~12c on $7.88)
+    for b in ev.buckets:
+        b.best_ask = round(0.90 / n, 4)
+        b.best_bid = round(1.12 / n, 4)
+    kind, net, _ = arb_check(ev.buckets, "us")
+    assert kind == "buy_all"                    # smaller net per set, far better per dollar
+    # with the buy side gone, the sell side is still taken on its own merits
+    for b in ev.buckets:
+        b.best_ask = round(1.30 / n, 4)
+    kind2, net2, _ = arb_check(ev.buckets, "us")
+    assert kind2 == "sell_all" and net2 > 0
+
+
 def test_arb_set_is_all_or_nothing_never_unbalanced():
     """An arb is N contracts of every leg. A set that ends up 11 of one and 12 of another is a
     naked basket with a story attached, and that is exactly what 4-decimal prices produced before

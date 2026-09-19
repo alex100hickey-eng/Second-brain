@@ -576,7 +576,15 @@ class Runner:
                     # Cloudflare rate limit that banned this IP on 2026-09-17.
                     if now.minute % 15 == 10 and self.us.available:
                         self.scan_weather(modules=["weather_lock", "weather_model_update", "weather_hold", "weather_obs"], venue="us")
-                    if now.minute % 5 == 0:
+                    # Arbs are brief: 12 of the 16 buy-side episodes on record were seen in a
+                    # single observed minute, and the observation cadence WAS five minutes — so a
+                    # five-minute scan samples a fraction of them. They also cluster hard: every
+                    # fully-quoted sub-$1 book so far landed between 11:00 and 17:00 ET, peaking at
+                    # 13:00-14:00. So scan every two minutes across that window and every five
+                    # outside it. A pass is ~12 calls against a budget of 25 a minute, which leaves
+                    # room for the six-call depth read a candidate triggers.
+                    arb_tick = now.minute % (2 if 10 <= now.hour <= 18 else 5) == 0
+                    if arb_tick:
                         # US only. bucket_sum cannot size a set without book depth, and depth is a
                         # call per bucket that is only worth spending on a venue we can actually
                         # trade — so the offshore pass could never emit a signal, while costing
@@ -588,6 +596,7 @@ class Runner:
                             # on goal come from, and `universe` is what keeps it safe.
                             if self.cfg.mode("bucket_sum") != "off":
                                 self.scan_universe()
+                    if now.minute % 5 == 0:
                         self.scan_other(modules=["leadlag", "maker_rewards"])
                         if self.us.available:
                             self.executor.sync()

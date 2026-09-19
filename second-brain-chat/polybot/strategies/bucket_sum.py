@@ -77,7 +77,15 @@ def arb_check(buckets, venue: str, category: str = "weather", assume_exhaustive:
     if all(x is not None for x in bids):
         proceeds = sum(bids) - sum(fees.leg_cost(x, 1, venue, maker=False, category=category) for x in bids)
         net_sell = (proceeds - 1.0) * 100
-    if net_buy > 0 and net_buy >= net_sell:
+    # Pick by RETURN ON CAPITAL, not cents per set. The two directions are not comparable per set:
+    # a buy-all set ties up sum(asks) ~= $0.88 to make 12c (13.6%), while a sell-all set on the same
+    # six legs ties up N - sum(bids) ~= $4.92 to make 8c (1.6%) — because buying NO on every leg
+    # means paying (1 - bid) six times over. With a fixed exposure cap the cheaper set is worth ~8x
+    # the dollars, so "bigger net per set" would systematically choose the worse trade.
+    roc_buy = (net_buy / 100.0) / max(sum(a for a in asks if a is not None), 1e-9) if net_buy > 0 else -1
+    sell_cost = len(buckets) - sum(x for x in bids if x is not None)
+    roc_sell = (net_sell / 100.0) / max(sell_cost, 1e-9) if net_sell > 0 else -1
+    if net_buy > 0 and roc_buy >= roc_sell:
         return "buy_all", round(net_buy, 2), asks
     if net_sell > 0:
         return "sell_all", round(net_sell, 2), bids
@@ -161,11 +169,15 @@ class BucketSum(Strategy):
             # runner answers that with one book call per bucket and scans again; until then this
             # is a candidate, not a trade.
             return []
-        # Every leg carries the same number of contracts, and the set costs what the set costs.
-        # The per-market cap is a cap on ONE leg, so the binding constraint is the dearest leg.
-        dearest = max(prices)
+        # Every leg carries the same number of contracts, and the caps apply to what a leg COSTS.
+        # For a sell-all set that is (1 - bid), not the bid: sizing off the bid made the dearest
+        # legs blow the per-market cap, risk refused them, and `handle_arb_set` then threw the
+        # whole set away — which is why no sell-all set ever reached the ledger despite the bids
+        # summing over $1 in a third of the event-minutes that had a full set of them.
+        leg_costs = [px if kind == "buy_all" else round(1 - px, 2) for px in prices]
+        dearest = max(leg_costs)
         by_cap = self.cfg.caps.max_per_market_usd / dearest if dearest > 0 else sets
-        by_total = self.cfg.caps.max_exposure_usd / max(sum(prices), 1e-9)
+        by_total = self.cfg.caps.max_exposure_usd / max(sum(leg_costs), 1e-9)
         contracts = int(min(sets, by_cap, by_total, self.cfg.arb_max_sets))
         if contracts < 1:
             return []
@@ -177,7 +189,8 @@ class BucketSum(Strategy):
             out.append(Signal(self.name, ctx.venue, b.yes_token, f"{ctx.city} {ctx.date} {ctx.kind} {b.title}", side,
                               price, price * contracts, net,
                               f"{kind}: {contracts} sets net {net:.1f}c each after taker fees "
-                              f"({len(ev.buckets)} legs, thinnest {sets:.0f})",
+                              f"({len(ev.buckets)} legs, ${sum(leg_costs) * contracts:.2f} in, "
+                              f"{net / sum(leg_costs):.1f}% on capital, thinnest {sets:.0f})",
                               # `contracts` is derived from size_usd/price, so the size IS the way to
                               # say "N contracts of this leg". Prices are 2dp and N is an integer, so
                               # price*N is exact at 2dp and the property reads back exactly N.
@@ -185,7 +198,9 @@ class BucketSum(Strategy):
                               spread_cents=None if b.best_bid is None or b.best_ask is None
                               else round((b.best_ask - b.best_bid) * 100, 1),
                               meta={"market_id": b.market_id, "group": group, "legs": len(ev.buckets),
-                                    "sets": contracts, "net_cents": net}))
+                                    "sets": contracts, "net_cents": net,
+                                    "set_cost_usd": round(sum(leg_costs), 4),
+                                    "roc_pct": round(net / sum(leg_costs), 2)}))
         # Belt and braces. `contracts` is derived from size_usd/price, and the arithmetic only
         # round-trips exactly while prices are well behaved — a 4-decimal price rounded to cents
         # silently produced 11 contracts on one leg and 12 on another in test. An unbalanced set
