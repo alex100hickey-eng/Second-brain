@@ -1619,6 +1619,48 @@ def _fake_us_weather_event(slug, n_markets=3):
         for i in range(n_markets)]}
 
 
+def test_snapshot_keeps_the_whole_ladder_for_arb_candidates(tmp_path):
+    """Top-of-book cannot answer the question that decides whether this strategy is worth real
+    money. The miami set on 2026-09-19 showed 13c of edge with ONE contract at the best ask, so
+    the episode was worth 13 cents -- unless level two was also under $1, which bid_qty/ask_qty
+    do not say. Sizing already walks the levels; the record has to keep them."""
+    from polybot.ledger import Ledger
+
+    led = Ledger(str(tmp_path / "t.db"))
+    led.add_snapshot("us", "leg-a", 0.30, 0.34, 0.31,
+                     bid_qty=1, ask_qty=1,
+                     bid_levels=[(0.30, 1), (0.28, 40)], ask_levels=[(0.34, 1), (0.37, 25)])
+    led.add_snapshot("us", "leg-b", 0.10, 0.12, 0.11)      # the ordinary screen: no depth paid for
+
+    rows = {r["market"]: r for r in led.conn.execute("SELECT * FROM snapshots")}
+    assert json.loads(rows["leg-a"]["ask_ladder"]) == [[0.34, 1], [0.37, 25]]
+    assert json.loads(rows["leg-a"]["bid_ladder"]) == [[0.30, 1], [0.28, 40]]
+    assert rows["leg-b"]["ask_ladder"] is None             # ~99% of rows stay as small as before
+    assert rows["leg-b"]["bid_ladder"] is None
+
+
+def test_ledger_migrates_ladder_columns_onto_an_existing_db(tmp_path):
+    """The database on disk is 130 MB and predates these columns; CREATE TABLE IF NOT EXISTS will
+    not add them. A migration that only handles REAL columns would leave the TEXT ones missing and
+    every candidate snapshot would fail to insert."""
+    import sqlite3
+    from polybot.ledger import Ledger
+
+    path = str(tmp_path / "old.db")
+    con = sqlite3.connect(path)
+    con.executescript("CREATE TABLE snapshots (ts REAL NOT NULL, venue TEXT NOT NULL, "
+                      "market TEXT NOT NULL, bid REAL, ask REAL, mid REAL, last REAL);")
+    con.execute("INSERT INTO snapshots (ts, venue, market, bid, ask) VALUES (1.0,'us','old',0.1,0.2)")
+    con.commit(); con.close()
+
+    led = Ledger(path)
+    cols = {r[1] for r in led.conn.execute("PRAGMA table_info(snapshots)")}
+    assert {"bid_qty", "ask_qty", "bid_ladder", "ask_ladder"} <= cols
+    led.add_snapshot("us", "new", 0.3, 0.4, ask_levels=[(0.4, 7)])
+    row = led.conn.execute("SELECT ask_ladder FROM snapshots WHERE market='new'").fetchone()
+    assert json.loads(row[0]) == [[0.4, 7]]
+
+
 def test_us_prefetch_fetches_a_whole_pass_in_one_call():
     """A pass over five cities and two days asked the venue for up to TEN separate events, one
     `retrieve_by_slug` each. The venue allows five requests per window, so the pass spent more than

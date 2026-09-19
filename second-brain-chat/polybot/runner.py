@@ -474,7 +474,9 @@ class Runner:
                 # evidence behind whether or not it trades.
                 for b in ctx.event.buckets:
                     self.ledger.add_snapshot(venue, b.yes_token, b.best_bid, b.best_ask, b.last,
-                                             bid_qty=b.bid_qty, ask_qty=b.ask_qty)
+                                             bid_qty=b.bid_qty, ask_qty=b.ask_qty,
+                                             bid_levels=getattr(b, "bid_levels", None),
+                                             ask_levels=getattr(b, "ask_levels", None))
         for name in wanted:
             try:
                 sigs = list(self.weather_modules[name].scan(ctx))

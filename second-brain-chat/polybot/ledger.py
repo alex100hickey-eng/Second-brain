@@ -70,7 +70,13 @@ CREATE TABLE IF NOT EXISTS snapshots (
     -- quotes are free with the event, depth costs a call per bucket). Only the arb path fills
     -- these in, and they are the record that answers the one question about bucket_sum that
     -- history cannot: was the arb ever big enough to be worth taking?
-    bid_qty REAL, ask_qty REAL
+    bid_qty REAL, ask_qty REAL,
+    -- The WHOLE ladder as JSON [[px, qty], ...], best price first, for arb candidates only.
+    -- Top-of-book alone cannot answer the question that decides whether this strategy is worth
+    -- real money: the miami set on 2026-09-19 showed 13c of edge and ONE contract at the best
+    -- ask, so the episode was worth 13 cents -- unless level two was also under $1, which
+    -- bid_qty/ask_qty simply do not say. Sizing walks these levels; now the record keeps them.
+    bid_ladder TEXT, ask_ladder TEXT
 );
 CREATE INDEX IF NOT EXISTS snapshots_idx ON snapshots (venue, market, ts);
 CREATE TABLE IF NOT EXISTS model_runs (
@@ -105,6 +111,9 @@ class Ledger:
         for col in ("bid_qty", "ask_qty"):
             if col not in have:
                 self.conn.execute(f"ALTER TABLE snapshots ADD COLUMN {col} REAL")
+        for col in ("bid_ladder", "ask_ladder"):
+            if col not in have:
+                self.conn.execute(f"ALTER TABLE snapshots ADD COLUMN {col} TEXT")
         self.conn.commit()
         self.gate_since_ts = 0.0     # set by the runner from config: evidence before a rule change doesn't count
         self.min_us_signals = 10     # set by the runner from config: the gate's US-evidence floor
@@ -180,12 +189,17 @@ class Ledger:
         self.conn.execute("UPDATE orders SET status=? WHERE id=?", (status, order_id))
         self.conn.commit()
 
-    def add_snapshot(self, venue, market, bid, ask, last=None, ts=None, bid_qty=None, ask_qty=None) -> None:
+    def add_snapshot(self, venue, market, bid, ask, last=None, ts=None, bid_qty=None, ask_qty=None,
+                     bid_levels=None, ask_levels=None) -> None:
         mid = (bid + ask) / 2 if (bid is not None and ask is not None) else None
+        # Ladders are kept only for the arb candidates that paid for a depth read, so this stays a
+        # couple of hundred bytes on ~1% of rows rather than a second copy of the whole database.
+        dump = lambda lv: json.dumps([[px, qty] for px, qty in lv]) if lv else None
         self.conn.execute(
-            "INSERT INTO snapshots (ts, venue, market, bid, ask, mid, last, bid_qty, ask_qty) "
-            "VALUES (?,?,?,?,?,?,?,?,?)",
-            (ts or _now(), venue, market, bid, ask, mid, last, bid_qty, ask_qty))
+            "INSERT INTO snapshots (ts, venue, market, bid, ask, mid, last, bid_qty, ask_qty, "
+            "bid_ladder, ask_ladder) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (ts or _now(), venue, market, bid, ask, mid, last, bid_qty, ask_qty,
+             dump(bid_levels), dump(ask_levels)))
         self.conn.commit()
 
     def snapshots(self, venue, market, since_ts):
