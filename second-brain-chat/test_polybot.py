@@ -2707,6 +2707,28 @@ def test_screening_leaves_budget_for_the_call_that_trades():
     assert len(v._calls) < usvenue.CALL_BUDGET
 
 
+def test_the_sweep_screens_today_only():
+    """Screening tomorrow's book as well was justified by a guess — that a thinner, worse-quoted
+    book is where a set under $1 is MORE likely. Measured over every snapshot on record:
+
+        today      2920 complete-book minutes,  58 with a positive net  (2.0%)
+        tomorrow   1196 complete-book minutes,   0                      (0.0%)
+
+    Nought for 1,196. Mispricings come from active trading, not from the absence of it — a thin
+    book just sits at 1.05-1.10 and never crosses. It doubled the work per sweep and never paid."""
+    import inspect
+    from polybot import runner as runner_mod
+
+    src = inspect.getsource(runner_mod.Runner.loop)
+    assert 'day_offsets=(0,)' in src
+    assert 'day_offsets=(0, 1)' not in src
+
+    # and the default for a light US pass is unchanged, so an explicit caller can still ask for
+    # tomorrow if there is ever a reason to look again
+    sig = inspect.getsource(runner_mod.Runner.scan_weather)
+    assert "day_offsets if day_offsets is not None" in sig
+
+
 def test_arb_sweep_interval_covers_the_whole_liquid_day():
     """The "13:00-14:00 peak" was an artefact of when the bot happened to scan. Normalised by
     observed event-minutes the rate of a positive net after fees is flat across the liquid day --

@@ -1004,10 +1004,17 @@ class Runner:
                     and self.cfg.mode("bucket_sum") != "off"):
                 next_arb = time.time() + self._arb_interval_s(now)
                 try:
-                    # Both days. Tomorrow's event rides the same batched call and came back fully
-                    # quoted, so it costs nothing extra to screen — and a thinner, worse-quoted
-                    # book is where a set under $1 is MORE likely, not less.
-                    self.scan_weather(modules=["bucket_sum"], venue="us", day_offsets=(0, 1))
+                    # TODAY only. Screening tomorrow as well was justified by a guess — "a thinner,
+                    # worse-quoted book is where a set under $1 is more likely" — and the guess was
+                    # wrong. Measured over every snapshot on record:
+                    #
+                    #     today      2920 complete-book minutes,  58 with a positive net  (2.0%)
+                    #     tomorrow   1196 complete-book minutes,   0                      (0.0%)
+                    #
+                    # Nought for 1,196. Mispricings come from active trading, not from the absence
+                    # of it: a thin book just sits at 1.05-1.10 and never crosses. Screening it
+                    # doubled the work per sweep, caused the over-budget skips, and never once paid.
+                    self.scan_weather(modules=["bucket_sum"], venue="us", day_offsets=(0,))
                 except Exception as exc:
                     self.log(f"  arb sweep error: {exc}\n{traceback.format_exc(limit=2)}")
             _beat("polybot", 3 * 3600, f"{self.cfg.mode('weather_lock')} lock")
