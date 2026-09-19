@@ -55,11 +55,19 @@ class RiskManager:
         mode = mode or self.cfg.mode(sig.module)
         live_like = mode == "live"
         if live_like and sig.arb and not self.cfg.arb_live_ok:
-            # An arb is all-or-nothing by definition, and `execution.py` places each leg as an
-            # independent order with no notion of the group. Fill four of six and you are not
-            # arbed — you are holding a naked basket that the set was built to avoid, with no
-            # unwind path. Paper can measure this safely; real money cannot until the executor
-            # can complete or unwind a partial set. Flip `arb_live_ok` when that exists.
+            # The original reason for this gate has been met: `execution.py` now places the whole
+            # group, every leg fill-or-kill, sends the thinnest leg first so a kill costs the
+            # least, reads the venue's real executions to tell a fill from a kill, and unwinds
+            # whatever actually filled — including a part-filled leg, for the quantity held.
+            #
+            # What is NOT met is evidence. No order has ever been sent to this venue, so the
+            # request and response shapes are checked against the SDK's types and nothing else:
+            # `fill_result` resolves an unrecognised reply to "not filled" precisely because that
+            # is the safe direction when the shape is a guess. The first live set is therefore an
+            # experiment, and it should be a small one that a human watches.
+            #
+            # So this stays off until Alex turns it on. It is his money and his call, not a
+            # threshold the bot may decide it has cleared.
             return False, "arb legs need group execution before live (arb_live_ok is off)"
         # One position per market, in every mode: the 2026-09-12 paper run re-entered the same bucket
         # every 3 hours (133 extra entries), so one wrong call cost $40-60 instead of $20. An arb
