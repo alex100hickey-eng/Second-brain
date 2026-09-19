@@ -100,6 +100,16 @@ def pnl_usd(sig, fill_price_yes, exit_price_yes, outcome, venue: str, category: 
     return round(gross - fee, 4), round(fee, 4)
 
 
+def _is_arb(sig) -> bool:
+    """Is this signal one leg of an all-or-nothing set?"""
+    if sig.get("arb"):
+        return True
+    try:
+        return bool(json.loads(sig.get("meta") or "{}").get("arb"))
+    except (TypeError, ValueError):
+        return False
+
+
 def snapshot_history(ledger, venue: str, market: str, since_ts: float) -> list:
     """[(ts, yes price)] from the runner's book snapshots: the paper price path for venues with no
     public price history (Polymarket US). Mid when both sides exist, else last."""
@@ -151,6 +161,26 @@ class PaperEngine:
                     log(f"  resolution error signal {sig['id']}: {exc}")
                 if outcome is None:
                     mark = hist[-1][1] if hist else fill_px
+                    if _is_arb(sig):
+                        # An arb leg is not an independent position and must not be marked like
+                        # one. The six legs are one instrument that pays exactly $1.00 a set at
+                        # settlement; marking each at its own mid and adding them up prices the
+                        # market's inefficiency SIX TIMES, and implies selling all six legs at mid
+                        # simultaneously, which is not a thing you can do — you would hit bids.
+                        #
+                        # On 2026-09-19 that read $17.18 unrealised on sets whose settlement value
+                        # is $8.70. Flattering by a factor of two, in the number the promotion
+                        # gate reads. An arb's profit is locked at entry and realised at
+                        # settlement, so carry it at cost until then and let the close book it.
+                        # Carried flat, not at cost-minus-a-phantom-exit-fee: there is no exit.
+                        # The set is held to settlement, where pnl_usd charges the entry fee once
+                        # and books the $1.00 payout. Marking anything here would either invent a
+                        # round trip that never happens or double-count the fee.
+                        mark = fill_px
+                        self.ledger.upsert_paper(sig["id"], mark_price=mark, pnl_usd=0.0,
+                                                 status="filled")
+                        counts["open"] += 1
+                        continue
                     unreal, _ = pnl_usd(sig, fill_px, mark, None, venue, category)
                     self.ledger.upsert_paper(sig["id"], mark_price=mark, pnl_usd=unreal, status="filled")
                     counts["open"] += 1

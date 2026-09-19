@@ -1881,6 +1881,43 @@ def test_an_already_taken_episode_does_not_pay_for_another_depth_read(monkeypatc
                    for m in legs)
 
 
+def test_an_open_arb_is_carried_at_cost_not_marked_leg_by_leg(tmp_path):
+    """Six arb legs are one instrument that pays exactly $1.00 a set at settlement. Marking each
+    at its own mid and adding them up prices the market's inefficiency six times over, and implies
+    selling all six at mid simultaneously — which is not a thing you can do, you would hit bids.
+
+    On 2026-09-19 that read $17.18 unrealised on sets whose settlement value is $8.70: flattering
+    by a factor of two, in the number the promotion gate reads."""
+    from polybot.ledger import Ledger
+    from polybot.paper import PaperEngine
+    from polybot.strategies.base import Signal
+
+    led = Ledger(str(tmp_path / "m.db"))
+    prices = [0.01, 0.01, 0.01, 0.09, 0.32, 0.41]         # ask_sum 0.85
+    ids = []
+    for i, px in enumerate(prices):
+        sig = Signal("bucket_sum", "us", f"l{i}", f"l{i}", "BUY_YES", px, round(px * 62, 2), 11.0,
+                     "set", taker=True, arb=True, meta={"group": "g"})
+        sid = led.add_signal(sig, "paper")
+        led.upsert_paper(sid, filled_ts=time.time() - 60, fill_price=px, status="filled")
+        ids.append(sid)
+
+    # every leg's mid has drifted UP; marking leg-by-leg would book a fat unrealised gain
+    pe = PaperEngine(led,
+                     history_fn=lambda sig: [(time.time(), float(sig["price"]) + 0.05)],
+                     resolution_fn=lambda sig: None)
+    pe.settle_open("us", log=lambda *a, **k: None)
+    unreal = sum((led.paper_row(i) or {}).get("pnl_usd") or 0 for i in ids)
+    assert unreal == pytest.approx(0.0, abs=0.01), f"arb marked leg-by-leg: {unreal}"
+
+    # a NON-arb position is still marked normally — this must not blunt ordinary reporting
+    sig = Signal("weather_obs", "us", "w", "w", "BUY_YES", 0.30, 6.0, 5.0, "view")
+    wid = led.add_signal(sig, "paper")
+    led.upsert_paper(wid, filled_ts=time.time() - 60, fill_price=0.30, status="filled")
+    pe.settle_open("us", log=lambda *a, **k: None)
+    assert ((led.paper_row(wid) or {}).get("pnl_usd") or 0) > 0
+
+
 def test_a_settled_arb_pays_the_same_whatever_wins(tmp_path):
     """The one property the whole strategy rests on, driven through the real settlement code.
 
