@@ -38,7 +38,8 @@ LOCAL_TZ = ZoneInfo("America/New_York")
 VAULT = os.environ.get("VAULT_PATH") or os.path.expanduser(
     "~/Library/Mobile Documents/com~apple~CloudDocs/Obsidian/Second brain")
 TRACKER = os.path.join(VAULT, "Money", "prospect-tracker.csv")
-STATE = os.path.expanduser("~/second-brain/scripts/splitframe_daily_state.json")
+STATE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                     "splitframe_daily_state.json")   # beside the module, for the same reason as LOG
 STATE_KEY = "splitframe:followups"
 # Beside this file, NOT under ~. The server container runs the repo somewhere else entirely and
 # its HOME is /root, so the expanduser path pointed at /root/second-brain/scripts/ — a directory
@@ -324,8 +325,17 @@ def save_state(st: dict) -> None:
             return
         except Exception as exc:
             log(f"shared state write failed ({str(exc)[:80]}) — writing the local file")
-    with open(STATE, "w") as f:
-        json.dump({k: v for k, v in st.items() if k != "_row_id"}, f, indent=1)
+    # The local file is the FALLBACK, so it must not crash harder than the thing it is catching.
+    # Unguarded, it had the same defect LOG did: on the server this path does not exist, so a
+    # Supabase hiccup would turn into a FileNotFoundError that killed the release outright.
+    # Losing the state file only risks re-drafting a follow-up, and `already_waiting` catches
+    # that downstream; losing the run means nothing goes out at all.
+    try:
+        with open(STATE, "w") as f:
+            json.dump({k: v for k, v in st.items() if k != "_row_id"}, f, indent=1)
+    except OSError as exc:
+        log(f"local state write failed too ({str(exc)[:80]}) — continuing; a follow-up may "
+            "be re-drafted, which already_waiting will defer")
 
 
 def tracker_rows() -> list:

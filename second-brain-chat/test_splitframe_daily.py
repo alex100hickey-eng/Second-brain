@@ -694,3 +694,17 @@ def test_releasing_survives_a_dead_logger(monkeypatch):
     monkeypatch.setattr(sfd, "LOG", "/nonexistent-dir-for-tests/splitframe.log")
     monkeypatch.setattr(sfd, "current_cap", lambda: (10, "pinned"))
     assert len(sfd.release_first_touches(_FakeOutbox(), "https://mail")) == 3
+
+
+def test_local_state_write_is_a_fallback_not_a_second_failure(monkeypatch):
+    """save_state's local file catches a Supabase failure, so it must not crash harder than
+    what it caught. Unguarded it shared LOG's defect: the path does not exist on the server,
+    so a Supabase hiccup became a FileNotFoundError that killed the release outright."""
+    monkeypatch.setattr(sfd, "_shared", None)
+    monkeypatch.setattr(sfd, "STATE", "/nonexistent-dir-for-tests/state.json")
+    monkeypatch.setattr(sfd, "LOG", "/nonexistent-dir-for-tests/splitframe.log")
+    sfd.save_state({"drafted": {}})          # must return, not raise
+
+
+def test_state_path_is_beside_the_module_not_under_home():
+    assert "~" not in sfd.STATE and "/root" not in sfd.STATE
