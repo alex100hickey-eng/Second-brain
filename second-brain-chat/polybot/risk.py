@@ -38,6 +38,12 @@ class RiskManager:
             if set_cost > self.cfg.arb_max_set_cost_usd + 1e-9:
                 return False, (f"arb set ${set_cost:.2f} over set cap "
                                f"${self.cfg.arb_max_set_cost_usd:.0f}")
+            # And the cap that matches the actual failure: a completed set pays $1 regardless, so
+            # what is at stake is unwinding a half-fill, not the capital it ties up.
+            at_risk = float((sig.meta or {}).get("unwind_usd") or 0.0)
+            if at_risk > self.cfg.arb_max_risk_usd + 1e-9:
+                return False, (f"arb risks ${at_risk:.2f} on a failed fill, over "
+                               f"${self.cfg.arb_max_risk_usd:.0f}")
         elif sig.size_usd > caps.max_per_market_usd + 1e-9:
             return False, f"over per-market cap ${caps.max_per_market_usd:.0f}"
         if (sig.category or "") == "sports" and not caps.sports_enabled:

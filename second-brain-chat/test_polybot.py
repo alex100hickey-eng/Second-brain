@@ -1172,6 +1172,34 @@ def test_hopeless_candidates_are_refused_before_the_depth_call_is_paid_for():
     assert not worth_confirming(book(0.08, 0.09), 0.2, cfg, days=1.25)
 
 
+def test_an_arb_is_capped_by_what_it_can_lose_not_only_by_what_it_ties_up():
+    """A completed set pays $1 whatever happens, so the money at stake is unwinding a half-fill,
+    not the capital committed. Governing the commitment alone capped the upside (56 buy-side sets
+    where the bankroll allowed 96) while saying nothing about the downside."""
+    from polybot.strategies.bucket_sum import BucketSum, unwind_cost_cents
+    from polybot.risk import RiskManager
+    cfg = _cfg()
+    ev = _event()
+    for b in ev.buckets:                       # 9 cheap legs: 0.81 of asks, deep ladders
+        b.best_bid, b.best_ask, b.ask_qty, b.bid_qty = 0.08, 0.09, 5000, 5000
+        b.bid_levels, b.ask_levels = [(0.08, 5000)], [(0.09, 5000)]
+    per_set_risk = unwind_cost_cents(ev.buckets, "buy_all") / 100.0
+    cfg.arb_max_risk_usd = 0.45                # deliberately the tightest rail
+    cfg.arb_max_set_cost_usd = 1e9
+    cfg.caps.max_exposure_usd = 1e9
+    sigs = BucketSum(cfg).scan(_ctx(event=ev))
+    assert sigs
+    n = sigs[0].contracts
+    assert n * per_set_risk <= 0.45 + 1e-9     # sized by the loss, not the outlay
+    assert sum(s.size_usd for s in sigs) > 0.45   # and it commits far more than it risks
+    # risk agrees, and refuses a set whose recorded unwind exceeds the cap
+    rm = RiskManager(cfg, _ledger())
+    assert all(rm.allow(sig)[0] for sig in sigs)
+    cfg.arb_max_risk_usd = 0.01
+    ok, why = rm.allow(sigs[0])
+    assert not ok and "on a failed fill" in why
+
+
 def test_unwind_cost_prices_a_one_sided_leg_instead_of_skipping_the_test():
     """A leg bought at the ask with NO bid behind it returns nothing when you try to close it --
     the worst case. The old test skipped entirely whenever any leg was one-sided, so exactly those

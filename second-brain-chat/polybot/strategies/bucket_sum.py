@@ -225,8 +225,11 @@ def size_for_profit(buckets, kind: str, cfg, days=None):
             continue
         if days is not None and (net / set_cost) / max(float(days), 0.5) < cfg.arb_min_roc_per_day_pct:
             continue
+        # Two different questions: how much capital this ties up, and how much it can lose.
+        unwind = unwind_cost_cents(buckets, kind) / 100.0
+        by_risk = cfg.arb_max_risk_usd / unwind if unwind > 0 else cfg.arb_max_sets
         capped = int(min(n, cfg.arb_max_set_cost_usd / set_cost,
-                         cfg.caps.max_exposure_usd / set_cost, cfg.arb_max_sets))
+                         cfg.caps.max_exposure_usd / set_cost, by_risk, cfg.arb_max_sets))
         if capped < 1:
             continue
         total = (net / 100.0) * capped
@@ -331,7 +334,9 @@ class BucketSum(Strategy):
                                     "sets": contracts, "net_cents": net,
                                     "set_cost_usd": round(set_cost, 4),
                                     "roc_pct": round(roc_pct, 2),
-                                    "settles_in_days": days}))
+                                    "settles_in_days": days,
+                                    "unwind_usd": round(unwind_cost_cents(ev.buckets, kind)
+                                                        / 100.0 * contracts, 2)}))
         # Belt and braces. `contracts` is derived from size_usd/price, and the arithmetic only
         # round-trips exactly while prices are well behaved — a 4-decimal price rounded to cents
         # silently produced 11 contracts on one leg and 12 on another in test. An unbalanced set
