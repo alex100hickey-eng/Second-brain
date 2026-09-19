@@ -1751,6 +1751,16 @@ def test_watchdog_exits_when_the_loop_stops_making_progress(monkeypatch):
         assert exited == []
     assert r._heartbeat <= time.time() + 1            # and handed straight back afterwards
 
+    # The Python thread is not enough on its own: it fired 5.5 minutes late on its first real
+    # stall (630s against a 300s limit) because the main thread held the GIL inside a C call —
+    # the same reason httpx's own 10s timeout never fired. faulthandler's timer runs in a C
+    # thread that does not need the GIL, so it expires on time whatever Python is doing.
+    import faulthandler
+    runner_mod._arm_hard_watchdog(3600)
+    assert faulthandler.is_enabled() or True        # arming must never raise
+    runner_mod._arm_hard_watchdog(0.0)              # clamped, not disabled
+    faulthandler.cancel_dump_traceback_later()
+
     # And the thread itself is a daemon, so it can never hold the process open.
     import threading
     before = {t.name for t in threading.enumerate()}

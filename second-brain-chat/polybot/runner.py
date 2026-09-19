@@ -20,6 +20,7 @@ import os
 import sys
 import time
 import json
+import faulthandler
 import traceback
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -86,6 +87,22 @@ from .strategies.weather import WeatherHold, WeatherLock, WeatherModelUpdate, We
 
 ET = ZoneInfo("America/New_York")
 DEDUPE_S = 3 * 3600
+# The Python watchdog thread fired 5.5 minutes late on its first real stall (630s against a 300s
+# limit) because the main thread was stuck in a C call holding the GIL — the same reason httpx's
+# own 10s timeout never fired. faulthandler's timer runs in a C thread that does not need the
+# GIL, so it fires on time whatever Python is doing, and it prints the stack of every thread on
+# the way out: the first hard evidence of WHERE these hangs actually are.
+WATCHDOG_HARD_S = 420.0
+
+
+def _arm_hard_watchdog(seconds: float) -> None:
+    """(Re)start the GIL-proof timer. Called on every loop iteration, so it only expires when the
+    loop genuinely stops coming back."""
+    try:
+        faulthandler.cancel_dump_traceback_later()
+        faulthandler.dump_traceback_later(max(seconds, 60.0), exit=True)
+    except Exception:
+        pass        # a watchdog that breaks the loop is worse than no watchdog
 
 
 class SeriesStore:
@@ -746,10 +763,12 @@ class Runner:
         the weekly backtest.
         """
         self._heartbeat = time.time() + grace_s
+        _arm_hard_watchdog(grace_s + WATCHDOG_HARD_S)
         try:
             yield
         finally:
             self._heartbeat = time.time()
+            _arm_hard_watchdog(WATCHDOG_HARD_S)
 
     def _start_watchdog(self, limit_s: float = 300.0) -> None:
         """Kill the process if the loop stops making progress, so launchd can restart it.
@@ -773,6 +792,8 @@ class Runner:
         """
         import threading
 
+        _arm_hard_watchdog(WATCHDOG_HARD_S)
+
         def watch():
             while True:
                 time.sleep(30)
@@ -795,6 +816,7 @@ class Runner:
         self._start_watchdog()
         while True:
             self._heartbeat = time.time()
+            _arm_hard_watchdog(WATCHDOG_HARD_S)
             now = datetime.now(ET)
             key = now.strftime("%Y-%m-%d %H:%M")
             if key not in done:
