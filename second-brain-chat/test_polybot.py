@@ -1880,6 +1880,45 @@ def test_an_already_taken_episode_does_not_pay_for_another_depth_read(monkeypatc
                    for m in legs)
 
 
+def test_a_settled_arb_pays_the_same_whatever_wins(tmp_path):
+    """The one property the whole strategy rests on, driven through the real settlement code.
+
+    Buy every bucket of an exhaustive set for less than $1 and exactly one pays $1, so the
+    outcome cannot change the result. Verified on the real 2026-09-19 miami set (6 legs, 62 sets,
+    $52.70 in) by settling it six times, once for each bucket winning: $6.84 every time.
+
+    If a change ever makes this vary by outcome, the thing being run is no longer an arbitrage —
+    it is a bet — and no amount of edge in the pricing makes that acceptable."""
+    from polybot.ledger import Ledger
+    from polybot.paper import PaperEngine
+    from polybot.strategies.base import Signal
+
+    prices = [0.01, 0.01, 0.01, 0.09, 0.32, 0.41]      # ask_sum 0.85, the real book
+    names = ["lt84", "b84", "b86", "b88", "b90", "b92"]
+    sets_n = 62
+
+    results = []
+    for winner in names:
+        led = Ledger(str(tmp_path / f"{winner}.db"))
+        ids = []
+        for nm, px in zip(names, prices):
+            sig = Signal("bucket_sum", "us", nm, nm, "BUY_YES", px, round(px * sets_n, 2), 11.0,
+                         "set", taker=True, arb=True, meta={"group": "g"})
+            sid = led.add_signal(sig, "paper")
+            led.upsert_paper(sid, filled_ts=time.time() - 60, fill_price=px, status="filled")
+            ids.append(sid)
+        pe = PaperEngine(led,
+                         history_fn=lambda sig: [],
+                         resolution_fn=lambda sig, w=winner: 1 if sig["market"] == w else 0)
+        pe.settle_open("us", log=lambda *a, **k: None)
+        results.append(round(sum((led.paper_row(i) or {}).get("pnl_usd") or 0 for i in ids), 2))
+
+    assert len(set(results)) == 1, f"outcome changed the P&L: {dict(zip(names, results))}"
+    # 62 * (1.00 - 0.85) gross, less 0.0695 * sum p(1-p) per set in taker fees
+    assert results[0] == pytest.approx(6.84, abs=0.05)
+    assert results[0] > 0                               # and it is a profit in every case
+
+
 def test_a_set_is_measured_against_the_exposure_cap_as_one_decision():
     """Every leg is risk-checked against the SAME exposure baseline, because none is recorded
     until they all pass. So six legs of $20 each are each compared with $80 of room and each says
