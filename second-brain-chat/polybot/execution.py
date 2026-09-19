@@ -127,7 +127,7 @@ class Executor:
         # five legs holding thousands of contracts and a binding leg holding exactly 21.
         legs = sorted(legs, key=lambda sl: (sl[1].meta or {}).get("depth", float("inf")))
         filled = []
-        for sid, sig in legs:
+        for idx, (sid, sig) in enumerate(legs):
             try:
                 order = self.us.place_limit(sig.market, sig.side, sig.price, sig.contracts, tif="fok")
                 out["placed"] += 1
@@ -154,6 +154,15 @@ class Executor:
                     filled.append((sid, sig, qty))
                 else:
                     self.ledger.set_signal_status(sid, "unfilled")
+                # Stop the moment a leg fails. The set cannot complete without it, so every
+                # further order buys a leg we are about to sell straight back at the spread —
+                # which is also what made "thinnest leg first" worth doing: a kill on the leg
+                # most likely to fail should cost NOTHING, and it only does if we stop here.
+                # Without this the ordering bought five legs and unwound all five.
+                for rest_sid, rest_sig in legs[idx + 1:]:
+                    self.ledger.set_signal_status(rest_sid, "unfilled")
+                    self.log(f"  arb leg {rest_sig.label}: not sent — set already failed")
+                break
         if out["filled"] == len(legs):
             for sid, sig in legs:
                 self.ledger.upsert_paper(sid, filled_ts=time.time(), fill_price=sig.price, status="filled",

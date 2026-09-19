@@ -992,10 +992,13 @@ def test_arb_set_unwinds_what_filled_when_a_leg_is_killed():
         sig = Signal("bucket_sum", "us", f"leg{i}", f"L{i}", "BUY_YES", 0.25, 5.0, 6, "r", taker=True, arb=True)
         legs.append((led.add_signal(sig, "live"), sig))
     out = ex.place_arb_set(legs)
-    assert out["ok"] is False and out["filled"] == 3
-    assert out["unwound"] == 3                                  # every filled leg sold back
+    # leg3 is killed, so leg4 is never sent: the set cannot complete without leg3, and every
+    # further order would buy a leg we are about to sell straight back at the spread.
+    assert out["ok"] is False and out["filled"] == 2
+    assert out["unwound"] == 2                                  # every filled leg sold back
+    assert "leg4" not in [r[0] for r in sent]
     assert all(t == "fok" for *_r, t in sent if _r[1].startswith("BUY"))
-    assert [t for *_r, t in sent if _r[1].startswith("SELL")] == ["ioc"] * 3
+    assert [t for *_r, t in sent if _r[1].startswith("SELL")] == ["ioc"] * 2
     assert led.paper_row(legs[2][0]) is None or led.paper_row(legs[2][0]).get("status") != "filled"
 
     # and the happy path leaves the set whole, with no unwind
@@ -2023,7 +2026,9 @@ def test_an_unwind_that_did_not_fill_is_not_counted_as_unwound(monkeypatch):
 
         def place_limit(self, market, side, price, contracts, tif=None):
             if tif == "fok":
-                return _fill(contracts) if market == "fat" else _KILLED
+                # thin goes first (it is the thinnest) and FILLS; the later leg is killed, so
+                # there is something to unwind. Killing the first leg would abort before any buy.
+                return _KILLED if market == "fat" else _fill(contracts)
             return _KILLED            # every unwind is killed too
 
         def bbo(self, slug):
@@ -2042,7 +2047,7 @@ def test_an_unwind_that_did_not_fill_is_not_counted_as_unwound(monkeypatch):
 
     # The leg we still hold must still read as held, or exposure and sizing both lie.
     rows = {r["market"]: r["status"] for r in led.open_signals(module="bucket_sum")}
-    assert rows.get("fat") == "open"
+    assert rows.get("thin") == "open"          # bought, could not be sold back, still held
 
 
 def test_a_successful_unwind_closes_the_position(monkeypatch):
@@ -2057,7 +2062,7 @@ def test_a_successful_unwind_closes_the_position(monkeypatch):
 
         def place_limit(self, market, side, price, contracts, tif=None):
             if tif == "fok":
-                return _fill(contracts) if market == "fat" else _KILLED
+                return _KILLED if market == "fat" else _fill(contracts)
             return _fill(contracts)             # the unwind fills
 
         def bbo(self, slug):
@@ -2071,8 +2076,8 @@ def test_a_successful_unwind_closes_the_position(monkeypatch):
 
     assert out["unwound"] == 1 and "stranded" not in out
     open_markets = {r["market"] for r in led.open_signals(module="bucket_sum")}
-    assert "fat" not in open_markets           # sold back, so no longer exposure
-    assert led.held_contracts("us", "fat", "bucket_sum") == 0
+    assert "thin" not in open_markets          # sold back, so no longer exposure
+    assert led.held_contracts("us", "thin", "bucket_sum") == 0
 
 
 def test_a_killed_order_is_never_read_as_filled():
@@ -2170,11 +2175,13 @@ def test_a_part_filled_leg_is_unwound_for_what_it_actually_holds():
     out = ex.place_arb_set([(0, Sig("thin", 21.0)), (1, Sig("fat", 9000.0))])
 
     assert out["ok"] is False                       # the set never completed
-    assert out["filled"] == 1                       # only the fat leg
+    # `thin` is the thinnest leg so it goes first, and a part fill means the set is already dead:
+    # `fat` is never bought at all. The only thing to undo is the 5 contracts we really got.
+    assert out["filled"] == 0                       # 5 of 21 is not a filled leg
+    assert "fat" not in [x[0] for x in sent]
     unwinds = [x for x in sent if x[3] == "ioc"]
-    assert ("thin", "SELL_YES", 5, "ioc") in unwinds   # the 5 we actually hold, not 21
-    assert ("fat", "SELL_YES", 21, "ioc") in unwinds
-    assert out["unwound"] == 2
+    assert unwinds == [("thin", "SELL_YES", 5, "ioc")]   # the 5 we hold, not the 21 we asked for
+    assert out["unwound"] == 1
 
 
 def test_arb_places_the_thinnest_leg_first():
