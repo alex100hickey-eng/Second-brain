@@ -2058,6 +2058,66 @@ def test_exhaustive_is_strict_about_what_it_calls_a_tiling():
     assert arb_check(gappy, "us", assume_exhaustive=True)[0] == "buy_all"
 
 
+def test_the_gate_refuses_a_record_that_is_one_trade(tmp_path):
+    """Counting signals, fills and mark-to-market cannot tell a small repeatable edge from a coin
+    flip. On 2026-09-19 weather_obs read +$8.43 over 28 closed trades and was the module CLOSEST
+    to going live — while its best trade was +$80.10 and its worst -$20.00 on a $20 position. One
+    trade was the whole record; one loss undid it. That is pennies in front of a steamroller, and
+    nothing in the gate was looking at it."""
+    from polybot.ledger import Ledger
+    from polybot.strategies.base import Signal
+
+    led = Ledger(str(tmp_path / "t.db"))
+
+    def closed(module, pnl, group=None, i=[0]):
+        i[0] += 1
+        sig = Signal(module, "us", f"m{i[0]}", f"m{i[0]}", "BUY_NO", 0.90, 20.0, 5.0, "r",
+                     meta={"group": group} if group else {})
+        sid = led.add_signal(sig, "paper")
+        led.upsert_paper(sid, filled_ts=time.time() - 60, fill_price=0.90, status="closed",
+                         pnl_usd=pnl)
+
+    # the weather_obs shape: lots of small wins, one big win, one loss that swallows the lot
+    for _ in range(9):
+        closed("obs", 1.20)
+    closed("obs", 80.10)
+    closed("obs", -20.00)
+    ok, why = led.tail_check("obs")
+    assert ok is False and "one trade" in why          # +80.10 IS the record
+
+    # and the mirror: profitable overall, but one loss is bigger than everything earned
+    for _ in range(25):
+        closed("steamroller", 1.00)
+    closed("steamroller", -20.00)                      # net +5.00, but -20 swallows it
+    ok, why = led.tail_check("steamroller")
+    assert ok is False and "one loss" in why, why
+
+    # a genuine edge — many small wins, no single trade carrying it — passes
+    for _ in range(20):
+        closed("real", 1.00)
+    closed("real", -0.50)
+    ok, why = led.tail_check("real")
+    assert ok is True, why
+
+    # AN ARB MUST NOT BE BLOCKED. Its legs look dreadful alone: five lose their premium so the
+    # sixth can win. Measured on the real settled sets, leg-level is worst -$20.78 / best +$35.54,
+    # which a per-row check calls variance — while the SETS are worst +$0.08 and cannot lose.
+    for g, legs in (("s1", [-0.62, -0.62, -5.58, -25.42, -0.62, 35.54]),
+                    ("s2", [-0.30, -0.30, -1.10, 4.00, -0.30, -0.30])):
+        for pnl in legs:
+            closed("arb", pnl, group=g)
+    ok, why = led.tail_check("arb")
+    assert ok is True, why
+    assert "2 decisions" in why                        # judged as two sets, not twelve legs
+
+    # The same rows judged per-leg would be rejected, which is exactly why grouping matters:
+    # the worst LEG (-25.42) dwarfs the net (+4.68) while the worst SET is +1.90 and safe.
+    all_legs = [-0.62, -0.62, -5.58, -25.42, -0.62, 35.54,
+                -0.30, -0.30, -1.10, 4.00, -0.30, -0.30]
+    assert abs(min(all_legs)) >= sum(all_legs)         # per-leg: looks like pure variance
+    assert min(sum(all_legs[:6]), sum(all_legs[6:])) > 0   # per-set: every decision made money
+
+
 def test_a_settled_arb_pays_the_same_whatever_wins(tmp_path):
     """The one property the whole strategy rests on, driven through the real settlement code.
 

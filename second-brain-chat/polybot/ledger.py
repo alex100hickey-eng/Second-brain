@@ -351,8 +351,50 @@ class Ledger:
             return False, f"US paper: {us_n} signals, none settled yet"
         if us_mtm < 0:
             return False, f"US paper mark-to-market {us_mtm:+.2f} negative over {us_n} signals"
+        ok, why = self.tail_check(module, days)
+        if not ok:
+            return False, why
         return True, (f"{n} signals, {closed} closed, mtm {mtm:+.2f}, fills {filled / rows:.0%}, "
                       f"US {us_n} signals {us_mtm:+.2f}")
+
+    def tail_check(self, module: str, days: int = 30):
+        """(ok, why) — is this record an edge, or one lucky trade and one unlucky one?
+
+        The rest of the gate counts signals, fills and mark-to-market, and none of that can tell a
+        small repeatable edge from a coin flip. weather_obs on 2026-09-19 read +$8.43 over 28
+        closed trades and was the module CLOSEST to promotion — while its best trade was +$80.10
+        and its worst was -$20.00 on a $20 position. One trade was the whole record and one loss
+        undid it, which is what "pennies in front of a steamroller" looks like in a ledger.
+
+        Measured per DECISION, not per row: an arb's legs look dreadful on their own (five lose
+        their premium so that one can win) while the set they belong to cannot lose at all. Legs
+        carrying a `meta.group` are therefore summed into their set first.
+        """
+        rows = list(self.conn.execute(
+            """SELECT s.meta, s.id, p.pnl_usd FROM signals s JOIN paper_trades p ON p.signal_id=s.id
+               WHERE s.module=? AND p.status='closed' AND s.status!='void' AND s.ts>=?""",
+            (module, max(_now() - days * 86400, float(self.gate_since_ts or 0.0)))))
+        if not rows:
+            return True, "no closed trades to judge"
+        by_decision = {}
+        for meta, sid, pnl in rows:
+            try:
+                key = (json.loads(meta or "{}").get("group")) or f"sig:{sid}"
+            except (TypeError, ValueError):
+                key = f"sig:{sid}"
+            by_decision[key] = by_decision.get(key, 0.0) + (pnl or 0.0)
+        vals = list(by_decision.values())
+        net = sum(vals)
+        if net <= 0:
+            return False, f"net {net:+.2f} over {len(vals)} decisions"
+        worst, best = min(vals), max(vals)
+        if abs(worst) >= net:
+            return False, (f"one loss ({worst:+.2f}) is bigger than the whole record ({net:+.2f}) "
+                           f"over {len(vals)} decisions — variance, not edge")
+        if best >= net:
+            return False, (f"one trade ({best:+.2f}) IS the whole record ({net:+.2f}) "
+                           f"over {len(vals)} decisions — not yet repeatable")
+        return True, f"{len(vals)} decisions, net {net:+.2f}, worst {worst:+.2f}, best {best:+.2f}"
 
     def arb_report(self, days: int = 7) -> str:
         """Every moment the US books offered a complete bucket set worth taking, and how deep it was.
