@@ -730,14 +730,24 @@ class USVenue:
         """
         if not self.available:
             raise RuntimeError(self.why_unavailable)
-        return self._client.orders.create({
+        body = {
             "marketSlug": slug,
             "intent": self.INTENTS[side],
             "type": "ORDER_TYPE_LIMIT",
             "price": {"value": f"{price:.2f}", "currency": "USD"},
             "quantity": int(contracts),
             "tif": self.TIF[tif],
-        })
+        }
+        if tif in ("fok", "ioc"):
+            # An immediate order's whole point is that its outcome is known at once, and
+            # `fill_result` reads that outcome out of the response's `executions`. Without this
+            # the reply can come back before the venue has decided, which reads as "nothing
+            # filled" — and the caller would then believe it holds none of a set it actually
+            # bought. A resting GTC order is deliberately left alone: it has no immediate
+            # outcome to wait for. (SDK CreateOrderParams field; unverified live until the first
+            # real arb, which is why the executor logs every raw reply.)
+            body["synchronousExecution"] = True
+        return self._client.orders.create(body)
 
     def cancel(self, order_id: str, slug: str):
         return self._client.orders.cancel(order_id, {"marketSlug": slug}) if self.available else None

@@ -1701,6 +1701,99 @@ def test_the_best_book_on_record_is_sized_and_taken():
     assert contracts * net_n / 100 >= cfg.arb_min_profit_usd
 
 
+def test_a_killed_order_is_never_read_as_filled():
+    """The check the whole all-or-nothing design rests on, against the SDK's REAL response shape.
+
+    CreateOrderResponse is {id, executions[]}: there is no top-level status or state. The outcome
+    lives in executions[].type (EXECUTION_TYPE_FILL / CANCELED / REJECTED / EXPIRED) and
+    executions[].order.state. The old check read a top-level "status"/"state" that is never there,
+    got "", and looked in it for "KILL" -- a word that appears in none of the venue's enums. An
+    empty string contains no bad word, so every order read as FILLED, including killed ones. Live,
+    that marks a set COMPLETE while holding nothing, or holds an unbalanced basket and never
+    unwinds it. It could only ever bite with real money, which is why no test caught it."""
+    from polybot.execution import fill_result
+
+    def resp(ex_type, state, shares=None, cum=None):
+        ex = {"type": ex_type, "order": {"state": state}}
+        if shares is not None:
+            ex["lastShares"] = shares
+        if cum is not None:
+            ex["order"]["cumQuantity"] = cum
+        return {"id": "o1", "executions": [ex]}
+
+    # A filled fill-or-kill.
+    assert fill_result(resp("EXECUTION_TYPE_FILL", "ORDER_STATE_FILLED", "21", 21), 21)[0] == 21
+
+    # Every way the venue says no. None of these contain the word "KILL".
+    for t, st in (("EXECUTION_TYPE_CANCELED", "ORDER_STATE_CANCELED"),
+                  ("EXECUTION_TYPE_REJECTED", "ORDER_STATE_REJECTED"),
+                  ("EXECUTION_TYPE_EXPIRED", "ORDER_STATE_EXPIRED")):
+        qty, label = fill_result(resp(t, st), 21)
+        assert qty == 0, f"{t} must not read as filled"
+        assert "KILL" not in label                  # the old check was looking for a word nobody says
+
+    # Ambiguity resolves to NOT filled: an unhedged basket nobody unwinds is worse than a
+    # needless unwind that leaves us flat.
+    assert fill_result({"id": "o1"}, 21) == (0, "no state reported")
+    assert fill_result({"id": "o1", "executions": []}, 21) == (0, "no state reported")
+    assert fill_result(None, 21)[0] == 0
+    assert fill_result({}, 21)[0] == 0
+
+    # A part-filled leg reports what it actually got, and that is not "filled" for a 21-lot.
+    qty, _ = fill_result(resp("EXECUTION_TYPE_PARTIAL_FILL", "ORDER_STATE_PARTIALLY_FILLED", "5", 5), 21)
+    assert qty == 5
+
+    # Gateways do not always match their own SDK types, so a plain statement is honoured too.
+    assert fill_result({"state": "ORDER_STATE_FILLED", "cumQuantity": 21}, 21)[0] == 21
+    assert fill_result({"status": "ORDER_STATE_CANCELED"}, 21)[0] == 0
+
+
+def test_a_part_filled_leg_is_unwound_for_what_it_actually_holds():
+    """A fill-or-kill should never part-fill. If the venue does it anyway we own those contracts:
+    they must be unwound with the rest rather than forgotten because the leg "failed", and the
+    unwind must sell the quantity HELD -- selling the full order size would turn an unwind into a
+    naked short."""
+    from polybot import execution
+
+    sent = []
+
+    class Sig:
+        def __init__(self, market, depth):
+            self.market, self.label, self.side = market, market, "BUY_YES"
+            self.price, self.contracts = 0.10, 21
+            self.meta = {"depth": depth}
+
+    class US:
+        available = True
+
+        def place_limit(self, market, side, price, contracts, tif=None):
+            sent.append((market, side, contracts, tif))
+            if tif == "ioc":
+                return {"id": "u", "executions": [{"type": "EXECUTION_TYPE_FILL",
+                                                   "order": {"state": "ORDER_STATE_FILLED"},
+                                                   "lastShares": str(contracts)}]}
+            if market == "thin":       # the binding leg part-fills
+                return {"id": "a", "executions": [{"type": "EXECUTION_TYPE_PARTIAL_FILL",
+                                                   "order": {"state": "ORDER_STATE_PARTIALLY_FILLED",
+                                                             "cumQuantity": 5}}]}
+            return {"id": "b", "executions": [{"type": "EXECUTION_TYPE_FILL",
+                                               "order": {"state": "ORDER_STATE_FILLED"},
+                                               "lastShares": "21"}]}
+
+        def bbo(self, slug):
+            return 0.09, 0.11
+
+    ex = execution.Executor(_ledger(), US(), _cfg(), log=lambda *_: None)
+    out = ex.place_arb_set([(0, Sig("thin", 21.0)), (1, Sig("fat", 9000.0))])
+
+    assert out["ok"] is False                       # the set never completed
+    assert out["filled"] == 1                       # only the fat leg
+    unwinds = [x for x in sent if x[3] == "ioc"]
+    assert ("thin", "SELL_YES", 5, "ioc") in unwinds   # the 5 we actually hold, not 21
+    assert ("fat", "SELL_YES", 21, "ioc") in unwinds
+    assert out["unwound"] == 2
+
+
 def test_arb_places_the_thinnest_leg_first():
     """The venue has no atomic multi-leg order, so legs go out one at a time and whichever leg is
     killed decides the unwind bill. Killed on the first leg costs nothing; killed on the fifth

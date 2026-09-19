@@ -27,6 +27,67 @@ def _id(o) -> str:
     return str(_pick(o, "id", "orderId", "order_id", default=""))
 
 
+# None of these appear in a response that filled. Note "KILL" is NOT among the venue's own words:
+# a killed fill-or-kill comes back as CANCELED or EXPIRED.
+_DEAD_MARKERS = ("CANCEL", "REJECT", "EXPIR", "KILL", "DONE_FOR_DAY")
+
+
+def _num(x) -> float:
+    if isinstance(x, dict):
+        x = x.get("value", x.get("quantity"))
+    try:
+        return float(x)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def fill_result(resp, want: int) -> tuple[int, str]:
+    """(contracts actually executed, what the venue called it) from a create-order response.
+
+    This is the check the whole all-or-nothing design rests on, and it was wrong in a way that
+    could only ever bite with real money. The SDK's CreateOrderResponse is {id, executions[]} --
+    there is NO top-level status or state; the outcome lives in executions[].type
+    (EXECUTION_TYPE_FILL / CANCELED / REJECTED / EXPIRED) and executions[].order.state
+    (ORDER_STATE_FILLED / CANCELED / ...). The old check read a top-level "status"/"state" that
+    is never there, got an empty string, and looked in it for the word "KILL" -- which appears in
+    none of the venue's enums anyway. Empty string contains no bad word, so EVERY order read as
+    filled, including a killed one. A set would have been marked COMPLETE while holding nothing,
+    or holding an unbalanced basket it would then never unwind.
+
+    Ambiguity resolves to NOT filled. Believing a leg filled when it did not leaves an unhedged
+    basket nobody unwinds; believing it did not when it did costs the spread and leaves us flat.
+    """
+    if not isinstance(resp, dict):
+        return 0, "no order"
+    states, done = [], 0.0
+    for ex in (resp.get("executions") or []):
+        if not isinstance(ex, dict):
+            continue
+        t = str(ex.get("type") or "").upper()
+        if t:
+            states.append(t)
+        o = ex.get("order") if isinstance(ex.get("order"), dict) else {}
+        st = str(o.get("state") or "").upper()
+        if st:
+            states.append(st)
+        if "FILL" in t and not any(d in t for d in _DEAD_MARKERS):
+            done += _num(ex.get("lastShares"))
+        done = max(done, _num(o.get("cumQuantity")))
+    # Gateways do not always match their own SDK types, so accept a plain statement too.
+    top = str(_pick(resp, "state", "status", default="")).upper()
+    if top:
+        states.append(top)
+    done = max(done, _num(resp.get("cumQuantity")))
+    if not states and done == 0:
+        return 0, "no state reported"
+    label = ", ".join(dict.fromkeys(states))
+    if done == 0 and any(d in st for st in states for d in _DEAD_MARKERS):
+        return 0, label
+    if done == 0 and any("FILL" in st and not any(d in st for d in _DEAD_MARKERS) for st in states):
+        done = want        # said filled, gave no quantity: take it at its word
+    return int(done), label
+
+
 class Executor:
     def __init__(self, ledger, us, cfg: config.Config, log=print):
         self.ledger, self.us, self.cfg, self.log = ledger, us, cfg, log
@@ -70,16 +131,23 @@ class Executor:
                 self.ledger.add_order(sid, "us", sig.market, sig.side, sig.price, sig.contracts, f"error: {exc}")
                 self.log(f"  arb leg {sig.label}: ORDER ERROR {exc}")
                 order = None
-            status = str(_pick(order or {}, "status", "state", default="")).upper()
-            got = bool(order) and "KILL" not in status and "CANCEL" not in status and "REJECT" not in status
+            qty, status = fill_result(order, sig.contracts)
+            got = qty >= sig.contracts
             self.ledger.add_order(sid, "us", sig.market, sig.side, sig.price, sig.contracts,
-                                  "filled" if got else "killed", venue_order_id=_id(order or {}), raw=order)
+                                  "filled" if got else ("partial" if qty else "killed"),
+                                  venue_order_id=_id(order or {}), raw=order)
             if got:
-                filled.append((sid, sig))
+                filled.append((sid, sig, sig.contracts))
                 out["filled"] += 1
             else:
                 self.ledger.set_signal_status(sid, "unfilled")
-                self.log(f"  arb leg {sig.label}: killed (status {status or 'no order'})")
+                self.log(f"  arb leg {sig.label}: {'PARTIAL ' + str(qty) if qty else 'killed'} "
+                         f"of {sig.contracts} ({status})")
+                if qty:
+                    # A fill-or-kill should never part-fill. If the venue does it anyway we own
+                    # those contracts, so they have to be unwound with the rest rather than
+                    # forgotten because the leg "failed".
+                    filled.append((sid, sig, qty))
         if out["filled"] == len(legs):
             for sid, sig in legs:
                 self.ledger.upsert_paper(sid, filled_ts=time.time(), fill_price=sig.price, status="filled",
@@ -89,7 +157,7 @@ class Executor:
             return out
         # Partial. Unwind what filled, at whatever the bid is now.
         self.log(f"  arb set INCOMPLETE ({out['filled']}/{len(legs)} legs) — unwinding")
-        for sid, sig in filled:
+        for sid, sig, qty in filled:
             exit_side = "SELL_YES" if sig.side == "BUY_YES" else "SELL_NO"
             bid, ask = self.us.bbo(sig.market)
             px = bid if sig.side == "BUY_YES" else (None if ask is None else round(1 - ask, 2))
@@ -97,8 +165,10 @@ class Executor:
                 self.log(f"  arb unwind {sig.label}: NO BID — leg left open, needs a human")
                 continue
             try:
-                o = self.us.place_limit(sig.market, exit_side, px, sig.contracts, tif="ioc")
-                self.ledger.add_order(sid, "us", sig.market, exit_side, px, sig.contracts, "unwind", raw=o)
+                # `qty`, not sig.contracts: on a part-filled leg we own only what filled, and
+                # selling the full order size would turn an unwind into a naked short.
+                o = self.us.place_limit(sig.market, exit_side, px, qty, tif="ioc")
+                self.ledger.add_order(sid, "us", sig.market, exit_side, px, qty, "unwind", raw=o)
                 out["unwound"] += 1
             except Exception as exc:
                 self.log(f"  arb unwind {sig.label} FAILED: {exc} — leg left open, needs a human")
