@@ -1820,6 +1820,15 @@ def test_a_killed_order_is_never_read_as_filled():
     qty, _ = fill_result(resp("EXECUTION_TYPE_PARTIAL_FILL", "ORDER_STATE_PARTIALLY_FILLED", "5", 5), 21)
     assert qty == 5
 
+    # ...and a partial that states NO quantity must not fall through to "complete". Both
+    # PARTIALLY_FILLED and PARTIAL_FILL contain the word FILL and neither is a dead marker, so a
+    # naive "it said filled, take its word" rule reads them as a full fill -- the exact error
+    # this function exists to prevent.
+    qty, _ = fill_result(resp("EXECUTION_TYPE_PARTIAL_FILL", "ORDER_STATE_PARTIALLY_FILLED"), 21)
+    assert qty == 0
+    # while a genuine fill with no quantity IS taken at its word
+    assert fill_result(resp("EXECUTION_TYPE_FILL", "ORDER_STATE_FILLED"), 21)[0] == 21
+
     # Gateways do not always match their own SDK types, so a plain statement is honoured too.
     assert fill_result({"state": "ORDER_STATE_FILLED", "cumQuantity": 21}, 21)[0] == 21
     assert fill_result({"status": "ORDER_STATE_CANCELED"}, 21)[0] == 0

@@ -83,8 +83,12 @@ def fill_result(resp, want: int) -> tuple[int, str]:
     label = ", ".join(dict.fromkeys(states))
     if done == 0 and any(d in st for st in states for d in _DEAD_MARKERS):
         return 0, label
-    if done == 0 and any("FILL" in st and not any(d in st for d in _DEAD_MARKERS) for st in states):
-        done = want        # said filled, gave no quantity: take it at its word
+    # "Filled" with no quantity anywhere: take it at its word. But NOT a partial -- PARTIALLY_FILLED
+    # and PARTIAL_FILL both contain "FILL" and neither is a dead marker, so without this they would
+    # be read as a complete fill, which is the precise error this whole function exists to prevent.
+    if done == 0 and any("FILL" in st and "PARTIAL" not in st
+                         and not any(d in st for d in _DEAD_MARKERS) for st in states):
+        done = want
     return int(done), label
 
 
