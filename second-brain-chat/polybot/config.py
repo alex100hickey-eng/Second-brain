@@ -108,7 +108,11 @@ STATIONS = {
 @dataclass
 class Caps:
     max_per_market_usd: float = 20.0
-    max_exposure_usd: float = 100.0
+    # $180 of a ~$206 account, raised from $100 by Alex on 2026-09-19 when told what it buys:
+    # one buy-side arb commits ~$79, so $100 allowed one a day and refused the second. Do not
+    # quietly walk this back — it is his call on his money, and the unwind risk is capped
+    # separately at arb_max_risk_usd ($15) per set regardless of how much is committed.
+    max_exposure_usd: float = 180.0
     bankroll_floor_usd: float = 120.0
     daily_loss_stop_usd: float = 20.0
     kelly_fraction: float = 0.25

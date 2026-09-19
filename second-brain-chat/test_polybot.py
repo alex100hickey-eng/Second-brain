@@ -458,6 +458,7 @@ def test_size_for_quarter_kelly_and_caps():
 def test_risk_manager_caps():
     cfg, led = _cfg(), _ledger()
     cfg.modes["weather_hold"] = "paper"      # off by default now; this test is about the caps, not the mode
+    cfg.caps.max_exposure_usd = 100.0        # pin it: the live cap is Alex's call and moves (180 on 09-19)
     rm = RiskManager(cfg, led)
     sig = Signal("weather_hold", "offshore", "tok", "x", "BUY_YES", 0.5, 20, 6, "r")
     assert rm.allow(sig)[0]
