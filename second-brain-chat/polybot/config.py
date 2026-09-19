@@ -154,10 +154,12 @@ class Config:
     # nyc offered 73 sets of depth while $20/market sized us to 23, i.e. a third of the arb. What
     # an arb can actually lose is the cost of a set that half-fills, so the cap belongs on the SET.
     # Capital COMMITTED by a set. $50 was binding at 56 buy-side sets when the bankroll allowed
-    # 96 — 40% of the arb left behind by a number chosen before any of it was measured. $80 sits
-    # under both the $86 deployable (account value minus the floor) and the $100 exposure cap, so
-    # those stay the outer rails.
-    arb_max_set_cost_usd: float = 80.0
+    # 96 — 40% of the arb left behind by a number chosen before any of it was measured. Raised
+    # again to $120 when the exposure cap went to $180: arbs come about one a day, so an $80 set
+    # cap left $100 of the envelope idle on the days only one appeared. $120 takes a lone arb from
+    # 87 sets to 130 ($5.04 -> $7.57) and still leaves $60 for a second. The risk cap allows 188
+    # sets on the same book, so this is the binding rail, not the unwind one.
+    arb_max_set_cost_usd: float = 120.0
     # What a set can actually LOSE, which is not what it commits: a completed arb pays $1 whatever
     # happens, so the only money at stake is unwinding a half-fill. At 12c a set, 96 sets commit
     # $86 and risk $11.47. Governing the commitment alone caps the upside while saying nothing

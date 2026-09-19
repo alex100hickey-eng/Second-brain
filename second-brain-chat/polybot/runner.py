@@ -622,7 +622,15 @@ class Runner:
                     # 13:00-14:00. So scan every two minutes across that window and every five
                     # outside it. A pass is ~12 calls against a budget of 25 a minute, which leaves
                     # room for the six-call depth read a candidate triggers.
-                    arb_tick = now.minute % (2 if 10 <= now.hour <= 18 else 5) == 0
+                    # Cadence follows where the arbs are. Every fully-quoted sub-$1 book on record
+                    # landed between 11:00 and 17:00 ET, peaking at 13:00-14:00, and episodes last
+                    # about a minute — so the peak is scanned every minute, the shoulders every
+                    # two, and the rest of the day every five. Measured cost: ~7.4 calls a pass
+                    # (5 events + ~2.4 leg-pricings) against a budget near 17 a minute, so even
+                    # the minute cadence runs at well under half, leaving room for the six-call
+                    # depth read a candidate triggers.
+                    arb_period = 1 if 12 <= now.hour <= 15 else 2 if 10 <= now.hour <= 18 else 5
+                    arb_tick = now.minute % arb_period == 0
                     if arb_tick:
                         # US only. bucket_sum cannot size a set without book depth, and depth is a
                         # call per bucket that is only worth spending on a venue we can actually
