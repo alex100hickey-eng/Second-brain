@@ -124,10 +124,33 @@ step, and you need me to prompt you to say do the next step." So inside your tas
   ("Need N more draft(s) to hold M in stock"), not to a number you remember. Your brief names how
   many you may add in one run; do the whole batch in that one run rather than stopping early —
   a run that writes two drafts costs nearly as much as one that writes eight.
-  **Sourcing is now the thing most likely to starve the send.** At 15-20 sends a day the in-band
+  **Sourcing is now the thing most likely to starve the send.** At 10-20 sends a day the in-band
   pool empties in days, so on an `sf_source` task keep going until you have added the number the
-  brief asks for, using the Ad Library keyword search across NEW categories rather than re-reading
-  ones already mined.
+  brief asks for.
+  **Search SELLER-SIZE phrases, not product categories.** Measured 2026-09-19: a category keyword
+  matches ad TEXT, so the brands that mention everything and outspend everyone dominate it —
+  `matcha` returned Lindt, Cheesecake Factory and Hungryroot; `hot honey` returned Subway, Bush's
+  Beans, Applebee's and Taco Bueno, and SCROLLING MADE IT WORSE (Subway went 6 ads to 11). Phrases
+  only a small seller writes invert that:
+      .../ads/library/?active_status=active&ad_type=all&country=US
+         &q=%22small%20batch%22&search_type=keyword_exact_phrase&media_type=all
+  `"small batch"` returned ~17 small DTC brands out of 22 (Fabula Coffee, Blackout Coffee, Ffern,
+  Oak & Smoke, Rooted Home Mercantile, Java Factory Roasters …) and `"hand poured"` returned 22
+  with no mega-brand at all. Both surfaced a brand ALREADY qualified in our tracker — Off The Farm
+  Bars and Cape Candle — which is the check that the method finds the right size of company.
+  Use `search_type=keyword_exact_phrase`. Rotate the phrase, don't re-run one already mined:
+  "small batch", "hand poured", "family run", "woman owned", "hand made in", "we're a small team",
+  "our little shop", "founded in our kitchen", "made to order". The last few are untested, same family.
+  **Caveat:** these surface small ADVERTISERS, which includes local services (a game shop, an
+  accountant, a therapy practice). Still filter to DTC e-commerce — a store that ships a product.
+  **COUNT BY SCROLLING TO STABLE, always.** The first page undercounts badly: Fabula Coffee showed
+  23 blocks before scrolling and 59 after, so a first-page read would have qualified a brand that
+  is out of band. Scroll until the count stops moving, then band it.
+  Cheap way to read a results page without spending thousands of tokens on ad bodies — pull just
+  the advertiser names out of the DOM:
+      const t=document.body.innerText.split('\n').map(s=>s.trim()).filter(Boolean);
+      const n=[];for(let i=1;i<t.length;i++){if(t[i]==='Sponsored')n.push(t[i-1]);}
+      const c={};n.forEach(x=>c[x]=(c[x]||0)+1);JSON.stringify(Object.entries(c).sort((a,b)=>b[1]-a[1]))
   **The subject line is part of the email, not a label.** "your ad account" is a wasted subject —
   it is the one line that decides whether any of the work below it gets read. Make it the single
   most specific finding you have, the way the body's first sentence is ("Two of your ads spell it
