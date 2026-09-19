@@ -77,7 +77,7 @@ def _days_until(iso: str | None) -> float | None:
         return max((when - datetime.now(timezone.utc)).total_seconds() / 86400.0, 0.5)
     except (ValueError, TypeError):
         return None
-from .strategies.bucket_sum import BucketSum, arb_check, arb_possible, unpriced, worth_confirming
+from .strategies.bucket_sum import consume_levels, BucketSum, arb_check, arb_possible, unpriced, worth_confirming
 from .strategies.hold_favorites import HoldFavorites
 from .strategies.leadlag import LeadLag
 from .strategies.maker_rewards import MakerRewards
@@ -517,6 +517,24 @@ class Runner:
             elif arb_kind is not None and worth_confirming(ctx.event.buckets, net, self.cfg,
                                                            getattr(ctx, "settles_in_days", None)):
                 got = self.us.fill_depth(ctx.event)
+                if got:
+                    # A position we already hold has consumed that liquidity. Paper orders do not,
+                    # so without this the same mispricing is bought over and over against the same
+                    # contracts -- miami was booked twice five minutes apart, 62 sets each, while
+                    # the binding leg showed the SAME 79 contracts both times. Sizing, not pricing:
+                    # best_bid/best_ask stay the real market so the logs keep telling the truth.
+                    for b in ctx.event.buckets:
+                        held = self.ledger.held_contracts(venue, b.yes_token, "bucket_sum")
+                        if held <= 0:
+                            continue
+                        if arb_kind == "buy_all":
+                            b.ask_levels = consume_levels(b.ask_levels, held)
+                            b.ask_qty = sum(q for px, q in b.ask_levels
+                                            if b.ask_levels and px == b.ask_levels[0][0]) or 0.0
+                        else:
+                            b.bid_levels = consume_levels(b.bid_levels, held)
+                            b.bid_qty = sum(q for px, q in b.bid_levels
+                                            if b.bid_levels and px == b.bid_levels[0][0]) or 0.0
                 self.log(f"  arb candidate {venue} {city} {ctx.date} {kind} {arb_kind} {net:.1f}c/set — "
                          f"depth {'read' if got else 'INCOMPLETE, standing down'}")
                 if got:

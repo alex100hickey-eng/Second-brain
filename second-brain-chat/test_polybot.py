@@ -1701,6 +1701,42 @@ def test_the_best_book_on_record_is_sized_and_taken():
     assert contracts * net_n / 100 >= cfg.arb_min_profit_usd
 
 
+def test_paper_cannot_buy_the_same_liquidity_twice(tmp_path):
+    """Paper orders do not consume the book, so a persistent mispricing gets bought over and over
+    against the same contracts. Miami on 2026-09-19 was booked twice five minutes apart, 62 sets
+    each, while the binding leg's ladder showed the SAME 79 contracts both times — live, the first
+    order would have taken 62 of them and the second set could not have existed.
+
+    That is not just a reporting error: the promotion gate runs on paper P&L, so an inflated
+    paper record could promote a strategy that cannot perform live."""
+    from polybot.strategies.bucket_sum import consume_levels
+    from polybot.ledger import Ledger
+    from polybot.strategies.base import Signal
+
+    # The ladder we already ate into.
+    lad = [(0.41, 79.0), (0.42, 300.0)]
+    assert consume_levels(lad, 0) == lad
+    assert consume_levels(lad, 62) == [(0.41, 17.0), (0.42, 300.0)]   # 17 left at the best price
+    assert consume_levels(lad, 79) == [(0.42, 300.0)]                 # best level gone entirely
+    assert consume_levels(lad, 100) == [(0.42, 279.0)]                # eats into the next level
+    assert consume_levels(lad, 500) == []                             # nothing left to buy
+    assert consume_levels([], 10) == []
+    assert consume_levels(None, 10) == []
+
+    # And the ledger reports what we hold on a leg, per module.
+    led = Ledger(str(tmp_path / "t.db"))
+    led.add_signal(Signal("bucket_sum", "us", "leg-a", "leg-a", "BUY_YES", 0.41, 25.42, 9.0,
+                          "set", taker=True, arb=True, meta={"group": "g"}), "paper")
+    assert led.held_contracts("us", "leg-a", "bucket_sum") == 62      # 25.42 / 0.41
+    assert led.held_contracts("us", "leg-b", "bucket_sum") == 0
+    assert led.held_contracts("us", "leg-a", "weather_obs") == 0      # another module's position
+
+    # A settled/closed position no longer blocks the book.
+    sid = led.open_signals(module="bucket_sum")[0]["id"]
+    led.set_signal_status(sid, "closed")
+    assert led.held_contracts("us", "leg-a", "bucket_sum") == 0
+
+
 def test_an_already_taken_episode_does_not_pay_for_another_depth_read(monkeypatch):
     """The depth read is six calls and the dedupe lived AFTER it, so an episode that persists paid
     six calls a sweep to confirm a set already decided. Miami on 2026-09-19 produced candidates at

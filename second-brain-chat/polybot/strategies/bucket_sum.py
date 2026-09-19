@@ -177,6 +177,26 @@ def unwind_cost_cents(buckets, kind: str) -> float:
     return total * 100
 
 
+def consume_levels(levels, n: float):
+    """The ladder that remains after `n` contracts have been taken off the best price down.
+
+    What a position we already hold has done to the book. Sizing against a ladder that still
+    shows liquidity we ourselves bought is how paper books the same mispricing repeatedly.
+    """
+    if not levels or n <= 0:
+        return list(levels or [])
+    out, left = [], float(n)
+    for px, q in levels:
+        if left <= 0:
+            out.append((px, q))
+            continue
+        take = min(q, left)
+        left -= take
+        if q - take > 0:
+            out.append((px, q - take))
+    return out
+
+
 def depth_at(levels, limit_px: float | None, kind: str) -> float:
     """Contracts available at `limit_px` or better on this leg's ladder.
 

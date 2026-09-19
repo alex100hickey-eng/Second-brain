@@ -233,6 +233,23 @@ class Ledger:
             args.append(market)
         return float(self.conn.execute(q, args).fetchone()["s"])
 
+    def held_contracts(self, venue: str, market: str, module: str | None = None) -> float:
+        """Contracts of this leg sitting in OPEN positions.
+
+        Paper orders do not consume the book, so without this a persistent mispricing is bought
+        over and over against the same contracts. Miami on 2026-09-19 was booked twice five
+        minutes apart, 62 sets each, while the binding leg's ladder showed the SAME 79 contracts
+        both times -- live, the first order would have taken 62 of them. That inflates paper P&L,
+        and paper P&L is the evidence the live decision rests on.
+        """
+        q = ("SELECT COALESCE(SUM(contracts),0) AS n FROM signals "
+             "WHERE status='open' AND venue=? AND market=?")
+        args = [venue, market]
+        if module:
+            q += " AND module=?"
+            args.append(module)
+        return float(self.conn.execute(q, args).fetchone()["n"])
+
     def realized_today_usd(self, mode: str = "live") -> float:
         start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
         r = self.conn.execute(
