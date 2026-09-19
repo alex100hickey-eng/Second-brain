@@ -134,8 +134,17 @@ class Ledger:
         return cur.lastrowid
 
     def recent_signal_exists(self, module: str, market: str, side: str, within_s: float) -> bool:
+        """Have we already decided this market+side recently? Voided rows do not count.
+
+        A void means "this decision was wrong, forget it" — `decision_count` and `module_stats`
+        already exclude them, and this is the third place that must. Otherwise striking a bad
+        signal from the record silently suppresses the real opportunity behind it: voiding a
+        double-counted miami set on 2026-09-19 immediately blocked a genuine 13.1c/set candidate
+        three minutes later, for no reason a reader of the log could see.
+        """
         row = self.conn.execute(
-            "SELECT 1 FROM signals WHERE module=? AND market=? AND side=? AND ts>=? LIMIT 1",
+            "SELECT 1 FROM signals WHERE module=? AND market=? AND side=? AND ts>=? "
+            "AND status!='void' LIMIT 1",
             (module, market, side, _now() - within_s),
         ).fetchone()
         return row is not None

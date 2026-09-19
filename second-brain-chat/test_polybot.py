@@ -1771,6 +1771,18 @@ def test_an_already_taken_episode_does_not_pay_for_another_depth_read(monkeypatc
     assert not any(led.recent_signal_exists("bucket_sum", m, "BUY_YES", cfg.arb_dedupe_s)
                    for m in legs)
 
+    # A VOIDED signal must not suppress anything. A void means "that decision was wrong, forget
+    # it", and striking a bad record should never cost us the real opportunity behind it —
+    # voiding a double-counted miami set on 2026-09-19 immediately blocked a genuine 13.1c/set
+    # candidate three minutes later, for no reason visible in the log.
+    led.conn.execute("UPDATE signals SET ts = ?", (__import__("time").time(),))
+    led.conn.commit()
+    assert all(led.recent_signal_exists("bucket_sum", m, "BUY_YES", cfg.arb_dedupe_s) for m in legs)
+    led.conn.execute("UPDATE signals SET status='void'")
+    led.conn.commit()
+    assert not any(led.recent_signal_exists("bucket_sum", m, "BUY_YES", cfg.arb_dedupe_s)
+                   for m in legs)
+
 
 def test_an_arb_rearms_in_minutes_while_a_view_stays_locked_for_hours():
     """The 3-hour dedupe exists because a directional module re-entered the same bucket every 3
