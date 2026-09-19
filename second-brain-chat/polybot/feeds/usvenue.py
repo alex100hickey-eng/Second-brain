@@ -45,7 +45,8 @@ except Exception:  # pragma: no cover - import guard
 # net because gateway.polymarket.us sees the whole CWRU campus IP (129.22.1.29) and other people
 # on that network spend from the same quota.
 SDK_TIMEOUT_S = 10.0               # a 30s call is already a failure for a 2-minute scan
-SCREEN_BOOK_TTL_S = 90             # how stale a book may be for SCREENING (never for trading)
+SCREEN_BOOK_TTL_S = 150            # how stale a book may be for SCREENING (never for trading);
+                                   # longer than the 2-minute scan so consecutive passes reuse it
 CALL_BUDGET = 5                    # requests allowed per window
 CALL_WINDOW_S = 12.0               # STARTING window; widened automatically when the venue refuses
 CALL_WINDOW_MAX_S = 60.0           # ceiling on the self-tuned window
@@ -474,17 +475,23 @@ class USVenue:
                     out[e["slug"]] = e
         return out
 
-    def price_legs(self, buckets, limit: int = 4) -> int:
+    def price_legs(self, buckets, limit: int = 6) -> int:
         """Fill in best_bid/best_ask for buckets the event object left unquoted, from the book.
 
         One call per bucket, and the usual case is a single unquoted leg (1,329 of 1,570 candidate
         event-minutes over 9 days), so this is cheap where a full depth read is not. `limit` caps
         the damage on the rare event that is missing several. Returns how many were priced.
         """
+        # All or nothing. arb_check needs EVERY leg quoted on the side it trades, so pricing four
+        # legs of a six-leg book answers nothing and spends four calls doing it — which was 42% of
+        # all screens (1,049 of 2,488 event-minutes), almost all of them books where every leg has
+        # an ask and none has a bid, i.e. exactly the sell-side shape that is 5x the more common
+        # arb. Spend six or spend none.
+        need = [b for b in buckets if b.best_ask is None or b.best_bid is None]
+        if len(need) > limit:
+            return 0
         done = 0
-        for b in buckets:
-            if (b.best_ask is not None and b.best_bid is not None) or done >= limit:
-                continue
+        for b in need:
             book = self.book(b.yes_token, max_age_s=SCREEN_BOOK_TTL_S)
             if book is None:
                 continue                      # rate limited: leave it unquoted, it stays a no-go

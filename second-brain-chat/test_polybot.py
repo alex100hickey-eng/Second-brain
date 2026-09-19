@@ -1128,18 +1128,27 @@ def test_the_screen_may_reuse_a_recent_book_but_a_trade_never_does():
     v.available, v._client = True, Client()
     ev = _event()
     for b in ev.buckets:
-        b.best_bid = b.best_ask = None
-    # the screen prices the legs, then reuses them on the next pass without spending a call
-    assert v.price_legs(ev.buckets, limit=2) == 2
+        b.best_bid = b.best_ask = 0.5
+    ev.buckets[0].best_bid = ev.buckets[1].best_bid = None      # two legs half-quoted
+    # the screen prices them, then reuses them on the next pass without spending a call
+    assert v.price_legs(ev.buckets) == 2
     first = len(calls)
     assert first == 2
-    for b in ev.buckets[:2]:
-        b.best_bid = b.best_ask = None
-    assert v.price_legs(ev.buckets, limit=2) == 2
+    ev.buckets[0].best_bid = ev.buckets[1].best_bid = None
+    assert v.price_legs(ev.buckets) == 2
     assert len(calls) == first                       # served from the cache
     # the trade path re-reads every leg regardless of how recently the screen looked
     v.fill_depth_buckets(ev.buckets[:2])
     assert len(calls) == first + 2
+
+    # all or nothing: arb_check needs EVERY leg quoted, so pricing some of a book answers nothing
+    # and spends calls doing it -- 42% of screens were doing exactly that
+    calls.clear()
+    wide = _event()
+    for b in wide.buckets:
+        b.best_bid = b.best_ask = None               # nine legs need pricing, limit is six
+    assert v.price_legs(wide.buckets, limit=6) == 0
+    assert calls == []
 
 
 def test_hopeless_candidates_are_refused_before_the_depth_call_is_paid_for():
