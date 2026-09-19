@@ -487,7 +487,7 @@ class Runner:
         # likely, not less. Only the arb path takes this: weather_lock and weather_obs trade on
         # observations of a day in progress and have nothing to say about tomorrow.
         offsets = day_offsets if day_offsets is not None else ((0, 1) if (light and venue == "us") else (0,))
-        # A scan pass has a wall clock, not just a call budget. Arb episodes last about a minute,
+        # A scan pass has a wall clock, not just a call budget. Arb episodes last a median of 4 minutes, up to 15,
         # so five cities scanned slowly is worth less than three scanned now — and on 2026-09-19 a
         # pass stalled after its first city and held the loop for fifteen minutes, which no amount
         # of cadence tuning upstream can fix. Abandon the tail and let the next tick start clean.

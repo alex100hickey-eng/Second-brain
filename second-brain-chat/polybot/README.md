@@ -165,6 +165,24 @@ tuned from data. Output: `backtest-latest.json` + a summary in the log.
   before. There is no intra-day "peak": normalised by observation the rate of a positive net is flat
   (2.7% over 12:00–15:00 vs 2.8% over 09:00–13:00, 1,450 event-minutes).
 
+## How long an episode actually lasts (corrected 2026-09-19)
+
+Everything in this repo used to say "about a minute", and that was measurement bias, not a fact.
+You cannot observe a four-minute episode as four minutes when you look every five:
+
+    09-16..09-18, sampling every ~5 min : 11 episodes, median 1 min, max 2,  0/11 >= 4 min
+    09-19,        sampling every ~21 s  :  7 episodes, median 4 min, max 15, 4/7  >= 4 min
+
+So an episode runs a median of FOUR minutes and can run fifteen. The 20s sweep is therefore
+comfortable rather than marginal — it samples a typical episode a dozen times. Do not use the old
+"one minute" figure to justify anything; it was an artefact of how rarely we looked.
+
+An episode also OPENS marginal and deepens. Miami on 2026-09-19 went 0.85c at 13:53, 2.83c at
+13:56, 11.03c at 13:57, peaking at 15.14c at 13:58:30 before easing back. Taking the first
+qualifying price is not taking the best one — but the peak is not knowable in advance, and tuning
+a threshold against seven episodes is overfitting, not edge. Measured: raising the minimum net to
+10c gains $0.12 on the day, and raising it to 12c catches nothing at all.
+
 ## bucket_sum (the arb) — state at 2026-09-19, and what is still unknown
 
 The only module whose profit does not require out-forecasting anyone. Buy every leg of an
