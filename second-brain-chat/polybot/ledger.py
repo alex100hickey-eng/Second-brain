@@ -11,6 +11,7 @@ import time
 from datetime import datetime, timezone
 
 from . import config
+from .fees import US_TAKER_THETA
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS signals (
@@ -328,42 +329,69 @@ class Ledger:
                       f"US {us_n} signals {us_mtm:+.2f}")
 
     def arb_report(self, days: int = 7) -> str:
-        """Every moment the US books offered a complete bucket set under $1, and how deep it was.
+        """Every moment the US books offered a complete bucket set worth taking, and how deep it was.
 
         bucket_sum is the only module whose profit does not depend on out-forecasting anyone, so
-        the question that decides whether it is a business is not "does the arb appear" (it does,
-        ~3 times a day) but "is it ever big enough to be worth taking". Only the rows written by
-        the arb path carry sizes; the rest are quote-only and show depth as `?`.
+        the question that decides whether it is a business is not "does the arb appear" (it does)
+        but "is it ever big enough to be worth taking".
+
+        Three things this used to get wrong, all of which flattered it:
+          - it accepted ANY two legs as a set, so a minute where only 2 of 6 legs happened to be
+            snapshotted read as a 90c edge. A set is the whole book or it is nothing.
+          - it reported GROSS, so rows like "gross=1.0c/set" were listed as candidates when six
+            legs of taker fee is ~3c and they are losses.
+          - it only ever looked at the buy side, while sell-side sets are the commoner shape.
         """
         since = _now() - days * 86400
         rows = [dict(r) for r in self.conn.execute(
-            "SELECT ts, market, bid, ask, bid_qty, ask_qty FROM snapshots "
+            "SELECT ts, market, bid, ask, bid_qty, ask_qty, bid_ladder, ask_ladder FROM snapshots "
             "WHERE venue='us' AND ts>=? ORDER BY ts", (since,))]
-        events = {}
+        events, width = {}, {}
         for r in rows:
             m = re.match(r"^(tc-temp-[a-z]+(?:high|low)-\d{4}-\d{2}-\d{2})-", r["market"] or "")
             if m:
                 events.setdefault((m.group(1), int(r["ts"] // 60)), {})[r["market"]] = r
-        lines = [f"arb candidates — last {days}d (US books)"]
-        found = 0
+        for (slug, _), legs in events.items():          # how many legs this event actually has
+            width[slug] = max(width.get(slug, 0), len(legs))
+
+        def fee(px):
+            return US_TAKER_THETA * px * (1.0 - px)
+
+        lines = [f"arb candidates — last {days}d (US books, net of taker fees)"]
+        found = taken = 0
         for (slug, minute), legs in sorted(events.items(), key=lambda kv: kv[0][1]):
-            if len(legs) < 2 or any(l["ask"] is None for l in legs.values()):
+            if len(legs) < width.get(slug, 0) or len(legs) < 3:
+                continue                                 # a partial book is not a set
+            asks = [l["ask"] for l in legs.values()]
+            bids = [l["bid"] for l in legs.values()]
+            best = None
+            if all(a is not None for a in asks):
+                net = (1.0 - sum(asks) - sum(fee(a) for a in asks)) * 100
+                best = ("buy_all", net, [l["ask_qty"] for l in legs.values()])
+            if all(b is not None for b in bids):
+                net = (sum(bids) - 1.0 - sum(fee(b) for b in bids)) * 100
+                if best is None or net > best[1]:
+                    best = ("sell_all", net, [l["bid_qty"] for l in legs.values()])
+            if best is None or best[1] <= 0:
                 continue
-            ask_sum = sum(l["ask"] for l in legs.values())
-            if ask_sum >= 1.0:
-                continue
+            kind, net, qtys = best
             found += 1
-            qtys = [l["ask_qty"] for l in legs.values()]
-            depth = "?" if any(q is None for q in qtys) else f"{min(qtys):.0f} sets"
+            if any(q is None for q in qtys):
+                depth, worth = "?", ""
+            else:
+                n = min(qtys)
+                depth = f"{n:.0f} sets"
+                worth = f"  ${net / 100 * n:6.2f}"
+                taken += 1
             when = datetime.fromtimestamp(minute * 60).strftime("%m-%d %H:%M")
-            lines.append(f"  {when}  {slug:<32} ask_sum={ask_sum:.3f}  gross={100 * (1 - ask_sum):4.1f}c/set  "
-                         f"fillable={depth}")
+            lines.append(f"  {when}  {slug:<32} {kind:<8} net={net:5.1f}c/set  "
+                         f"fillable={depth}{worth}")
         if not found:
             lines.append("  none")
         else:
-            sized = [l for l in lines[1:] if "fillable=?" not in l]
-            lines.append(f"  {found} candidate event-minutes, {len(sized)} with depth recorded. "
-                         "Depth is only written when the arb path runs, so older rows read '?'.")
+            lines.append(f"  {found} event-minutes with a positive net; {taken} had depth recorded. "
+                         "Depth is only written when the arb path runs, so the rest read '?' — "
+                         "and depth, not price, is what decides whether any of this is money.")
         return "\n".join(lines)
 
     def report(self, days: int = 1) -> str:
