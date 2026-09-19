@@ -1954,6 +1954,91 @@ def test_a_big_paper_arb_is_announced_and_a_small_one_is_not():
         notify.nudge = old
 
 
+def _arb_sig(market, depth, price=0.30, contracts=21):
+    from polybot.strategies.base import Signal
+    return Signal("bucket_sum", "us", market, market, "BUY_YES", price,
+                  round(price * contracts, 2), 9.0, "set", taker=True, arb=True,
+                  meta={"group": "g", "depth": depth})
+
+
+def _fill(qty):
+    return {"id": "o", "executions": [{"type": "EXECUTION_TYPE_FILL",
+                                       "order": {"state": "ORDER_STATE_FILLED"},
+                                       "lastShares": str(qty)}]}
+
+
+_KILLED = {"id": "o", "executions": [{"type": "EXECUTION_TYPE_CANCELED",
+                                      "order": {"state": "ORDER_STATE_CANCELED"}}]}
+
+
+def test_an_unwind_that_did_not_fill_is_not_counted_as_unwound(monkeypatch):
+    """An immediate-or-cancel unwind is killed exactly like the fill-or-kill that started the
+    set, so "unwound" has to mean the contracts actually left — not that a request was sent. A
+    leg we could not sell is an unhedged position, which is the single outcome this whole design
+    exists to prevent, so it stays OPEN in the ledger and it wakes somebody."""
+    from polybot import execution
+
+    nudges = []
+    monkeypatch.setattr(execution.notify, "nudge",
+                        lambda title, body, key=None, log=None: nudges.append(title))
+
+    class US:
+        available = True
+
+        def place_limit(self, market, side, price, contracts, tif=None):
+            if tif == "fok":
+                return _fill(contracts) if market == "fat" else _KILLED
+            return _KILLED            # every unwind is killed too
+
+        def bbo(self, slug):
+            return 0.29, 0.31
+
+    led = _ledger()
+    ex = execution.Executor(led, US(), _cfg(), log=lambda *_: None)
+    legs = [(led.add_signal(_arb_sig("fat", 9000.0), "live"), _arb_sig("fat", 9000.0)),
+            (led.add_signal(_arb_sig("thin", 21.0), "live"), _arb_sig("thin", 21.0))]
+    out = ex.place_arb_set(legs)
+
+    assert out["ok"] is False
+    assert out["unwound"] == 0                 # sent, but nothing actually sold
+    assert out.get("stranded") == 1
+    assert nudges and "STRANDED" in nudges[0]
+
+    # The leg we still hold must still read as held, or exposure and sizing both lie.
+    rows = {r["market"]: r["status"] for r in led.open_signals(module="bucket_sum")}
+    assert rows.get("fat") == "open"
+
+
+def test_a_successful_unwind_closes_the_position(monkeypatch):
+    """The mirror case: when the contracts really do leave, the signal has to stop counting as
+    exposure, or every later set is sized against capital we no longer have committed."""
+    from polybot import execution
+
+    monkeypatch.setattr(execution.notify, "nudge", lambda *a, **k: None)
+
+    class US:
+        available = True
+
+        def place_limit(self, market, side, price, contracts, tif=None):
+            if tif == "fok":
+                return _fill(contracts) if market == "fat" else _KILLED
+            return _fill(contracts)             # the unwind fills
+
+        def bbo(self, slug):
+            return 0.29, 0.31
+
+    led = _ledger()
+    ex = execution.Executor(led, US(), _cfg(), log=lambda *_: None)
+    legs = [(led.add_signal(_arb_sig("fat", 9000.0), "live"), _arb_sig("fat", 9000.0)),
+            (led.add_signal(_arb_sig("thin", 21.0), "live"), _arb_sig("thin", 21.0))]
+    out = ex.place_arb_set(legs)
+
+    assert out["unwound"] == 1 and "stranded" not in out
+    open_markets = {r["market"] for r in led.open_signals(module="bucket_sum")}
+    assert "fat" not in open_markets           # sold back, so no longer exposure
+    assert led.held_contracts("us", "fat", "bucket_sum") == 0
+
+
 def test_a_killed_order_is_never_read_as_filled():
     """The check the whole all-or-nothing design rests on, against the SDK's REAL response shape.
 

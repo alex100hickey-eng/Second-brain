@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import time
 
-from . import config
+from . import config, notify
 
 
 def _pick(d: dict, *keys, default=None):
@@ -144,14 +144,16 @@ class Executor:
                 filled.append((sid, sig, sig.contracts))
                 out["filled"] += 1
             else:
-                self.ledger.set_signal_status(sid, "unfilled")
                 self.log(f"  arb leg {sig.label}: {'PARTIAL ' + str(qty) if qty else 'killed'} "
                          f"of {sig.contracts} ({status})")
                 if qty:
                     # A fill-or-kill should never part-fill. If the venue does it anyway we own
                     # those contracts, so they have to be unwound with the rest rather than
-                    # forgotten because the leg "failed".
+                    # forgotten because the leg "failed" — and the ledger must not call a leg we
+                    # are actually holding "unfilled", or exposure and held_contracts both lie.
                     filled.append((sid, sig, qty))
+                else:
+                    self.ledger.set_signal_status(sid, "unfilled")
         if out["filled"] == len(legs):
             for sid, sig in legs:
                 self.ledger.upsert_paper(sid, filled_ts=time.time(), fill_price=sig.price, status="filled",
@@ -160,22 +162,54 @@ class Executor:
             self.log(f"  arb set COMPLETE: {len(legs)} legs")
             return out
         # Partial. Unwind what filled, at whatever the bid is now.
+        #
+        # Everything here is about ending FLAT and knowing whether we did. An unwind that is only
+        # *sent* proves nothing: an immediate-or-cancel order is killed exactly like the
+        # fill-or-kill that started this, so "unwound" must mean the contracts actually left, not
+        # that a request was made. And a leg we could not sell is real money sitting in an
+        # unhedged position — the one outcome this whole design exists to prevent — so it cannot
+        # be a log line nobody reads.
         self.log(f"  arb set INCOMPLETE ({out['filled']}/{len(legs)} legs) — unwinding")
+        stranded = []
         for sid, sig, qty in filled:
             exit_side = "SELL_YES" if sig.side == "BUY_YES" else "SELL_NO"
             bid, ask = self.us.bbo(sig.market)
             px = bid if sig.side == "BUY_YES" else (None if ask is None else round(1 - ask, 2))
             if px is None:
-                self.log(f"  arb unwind {sig.label}: NO BID — leg left open, needs a human")
+                stranded.append((sid, sig, qty, "no bid to sell into"))
                 continue
             try:
                 # `qty`, not sig.contracts: on a part-filled leg we own only what filled, and
                 # selling the full order size would turn an unwind into a naked short.
                 o = self.us.place_limit(sig.market, exit_side, px, qty, tif="ioc")
-                self.ledger.add_order(sid, "us", sig.market, exit_side, px, qty, "unwind", raw=o)
-                out["unwound"] += 1
             except Exception as exc:
-                self.log(f"  arb unwind {sig.label} FAILED: {exc} — leg left open, needs a human")
+                self.ledger.add_order(sid, "us", sig.market, exit_side, px, qty, f"unwind error: {exc}")
+                stranded.append((sid, sig, qty, str(exc)[:80]))
+                continue
+            sold, why = fill_result(o, qty)
+            self.ledger.add_order(sid, "us", sig.market, exit_side, px, qty,
+                                  "unwind" if sold >= qty else ("unwind partial" if sold else "unwind killed"),
+                                  venue_order_id=_id(o or {}), raw=o)
+            if sold >= qty:
+                self.ledger.set_signal_status(sid, "closed")      # flat: stop counting exposure
+                out["unwound"] += 1
+            else:
+                stranded.append((sid, sig, qty - sold, f"unwind {why}"))
+
+        if stranded:
+            # Leave these OPEN on purpose. They are positions we hold, and the ledger has to keep
+            # saying so or exposure, held_contracts and every later sizing decision are all wrong.
+            held = sum(s.price * q for _, s, q, _ in stranded)
+            lines = "; ".join(f"{s.label} {q}@{s.price}" for _, s, q, _ in stranded)
+            self.log(f"  arb set STRANDED {len(stranded)} leg(s), ~${held:.2f} unhedged: {lines}")
+            for _, _, _, why in stranded:
+                self.log(f"    reason: {why}")
+            out["stranded"] = len(stranded)
+            notify.nudge(
+                f"polybot: {len(stranded)} arb leg(s) STRANDED, ~${held:.2f} unhedged",
+                f"A set failed and these could not be sold back: {lines}. "
+                f"This is an unhedged position, not an arb — it needs a human.",
+                key="polybot-arb-stranded", log=self.log)
         return out
 
     def sync(self) -> dict:
