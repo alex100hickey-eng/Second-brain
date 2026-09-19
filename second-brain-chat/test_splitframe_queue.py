@@ -697,3 +697,51 @@ def test_searches_go_to_the_smallest_nameless_in_band_brands_first():
     # 100+ active ads is an in-house creative team: excluded outright, not merely ranked last.
     assert "TooBig" not in got
     assert got[-1] == "Borderline", "the 51-100 band is a last resort, not a first pick"
+
+
+# ---------------------------------------------------------------------------
+# Closing out dead prospects. Nothing ever wrote `outcome`. MAX_TOUCHES stops
+# the drafter at touch three, but the row stayed open forever — so the inbound
+# reply watch list only grew (and it builds a length-limited Gmail query), and
+# "how many brands did we work all the way through and get nothing from" — the
+# denominator for every decision about whether this works — was unanswerable.
+# ---------------------------------------------------------------------------
+
+def _srow(**kw):
+    base = {"brand": "Acme", "sent_date": "2026-09-01", "followup2_date": "2026-09-08",
+            "replied": "", "outcome": ""}
+    base.update(kw)
+    return base
+
+
+def test_a_brand_worked_to_the_last_touch_with_no_reply_is_closed():
+    rows = [_srow(brand="Dead", followup2_date="2026-09-08")]
+    assert [r["brand"] for r in sq.stale_prospects(rows, "2026-09-19")] == ["Dead"]
+
+
+def test_a_brand_still_inside_its_window_is_left_alone():
+    """Grace on top of the last touch: a founder who answers late still lands in the inbox."""
+    rows = [_srow(brand="Fresh", followup2_date="2026-09-18")]
+    assert sq.stale_prospects(rows, "2026-09-19") == []
+    # exactly at the grace boundary, still open
+    assert sq.stale_prospects([_srow(followup2_date="2026-09-15")], "2026-09-19") == []
+    # one day past it, closed
+    assert len(sq.stale_prospects([_srow(followup2_date="2026-09-14")], "2026-09-19")) == 1
+
+
+def test_a_reply_or_an_outcome_is_never_overwritten():
+    """Closing a brand that answered would drop it from the reply watch — the opposite of what
+    this is for."""
+    rows = [_srow(brand="Replied", replied="2026-09-10"),
+            _srow(brand="Closed", outcome="no_response"),
+            _srow(brand="Won", outcome="client")]
+    assert sq.stale_prospects(rows, "2026-09-30") == []
+
+
+def test_a_brand_never_emailed_is_not_closed():
+    assert sq.stale_prospects([_srow(sent_date="", followup2_date="2026-09-01")], "2026-09-30") == []
+
+
+def test_a_row_with_no_last_touch_date_is_left_alone():
+    """No schedule means no evidence the sequence finished — never guess a brand is dead."""
+    assert sq.stale_prospects([_srow(followup2_date="")], "2026-09-30") == []

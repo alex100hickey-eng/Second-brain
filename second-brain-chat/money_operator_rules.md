@@ -119,6 +119,11 @@ step, and you need me to prompt you to say do the next step." So inside your tas
   jobs are the live Ad Library read + the email in his voice (`add`), sourcing new in-band brands
   (`source`, 5-50 active ads, DTC brands only — never retailers, agencies or marketplaces), and
   Hunter inside quota. 0 active ads → `note --ad-count 0` (hold). Over 100 → note and skip.
+  **Run `python3 scripts/splitframe_queue.py sweep --write` once per shift.** It closes brands
+  worked through all three touches with no reply (`outcome: no_response`). Nothing else ever
+  writes `outcome`, and until it is written those brands stay in the inbound reply watch forever
+  — which asks Gmail about written-off brands every 15 minutes and grows a length-limited query
+  — and the funnel has no denominator. `status` prints how many are due.
   **The daily cadence is not fixed at 5 any more** — `status` prints it ("cadence: N/day") and it
   ramps to 20/day on a clean send record, so top the queue to the stock target `status` asks for
   ("Need N more draft(s) to hold M in stock"), not to a number you remember. Your brief names how

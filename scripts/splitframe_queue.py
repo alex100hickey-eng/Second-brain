@@ -237,6 +237,38 @@ def candidates_to_qualify(rows: list, today: str, limit: int = QUALIFY_BATCH) ->
     return out[:limit]
 
 
+# Days after the LAST scheduled touch before a silent brand is called done. The sequence is
+# three touches; FU2 is the last one, so this is grace on top of it — a founder who was going to
+# answer has answered by then, and one who answers later still lands in the inbox and can be
+# reopened by hand.
+CLOSEOUT_GRACE_DAYS = 5
+
+
+def stale_prospects(rows: list, today: str, grace: int = CLOSEOUT_GRACE_DAYS) -> list:
+    """Rows that have been fully worked and never answered.
+
+    Nothing ever wrote `outcome`. MAX_TOUCHES stops the drafter at touch three, but the tracker
+    row stayed open forever, and two things quietly depended on it closing:
+
+    `sent_domains()` — the inbound reply watch list — is every brand with a sent_date and no
+    reply or outcome, so it only ever grew. Every 15 minutes it asked Gmail about brands that
+    were written off weeks ago, and the query it builds has a length limit.
+
+    And the funnel became unmeasurable: "how many brands did we work all the way through and
+    get nothing from" is the denominator for every decision about whether this is working, and
+    it could not be answered from the tracker at all.
+    """
+    cutoff = (datetime.fromisoformat(today).date() - timedelta(days=grace)).isoformat()
+    out = []
+    for r in rows:
+        if not _c(r.get("sent_date")) or _c(r.get("replied")) or _c(r.get("outcome")):
+            continue
+        fu2 = _c(r.get("followup2_date"))
+        if fu2 and fu2 <= cutoff:
+            out.append(r)
+    return out
+
+
 def hunter_targets(rows: list, queue: list = (), cycle_start: str = "") -> list:
     """Qualified, in-band, still worth a Hunter search — and nothing else.
 
@@ -866,6 +898,7 @@ def status_report(rows: list, queue: list, today: str) -> dict:
         "next_close": next_close_variant(queue),
         "close_report": close_report(rows, queue),
         "bounces": recent_bounces(),
+        "stale_prospects": [r.get("brand") for r in stale_prospects(rows, today)],
     }
 
 
@@ -896,6 +929,12 @@ def _print_status(rep: dict) -> None:
     print(f"\nClose experiment — write the next one with the {rep['next_close'].upper()} close.")
     for arm in CLOSE_VARIANTS:
         print(f"  {arm:9} {cr[arm]['sent']:>3} sent, {cr[arm]['replied']} replied")
+
+    sp = rep.get("stale_prospects") or []
+    if sp:
+        print(f"\nWorked to the last touch, no reply ({len(sp)}) — `sweep --write` closes them "
+              f"so they leave the reply watch: {', '.join(sp[:8])}"
+              + (" …" if len(sp) > 8 else ""))
 
     b = rep["bounces"]
     if b:
@@ -1013,6 +1052,34 @@ def cmd_revise(args) -> int:
     return 0
 
 
+def cmd_sweep(args) -> int:
+    """Close out brands that were worked all three touches and never answered.
+
+    Writes `outcome: no_response`, which is what the vault plan said to do by hand after FU2 and
+    nothing ever did. Only the Mac writes the tracker, and this tool is Mac-only by design.
+    """
+    rows, fields = tracker_rows()
+    today = today_local()
+    stale = stale_prospects(rows, today)
+    if not stale:
+        print("Nothing to close out: every sent brand is either inside its follow-up window, "
+              "has replied, or is already closed.")
+        return 0
+    print(f"{len(stale)} brand(s) worked to the last touch with no reply"
+          f"{'' if args.write else '  [DRY RUN — pass --write to close them]'}:")
+    for r in stale:
+        print(f"  {r['brand'][:32]:32} sent {_c(r.get('sent_date'))}  "
+              f"last touch due {_c(r.get('followup2_date'))}")
+    if not args.write:
+        return 0
+    for r in stale:
+        r["outcome"] = "no_response"
+    bak = write_tracker(rows, fields, "sweep")
+    print(f"\nClosed {len(stale)} (backup {os.path.basename(bak)}). They drop out of the inbound "
+          "reply watch, and the funnel finally has a denominator.")
+    return 0
+
+
 def cmd_note(args) -> int:
     rows, fields = tracker_rows()
     row = next((r for r in rows if _c(r.get("brand")).lower() == _c(args.brand).lower()), None)
@@ -1088,6 +1155,9 @@ def main(argv=None) -> int:
                    help="which stream and which moment was watched, with the date")
     c.add_argument("--dry-run", action="store_true", help="run every guard, draft nothing")
     c.set_defaults(fn=cmd_creator)
+    sw = sub.add_parser("sweep", help="close out brands worked to the last touch with no reply")
+    sw.add_argument("--write", action="store_true")
+    sw.set_defaults(fn=cmd_sweep)
     rv = sub.add_parser("revise", help="fix a PENDING queued first touch in place (draft + queue)")
     rv.add_argument("--to", required=True, help="the queued recipient")
     rv.add_argument("--subject", default=None, help="new subject; omit to keep")
