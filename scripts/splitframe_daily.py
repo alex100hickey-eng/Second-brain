@@ -40,7 +40,10 @@ VAULT = os.environ.get("VAULT_PATH") or os.path.expanduser(
 TRACKER = os.path.join(VAULT, "Money", "prospect-tracker.csv")
 STATE = os.path.expanduser("~/second-brain/scripts/splitframe_daily_state.json")
 STATE_KEY = "splitframe:followups"
-LOG = os.path.expanduser("~/second-brain/scripts/splitframe_daily.log")
+# Beside this file, NOT under ~. The server container runs the repo somewhere else entirely and
+# its HOME is /root, so the expanduser path pointed at /root/second-brain/scripts/ — a directory
+# that does not exist there.
+LOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "splitframe_daily.log")
 CHAT = os.path.expanduser("~/second-brain/second-brain-chat")
 
 MODEL = "claude-sonnet-5"
@@ -267,10 +270,28 @@ def fabrication_risk(body: str) -> list:
 
 
 def log(msg: str) -> None:
+    """Write a line, and NEVER be the reason the caller dies.
+
+    This was unguarded, and on the server every call raised FileNotFoundError because LOG
+    pointed into a directory that only exists on the Mac. Any log line reached on the server
+    took the whole follow-up-and-release run down with it, hourly, reported only as a generic
+    "follow-up drafting failed" warning nobody was reading.
+
+    It only became total when a cap line was added to release_first_touches — before that the
+    log calls were all inside branches, so the run survived exactly on the days nothing
+    interesting happened and died on the days a follow-up was due. That is almost certainly why
+    FU1 on Sep 3, FU2 on Sep 8 and FU1 on Sep 14 were all "missed".
+
+    The stdout line is what actually matters (the server captures it); the file is a
+    convenience. So print first, then try the file, and swallow anything it throws.
+    """
     line = f"{datetime.now().strftime('%Y-%m-%d %H:%M')} {msg}"
-    print(line)
-    with open(LOG, "a") as f:
-        f.write(line + "\n")
+    print(line, flush=True)
+    try:
+        with open(LOG, "a") as f:
+            f.write(line + "\n")
+    except OSError:
+        pass
 
 
 _shared = None          # intake module, once a Supabase client is wired into it

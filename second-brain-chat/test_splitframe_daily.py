@@ -661,3 +661,36 @@ def test_release_uses_the_live_cap_when_no_limit_is_passed(monkeypatch):
     assert sig.parameters["limit"].default is None
     src = inspect.getsource(sfd.release_first_touches)
     assert "current_cap()" in src
+
+
+# ---------------------------------------------------------------------------
+# log() must never be the reason a run dies. It was unguarded and pointed under
+# ~, so on the server (HOME=/root) every call raised FileNotFoundError and took
+# the whole follow-up-and-release run with it — reported only as a generic
+# "follow-up drafting failed" warning nobody read. It went total when a cap line
+# was added to release_first_touches; before that it only died on days a
+# follow-up was actually due, which is almost certainly why FU1 Sep 3, FU2 Sep 8
+# and FU1 Sep 14 were all "missed".
+# ---------------------------------------------------------------------------
+
+def test_log_survives_an_unwritable_path(monkeypatch, capsys):
+    monkeypatch.setattr(sfd, "LOG", "/nonexistent-dir-for-tests/splitframe.log")
+    sfd.log("this must not raise")          # the assertion is that it returns at all
+    assert "this must not raise" in capsys.readouterr().out, "stdout is the line that matters"
+
+
+def test_log_path_is_beside_the_module_not_under_home():
+    """The server container's HOME is /root and it runs the repo elsewhere, so any ~-based
+    path is a file that cannot be created."""
+    assert "~" not in sfd.LOG and "/root" not in sfd.LOG
+    assert sfd.LOG.endswith("scripts/splitframe_daily.log")
+
+
+def test_releasing_survives_a_dead_logger(monkeypatch):
+    """The regression in one line: release_first_touches logs its cap before doing anything,
+    so a logger that can throw meant the raised cap released nothing at all."""
+    queue = [_entry(n) for n in range(1, 4)]
+    monkeypatch.setattr(sfd, "_shared", _FakeShared(queue))
+    monkeypatch.setattr(sfd, "LOG", "/nonexistent-dir-for-tests/splitframe.log")
+    monkeypatch.setattr(sfd, "current_cap", lambda: (10, "pinned"))
+    assert len(sfd.release_first_touches(_FakeOutbox(), "https://mail")) == 3
