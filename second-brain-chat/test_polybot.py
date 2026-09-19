@@ -1181,6 +1181,26 @@ def test_hopeless_candidates_are_refused_before_the_depth_call_is_paid_for():
     assert not worth_confirming(book(0.08, 0.09), 0.2, cfg, days=1.25)
 
 
+def test_a_voided_signal_is_not_evidence_for_going_live():
+    """Voiding a signal says the bot would NOT take it -- a rule changed under it. Counting it
+    toward the gate releases real money on the strength of trades the current rules refuse, which
+    is the opposite of what the gate is for. Two sets voided on 2026-09-19 were still counting."""
+    led = _ledger()
+    t0 = time.time() - 600
+    for ep in range(4):
+        for leg in range(6):
+            sid = led.add_signal(Signal("bucket_sum", "us", f"e{ep}l{leg}", "x", "BUY_YES", 0.2, 2.0, 6,
+                                        "r", ts=t0, arb=True, meta={"group": f"ev{ep}"}), "paper")
+            led.upsert_paper(sid, filled_ts=t0, fill_price=0.2, status="closed",
+                             pnl_usd=0.5, exit_ts=t0 + 60)
+            if ep < 2:
+                led.set_signal_status(sid, "void")
+    assert led.decision_count("bucket_sum") == 2          # four episodes, two of them voided
+    stats = {r["module"]: r for r in led.module_stats(30)}
+    assert stats["bucket_sum"]["n"] == 12                 # and the voided rows leave the P&L too
+    assert stats["bucket_sum"]["pnl"] == pytest.approx(6.0)
+
+
 def test_an_arb_is_capped_by_what_it_can_lose_not_only_by_what_it_ties_up():
     """A completed set pays $1 whatever happens, so the money at stake is unwinding a half-fill,
     not the capital committed. Governing the commitment alone capped the upside (56 buy-side sets

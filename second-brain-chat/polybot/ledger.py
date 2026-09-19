@@ -244,7 +244,7 @@ class Ledger:
                       COALESCE(SUM(CASE WHEN p.status='closed' THEN p.fees_usd END),0) AS fees,
                       AVG(s.edge_cents) AS edge, AVG(s.spread_cents) AS spread
                FROM signals s LEFT JOIN paper_trades p ON p.signal_id=s.id
-               WHERE s.ts>=?"""
+               WHERE s.ts>=? AND s.status!='void'"""
         args = [since]
         if venue:
             q += " AND s.venue=?"
@@ -260,8 +260,11 @@ class Ledger:
         let real money out after five observed sets. Signals carrying a `meta.group` are counted by
         distinct group; everything else is one decision per row."""
         since = max(_now() - days * 86400, float(self.gate_since_ts or 0.0))
+        # A voided signal is one the bot has since decided it would NOT take — a rule changed
+        # under it. Counting it as evidence releases real money on the strength of trades the
+        # current rules refuse, which is the opposite of what the gate is for.
         q = ("SELECT COUNT(DISTINCT COALESCE(json_extract(meta,'$.group'), 'row:' || id)) AS n "
-             "FROM signals WHERE module=? AND ts>=?")
+             "FROM signals WHERE module=? AND ts>=? AND status!='void'")
         args = [module, since]
         if venue:
             q += " AND venue=?"
