@@ -975,6 +975,7 @@ def test_arb_set_unwinds_what_filled_when_a_leg_is_killed():
 
     class Venue:
         available = True
+        balance_usd = staticmethod(lambda: 10_000.0)
 
         def place_limit(self, slug, side, price, contracts, tif="gtc"):
             sent.append((slug, side, price, contracts, tif))
@@ -2049,6 +2050,56 @@ _KILLED = {"id": "o", "executions": [{"type": "EXECUTION_TYPE_CANCELED",
                                       "order": {"state": "ORDER_STATE_CANCELED"}}]}
 
 
+def test_a_set_is_not_sent_without_the_cash_to_pay_for_it():
+    """The bankroll the caps are measured against is account VALUE — cash plus what is already in
+    open positions — because a bot that halts the moment its money is working never compounds.
+    That is right for the floor and wrong for placing an order: value you cannot spend does not
+    fill anything.
+
+    On 2026-09-19 the account read $272.50 of value against $0.06 of buying power, the rest being
+    two positions Alex had opened himself. Without this check every leg would have been refused
+    for insufficient funds one at a time, and whichever filled first would have needed unwinding."""
+    from polybot import execution
+
+    sent = []
+
+    class US:
+        available = True
+
+        def __init__(self, cash):
+            self.cash = cash
+
+        def balance_usd(self):
+            return self.cash
+
+        def place_limit(self, market, side, price, contracts, tif=None):
+            sent.append(market)
+            return _fill(contracts)
+
+        def bbo(self, slug):
+            return 0.29, 0.31
+
+    led = _ledger()
+    legs = [(led.add_signal(_arb_sig(n, 100.0), "live"), _arb_sig(n, 100.0)) for n in ("a", "b")]
+    need = sum(sig.size_usd for _, sig in legs)
+
+    broke = execution.Executor(led, US(0.06), _cfg(), log=lambda *_: None)
+    out = broke.place_arb_set(legs)
+    assert out["ok"] is False and out["placed"] == 0
+    assert out.get("reason") == "insufficient buying power"
+    assert sent == []                              # nothing was sent at all
+
+    sent.clear()
+    rich = execution.Executor(led, US(need + 1.0), _cfg(), log=lambda *_: None)
+    assert rich.place_arb_set(legs)["ok"] is True
+    assert sent == ["a", "b"]
+
+    # A venue that will not say costs us nothing: unknown cash must not block a real set.
+    sent.clear()
+    unknown = execution.Executor(led, US(None), _cfg(), log=lambda *_: None)
+    assert unknown.place_arb_set(legs)["ok"] is True
+
+
 def test_a_rate_limit_mid_set_aborts_and_unwinds_rather_than_stranding(monkeypatch):
     """The most likely way the first live set fails.
 
@@ -2069,6 +2120,7 @@ def test_a_rate_limit_mid_set_aborts_and_unwinds_rather_than_stranding(monkeypat
 
     class US:
         available = True
+        balance_usd = staticmethod(lambda: 10_000.0)      # plenty; this test is not about cash
 
         def place_limit(self, market, side, price, contracts, tif=None):
             sent.append((market, tif))
@@ -2108,6 +2160,7 @@ def test_an_unwind_that_did_not_fill_is_not_counted_as_unwound(monkeypatch):
 
     class US:
         available = True
+        balance_usd = staticmethod(lambda: 10_000.0)      # plenty; this test is not about cash
 
         def place_limit(self, market, side, price, contracts, tif=None):
             if tif == "fok":
@@ -2144,6 +2197,7 @@ def test_a_successful_unwind_closes_the_position(monkeypatch):
 
     class US:
         available = True
+        balance_usd = staticmethod(lambda: 10_000.0)      # plenty; this test is not about cash
 
         def place_limit(self, market, side, price, contracts, tif=None):
             if tif == "fok":
@@ -2238,6 +2292,7 @@ def test_a_part_filled_leg_is_unwound_for_what_it_actually_holds():
 
     class US:
         available = True
+        balance_usd = staticmethod(lambda: 10_000.0)      # plenty; this test is not about cash
 
         def place_limit(self, market, side, price, contracts, tif=None):
             sent.append((market, side, contracts, tif))
@@ -2287,6 +2342,7 @@ def test_arb_places_the_thinnest_leg_first():
 
     class US:
         available = True
+        balance_usd = staticmethod(lambda: 10_000.0)      # plenty; this test is not about cash
 
         def place_limit(self, market, side, price, contracts, tif=None):
             sent.append(market)

@@ -119,6 +119,26 @@ class Executor:
         if not self.us.available:
             self.log("  arb set: venue unavailable, nothing sent")
             return out
+        # Can we actually pay for this? The bankroll the caps are measured against is account
+        # VALUE — cash plus whatever is sitting in open positions — because a bot that halts the
+        # moment its money is working never compounds. That is right for the floor and wrong here:
+        # value you cannot spend does not fill an order.
+        #
+        # On 2026-09-19 the account read $272.50 of value and $0.06 of buying power, the rest
+        # being two positions Alex had opened himself. Every leg of a set would have been refused
+        # for insufficient funds, one at a time, and the first ones to fill would have had to be
+        # unwound. Ask once, before committing to anything.
+        need = sum(getattr(sig, "size_usd", None) or (sig.price * sig.contracts) for _, sig in legs)
+        try:
+            cash = self.us.balance_usd()
+        except Exception as exc:
+            self.log(f"  arb set: could not read buying power ({exc}) — proceeding on the caps")
+            cash = None
+        if cash is not None and cash + 1e-9 < need:
+            self.log(f"  arb set: buying power ${cash:.2f} < set cost ${need:.2f} — nothing sent "
+                     f"(account value is not spendable cash)")
+            out["reason"] = "insufficient buying power"
+            return out
         # Thinnest leg first. The legs go out one at a time -- the venue has no atomic multi-leg
         # order -- so whichever leg is going to be killed decides how much unwinding we pay for.
         # Killed on the first leg costs nothing; killed on the fifth means selling four legs back
