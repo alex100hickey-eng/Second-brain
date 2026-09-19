@@ -115,6 +115,15 @@ def _market_closed(m) -> bool:
     return bool(m.get("closed")) or str(m.get("status", "")).endswith(("RESOLVED", "SETTLED", "CLOSED"))
 
 
+def _fee_coefficient(m: dict) -> float | None:
+    """The market's own taker fee coefficient, or None if it did not say."""
+    try:
+        v = m.get("feeCoefficient")
+        return float(v) if v is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
 def bucket_from_us_market(m: dict) -> Bucket:
     lo, hi = parse_us_bucket_title(m.get("title") or m.get("titleShort") or "")
     slug = m.get("slug") or ""
@@ -126,7 +135,8 @@ def bucket_from_us_market(m: dict) -> Bucket:
     return Bucket(title=m.get("title") or m.get("titleShort") or "", lo=lo, hi=hi, unit="F",
                   yes_token=slug, no_token=slug, market_id=slug, condition_id=str(m.get("id") or ""),
                   best_bid=_price(m.get("bestBidQuote")), best_ask=_price(m.get("bestAskQuote")), last=last,
-                  closed=closed, outcome=outcome, liquidity=0.0)
+                  closed=closed, outcome=outcome, liquidity=0.0,
+                  fee_coefficient=_fee_coefficient(m))
 
 
 def buckets_from_markets(markets: list) -> list:
@@ -144,7 +154,8 @@ def buckets_from_markets(markets: list) -> list:
                           unit="", yes_token=slug, no_token=slug, market_id=slug,
                           condition_id=str(m.get("id") or ""), best_bid=_price(m.get("bestBidQuote")),
                           best_ask=_price(m.get("bestAskQuote")), last=_yes_price(m),
-                          closed=_market_closed(m), outcome=None, liquidity=0.0))
+                          closed=_market_closed(m), outcome=None, liquidity=0.0,
+                          fee_coefficient=_fee_coefficient(m)))
     return out
 
 

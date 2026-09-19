@@ -60,14 +60,26 @@ def _ctx(event=None, members=None, obs=None, hourly=None, local_now=None, cfg=No
 
 
 # ---- fees -----------------------------------------------------------------------------------
-def test_us_fee_schedule_matches_docs():
-    assert fees.us_taker_fee(0.5, 100) == pytest.approx(1.50)
+def test_us_fee_schedule_matches_the_live_venue():
+    """The July fee schedule documented a 0.06 taker coefficient. On 2026-09-19 every one of the
+    30 live US weather markets reported `feeCoefficient: 0.0695`, and the venue's number is the
+    one that gets charged. For an arb that is not a rounding error: a set scored at 1.0c net
+    under 0.06 is worth 0.38c under 0.0695, against a 1.0c minimum -- i.e. the floor was passing
+    trades that did not actually clear it."""
+    assert fees.US_TAKER_THETA == 0.0695
+    assert fees.us_taker_fee(0.5, 100) == pytest.approx(1.7375)
     assert fees.us_maker_rebate(0.5, 100) == pytest.approx(0.3125)
     assert fees.leg_cost(0.5, 100, "us", maker=True) == pytest.approx(-0.3125)
     assert fees.leg_cost(0.5, 100, "offshore", maker=True) == 0.0
     assert fees.leg_cost(0.5, 100, "offshore", maker=False, category="weather") == pytest.approx(1.25)
-    # a taken round trip at 50c on US costs 3c per contract; two maker legs earn 0.6c
-    assert fees.swing_breakeven_cents(0.5, "us", False, False, spread_cents=0) == pytest.approx(3.0)
+
+    # A market that states its own coefficient overrides the fallback, in both directions.
+    assert fees.us_taker_fee(0.5, 100, theta=0.06) == pytest.approx(1.50)
+    assert fees.leg_cost(0.5, 100, "us", maker=False, theta=0.08) == pytest.approx(2.00)
+    assert fees.leg_cost(0.5, 100, "us", maker=False, theta=None) == pytest.approx(1.7375)
+    # a taken round trip at 50c on US costs 2 * 0.0695 * 0.25 = 3.475c per contract (it was 3.0c
+    # while we believed the July schedule); two maker legs still earn 0.6c, the rebate is unchanged
+    assert fees.swing_breakeven_cents(0.5, "us", False, False, spread_cents=0) == pytest.approx(3.475)
     assert fees.swing_breakeven_cents(0.5, "us", True, True, spread_cents=2) == pytest.approx(-0.625)
 
 
@@ -350,7 +362,8 @@ def test_bucket_sum_arb_math():
     for b in ev.buckets:                                               # 9 legs x 0.09 = 0.81
         b.best_bid, b.best_ask = 0.08, 0.09
     kind, net, prices = arb_check(ev.buckets, "us")
-    assert kind == "buy_all" and 14.0 < net < 19.0 and len(prices) == len(ev.buckets)  # 19c gross minus fees
+    # 19c gross; 9 legs at 0.09 pay 0.0695 * 9 * 0.09 * 0.91 = 5.1c of taker fees
+    assert kind == "buy_all" and 13.0 < net < 15.0 and len(prices) == len(ev.buckets)
 
     # An arb the book cannot fill is not an arb. Depth is None until somebody asks the book, and
     # None must block the trade rather than default to a size.
@@ -1617,6 +1630,41 @@ def _fake_us_weather_event(slug, n_markets=3):
          "outcomes": '["Yes","No"]', "outcomePrices": '["0.30","0.70"]',
          "bestBidQuote": {"value": "0.30"}, "bestAskQuote": {"value": "0.34"}}
         for i in range(n_markets)]}
+
+
+def test_arb_uses_the_market_own_fee_coefficient_not_a_constant():
+    """The fee is ~30% of an arb's gross edge, so which number gets used decides whether a set is
+    taken. The venue states `feeCoefficient` per market; it must reach arb_check, not be replaced
+    by whatever the fee table last documented."""
+    from polybot.feeds.usvenue import bucket_from_us_market
+    from polybot.strategies.bucket_sum import arb_check
+
+    def legs(coef):
+        out = []
+        titles = ["69 or below", "70 to 71", "72 to 73", "74 to 75", "76 to 77", "78 or above"]
+        for i, title in enumerate(titles):
+            m = {"slug": f"leg{i}", "title": title, "active": True, "closed": False,
+                 "bestBidQuote": {"value": "0.13"}, "bestAskQuote": {"value": "0.14"},
+                 "outcomes": '["Yes","No"]', "outcomePrices": '["0.13","0.87"]'}
+            if coef is not None:
+                m["feeCoefficient"] = coef
+            out.append(bucket_from_us_market(m))
+        return out
+
+    # The coefficient survives the market -> Bucket hop at all.
+    assert legs(0.0695)[0].fee_coefficient == 0.0695
+    assert legs(None)[0].fee_coefficient is None
+
+    # 6 legs at 0.14 = 0.84, so 16c gross. Fee per set = theta * 6 * 0.14 * 0.86 = theta * 0.7224.
+    _, cheap, _ = arb_check(legs(0.02), "us")
+    _, dear, _ = arb_check(legs(0.10), "us")
+    assert cheap == pytest.approx(16.0 - 0.02 * 72.24, abs=0.05)
+    assert dear == pytest.approx(16.0 - 0.10 * 72.24, abs=0.05)
+    assert cheap > dear                       # a dearer venue is a thinner arb, not the same one
+
+    # No stated coefficient falls back to the table's live value, never to free.
+    _, silent, _ = arb_check(legs(None), "us")
+    assert silent == pytest.approx(16.0 - fees.US_TAKER_THETA * 72.24, abs=0.05)
 
 
 def test_snapshot_keeps_the_whole_ladder_for_arb_candidates(tmp_path):

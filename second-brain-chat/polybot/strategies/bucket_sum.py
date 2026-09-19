@@ -72,10 +72,12 @@ def arb_check(buckets, venue: str, category: str = "weather", assume_exhaustive:
     bids = [b.best_bid for b in buckets]
     net_buy = net_sell = -math.inf
     if all(a is not None for a in asks):
-        cost = sum(asks) + sum(fees.leg_cost(a, 1, venue, maker=False, category=category) for a in asks)
+        cost = sum(asks) + sum(fees.leg_cost(a, 1, venue, maker=False, category=category,
+                                            theta=b.fee_coefficient) for a, b in zip(asks, buckets))
         net_buy = (1.0 - cost) * 100
     if all(x is not None for x in bids):
-        proceeds = sum(bids) - sum(fees.leg_cost(x, 1, venue, maker=False, category=category) for x in bids)
+        proceeds = sum(bids) - sum(fees.leg_cost(x, 1, venue, maker=False, category=category,
+                                                 theta=b.fee_coefficient) for x, b in zip(bids, buckets))
         net_sell = (proceeds - 1.0) * 100
     # Pick by RETURN ON CAPITAL, not cents per set. The two directions are not comparable per set:
     # a buy-all set ties up sum(asks) ~= $0.88 to make 12c (13.6%), while a sell-all set on the same
@@ -212,11 +214,13 @@ def size_for_profit(buckets, kind: str, cfg, days=None):
         if any(px is None for px in prices):
             continue
         if kind == "buy_all":
-            cost = sum(prices) + sum(fees.leg_cost(px, 1, "us", maker=False) for px in prices)
+            cost = sum(prices) + sum(fees.leg_cost(px, 1, "us", maker=False, theta=b.fee_coefficient)
+                                     for px, b in zip(prices, buckets))
             net = (1.0 - cost) * 100
             set_cost = sum(prices)
         else:
-            proceeds = sum(prices) - sum(fees.leg_cost(px, 1, "us", maker=False) for px in prices)
+            proceeds = sum(prices) - sum(fees.leg_cost(px, 1, "us", maker=False, theta=b.fee_coefficient)
+                                         for px, b in zip(prices, buckets))
             net = (proceeds - 1.0) * 100
             set_cost = len(buckets) - sum(prices)
         if net <= 0 or set_cost <= 0:

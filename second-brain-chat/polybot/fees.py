@@ -9,7 +9,13 @@ polymarket.com (2026-07-10, help.polymarket.com trading-fees): makers never pay;
 pay rate * p * (1-p) per share with the rate by category.
 """
 
-US_TAKER_THETA = 0.06
+# The live gateway reports its own `feeCoefficient` on every market, and on 2026-09-19 all 30
+# US weather markets said 0.0695 -- not the 0.06 the July fee schedule documented. A stale
+# constant here is not a rounding error for an arb: it decides whether a set is taken at all.
+# Scoring a set at 1.0c net with theta=0.06 means 0.38c in reality, against a 1.0c floor, so the
+# threshold was clearing trades that did not actually clear it. Prefer the per-market number the
+# venue hands us (`theta=`); this constant is only the fallback when a caller has none.
+US_TAKER_THETA = 0.0695
 US_MAKER_THETA = -0.0125
 
 OFFSHORE_TAKER_RATE = {
@@ -32,9 +38,12 @@ def _pq(price: float) -> float:
     return price * (1.0 - price)
 
 
-def us_taker_fee(price: float, contracts: float = 1) -> float:
-    """Dollars paid when an order TAKES liquidity on Polymarket US."""
-    return US_TAKER_THETA * contracts * _pq(price)
+def us_taker_fee(price: float, contracts: float = 1, theta: float | None = None) -> float:
+    """Dollars paid when an order TAKES liquidity on Polymarket US.
+
+    `theta` is the market's own `feeCoefficient` when the caller has it; underestimating a cost
+    that decides whether to trade is the expensive direction, so the venue's number wins."""
+    return (US_TAKER_THETA if theta is None else float(theta)) * contracts * _pq(price)
 
 
 def us_maker_rebate(price: float, contracts: float = 1) -> float:
@@ -47,10 +56,13 @@ def offshore_taker_fee(price: float, contracts: float = 1, category: str = "othe
     return rate * contracts * _pq(price)
 
 
-def leg_cost(price: float, contracts: float, venue: str, maker: bool, category: str = "other") -> float:
-    """Net dollars this leg costs in fees. Negative means a rebate."""
+def leg_cost(price: float, contracts: float, venue: str, maker: bool, category: str = "other",
+             theta: float | None = None) -> float:
+    """Net dollars this leg costs in fees. Negative means a rebate.
+
+    `theta` overrides the US taker coefficient with the market's own `feeCoefficient`."""
     if venue == "us":
-        return -us_maker_rebate(price, contracts) if maker else us_taker_fee(price, contracts)
+        return -us_maker_rebate(price, contracts) if maker else us_taker_fee(price, contracts, theta)
     if venue == "offshore":
         return 0.0 if maker else offshore_taker_fee(price, contracts, category)
     raise ValueError(f"unknown venue {venue}")

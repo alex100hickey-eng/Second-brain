@@ -56,6 +56,10 @@ class Bucket:
     # of price turned a 3-set arb into a 100-set one.
     bid_levels: list | None = None
     ask_levels: list | None = None
+    # The venue's own taker fee coefficient for THIS market (`feeCoefficient`). None means "ask
+    # the fee table", which is only right when the venue did not say -- fees are ~30% of an arb's
+    # gross edge, so this is not a detail that can be carried by a constant read out of a doc.
+    fee_coefficient: float | None = None
 
     def contains(self, temp: float) -> bool:
         return self.lo <= temp <= self.hi
