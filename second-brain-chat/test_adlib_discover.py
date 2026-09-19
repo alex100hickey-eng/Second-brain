@@ -119,3 +119,20 @@ def test_one_failing_batch_does_not_lose_the_others():
         acp.sent_domains = orig
     assert calls["n"] > 1, "must keep going after a failed batch"
     assert any(h["id"] == "m1" for h in hits), "the reply in a later batch must still be found"
+
+
+def test_a_page_id_never_pairs_with_another_advertisers_name():
+    """The gap between id and name must not leave the JSON object. Allowing "{" mapped one page
+    id to both "Jeep" and "NFL on CBS", and reported Jeep as running 18 ads when it runs
+    hundreds. A wrong count is worse than a missing brand: it is the number that decides
+    whether Alex writes to them at all."""
+    acp = _acp  # keep the module-loader helpers together
+    import importlib.util, os
+    s = importlib.util.spec_from_file_location(
+        "adlib_read", os.path.expanduser("~/second-brain/scripts/adlib_read.py"))
+    al = importlib.util.module_from_spec(s)
+    s.loader.exec_module(al)
+    cross = '{"page_id":"154220684664204","x":1},{"y":2,"page_name":"NFL on CBS"}'
+    assert al.PAGE_PAIR_RE.findall(cross) == []
+    same = '{"page_id":"104507196273121","page_name":"A Cheerful Giver"}'
+    assert al.PAGE_PAIR_RE.findall(same) == [("104507196273121", "A Cheerful Giver")]

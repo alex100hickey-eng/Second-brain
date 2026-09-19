@@ -162,8 +162,13 @@ def parse_keyword(text: str, max_rows: int = 40) -> list:
 
 # Advertiser names are NOT anchors on a results page — they are React components, so
 # a[href*=view_all_page_id] finds nothing. The map does exist, in the page's embedded JSON.
+# [^{}] not [^}]: allowing "{" lets the gap run out of one JSON object and into the next, so an
+# id from one advertiser pairs with a NAME from another. That produced "Jeep - 18 active ads"
+# (Jeep runs hundreds) and mapped the same page id to both "Jeep" and "NFL on CBS" — a wrong
+# count on a brand is worse than no brand, because it is the number that decides whether Alex
+# writes to them at all.
 PAGE_PAIR_RE = re.compile(
-    r'"page_id":"?(\d{6,})"?[^}]{0,400}?"page_name":"((?:[^"\\]|\\.)*)"')
+    r'"page_id":"?(\d{6,})"?[^{}]{0,400}?"page_name":"((?:[^"\\]|\\.)*)"')
 
 # Phrases a SMALL seller writes. Category keywords match ad TEXT, so the brands that mention
 # everything and outspend everyone own the page: "matcha" returns Lindt and Cheesecake Factory,
