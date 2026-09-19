@@ -51,6 +51,20 @@ CALL_BUDGET = 5                    # requests allowed per window
 CALL_WINDOW_S = 12.0               # STARTING window; widened automatically when the venue refuses
 CALL_WINDOW_MAX_S = 60.0           # ceiling on the self-tuned window
 CLEAN_CALLS_TO_RELAX = 40          # a long clean run earns the window back
+# Tokens a SCREENING call will not touch. The depth read is the only call that leads to money and
+# it needs six at once, so when it shares a flat budget with routine screening it is the one that
+# loses -- and losing it costs the whole episode, not a screen. On 2026-09-18 the best book on
+# record (chicago, 21 sets, $3.23) was refused twice with "depth INCOMPLETE, standing down"
+# because a leg's book call came back empty, and an empty book call on this venue means the quota
+# was gone. Screening now runs on a smaller budget so there is always something left for the call
+# that actually trades.
+DEPTH_RESERVE = 2
+# How long a depth read will WAIT OUT a cooldown before giving up on the set. book() fails on
+# exactly one path -- the quota -- so "ask again immediately" is useless: the venue is in backoff
+# and the retry fails the same way. Serving the cooldown is the only retry that means anything.
+# It holds the scan pass, which is why it is capped: 15s to rescue a $3.23 set is worth it, two
+# minutes is not, and a sweep runs every 20s anyway so a long cooldown is the next sweep's problem.
+DEPTH_RETRY_WAIT_MAX_S = 20.0
 RATE_LIMIT_BACKOFF_S = 15          # first offence — short, because recovery is short
 RATE_LIMIT_BACKOFF_MAX_S = 120     # ceiling if it keeps happening
 # The budget throttles real network calls. Tests inject a fake client and must not sleep for it:
@@ -261,18 +275,23 @@ class USVenue:
                 pass
         self._backoff_s = min(self._backoff_s * 2, RATE_LIMIT_BACKOFF_MAX_S)
 
-    def _space(self) -> None:
+    def _space(self, priority: bool = False) -> None:
         """Spend one request from the budget, waiting for the window to roll if it is empty.
 
         A six-bucket depth read is six requests, so it costs one window plus a moment — about
         fifteen seconds. The arb episodes in the snapshot record lasted one to four minutes, so
         that is affordable; being banned for ten minutes was not.
+
+        `priority` is for the depth read, the only call that can lead to a trade. It may spend the
+        whole budget; screening may not, so a candidate never arrives to find the quota already
+        spent on looking at books that had nothing in them.
         """
         if TEST_MODE:
             return
+        budget = CALL_BUDGET if priority else max(1, CALL_BUDGET - DEPTH_RESERVE)
         now = time.time()
         self._calls = [t for t in self._calls if now - t < self._window_s]
-        if len(self._calls) >= CALL_BUDGET:
+        if len(self._calls) >= budget:
             wait = self._window_s - (now - self._calls[0]) + 0.05
             if wait > 0:
                 time.sleep(wait)
@@ -280,11 +299,11 @@ class USVenue:
             self._calls = [t for t in self._calls if now - t < self._window_s]
         self._calls.append(now)
 
-    def _guarded(self, fn, default=None):
+    def _guarded(self, fn, default=None, priority: bool = False):
         """Run an SDK call; on a rate limit, back off instead of calling a banned host again next
         tick, and return `default` instead of the raw (often HTML) error body every caller would
         otherwise have to log in full."""
-        self._space()
+        self._space(priority)
         try:
             out = fn()
         except Exception as exc:
@@ -330,7 +349,7 @@ class USVenue:
             return {}
         return self._guarded(lambda: _unwrap(self._client.markets.bbo(slug)), default={})
 
-    def book(self, slug: str, max_age_s: float = 0.0):
+    def book(self, slug: str, max_age_s: float = 0.0, priority: bool = False):
         """{'bids': [(px, qty)...] high→low, 'asks': [(px, qty)...] low→high, 'last': float|None}.
 
         `max_age_s` serves the SCREEN, never a trade. Re-pricing the same 1c tail leg every two
@@ -345,7 +364,7 @@ class USVenue:
             hit = self._book_cache.get(slug)
             if hit and time.time() - hit[0] <= max_age_s:
                 return hit[1]
-        d = self._guarded(lambda: _unwrap(self._client.markets.book(slug)))
+        d = self._guarded(lambda: _unwrap(self._client.markets.book(slug)), priority=priority)
         if d is None:
             return None
         # The venue calls the ask side "offers" (SDK `MarketBook`: bids / offers). Reading "asks"
@@ -460,27 +479,62 @@ class USVenue:
                 return None
             raise
 
-    def fill_depth_buckets(self, buckets) -> bool:
-        """`fill_depth` for a bare list of legs (the universe path has no WeatherEvent)."""
-        ok = True
-        for b in buckets:
-            book = self.book(b.yes_token)
-            if not book:
-                b.bid_qty = b.ask_qty = None
-                ok = False
-                continue
-            bids, asks = book.get("bids") or [], book.get("asks") or []
-            b.bid_levels, b.ask_levels = bids, asks
-            b.bid_qty = sum(q for px, q in bids if px == bids[0][0]) if bids else 0.0
-            b.ask_qty = sum(q for px, q in asks if px == asks[0][0]) if asks else 0.0
-            # Once the book has answered, the book is the truth. Leaving the event object's stale
-            # quote in place when the ladder comes back EMPTY is the phantom-edge trap wearing a
-            # new hat: miahigh's "92 or above" showed ask=0.04 from the event and no offers at all
-            # in the book on 2026-09-19, and arb_check duly reported a 4.4c buy-all on a leg that
-            # could not be bought at any price.
-            b.best_bid = bids[0][0] if bids else None
-            b.best_ask = asks[0][0] if asks else None
-        return ok
+    def _read_depth(self, b) -> bool:
+        """Ladders and top-of-book sizes for ONE leg. False if the book could not be read."""
+        book = self.book(b.yes_token, priority=True)
+        if not book:
+            b.bid_qty = b.ask_qty = None
+            return False
+        bids, asks = book.get("bids") or [], book.get("asks") or []
+        b.bid_levels, b.ask_levels = bids, asks
+        b.bid_qty = sum(q for px, q in bids if px == bids[0][0]) if bids else 0.0
+        b.ask_qty = sum(q for px, q in asks if px == asks[0][0]) if asks else 0.0
+        # Once the book has answered, the book is the truth. Leaving the event object's stale
+        # quote in place when the ladder comes back EMPTY is the phantom-edge trap wearing a
+        # new hat: miahigh's "92 or above" showed ask=0.04 from the event and no offers at all
+        # in the book on 2026-09-19, and arb_check duly reported a 4.4c buy-all on a leg that
+        # could not be bought at any price.
+        b.best_bid = bids[0][0] if bids else None
+        b.best_ask = asks[0][0] if asks else None
+        return True
+
+    def fill_depth_buckets(self, buckets, retries: int = 1) -> bool:
+        """`fill_depth` for a bare list of legs (the universe path has no WeatherEvent).
+
+        One unreadable leg fails the whole set, and that is correct -- sizing off a partly-unknown
+        book is how you buy five legs and discover the sixth was never fillable. But it makes a
+        single dropped HTTP call as expensive as a missing market, and on 2026-09-18 that is
+        exactly what happened:
+
+            13:55:58  arb candidate us chicago buy_all 9.4c/set — depth INCOMPLETE, standing down
+
+        That book was the best one on record. Five legs had thousands of contracts behind them and
+        the binding leg had 21, at an ask_sum of 0.82: 21 sets at 17.5c, about $3.68 -- 72% of all
+        the profit this strategy has ever found, in one minute. It was refused because the sixth
+        leg's book call came back empty once.
+
+        book() fails on exactly one path -- the quota. So "ask again straight away" would be
+        useless, because the venue is in backoff and the second call fails identically. What
+        rescues the set is serving the cooldown and then asking: 15s of a held scan pass against
+        a $3.23 set, capped so a long ban is left to the next sweep instead of stalling this one.
+
+        The all-or-nothing rule is unchanged. A leg that still will not answer stands the whole
+        set down, because a set sized off a partly-unknown book is how you buy five legs and find
+        the sixth was never fillable. What changes is how hard we try before giving up.
+        """
+        missed = [b for b in buckets if not self._read_depth(b)]
+        for _ in range(max(0, retries)):
+            if not missed:
+                break
+            wait = self._backoff_until - time.time()
+            if wait > 0:
+                if wait > DEPTH_RETRY_WAIT_MAX_S:
+                    break                 # too long to hold the pass; the next sweep can have it
+                if not TEST_MODE:
+                    time.sleep(wait + 0.05)
+                self._backoff_until = 0.0            # the cooldown has been served
+            missed = [b for b in missed if not self._read_depth(b)]
+        return not missed
 
     def fill_depth(self, event) -> bool:
         """Put real top-of-book sizes on an event's buckets. One call per bucket, so the caller

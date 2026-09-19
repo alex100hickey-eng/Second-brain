@@ -1,5 +1,6 @@
 """polybot unit tests — no network. Run: python3 -m pytest test_polybot.py -q"""
 import json
+import collections
 import math
 import os
 os.environ.setdefault("JARVIS_TEST", "1")   # no real sleeps for the US call budget
@@ -1647,6 +1648,148 @@ def _fake_us_weather_event(slug, n_markets=3):
          "outcomes": '["Yes","No"]', "outcomePrices": '["0.30","0.70"]',
          "bestBidQuote": {"value": "0.30"}, "bestAskQuote": {"value": "0.34"}}
         for i in range(n_markets)]}
+
+
+# The real chicago book of 2026-09-18 13:54:38, straight out of the snapshots table. Five legs
+# with thousands of contracts behind them, one binding leg with 21, ask_sum 0.82. This is the best
+# book on record and it is most of the profit the strategy has ever found, so it gets a test.
+_CHICAGO_0918 = [("69 or below", None, 0.01, 0.0, 22716.07),
+                 ("70 to 71", None, 0.01, 0.0, 27764.0),
+                 ("72 to 73", 0.59, 0.66, 1.0, 21.0),
+                 ("74 to 75", 0.03, 0.08, 10.0, 10157.92),
+                 ("76 to 77", 0.02, 0.04, 1.0, 16310.0),
+                 ("78 or above", None, 0.02, 0.0, 9000.0)]
+
+
+def _chicago_legs(with_depth=True):
+    from polybot.feeds.offshore import Bucket
+    out = []
+    for i, (t, bid, ask, bq, aq) in enumerate(_CHICAGO_0918):
+        lo, hi = ((-math.inf, 69.0) if i == 0 else (78.0, math.inf) if i == 5
+                  else (70.0 + (i - 1) * 2, 71.0 + (i - 1) * 2))
+        b = Bucket(title=t, lo=lo, hi=hi, unit="F", yes_token=f"leg{i}", no_token=f"leg{i}",
+                   market_id=f"leg{i}", condition_id=str(i), best_bid=bid, best_ask=ask,
+                   last=ask, closed=False, outcome=None, liquidity=0.0, fee_coefficient=0.0695)
+        if with_depth:
+            b.bid_qty, b.ask_qty = bq, aq
+            b.bid_levels = [(bid, bq)] if bid else []
+            b.ask_levels = [(ask, aq)]
+        out.append(b)
+    return out
+
+
+def test_the_best_book_on_record_is_sized_and_taken():
+    """2026-09-18 13:54, chicago: six legs at an ask_sum of 0.82, so 18c gross and 15.39c net
+    after the venue's own 0.0695 fee. The binding leg had 21 contracts; the rest had thousands.
+    21 sets x 15.39c = $3.23 -- around 70% of every dollar this strategy has ever found, in a
+    single minute. If a change ever stops this book from producing a set, that change is wrong."""
+    from polybot.strategies.bucket_sum import arb_check, size_for_profit, worth_confirming
+
+    cfg = _cfg()
+    legs = _chicago_legs()
+    kind, net, _ = arb_check(legs, "us")
+    assert kind == "buy_all"
+    assert net == pytest.approx(15.39, abs=0.05)
+    assert worth_confirming(legs, net, cfg, 1.0)
+
+    contracts, prices, net_n = size_for_profit(legs, kind, cfg, days=1.0)
+    assert contracts == 21                       # the thinnest leg, not a cap
+    assert sum(prices) == pytest.approx(0.82, abs=1e-6)
+    assert contracts * net_n / 100 == pytest.approx(3.23, abs=0.05)
+    # None of the caps bind here: this is a depth-limited set, which is the normal shape.
+    assert sum(prices) < cfg.arb_max_set_cost_usd
+    assert contracts * net_n / 100 >= cfg.arb_min_profit_usd
+
+
+class _RateLimited(Exception):
+    status_code = 429
+
+
+def _chicago_client(fail_leg5_times):
+    """A fake gateway serving the 2026-09-18 chicago book, where leg5 is rate limited the first
+    `fail_leg5_times` times it is asked for. A rate limit is the ONLY way book() can fail -- an
+    SDK that simply returns nothing still produces an empty-but-real book -- so this is what the
+    live failure looked like."""
+    calls = collections.Counter()
+
+    class Markets:
+        def book(self, slug):
+            calls[slug] += 1
+            if slug == "leg5" and calls[slug] <= fail_leg5_times:
+                raise _RateLimited("<!doctype html>...You are being rate limited...")
+            i = int(slug[-1])
+            _, bid, ask, bq, aq = _CHICAGO_0918[i]
+            return {"bids": ([{"px": bid, "qty": bq}] if bid else []),
+                    "offers": [{"px": ask, "qty": aq}]}
+
+    class Client:
+        markets = Markets()
+
+    return Client(), calls
+
+
+def test_a_rate_limited_leg_does_not_cost_the_whole_episode():
+    """That same 2026-09-18 set was refused in real life, twice:
+
+        13:55:58  arb candidate us chicago buy_all 9.4c/set — depth INCOMPLETE, standing down
+
+    Five legs read fine and the sixth came back empty, which on this venue means the quota was
+    gone. All-or-nothing is the right rule, but it made a spent quota as expensive as a missing
+    market and it cost the best book on record. Serving the cooldown and asking again rescues the
+    set -- retrying immediately would not, because the venue is still backing off."""
+    from polybot.feeds import usvenue
+
+    v = usvenue.USVenue()
+    v.available, (v._client, calls) = True, _chicago_client(fail_leg5_times=1)
+    legs = _chicago_legs(with_depth=False)
+
+    assert v.fill_depth_buckets(legs) is True     # rescued once the cooldown is served
+    assert calls["leg5"] == 2                     # asked twice, and only that leg
+    assert all(calls[f"leg{i}"] == 1 for i in range(5))
+    assert all(b.ask_qty is not None for b in legs)
+
+    # And the rescued book is the real one, worth $3.23 rather than nothing.
+    from polybot.strategies.bucket_sum import arb_check, size_for_profit
+    kind, net, _ = arb_check(legs, "us")
+    contracts, _, net_n = size_for_profit(legs, kind, _cfg(), days=1.0)
+    assert contracts * net_n / 100 == pytest.approx(3.23, abs=0.05)
+
+
+def test_a_leg_that_never_answers_still_stands_the_set_down():
+    """The retry must not become a way of trading on a book nobody has read. A leg that fails
+    every attempt leaves depth unknown, and unknown depth still refuses the set."""
+    from polybot.feeds import usvenue
+    from polybot.strategies.bucket_sum import size_for_profit
+
+    v = usvenue.USVenue()
+    v.available, (v._client, calls) = True, _chicago_client(fail_leg5_times=99)
+    legs = _chicago_legs(with_depth=False)
+
+    assert v.fill_depth_buckets(legs) is False
+    assert legs[5].ask_qty is None                # unknown, NOT zero
+    assert calls["leg5"] == 2                     # tried again, then gave up
+    contracts, _, _ = size_for_profit(legs, "buy_all", _cfg(), days=1.0)
+    assert contracts == 0
+
+
+def test_screening_leaves_budget_for_the_call_that_trades():
+    """The depth read is the only call that can lead to a trade and it needs six at once. Sharing
+    a flat budget with routine screening means the screen spends the quota and the candidate
+    arrives to find none left -- which is how the best book on record was lost. Screening runs on
+    a smaller budget so something is always held back."""
+    from polybot.feeds import usvenue
+
+    v = usvenue.USVenue()
+    v._window_s = 60.0
+    now = time.time()
+    v._calls = [now] * (usvenue.CALL_BUDGET - usvenue.DEPTH_RESERVE)   # screening has had its fill
+
+    assert usvenue.DEPTH_RESERVE >= 1
+    assert len(v._calls) < usvenue.CALL_BUDGET      # ...but the venue's budget is not exhausted
+    # A screening call would now have to wait for the window; a depth read would not.
+    budget_screen = max(1, usvenue.CALL_BUDGET - usvenue.DEPTH_RESERVE)
+    assert len(v._calls) >= budget_screen
+    assert len(v._calls) < usvenue.CALL_BUDGET
 
 
 def test_arb_sweep_interval_covers_the_whole_liquid_day():
