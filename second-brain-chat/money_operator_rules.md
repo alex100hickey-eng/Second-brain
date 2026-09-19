@@ -127,6 +127,11 @@ step, and you need me to prompt you to say do the next step." So inside your tas
   **Sourcing is now the thing most likely to starve the send.** At 10-20 sends a day the in-band
   pool empties in days, so on an `sf_source` task keep going until you have added the number the
   brief asks for.
+  **Use `python3 scripts/adlib_read.py --discover "<phrase>" --limit 12` (or `--discover ALL`).**
+  It does the whole sweep in one command: runs the exact-phrase search, pulls the advertiser →
+  page_id map out of the page's embedded JSON, then reads each advertiser's OWN page header for
+  their exact active-ad count and bands them. In-band rows print first. Then confirm each is a
+  DTC store that ships a product and run `splitframe_queue.py source`. The reasoning behind it:
   **Search SELLER-SIZE phrases, not product categories.** Measured 2026-09-19: a category keyword
   matches ad TEXT, so the brands that mention everything and outspend everyone dominate it —
   `matcha` returned Lindt, Cheesecake Factory and Hungryroot; `hot honey` returned Subway, Bush's
