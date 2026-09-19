@@ -356,8 +356,8 @@ def test_bucket_sum_arb_math():
     # None must block the trade rather than default to a size.
     assert BucketSum(_cfg()).scan(_ctx(event=ev)) == []
     for b in ev.buckets:
-        b.ask_qty = 40
-    ev.buckets[3].ask_qty = 12                                          # the thinnest leg is the set size
+        b.ask_qty, b.ask_levels = 40, [(b.best_ask, 40)]
+    ev.buckets[3].ask_qty, ev.buckets[3].ask_levels = 12, [(ev.buckets[3].best_ask, 12)]  # thinnest leg
     sigs = BucketSum(_cfg()).scan(_ctx(event=ev))
     assert len(sigs) == len(ev.buckets) and all(s.taker and s.arb for s in sigs)
     # every leg carries the SAME number of contracts — equal dollars per leg would be a random
@@ -389,7 +389,7 @@ def test_bucket_sum_arb_math():
     empty = _event()
     for b in empty.buckets:
         b.best_bid = b.best_ask = None
-        b.ask_qty = 999
+        b.ask_qty, b.ask_levels = 999, [(0.01, 999)]
     assert arb_check(empty.buckets, "us")[0] is None
     assert BucketSum(_cfg()).scan(_ctx(event=empty)) == []
 
@@ -400,7 +400,7 @@ def test_bucket_sum_arb_math():
     del gapped.buckets[4]                                               # 76-77 removed: 75 and 78 no longer meet
     assert not exhaustive(gapped.buckets)
     for b in gapped.buckets:
-        b.best_ask, b.ask_qty = 0.05, 40
+        b.best_ask, b.ask_qty, b.ask_levels = 0.05, 40, [(0.05, 40)]
     assert arb_check(gapped.buckets, "us")[0] is None
 
 
@@ -1026,6 +1026,7 @@ def test_sell_all_is_sized_on_what_a_leg_costs_not_on_the_bid():
     ev = _event()
     for b in ev.buckets:                                  # 9 legs bidding 0.14 = 1.26 of bids
         b.best_bid, b.best_ask, b.bid_qty, b.ask_qty = 0.14, 0.15, 500, 500
+        b.bid_levels, b.ask_levels = [(0.14, 500)], [(0.15, 500)]
     kind, net, prices = arb_check(ev.buckets, "us")
     assert kind == "sell_all" and net > 0
     sigs = BucketSum(cfg).scan(_ctx(event=ev))
@@ -1156,9 +1157,11 @@ def test_hopeless_candidates_are_refused_before_the_depth_call_is_paid_for():
         return ev.buckets
 
     # a set that cannot pay for its own unwind is refused without touching the book
+    cfg.arb_unwind_cover = 1.0
     assert not worth_confirming(book(0.09, 0.10), 7.0, cfg)
     # one that can, is confirmed
     assert worth_confirming(book(0.08, 0.09), 16.0, cfg)
+    cfg.arb_unwind_cover = 0.25
     # a cheap set held for six weeks is still fine -- 16c on $0.81 is 0.51%/day even at 39 days
     assert worth_confirming(book(0.08, 0.09), 16.0, cfg, days=39.0)
     # the boc shape is the one that fails: selling nine legs bid at 0.20 ties up $7.20 a set, so
@@ -1167,6 +1170,33 @@ def test_hopeless_candidates_are_refused_before_the_depth_call_is_paid_for():
     assert worth_confirming(book(0.20, 0.21), 16.0, cfg, days=1.25)
     # below the flat floor it never gets that far
     assert not worth_confirming(book(0.08, 0.09), 0.2, cfg, days=1.25)
+
+
+def test_sizing_walks_the_ladder_for_dollars_not_cents_per_set():
+    """Top-of-book sizing picks the best cents-per-set and the worst dollars. Chicago's "71 or
+    below" bid 3 contracts at 0.16 and 100 at 0.15 on 2026-09-19: one cent of price is the
+    difference between a 3-set arb worth $0.18 and a 100-set one worth $5.00."""
+    from polybot.strategies.bucket_sum import size_for_profit, limit_for
+    cfg = _cfg()
+    cfg.arb_max_set_cost_usd = 1e9        # isolate the ladder logic from the caps
+    cfg.caps.max_exposure_usd = 1e9
+    ev = _event()
+    for b in ev.buckets:                  # nine legs bidding 0.14 deep: 1.26 of bids
+        b.best_bid, b.best_ask = 0.14, 0.15
+        b.bid_levels, b.ask_levels = [(0.14, 500)], [(0.15, 500)]
+    # one leg is thin at the top and fat a cent below -- the chicago shape
+    thin = ev.buckets[3]
+    thin.bid_levels = [(0.14, 3), (0.13, 500)]
+    assert limit_for(thin.bid_levels, 3) == 0.14
+    assert limit_for(thin.bid_levels, 100) == 0.13      # one cent buys 30x the size
+    assert limit_for(thin.bid_levels, 9999) is None     # honest about a ladder that cannot fill
+
+    contracts, prices, net = size_for_profit(ev.buckets, "sell_all", cfg)
+    assert contracts > 3, "top-of-book sizing would have stopped at 3 sets"
+    assert prices[3] == 0.13                            # it accepted the worse price knowingly
+    # and it chose dollars: 3 sets at the better price is worth less than what it picked
+    top_only = 3 * ((sum(0.14 for _ in ev.buckets) - 1.0) * 100) / 100
+    assert (net / 100.0) * contracts > top_only
 
 
 def test_arb_must_pay_for_its_own_unwind():
@@ -1184,14 +1214,20 @@ def test_arb_must_pay_for_its_own_unwind():
     def book(bid, ask):
         for b in ev.buckets:
             b.best_bid, b.best_ask, b.ask_qty, b.bid_qty = bid, ask, 500, 500
+            b.bid_levels, b.ask_levels = [(bid, 500)], [(ask, 500)]
         return _ctx(event=ev)
 
-    # the chicago shape: a real arb, too thin to survive its own unwind
+    # the default is evidence, not caution: a US quote moves 1.7% of the time in the 30s between
+    # the depth read and the order landing, so a six-leg set fails ~10% of the time and 0.25 is a
+    # 2.5x margin. At the old 1.0 exactly one event-minute in nine days cleared it.
+    assert cfg.arb_unwind_cover == 0.25
+    cfg.arb_unwind_cover = 1.0                              # the old "a half-fill is certain" bar
     assert BucketSum(cfg).scan(book(0.09, 0.10)) == []      # ~7c net against 9c of spread
-    # widen the edge, keep the spread: now it pays for the unwind twice over
-    assert BucketSum(cfg).scan(book(0.08, 0.09))            # ~16c net against 9c of spread
-    cfg.arb_unwind_cover = 0.0                              # knob off -> the thin set comes back
+    assert BucketSum(cfg).scan(book(0.08, 0.09))            # ~16c net against 9c: clears even that
+    cfg.arb_unwind_cover = 0.25                             # at the measured bar the thin set trades
     assert BucketSum(cfg).scan(book(0.09, 0.10))
+    cfg.arb_unwind_cover = 5.0                              # and a bar nothing can clear stops it
+    assert BucketSum(cfg).scan(book(0.08, 0.09)) == []
 
 
 def test_arb_refuses_a_set_that_locks_capital_for_weeks_to_earn_cents():
@@ -1204,6 +1240,7 @@ def test_arb_refuses_a_set_that_locks_capital_for_weeks_to_earn_cents():
     ev = _event()
     for b in ev.buckets:                                   # 9 legs, asks sum 0.81: 19c gross
         b.best_bid, b.best_ask, b.ask_qty, b.bid_qty = 0.08, 0.09, 500, 500
+        b.bid_levels, b.ask_levels = [(0.08, 500)], [(0.09, 500)]
 
     class Ctx:
         proven_exhaustive = False

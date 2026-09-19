@@ -162,7 +162,16 @@ class Config:
     # offered 6.0c a set against 20c of spread across its six legs: $0.12 of profit risking $0.40
     # to get it. Both scale with the number of sets, so the test is size-free: the arb must pay
     # for its own unwind. Lower this only when live fills prove reliable.
-    arb_unwind_cover: float = 1.0
+    # How much of a failed set's unwind the arb must pre-pay. 1.0 assumed a half-fill was
+    # CERTAIN, which was a guess and an expensive one: across nine days of US books exactly ONE
+    # event-minute cleared it, so the filter was really an off switch. Measured 2026-09-19 instead:
+    # a US quote changes 1.7% of the time within 30s (0.4% for the cheap legs we buy), and 30s is
+    # the whole window between the depth read and the order landing. That is ~10% for a six-leg
+    # set before counting that some moves are favourable. 0.25 is a 2.5x margin on the measured
+    # rate, stays clearly +EV (0.25*spread earned against ~0.10*spread expected cost), and passes
+    # 48 of those nine days' event-minutes instead of one.
+    arb_unwind_cover: float = 0.25
+    arb_min_profit_usd: float = 0.10       # below this a set is not worth the calls or the risk
     arb_pass_budget_s: float = 45.0        # a US scan pass abandons its tail rather than hold the loop
     arb_live_ok: bool = False              # arb legs stay paper until the executor can unwind a partial set
     hourly_rule_discount_f: float = 0.0    # offshore hourly-max rule discount; backtest fit 2026-09-12 (208 city-days) says 0.0, not the 1.0 assumed

@@ -51,6 +51,11 @@ class Bucket:
     # as free money, so bucket_sum refuses to size a set until these are filled in from the book.
     bid_qty: float | None = None
     ask_qty: float | None = None
+    # Full price ladders, best first. Top-of-book alone badly understates how big a set can be:
+    # chicago's "71 or below" bid 3 contracts at 0.16 and 100 at 0.15 on 2026-09-19, so one cent
+    # of price turned a 3-set arb into a 100-set one.
+    bid_levels: list | None = None
+    ask_levels: list | None = None
 
     def contains(self, temp: float) -> bool:
         return self.lo <= temp <= self.hi

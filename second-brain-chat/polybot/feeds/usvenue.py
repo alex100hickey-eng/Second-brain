@@ -414,6 +414,7 @@ class USVenue:
                 ok = False
                 continue
             bids, asks = book.get("bids") or [], book.get("asks") or []
+            b.bid_levels, b.ask_levels = bids, asks
             b.bid_qty = sum(q for px, q in bids if px == bids[0][0]) if bids else 0.0
             b.ask_qty = sum(q for px, q in asks if px == asks[0][0]) if asks else 0.0
             if bids:

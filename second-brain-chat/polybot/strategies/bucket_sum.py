@@ -151,6 +151,81 @@ def sets_available(buckets, kind: str) -> float | None:
     return max(0.0, min(qtys))
 
 
+def limit_for(levels, n: int) -> float | None:
+    """The worst price we must accept to get `n` contracts from a price ladder, or None if the
+    ladder is too thin.
+
+    This is the price a FILL_OR_KILL order is placed at, so it is what the arb must be costed on:
+    the fill may be better, but only the limit is guaranteed. Walking the ladder is where the size
+    is — chicago's "71 or below" bid 3 contracts at 0.16 and 100 at 0.15, so one cent of price
+    turned a 3-set arb into a 100-set one, and 3 sets x 6c is $0.18 against 100 x 5c = $5.00.
+    """
+    if not levels:
+        return None
+    taken = 0.0
+    for px, qty in levels:
+        taken += qty
+        if taken >= n:
+            return px
+    return None
+
+
+def size_for_profit(buckets, kind: str, cfg, days=None):
+    """Choose the number of sets that maximises TOTAL profit, not cents per set.
+
+    Every extra set costs price: the ladder gets worse as you take more of it. Sizing to
+    top-of-book (the old `sets_available`) picks the best cents-per-set and the worst dollars,
+    because the binding leg's top level is often a handful of contracts sitting above a hundred.
+    Returns (contracts, limit_prices, net_cents_per_set) or (0, [], 0.0).
+    """
+    ladders = [(b.bid_levels if kind == "sell_all" else b.ask_levels) for b in buckets]
+    if any(l is None for l in ladders):
+        return 0, [], 0.0
+    deepest = int(min((sum(q for _, q in l) for l in ladders), default=0))
+    best = (0, [], 0.0, 0.0)          # contracts, prices, net_cents, total_profit
+    for n in _candidate_sizes(deepest):
+        prices = [limit_for(l, n) for l in ladders]
+        if any(px is None for px in prices):
+            continue
+        if kind == "buy_all":
+            cost = sum(prices) + sum(fees.leg_cost(px, 1, "us", maker=False) for px in prices)
+            net = (1.0 - cost) * 100
+            set_cost = sum(prices)
+        else:
+            proceeds = sum(prices) - sum(fees.leg_cost(px, 1, "us", maker=False) for px in prices)
+            net = (proceeds - 1.0) * 100
+            set_cost = len(buckets) - sum(prices)
+        if net <= 0 or set_cost <= 0:
+            continue
+        spreads = [(b.best_ask - b.best_bid) * 100 for b in buckets
+                   if b.best_ask is not None and b.best_bid is not None]
+        if len(spreads) == len(buckets) and net < cfg.arb_unwind_cover * sum(spreads):
+            continue
+        if days is not None and (net / set_cost) / max(float(days), 0.5) < cfg.arb_min_roc_per_day_pct:
+            continue
+        capped = int(min(n, cfg.arb_max_set_cost_usd / set_cost,
+                         cfg.caps.max_exposure_usd / set_cost, cfg.arb_max_sets))
+        if capped < 1:
+            continue
+        total = (net / 100.0) * capped
+        if total > best[3]:
+            best = (capped, prices, round(net, 2), total)
+    return best[0], best[1], best[2]
+
+
+def _candidate_sizes(deepest: int):
+    """Sizes worth evaluating. The ladder only changes price at level boundaries, so a geometric
+    sweep finds the optimum without walking every integer up to several hundred."""
+    if deepest < 1:
+        return []
+    out, n = [], 1
+    while n <= deepest:
+        out.append(n)
+        n = max(n + 1, int(n * 1.3))
+    out.append(deepest)
+    return sorted(set(out))
+
+
 def worth_confirming(buckets, net: float, cfg, days=None) -> bool:
     """Is this candidate worth spending a book call per leg to confirm?
 
@@ -194,45 +269,23 @@ class BucketSum(Strategy):
     def scan(self, ctx) -> list:
         ev = ctx.event
         proven = bool(getattr(ctx, "proven_exhaustive", False))
-        kind, net, prices = arb_check(ev.buckets, ctx.venue, assume_exhaustive=proven)
-        if kind is None or net < self.cfg.bucket_sum_min_net_cents:
+        kind, net_top, _ = arb_check(ev.buckets, ctx.venue, assume_exhaustive=proven)
+        if kind is None or net_top < self.cfg.bucket_sum_min_net_cents:
             return []
-        sets = sets_available(ev.buckets, kind)
-        if sets is None:
-            # The quotes say there is an arb but nobody has asked the book how deep it is. The
-            # runner answers that with one book call per bucket and scans again; until then this
-            # is a candidate, not a trade.
+        days = getattr(ctx, "settles_in_days", None)
+        # Size on the whole ladder, not the top of it. `size_for_profit` applies the unwind cover,
+        # the dollar-day floor and the caps at every candidate size, and returns the one that makes
+        # the most DOLLARS — which is rarely the one that makes the most cents per set.
+        contracts, prices, net = size_for_profit(ev.buckets, kind, self.cfg, days)
+        if contracts < 1 or not prices:
+            # Either nobody has read the book yet (the runner answers that with a depth call and
+            # scans again) or no size clears the filters.
             return []
-        # Every leg carries the same number of contracts, and the caps apply to what a leg COSTS.
-        # For a sell-all set that is (1 - bid), not the bid: sizing off the bid made the dearest
-        # legs blow the per-market cap, risk refused them, and `handle_arb_set` then threw the
-        # whole set away — which is why no sell-all set ever reached the ledger despite the bids
-        # summing over $1 in a third of the event-minutes that had a full set of them.
         leg_costs = [px if kind == "buy_all" else round(1 - px, 2) for px in prices]
         set_cost = sum(leg_costs)
-        # The cap is on the SET, not the leg. A completed set pays $1 whatever the world does, so
-        # per-leg direction risk is the wrong ruler; what an arb can lose is a set that half-fills.
-        # A set that half-fills must be unwound: every filled leg sold back at the bid, one full
-        # spread each. That cost scales with the number of sets exactly as the profit does, so the
-        # test is size-free — the arb has to pay for its own unwind or it is not worth attempting.
-        spreads = [(b.best_ask - b.best_bid) * 100 for b in ev.buckets
-                   if b.best_ask is not None and b.best_bid is not None]
-        if len(spreads) == len(ev.buckets):
-            if net < self.cfg.arb_unwind_cover * sum(spreads):
-                return []
-        # Profit is per dollar-DAY, not per set. A set that pays 1c on $3.96 and settles in 39
-        # days is a worse use of the bankroll than leaving it idle for the next weather arb.
-        days = getattr(ctx, "settles_in_days", None)
         roc_pct = net / set_cost if set_cost > 0 else 0.0
-        if days is not None:
-            roc_day = roc_pct / max(float(days), 0.5)
-            if roc_day < self.cfg.arb_min_roc_per_day_pct:
-                return []
-        by_set = self.cfg.arb_max_set_cost_usd / max(set_cost, 1e-9)
-        by_total = self.cfg.caps.max_exposure_usd / max(set_cost, 1e-9)
-        contracts = int(min(sets, by_set, by_total, self.cfg.arb_max_sets))
-        if contracts < 1:
-            return []
+        if (net / 100.0) * contracts < self.cfg.arb_min_profit_usd:
+            return []            # real, but not worth the calls or the operational risk
         group = f"{ev.slug}:{kind}:{int(net * 10)}"
         out = []
         for b, px in zip(ev.buckets, prices):
@@ -245,7 +298,7 @@ class BucketSum(Strategy):
                               f"{roc_pct:.1f}% on capital"
                               + (f" over {days:.1f}d = {roc_pct / max(float(days), 0.5):.2f}%/day"
                                  if days is not None else "")
-                              + f", thinnest {sets:.0f})",
+                              + f", ${(net / 100.0) * contracts:.2f} profit)",
                               # `contracts` is derived from size_usd/price, so the size IS the way to
                               # say "N contracts of this leg". Prices are 2dp and N is an integer, so
                               # price*N is exact at 2dp and the property reads back exactly N.
