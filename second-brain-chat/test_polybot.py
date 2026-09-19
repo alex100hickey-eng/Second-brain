@@ -1739,6 +1739,16 @@ def test_watchdog_exits_when_the_loop_stops_making_progress(monkeypatch):
     tick()
     assert exited == []
 
+    # The longest legitimate gap is one city-day: six price_legs calls against a window the venue
+    # may have widened to 60s, about 120-150s cold. The limit has to clear that, because a false
+    # restart costs a cold cache and a skipped pass. The win comes from stamping progress DURING
+    # a pass, not from cutting the limit fine.
+    from polybot import runner as rm
+    assert rm.WATCHDOG_HARD_S >= 240
+    r._heartbeat = time.time() - 150              # still inside one slow city-day
+    tick(limit_s=240.0)
+    assert exited == []
+
     r._heartbeat = time.time() - 2040             # the real 34-minute stall
     tick()
     assert exited == [1]

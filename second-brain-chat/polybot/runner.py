@@ -92,7 +92,11 @@ DEDUPE_S = 3 * 3600
 # own 10s timeout never fired. faulthandler's timer runs in a C thread that does not need the
 # GIL, so it fires on time whatever Python is doing, and it prints the stack of every thread on
 # the way out: the first hard evidence of WHERE these hangs actually are.
-WATCHDOG_HARD_S = 420.0
+# 240s soft / 300s hard, not tighter. The longest LEGITIMATE gap between heartbeats is one
+# city-day: six price_legs calls against a window the venue may have widened to 60s is ~120-150s
+# cold. A false restart costs a cold cache and a skipped pass, so the limit sits above that with
+# room, and the win comes from stamping progress DURING a pass rather than from cutting it fine.
+WATCHDOG_HARD_S = 300.0
 
 
 def _arm_hard_watchdog(seconds: float) -> None:
@@ -487,6 +491,10 @@ class Runner:
             if deadline and time.time() > deadline:
                 skipped += 1
                 continue
+            # Progress, not just arrival. A pass can legitimately take a minute, and without a
+            # stamp here the watchdog cannot tell a slow pass from a hung socket — which is why
+            # its limit had to be set generously enough to sit through most of a real stall.
+            self._heartbeat = time.time()
             n += self._scan_one(city, kind, day_offset, wanted, light, venue, date)
         if skipped:
             self.log(f"  us scan over its {self.cfg.arb_pass_budget_s:.0f}s budget — skipped "
@@ -799,7 +807,7 @@ class Runner:
             self._heartbeat = time.time()
             _arm_hard_watchdog(WATCHDOG_HARD_S)
 
-    def _start_watchdog(self, limit_s: float = 300.0) -> None:
+    def _start_watchdog(self, limit_s: float = 240.0) -> None:
         """Kill the process if the loop stops making progress, so launchd can restart it.
 
         A hung socket blinded this bot for THIRTY-FOUR MINUTES on 2026-09-19, in the middle of
@@ -886,13 +894,16 @@ class Runner:
                     # those settle weeks out and the dollar-day filter refuses them anyway, so
                     # they are worth a look for the record, not worth a place in the hot path.
                     if now.minute % 10 == 0 and self.us.available and self.cfg.mode("bucket_sum") != "off":
-                        self.scan_universe()
+                        with self._long_job("scan_universe", grace_s=300):
+                            self.scan_universe()
                     if now.minute % 5 == 0:
                         self.scan_other(modules=["leadlag", "maker_rewards"])
                         if self.us.available:
-                            self.executor.sync()
+                            with self._long_job("sync", grace_s=300):
+                                self.executor.sync()
                     if now.minute == 20:
-                        self.settle()
+                        with self._long_job("settle", grace_s=600):
+                            self.settle()
                     if now.weekday() == 6 and now.hour == 4 and now.minute == 0:
                         with self._long_job("backtest"):
                             self.backtest(7)
@@ -900,7 +911,8 @@ class Runner:
                         with self._long_job("build_pairs"):
                             self.log(self.build_pairs())
                     if now.hour in (9, 21) and now.minute == 0:
-                        self.scan_other(modules=["hold_favorites"])
+                        with self._long_job("hold_favorites", grace_s=300):
+                            self.scan_other(modules=["hold_favorites"])
                     if now.hour == 7 and now.minute == 0:
                         self.log(self.report(1))
                         promoted = self.promote() if self.cfg.auto_promote else []
