@@ -30,7 +30,15 @@ class RiskManager:
             # expensive ones filled: the exact naked-basket outcome the set exists to avoid.
             # (The venue may enforce its own minimum; unverified until the first live arb.)
             return False, f"below min order ${caps.min_order_usd:.0f}"
-        if sig.size_usd > caps.max_per_market_usd + 1e-9:
+        if sig.arb:
+            # An arb leg is judged by what the SET costs, not by the per-market cap meant for
+            # single directional bets — the set is the thing that either completes and pays $1 or
+            # has to be unwound. The strategy sizes to this, and this is the hard rail under it.
+            set_cost = float((sig.meta or {}).get("set_cost_usd") or 0.0) * sig.contracts
+            if set_cost > self.cfg.arb_max_set_cost_usd + 1e-9:
+                return False, (f"arb set ${set_cost:.2f} over set cap "
+                               f"${self.cfg.arb_max_set_cost_usd:.0f}")
+        elif sig.size_usd > caps.max_per_market_usd + 1e-9:
             return False, f"over per-market cap ${caps.max_per_market_usd:.0f}"
         if (sig.category or "") == "sports" and not caps.sports_enabled:
             return False, "sports disabled (Ohio)"
@@ -48,9 +56,12 @@ class RiskManager:
             # can complete or unwind a partial set. Flip `arb_live_ok` when that exists.
             return False, "arb legs need group execution before live (arb_live_ok is off)"
         # One position per market, in every mode: the 2026-09-12 paper run re-entered the same bucket
-        # every 3 hours (133 extra entries), so one wrong call cost $40-60 instead of $20.
+        # every 3 hours (133 extra entries), so one wrong call cost $40-60 instead of $20. An arb
+        # leg is measured against the set cap for the same reason it is sized against it — the leg
+        # is not a position anyone took a view on, it is a sixth of something that pays $1.
+        per_market_cap = self.cfg.arb_max_set_cost_usd if sig.arb else caps.max_per_market_usd
         existing = self.ledger.exposure_usd(sig.venue, sig.market, live_only=live_like)
-        if existing + sig.size_usd > caps.max_per_market_usd + 1e-9:
+        if existing + sig.size_usd > per_market_cap + 1e-9:
             return False, f"market exposure ${existing:.0f}+${sig.size_usd:.0f} > cap (already in this market)"
         # Portfolio-level caps. In paper mode they are recorded, not enforced: the ledger must see every
         # signal a module produces to measure it, and the note tells us what live sizing would have cut.

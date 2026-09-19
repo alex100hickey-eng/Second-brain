@@ -145,6 +145,18 @@ class Config:
     model_update_min_shift: float = 0.10   # weather_model_update: probability shift that counts
     bucket_sum_min_net_cents: float = 1.0  # bucket_sum: net per set after fees must exceed this
     arb_max_sets: int = 200                # hard ceiling on one arb set, whatever the book offers
+    # An arb's risk is NOT per-leg direction risk -- once the set is complete it pays $1 whatever
+    # happens, so the per-market cap meant for single bets is the wrong ruler and a costly one:
+    # nyc offered 73 sets of depth while $20/market sized us to 23, i.e. a third of the arb. What
+    # an arb can actually lose is the cost of a set that half-fills, so the cap belongs on the SET.
+    arb_max_set_cost_usd: float = 50.0
+    # Cents per set is not profit — it is profit per dollar TIED UP UNTIL SETTLEMENT, and the
+    # venue's events settle anywhere from tomorrow to next March. Measured 2026-09-19: a boc
+    # sell-all paid 1c on a $3.96 set that settles in 39 days (0.006%/day) while a weather set
+    # paid 12c on $0.92 settling in ~1.25 days (10%/day) — a 1,600x difference that a flat
+    # cents-per-set threshold cannot see. Without this the bot locks the bankroll in the worst
+    # trade available and misses every good one for a month.
+    arb_min_roc_per_day_pct: float = 0.5
     arb_live_ok: bool = False              # arb legs stay paper until the executor can unwind a partial set
     hourly_rule_discount_f: float = 0.0    # offshore hourly-max rule discount; backtest fit 2026-09-12 (208 city-days) says 0.0, not the 1.0 assumed
     leadlag_move_cents: float = 3.0

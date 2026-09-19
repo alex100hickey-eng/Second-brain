@@ -117,8 +117,13 @@ def one_winner(markets: list) -> bool | None:
 # only through search. These queries are the net; each costs one API call, and the whole sweep is
 # ~20 calls, which is why it runs twice a day rather than every tick.
 DISCOVERY_QUERIES = [
-    "Fed decision", "interest rate decision", "CPI", "inflation", "unemployment", "GDP",
-    "central bank", "recession", "government shutdown",
+    # Recurring macro is the richest seam: every one of these that a settled instance proves
+    # becomes a permanently tradable 5-to-9-leg market with a tight book, and central banks meet
+    # on a schedule forever. usfed-fomc and banxico both came from this list.
+    "Fed decision", "interest rate decision", "central bank", "ECB", "Bank of England",
+    "Bank of Japan", "Banxico", "rate cut", "rate hike",
+    "CPI", "inflation", "PCE", "unemployment", "jobs report", "payrolls", "jobless claims",
+    "GDP", "retail sales", "recession", "government shutdown", "debt ceiling",
     "election winner", "Senate", "Governor", "Mayor", "Supreme Court",
     "Bitcoin price", "Ethereum price",
     "Oscar winner", "Nobel", "Grammy", "Person of the Year",

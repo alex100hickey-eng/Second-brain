@@ -341,14 +341,14 @@ def test_bucket_sum_arb_math():
     ev = _event()
     kind, net, _ = arb_check(ev.buckets, "offshore")
     assert kind is None                                                # one-sided books: no arb can be locked
-    for b in ev.buckets:
-        b.best_bid = b.best_bid or 0.001
-    asks_sum = sum(b.best_ask for b in ev.buckets)
-    assert asks_sum > 1.0
-    for b in ev.buckets:                                               # make the asks sum to 0.90
-        b.best_ask = round(b.best_ask * 0.90 / asks_sum, 4)
+    assert sum(b.best_ask for b in ev.buckets) > 1.0
+    # Real venue prices are whole cents, and the fixture must be too: 4-decimal asks produced
+    # sub-tick legs at 0.0082 that risk rightly refuses ("price outside 1-99c"), and earlier the
+    # same unrealism silently sized 11 contracts on one leg and 12 on another.
+    for b in ev.buckets:                                               # 9 legs x 0.10 = 0.90
+        b.best_bid, b.best_ask = 0.09, 0.10
     kind, net, prices = arb_check(ev.buckets, "us")
-    assert kind == "buy_all" and 5.0 < net < 10.0 and len(prices) == len(ev.buckets)   # 10c gross minus ~3.3c taker fees
+    assert kind == "buy_all" and 5.0 < net < 10.0 and len(prices) == len(ev.buckets)   # 10c gross minus fees
 
     # An arb the book cannot fill is not an arb. Depth is None until somebody asks the book, and
     # None must block the trade rather than default to a size.
@@ -364,12 +364,24 @@ def test_bucket_sum_arb_math():
     assert all(s.size_usd == pytest.approx(s.price * 12) for s in sigs)
     # a set costs about what the asks sum to, and it is one position in each of the legs' markets
     assert sum(s.size_usd for s in sigs) == pytest.approx(0.90 * 12, abs=0.05)
+    assert all(0.01 <= s.price <= 0.99 for s in sigs)                   # every leg is a real tick
 
-    # the per-market cap binds on the DEAREST leg, not on the set
+    # the SET cost is what binds, not the per-market cap: a completed set pays $1 whatever the
+    # world does, so per-leg direction risk is the wrong ruler (nyc offered 73 sets of depth while
+    # $20/market sized us to 23 — a third of the arb left on the table)
     cfg = _cfg()
-    cfg.caps.max_per_market_usd = 2.0
+    cfg.arb_max_set_cost_usd = 4.5
     small = BucketSum(cfg).scan(_ctx(event=ev))
-    assert small and max(s.size_usd for s in small) <= 2.0 + 1e-9
+    assert small
+    set_cost = sum(s.size_usd for s in small)
+    assert set_cost <= 4.5 + 1e-9 and set_cost > 3.0        # sized right up to the cap
+    # a leg may now exceed the per-market cap, and risk agrees because it judges the set
+    cfg.caps.max_per_market_usd = 0.5
+    rm = RiskManager(cfg, _ledger())
+    assert all(rm.allow(sig)[0] for sig in small)
+    cfg.arb_max_set_cost_usd = 1.0                           # ...but the SET cap is a hard rail
+    ok, why = rm.allow(small[0])
+    assert not ok and "over set cap" in why
 
     # an empty book is not a 100% arb: a missing ask is unknown, never zero
     empty = _event()
@@ -1024,6 +1036,33 @@ def test_sell_all_is_sized_on_what_a_leg_costs_not_on_the_bid():
     # every leg passes risk, so the set is accepted whole rather than silently dropped
     r = runner_mod.Runner(cfg, _ledger(), log=lambda *_: None)
     assert r.handle_arb_set(sigs) == len(sigs)
+
+
+def test_arb_refuses_a_set_that_locks_capital_for_weeks_to_earn_cents():
+    """Cents per set is not profit -- profit is per dollar TIED UP until settlement. On 2026-09-19
+    a boc sell-all paid 1c on a $3.96 set settling in 39 days (0.006%/day) while a weather set
+    paid 12c on $0.92 settling in ~1.25 days (10%/day). A flat cents threshold cannot tell them
+    apart, and taking the first locks the bankroll out of every good trade for a month."""
+    from polybot.strategies.bucket_sum import BucketSum
+    cfg = _cfg()
+    ev = _event()
+    for b in ev.buckets:                                   # 9 legs, asks sum 0.90: 10c gross
+        b.best_bid, b.best_ask, b.ask_qty, b.bid_qty = 0.09, 0.10, 500, 500
+
+    class Ctx:
+        proven_exhaustive = False
+
+        def __init__(self, days):
+            self.event, self.venue, self.city, self.kind = ev, "us", "nyc", "high"
+            self.date, self.settles_in_days = "2026-09-19", days
+
+    assert BucketSum(cfg).scan(Ctx(1.25))                  # ~6% on capital overnight: take it
+    assert BucketSum(cfg).scan(Ctx(39.0)) == []            # same cents, six weeks: not worth it
+    cfg.arb_min_roc_per_day_pct = 0.0                      # knob off -> horizon stops mattering
+    assert BucketSum(cfg).scan(Ctx(39.0))
+    # with no horizon known at all it falls back to the flat threshold rather than inventing one
+    cfg.arb_min_roc_per_day_pct = 0.5
+    assert BucketSum(cfg).scan(Ctx(None))
 
 
 def test_arb_picks_the_direction_with_the_better_return_on_capital():

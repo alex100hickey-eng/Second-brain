@@ -21,7 +21,7 @@ import sys
 import time
 import json
 import traceback
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from . import backtest, calibration, config, notify, pairs
@@ -43,12 +43,29 @@ class _Ev:
 
 class _UniverseCtx:
     """A weather ctx has a model and observations; a Fed decision has neither. The arb only ever
-    reads event/venue/city/date/kind, plus the settlement proof that stands in for tiling."""
+    reads event/venue/city/date/kind, plus the settlement proof that stands in for tiling and the
+    horizon that turns cents-per-set into cents per dollar-day."""
 
     proven_exhaustive = True
 
-    def __init__(self, event, venue, city, date, kind):
+    def __init__(self, event, venue, city, date, kind, settles_in_days=None):
         self.event, self.venue, self.city, self.date, self.kind = event, venue, city, date, kind
+        self.settles_in_days = settles_in_days
+
+
+def _days_until(iso: str | None) -> float | None:
+    """Days from now to an ISO timestamp, floored at half a day. None when unparseable — and the
+    arb then falls back to the flat cents threshold rather than inventing a horizon."""
+    if not iso:
+        return None
+    try:
+        txt = str(iso).replace("Z", "+00:00")
+        when = datetime.fromisoformat(txt)
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=timezone.utc)
+        return max((when - datetime.now(timezone.utc)).total_seconds() / 86400.0, 0.5)
+    except (ValueError, TypeError):
+        return None
 from .strategies.bucket_sum import BucketSum, arb_check, arb_possible, unpriced
 from .strategies.hold_favorites import HoldFavorites
 from .strategies.leadlag import LeadLag
@@ -245,7 +262,8 @@ class Runner:
                 self.ledger.add_snapshot("us", b.yes_token, b.best_bid, b.best_ask, b.last,
                                          bid_qty=b.bid_qty, ask_qty=b.ask_qty)
             ctx = _UniverseCtx(event=_Ev(slug, buckets), venue="us", city=row["series"],
-                               date=slug[-10:], kind=row["category"] or "event")
+                               date=slug[-10:], kind=row["category"] or "event",
+                               settles_in_days=_days_until((e or {}).get("endDate")))
             n += self.handle_arb_set(list(self.arb.scan(ctx)))
         return n
 
@@ -387,6 +405,12 @@ class Runner:
             probs = " ".join(f"{b.title.split('°')[0]}={p:.0%}" for b, p in zip(ctx.event.buckets, ctx.probs) if p >= 0.03)
             self.log(f"  {venue} {city} {ctx.date} {kind} [{ctx.station}/{ctx.rule}] running={ctx.running} n_obs={ctx.n_obs} "
                      f"remaining={ctx.remaining_extreme} | model {probs}")
+        # US weather settles on the NWS daily climate report at 8 AM ET the morning AFTER the
+        # market's date, so a set bought today is capital locked for roughly a day — which is what
+        # makes it worth many times a central-bank set paying more cents six weeks out.
+        if venue == "us":
+            ctx.settles_in_days = _days_until(f"{ctx.date}T12:00:00+00:00") or 1.0
+            ctx.settles_in_days = max(ctx.settles_in_days, 0.5) + 0.5
         for b in ctx.event.buckets:
             self.ledger.add_snapshot(venue, b.yes_token, b.best_bid, b.best_ask, b.last)
         # Cheap screen, expensive confirm. The quotes come free with the event (one call); depth

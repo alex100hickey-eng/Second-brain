@@ -175,10 +175,20 @@ class BucketSum(Strategy):
         # whole set away — which is why no sell-all set ever reached the ledger despite the bids
         # summing over $1 in a third of the event-minutes that had a full set of them.
         leg_costs = [px if kind == "buy_all" else round(1 - px, 2) for px in prices]
-        dearest = max(leg_costs)
-        by_cap = self.cfg.caps.max_per_market_usd / dearest if dearest > 0 else sets
-        by_total = self.cfg.caps.max_exposure_usd / max(sum(leg_costs), 1e-9)
-        contracts = int(min(sets, by_cap, by_total, self.cfg.arb_max_sets))
+        set_cost = sum(leg_costs)
+        # The cap is on the SET, not the leg. A completed set pays $1 whatever the world does, so
+        # per-leg direction risk is the wrong ruler; what an arb can lose is a set that half-fills.
+        # Profit is per dollar-DAY, not per set. A set that pays 1c on $3.96 and settles in 39
+        # days is a worse use of the bankroll than leaving it idle for the next weather arb.
+        days = getattr(ctx, "settles_in_days", None)
+        roc_pct = net / set_cost if set_cost > 0 else 0.0
+        if days is not None:
+            roc_day = roc_pct / max(float(days), 0.5)
+            if roc_day < self.cfg.arb_min_roc_per_day_pct:
+                return []
+        by_set = self.cfg.arb_max_set_cost_usd / max(set_cost, 1e-9)
+        by_total = self.cfg.caps.max_exposure_usd / max(set_cost, 1e-9)
+        contracts = int(min(sets, by_set, by_total, self.cfg.arb_max_sets))
         if contracts < 1:
             return []
         group = f"{ev.slug}:{kind}:{int(net * 10)}"
@@ -189,8 +199,11 @@ class BucketSum(Strategy):
             out.append(Signal(self.name, ctx.venue, b.yes_token, f"{ctx.city} {ctx.date} {ctx.kind} {b.title}", side,
                               price, price * contracts, net,
                               f"{kind}: {contracts} sets net {net:.1f}c each after taker fees "
-                              f"({len(ev.buckets)} legs, ${sum(leg_costs) * contracts:.2f} in, "
-                              f"{net / sum(leg_costs):.1f}% on capital, thinnest {sets:.0f})",
+                              f"({len(ev.buckets)} legs, ${set_cost * contracts:.2f} in, "
+                              f"{roc_pct:.1f}% on capital"
+                              + (f" over {days:.1f}d = {roc_pct / max(float(days), 0.5):.2f}%/day"
+                                 if days is not None else "")
+                              + f", thinnest {sets:.0f})",
                               # `contracts` is derived from size_usd/price, so the size IS the way to
                               # say "N contracts of this leg". Prices are 2dp and N is an integer, so
                               # price*N is exact at 2dp and the property reads back exactly N.
@@ -199,8 +212,9 @@ class BucketSum(Strategy):
                               else round((b.best_ask - b.best_bid) * 100, 1),
                               meta={"market_id": b.market_id, "group": group, "legs": len(ev.buckets),
                                     "sets": contracts, "net_cents": net,
-                                    "set_cost_usd": round(sum(leg_costs), 4),
-                                    "roc_pct": round(net / sum(leg_costs), 2)}))
+                                    "set_cost_usd": round(set_cost, 4),
+                                    "roc_pct": round(roc_pct, 2),
+                                    "settles_in_days": days}))
         # Belt and braces. `contracts` is derived from size_usd/price, and the arithmetic only
         # round-trips exactly while prices are well behaved — a 4-decimal price rounded to cents
         # silently produced 11 contracts on one leg and 12 on another in test. An unbalanced set
