@@ -402,13 +402,21 @@ class Runner:
             except Exception as exc:
                 self.log(f"  us prefetch failed ({exc}) — falling back to per-event lookups")
         skipped = 0
-        for city in cities:
-            for kind in kinds:
-                for day_offset in offsets:
-                    if deadline and time.time() > deadline:
-                        skipped += 1
-                        continue
-                    n += self._scan_one(city, kind, day_offset, wanted, light, venue, date)
+        jobs = [(city, kind, off) for city in cities for kind in kinds for off in offsets]
+        # When the deadline bites it always bit the same way: the loop ran cities in a fixed order,
+        # so the tail of the list was the part that got dropped, every single pass. With ten
+        # city-days and a 45s budget that meant san-francisco and ALL of tomorrow were
+        # systematically never screened while the log honestly reported "skipped 4" each time.
+        # Rotate the starting point so the cost of running out of time is shared out instead of
+        # falling on the same books forever.
+        if deadline and len(jobs) > 1:
+            self._scan_rot = (getattr(self, "_scan_rot", 0) + 1) % len(jobs)
+            jobs = jobs[self._scan_rot:] + jobs[:self._scan_rot]
+        for city, kind, day_offset in jobs:
+            if deadline and time.time() > deadline:
+                skipped += 1
+                continue
+            n += self._scan_one(city, kind, day_offset, wanted, light, venue, date)
         if skipped:
             self.log(f"  us scan over its {self.cfg.arb_pass_budget_s:.0f}s budget — skipped "
                      f"{skipped} city-day(s); next tick starts fresh")
@@ -615,20 +623,24 @@ class Runner:
     def _arb_interval_s(self, now) -> float:
         """Seconds between US arb sweeps at this hour.
 
-        Every fully-quoted sub-$1 book on record landed between 11:00 and 17:00 ET, peaking at
-        13:00-14:00, and an episode lasts about a minute. A once-a-minute sweep therefore samples
-        a peak episode about once and misses a short one entirely, which is the difference between
-        catching a 21-contract book and reading about it afterwards.
+        The "13:00-14:00 peak" this used to chase was an artefact of when the bot happened to
+        scan. Normalised by observed event-minutes, the rate of a positive net after fees is flat
+        across the liquid day -- 2.7% over 12:00-15:00 against 2.8% over 09:00-13:00, on 1,450
+        observations. There is no peak hour to concentrate on, so concentrating on one only buys
+        dense coverage of four hours and thin coverage of the other four.
+
+        What the same data does say clearly is where NOT to look: 18:00-23:00 is 0 opportunities
+        in 281 observed event-minutes. So sweep the whole liquid day at the fast rate and let the
+        evening go.
 
         20s is not the venue's limit, it is the loop's: a batched pass costs ~3.4 calls, so three
-        sweeps a minute spend ~10 against a budget near 25. The loop sleeps 20s, so this is as
-        fast as the peak can be swept without restructuring the whole tick.
+        sweeps a minute spend ~10 against a budget near 25, and the loop sleeps 20s anyway.
         """
-        if 12 <= now.hour <= 15:
+        if 9 <= now.hour <= 16:
             return 20.0
-        if 10 <= now.hour <= 18:
-            return 60.0
-        return 300.0
+        if now.hour == 17 or now.hour <= 8:
+            return 120.0
+        return 600.0
 
     def loop(self):
         self.log("polybot loop started (Ctrl+C to stop)")

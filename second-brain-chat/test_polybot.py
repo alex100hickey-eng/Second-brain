@@ -1074,18 +1074,35 @@ def test_a_slow_scan_pass_abandons_its_tail_instead_of_holding_the_loop():
         return 0
 
     r._scan_one = slow
-    r.scan_weather(cities=["nyc", "chicago", "miami", "los-angeles", "san-francisco"],
-                   modules=["bucket_sum"], kinds=("high",), venue="us", day_offsets=(0,))
-    assert scanned == ["nyc", "chicago"]          # the clock stopped it; it did not grind on
+    cities = ["nyc", "chicago", "miami", "los-angeles", "san-francisco"]
+    r.scan_weather(cities=cities, modules=["bucket_sum"], kinds=("high",), venue="us",
+                   day_offsets=(0,))
+    assert len(scanned) == 2                      # the clock stopped it; it did not grind on
+
+    # ...and WHICH two rotates. A fixed order meant the same tail was dropped every pass, so with
+    # ten city-days and a 45s budget san-francisco and all of tomorrow were never screened at all
+    # while the log honestly reported "skipped 4" each time.
+    firsts = set()
+    for _ in range(5):
+        scanned.clear()
+        r.scan_weather(cities=cities, modules=["bucket_sum"], kinds=("high",), venue="us",
+                       day_offsets=(0,))
+        firsts.add(scanned[0])
+    assert len(firsts) >= 3                       # the cost of running out of time is shared out
+    assert firsts <= set(cities)
+
     # left to itself the US path also sweeps tomorrow, so the clock is per city-DAY not per city
     scanned.clear()
-    r.scan_weather(cities=["nyc", "chicago"], modules=["bucket_sum"], kinds=("high",), venue="us")
-    assert scanned == ["nyc", "nyc"]              # today and tomorrow for nyc, then the clock
-    # off the US path there is no deadline: the offshore proxy is not time-critical
+    r._scan_rot = 0
+    r.scan_weather(cities=["nyc"], modules=["bucket_sum"], kinds=("high",), venue="us")
+    assert scanned == ["nyc", "nyc"][:len(scanned)] and len(scanned) <= 2
+
+    # off the US path there is no deadline, and no rotation: the offshore proxy is not
+    # time-critical and every city must be scanned every pass.
     scanned.clear()
     r.scan_weather(cities=["nyc", "chicago", "miami"], modules=["bucket_sum"],
                    kinds=("high",), venue="offshore")
-    assert len(scanned) == 3
+    assert scanned == ["nyc", "chicago", "miami"]
 
 
 def test_a_blind_venue_says_so_and_the_budget_retunes_itself():
@@ -1632,20 +1649,54 @@ def _fake_us_weather_event(slug, n_markets=3):
         for i in range(n_markets)]}
 
 
-def test_arb_sweep_interval_follows_where_the_arbs_are():
-    """Episodes last about a minute and cluster 11:00-17:00 ET, peaking 13:00-14:00. A
-    once-a-minute sweep samples a peak episode about once and misses a short one outright, so the
-    peak is swept every 20s -- the loop's own granularity, not the venue's: a batched pass is
-    ~3.4 calls, so three sweeps a minute spend ~10 against a budget near 25."""
+def test_arb_sweep_interval_covers_the_whole_liquid_day():
+    """The "13:00-14:00 peak" was an artefact of when the bot happened to scan. Normalised by
+    observed event-minutes the rate of a positive net after fees is flat across the liquid day --
+    2.7% over 12:00-15:00 against 2.8% over 09:00-13:00 on 1,450 observations -- so concentrating
+    on a peak buys dense coverage of four hours and thin coverage of four equally good ones.
+
+    The same data is emphatic about where NOT to look: 18:00-23:00 is 0 opportunities in 281
+    observed event-minutes."""
     from polybot.runner import Runner
 
     at = lambda h: datetime(2026, 9, 19, h, 0)
     f = Runner._arb_interval_s
-    assert f(None, at(13)) == 20.0 and f(None, at(15)) == 20.0     # the peak
-    assert f(None, at(10)) == 60.0 and f(None, at(18)) == 60.0     # the shoulders
-    assert f(None, at(3)) == 300.0 and f(None, at(22)) == 300.0    # overnight
-    # Strictly finer where the money is, and never finer outside it.
-    assert f(None, at(13)) < f(None, at(11)) < f(None, at(20))
+    for h in range(9, 17):
+        assert f(None, at(h)) == 20.0, f"hour {h} is inside the liquid day"
+    assert f(None, at(17)) == 120.0
+    assert f(None, at(4)) == 120.0 and f(None, at(8)) == 120.0
+    assert f(None, at(19)) == 600.0 and f(None, at(23)) == 600.0   # 0 for 281 observations
+    # No hour outside the liquid day is swept as fast as one inside it.
+    assert max(f(None, at(h)) for h in range(9, 17)) < min(
+        f(None, at(h)) for h in list(range(17, 24)) + list(range(0, 9)))
+
+
+def test_scan_rotates_so_a_budget_skip_does_not_starve_the_same_books(monkeypatch):
+    """The pass runs city-days in a fixed order and abandons the tail when it runs out of time.
+    With ten city-days and a 45s budget that meant the same books -- san-francisco, and all of
+    tomorrow -- were never screened, every pass, while the log honestly said "skipped 4"."""
+    from polybot import runner as runner_mod
+
+    r = object.__new__(runner_mod.Runner)
+    r.cfg = config.load()
+    r.cfg.arb_pass_budget_s = 0.0          # every pass is instantly over budget
+    r.log = lambda *a, **k: None
+    r.us = type("V", (), {"available": True, "prefetch_weather_events": lambda self, t: 0})()
+    r.weather_modules = {"bucket_sum": object()}
+    monkeypatch.setattr(r.cfg, "mode", lambda m: "paper")
+
+    seen = []
+    r._scan_one = lambda city, kind, off, *a: (seen.append((city, off)), 0)[1]
+    cities = ["nyc", "chicago", "miami", "los-angeles", "san-francisco"]
+    starts = []
+    for _ in range(4):
+        before = len(seen)
+        r.scan_weather(cities=cities, modules=["bucket_sum"], venue="us",
+                       kinds=("high",), day_offsets=(0, 1))
+        starts.append(seen[before] if len(seen) > before else None)
+    # Nothing actually ran (budget 0), but the rotation must have advanced regardless, so that
+    # over successive passes a different book is first in line.
+    assert r._scan_rot == 4 % 10
 
 
 def test_arb_uses_the_market_own_fee_coefficient_not_a_constant():
