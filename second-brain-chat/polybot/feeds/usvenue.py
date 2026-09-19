@@ -44,6 +44,7 @@ except Exception:  # pragma: no cover - import guard
 # So: spend from a budget instead of reacting to a ban. The reactive backoff stays as a safety
 # net because gateway.polymarket.us sees the whole CWRU campus IP (129.22.1.29) and other people
 # on that network spend from the same quota.
+SDK_TIMEOUT_S = 10.0               # a 30s call is already a failure for a 2-minute scan
 SCREEN_BOOK_TTL_S = 90             # how stale a book may be for SCREENING (never for trading)
 CALL_BUDGET = 5                    # requests allowed per window
 CALL_WINDOW_S = 12.0               # STARTING window; widened automatically when the venue refuses
@@ -189,7 +190,12 @@ class USVenue:
         self.secret = os.environ.get("POLYMARKET_SECRET_KEY")
         self.sdk_installed = PolymarketUS is not None
         self._base_available = bool(self.sdk_installed and self.key_id and self.secret)
-        self._client = PolymarketUS(key_id=self.key_id, secret_key=self.secret) if self._base_available else None
+        # The SDK defaults to a 30s timeout. For a scanner that wants to sweep five markets every
+        # two minutes a 30s call has already failed — on 2026-09-19 a pass stalled between nyc and
+        # los-angeles for fifteen minutes with no error and no rate limit, just slow sockets on
+        # campus wifi. Fail fast and let the next tick try again.
+        self._client = (PolymarketUS(key_id=self.key_id, secret_key=self.secret, timeout=SDK_TIMEOUT_S)
+                        if self._base_available else None)
         self._backoff_until = 0.0
         self._backoff_reason = ""
         self._backoff_s = RATE_LIMIT_BACKOFF_S

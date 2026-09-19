@@ -1040,6 +1040,39 @@ def test_sell_all_is_sized_on_what_a_leg_costs_not_on_the_bid():
     assert r.handle_arb_set(sigs) == len(sigs)
 
 
+def test_a_slow_scan_pass_abandons_its_tail_instead_of_holding_the_loop():
+    """Arb episodes last about a minute, so five cities scanned slowly are worth less than three
+    scanned now. On 2026-09-19 a pass stalled after its first city -- no error, no rate limit, just
+    slow sockets -- and held the loop for fifteen minutes, which no cadence tuning upstream can
+    fix."""
+    from polybot import runner as runner_mod
+    cfg, led = _cfg(), _ledger()
+    cfg.arb_pass_budget_s = 0.25
+    cfg.modes["bucket_sum"] = "paper"
+    r = runner_mod.Runner(cfg, led, log=lambda *_: None)
+    r.us = type("V", (), {"available": True})()
+    scanned = []
+
+    def slow(city, kind, day_offset, *a):
+        scanned.append(city)
+        time.sleep(0.2)
+        return 0
+
+    r._scan_one = slow
+    r.scan_weather(cities=["nyc", "chicago", "miami", "los-angeles", "san-francisco"],
+                   modules=["bucket_sum"], kinds=("high",), venue="us", day_offsets=(0,))
+    assert scanned == ["nyc", "chicago"]          # the clock stopped it; it did not grind on
+    # left to itself the US path also sweeps tomorrow, so the clock is per city-DAY not per city
+    scanned.clear()
+    r.scan_weather(cities=["nyc", "chicago"], modules=["bucket_sum"], kinds=("high",), venue="us")
+    assert scanned == ["nyc", "nyc"]              # today and tomorrow for nyc, then the clock
+    # off the US path there is no deadline: the offshore proxy is not time-critical
+    scanned.clear()
+    r.scan_weather(cities=["nyc", "chicago", "miami"], modules=["bucket_sum"],
+                   kinds=("high",), venue="offshore")
+    assert len(scanned) == 3
+
+
 def test_a_blind_venue_says_so_and_the_budget_retunes_itself():
     """scan_weather returns 0 the moment the venue is unavailable, and it logs nothing -- so a
     rate-limited bot simply stops scanning and nothing says why. That produced 12-to-16 minute

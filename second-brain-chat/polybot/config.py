@@ -163,6 +163,7 @@ class Config:
     # to get it. Both scale with the number of sets, so the test is size-free: the arb must pay
     # for its own unwind. Lower this only when live fills prove reliable.
     arb_unwind_cover: float = 1.0
+    arb_pass_budget_s: float = 45.0        # a US scan pass abandons its tail rather than hold the loop
     arb_live_ok: bool = False              # arb legs stay paper until the executor can unwind a partial set
     hourly_rule_discount_f: float = 0.0    # offshore hourly-max rule discount; backtest fit 2026-09-12 (208 city-days) says 0.0, not the 1.0 assumed
     leadlag_move_cents: float = 3.0

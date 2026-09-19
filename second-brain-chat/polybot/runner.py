@@ -375,10 +375,22 @@ class Runner:
         # likely, not less. Only the arb path takes this: weather_lock and weather_obs trade on
         # observations of a day in progress and have nothing to say about tomorrow.
         offsets = day_offsets if day_offsets is not None else ((0, 1) if (light and venue == "us") else (0,))
+        # A scan pass has a wall clock, not just a call budget. Arb episodes last about a minute,
+        # so five cities scanned slowly is worth less than three scanned now — and on 2026-09-19 a
+        # pass stalled after its first city and held the loop for fifteen minutes, which no amount
+        # of cadence tuning upstream can fix. Abandon the tail and let the next tick start clean.
+        deadline = time.time() + self.cfg.arb_pass_budget_s if venue == "us" else None
+        skipped = 0
         for city in cities:
             for kind in kinds:
                 for day_offset in offsets:
+                    if deadline and time.time() > deadline:
+                        skipped += 1
+                        continue
                     n += self._scan_one(city, kind, day_offset, wanted, light, venue, date)
+        if skipped:
+            self.log(f"  us scan over its {self.cfg.arb_pass_budget_s:.0f}s budget — skipped "
+                     f"{skipped} city-day(s); next tick starts fresh")
         return n
 
     def _scan_one(self, city, kind, day_offset, wanted, light, venue, date) -> int:
