@@ -1891,6 +1891,44 @@ def test_an_already_taken_episode_does_not_pay_for_another_depth_read(monkeypatc
                    for m in legs)
 
 
+def test_the_universe_arb_path_stands_down_on_unknown_depth():
+    """There are two copies of the arb: the five weather books, and scan_universe over every
+    proven one-winner event. The universe copy ignored fill_depth_buckets' return value, so an
+    unreadable leg — the thing that cost the best book on record — was simply not noticed.
+
+    A second copy of the arb that quietly lacks the first copy's fixes is worse than no second
+    copy, because it looks supported and is not."""
+    from polybot import runner as runner_mod
+    from polybot.feeds.offshore import Bucket
+
+    cfg, led = _cfg(), _ledger()
+    cfg.modes["bucket_sum"] = "paper"
+    r = runner_mod.Runner(cfg, led, log=lambda *_: None)
+
+    def leg(i, ask):
+        b = Bucket(title=f"o{i}", lo=float(i), hi=float(i), unit="", yes_token=f"u{i}",
+                   no_token=f"u{i}", market_id=f"u{i}", condition_id=str(i), best_bid=ask - 0.01,
+                   best_ask=ask, last=ask, closed=False, outcome=None, liquidity=0.0,
+                   fee_coefficient=0.0695)
+        return b
+
+    buckets = [leg(i, 0.20) for i in range(4)]        # ask_sum 0.80 — a real-looking arb
+    # one leg's book never answers, so its depth is unknown, not zero
+    for b in buckets[:-1]:
+        b.ask_levels, b.bid_levels = [(b.best_ask, 500.0)], [(b.best_bid, 500.0)]
+        b.ask_qty, b.bid_qty = 500.0, 500.0
+    assert buckets[-1].ask_levels is None
+
+    from polybot.strategies.bucket_sum import size_for_profit
+    n, _, _ = size_for_profit(buckets, "buy_all", cfg, days=1.0)
+    assert n == 0, "a set must not be sized while a leg's depth is unknown"
+
+    # and held contracts are consumed off the ladder on this path too
+    from polybot.strategies.bucket_sum import consume_levels
+    assert consume_levels([(0.20, 500.0)], 500) == []
+    assert consume_levels([(0.20, 500.0)], 120) == [(0.20, 380.0)]
+
+
 def test_an_open_arb_is_carried_at_cost_not_marked_leg_by_leg(tmp_path):
     """Six arb legs are one instrument that pays exactly $1.00 a set at settlement. Marking each
     at its own mid and adding them up prices the market's inefficiency six times over, and implies

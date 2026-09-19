@@ -291,11 +291,37 @@ class Runner:
             days = _days_until((e or {}).get("endDate"))
             if kind is None or not worth_confirming(buckets, net, self.cfg, days):
                 continue
-            self.us.fill_depth_buckets(buckets)
-            self.log(f"  arb candidate us {slug} {kind} {net:.1f}c/set ({len(buckets)} legs)")
+            # Everything below mirrors the weather path deliberately. These are the same bugs
+            # already fixed there, and a second copy of the arb that quietly lacks the fixes is
+            # worse than no second copy: it looks supported and is not.
+            side = "BUY_YES" if kind == "buy_all" else "BUY_NO"
+            if any(self.ledger.recent_signal_exists("bucket_sum", b.yes_token, side,
+                                                    self.cfg.arb_dedupe_s) for b in buckets):
+                self.log(f"  arb candidate us {slug} {kind} {net:.1f}c/set — already taken this "
+                         f"episode, not re-confirming")
+                continue
+            got = self.us.fill_depth_buckets(buckets)
+            self.log(f"  arb candidate us {slug} {kind} {net:.1f}c/set ({len(buckets)} legs) — "
+                     f"depth {'read' if got else 'INCOMPLETE, standing down'}")
+            if not got:
+                continue          # the return was being ignored; unknown depth is not zero depth
+            for b in buckets:     # a position we already hold has eaten that liquidity
+                held = self.ledger.held_contracts("us", b.yes_token, "bucket_sum")
+                if held <= 0:
+                    continue
+                if kind == "buy_all":
+                    b.ask_levels = consume_levels(b.ask_levels, held)
+                    b.ask_qty = sum(q for px, q in b.ask_levels
+                                    if b.ask_levels and px == b.ask_levels[0][0]) or 0.0
+                else:
+                    b.bid_levels = consume_levels(b.bid_levels, held)
+                    b.bid_qty = sum(q for px, q in b.bid_levels
+                                    if b.bid_levels and px == b.bid_levels[0][0]) or 0.0
             for b in buckets:
                 self.ledger.add_snapshot("us", b.yes_token, b.best_bid, b.best_ask, b.last,
-                                         bid_qty=b.bid_qty, ask_qty=b.ask_qty)
+                                         bid_qty=b.bid_qty, ask_qty=b.ask_qty,
+                                         bid_levels=getattr(b, "bid_levels", None),
+                                         ask_levels=getattr(b, "ask_levels", None))
             ctx = _UniverseCtx(event=_Ev(slug, buckets), venue="us", city=row["series"],
                                date=slug[-10:], kind=row["category"] or "event",
                                settles_in_days=days)
