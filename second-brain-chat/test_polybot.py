@@ -1877,6 +1877,42 @@ def test_an_already_taken_episode_does_not_pay_for_another_depth_read(monkeypatc
                    for m in legs)
 
 
+def test_a_set_is_measured_against_the_exposure_cap_as_one_decision():
+    """Every leg is risk-checked against the SAME exposure baseline, because none is recorded
+    until they all pass. So six legs of $20 each are each compared with $80 of room and each says
+    yes — and then $120 goes on. Proved against live settings: $100 open, a $120 set, all six
+    legs "ok", resulting exposure $220 against a $180 cap.
+
+    A set is one decision; it has to be measured as one."""
+    from polybot import runner as runner_mod
+    from polybot.strategies.base import Signal
+
+    cfg, led = _cfg(), _ledger()
+    cfg.modes["bucket_sum"] = "live"
+    cfg.arb_live_ok = True
+    cfg.caps.max_exposure_usd = 180.0
+    cfg.bankroll_usd = 256.0
+    r = runner_mod.Runner(cfg, led, log=lambda *_: None)
+    r.executor.place_arb_set = lambda legs: {"ok": True}
+
+    for i in range(5):                       # $100 already committed
+        led.add_signal(Signal("weather_obs", "us", f"x{i}", f"x{i}", "BUY_YES", 0.5, 20.0, 5.0, "r"), "live")
+    assert led.exposure_usd("us", None, live_only=True) == 100.0
+
+    def legs(each, tag):
+        return [Signal("bucket_sum", "us", f"{tag}{i}", f"{tag}{i}", "BUY_YES", 0.5, each, 9.0,
+                       "set", taker=True, arb=True, meta={"group": tag}) for i in range(6)]
+
+    # $120 on top of $100 breaches the $180 cap, even though every leg passes alone.
+    assert all(r.risk.allow(s, mode="live")[0] for s in legs(20.0, "big"))
+    assert r.handle_arb_set(legs(20.0, "big")) == 0
+    assert led.exposure_usd("us", None, live_only=True) == 100.0      # nothing recorded
+
+    # A set that genuinely fits is still taken.
+    assert r.handle_arb_set(legs(10.0, "ok")) == 6
+    assert led.exposure_usd("us", None, live_only=True) == 160.0
+
+
 def test_an_arb_rearms_in_minutes_while_a_view_stays_locked_for_hours():
     """The 3-hour dedupe exists because a directional module re-entered the same bucket every 3
     hours and turned a $20 call into a $60 one. An arb is not a view: a set pays $1 whatever

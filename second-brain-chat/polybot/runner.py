@@ -380,8 +380,24 @@ class Runner:
             if not ok:
                 self.log(f"    refused arb set {sigs[0].label}: leg {s.label}: {why}")
                 return 0
-        legs = [(self.ledger.add_signal(s, mode), s) for s in sigs]
+        # The per-leg risk check cannot see its siblings. Every leg is measured against the SAME
+        # exposure baseline, because none of them is recorded until they all pass — so six legs of
+        # $20 each sail through individually and then put $120 on a book that only had $80 of room.
+        # Proved against live settings: existing exposure $100, a $120 set, all six legs "ok",
+        # resulting exposure $220 against a $180 cap. A set is one decision and has to be measured
+        # as one.
         cost = sum(s.size_usd for s in sigs)
+        if mode == "live":
+            total = self.ledger.exposure_usd("us", None, live_only=True)
+            if total + cost > self.cfg.caps.max_exposure_usd + 1e-9:
+                self.log(f"    refused arb set {sigs[0].label}: set ${cost:.2f} + open ${total:.2f} "
+                         f"over exposure cap ${self.cfg.caps.max_exposure_usd:.0f}")
+                return 0
+            # Only the exposure cap needs the set-level view. The bankroll floor compares account
+            # VALUE to the floor, which is identical for every leg, so risk.allow already has it —
+            # inventing a stricter "keep the floor uncommitted" rule here would quietly change a
+            # limit Alex set.
+        legs = [(self.ledger.add_signal(s, mode), s) for s in sigs]
         self.log(f"    {mode.upper():<6} arb set {sigs[0].module} {len(sigs)} legs, {sigs[0].contracts} sets, "
                  f"${cost:.2f} in for $1.00/set out — {sigs[0].reason}")
         profit = (sigs[0].edge_cents / 100.0) * sigs[0].contracts
