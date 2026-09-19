@@ -1060,6 +1060,37 @@ def test_sell_all_is_sized_on_what_a_leg_costs_not_on_the_bid():
     assert r.handle_arb_set(sigs) == len(sigs)
 
 
+def test_one_books_failure_does_not_abort_the_whole_sweep():
+    """_scan_one guards its context build, but the arb screen after it — price_legs, fill_depth —
+    was unprotected, so one timed-out request took the entire sweep down:
+
+        17:52:22  arb sweep error: Request timed out.   (httpx, raised inside scan_weather)
+
+    Ten books went unscreened because one of them was slow."""
+    from polybot import runner as runner_mod
+
+    cfg, led = _cfg(), _ledger()
+    cfg.modes["bucket_sum"] = "paper"
+    r = runner_mod.Runner(cfg, led, log=lambda *_: None)
+    r.us = type("V", (), {"available": True,
+                          "prefetch_weather_events": lambda self, t: 0})()
+    seen = []
+
+    def flaky(city, kind, off, *a):
+        seen.append(city)
+        if city == "miami":
+            raise RuntimeError("Request timed out.")
+        return 1
+
+    r._scan_one = flaky
+    cities = ["nyc", "chicago", "miami", "los-angeles", "san-francisco"]
+    n = r.scan_weather(cities=cities, modules=["bucket_sum"], venue="us",
+                       kinds=("high",), day_offsets=(0,))
+
+    assert set(seen) == set(cities)        # every book still got its turn
+    assert n == 4                          # the four that worked still counted
+
+
 def test_a_slow_scan_pass_abandons_its_tail_instead_of_holding_the_loop():
     """Arb episodes last about a minute, so five cities scanned slowly are worth less than three
     scanned now. On 2026-09-19 a pass stalled after its first city -- no error, no rate limit, just

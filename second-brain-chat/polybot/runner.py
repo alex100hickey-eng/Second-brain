@@ -521,7 +521,17 @@ class Runner:
             # stamp here the watchdog cannot tell a slow pass from a hung socket — which is why
             # its limit had to be set generously enough to sit through most of a real stall.
             self._heartbeat = time.time()
-            n += self._scan_one(city, kind, day_offset, wanted, light, venue, date)
+            try:
+                n += self._scan_one(city, kind, day_offset, wanted, light, venue, date)
+            except Exception as exc:
+                # One book's bad luck is not the other nine books' problem. _scan_one guards its
+                # context build, but the arb screen after it — price_legs, fill_depth — was
+                # unprotected, so a single timed-out request took the WHOLE sweep down:
+                #   17:52:22  arb sweep error: Request timed out.  (httpx, inside scan_weather)
+                # Ten books went unscreened because one of them was slow. Log it, move on, and
+                # let the next book have its turn.
+                self.log(f"  {venue} {city} {kind} +{day_offset}d: scan failed ({exc}) — "
+                         f"skipping this book, continuing the sweep")
         if skipped:
             self.log(f"  us scan over its {self.cfg.arb_pass_budget_s:.0f}s budget — skipped "
                      f"{skipped} city-day(s); next tick starts fresh")
