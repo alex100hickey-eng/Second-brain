@@ -242,11 +242,12 @@ def size_for_profit(buckets, kind: str, cfg, days=None):
     if any(l is None for l in ladders):
         return 0, [], 0.0
     deepest = int(min((sum(q for _, q in l) for l in ladders), default=0))
-    best = (0, [], 0.0, 0.0)          # contracts, prices, net_cents, total_profit
-    for n in _candidate_sizes(deepest):
+
+    def evaluate(n):
+        """(prices, net_cents, set_cost) for exactly n sets, or None if n is not worth taking."""
         prices = [limit_for(l, n) for l in ladders]
         if any(px is None for px in prices):
-            continue
+            return None
         if kind == "buy_all":
             cost = sum(prices) + sum(fees.leg_cost(px, 1, "us", maker=False, theta=b.fee_coefficient)
                                      for px, b in zip(prices, buckets))
@@ -258,11 +259,19 @@ def size_for_profit(buckets, kind: str, cfg, days=None):
             net = (proceeds - 1.0) * 100
             set_cost = len(buckets) - sum(prices)
         if net <= 0 or set_cost <= 0:
-            continue
+            return None
         if net < cfg.arb_unwind_cover * unwind_cost_cents(buckets, kind):
-            continue
+            return None
         if days is not None and (net / set_cost) / max(float(days), 0.5) < cfg.arb_min_roc_per_day_pct:
+            return None
+        return prices, net, set_cost
+
+    best = (0, [], 0.0, 0.0)          # contracts, prices, net_cents, total_profit
+    for n in _candidate_sizes(deepest, ladders):
+        ev = evaluate(n)
+        if ev is None:
             continue
+        prices, net, set_cost = ev
         # Two different questions: how much capital this ties up, and how much it can lose.
         unwind = unwind_cost_cents(buckets, kind) / 100.0
         by_risk = cfg.arb_max_risk_usd / unwind if unwind > 0 else cfg.arb_max_sets
@@ -270,18 +279,52 @@ def size_for_profit(buckets, kind: str, cfg, days=None):
                          cfg.caps.max_exposure_usd / set_cost, by_risk, cfg.arb_max_sets))
         if capped < 1:
             continue
+        if capped < n:
+            # Price what we are actually going to buy. The ladder is CHEAPER for fewer contracts,
+            # so costing a capped set at the un-capped size understates its net and can refuse a
+            # set that comfortably clears the filters at the size we would really take.
+            ev = evaluate(capped)
+            if ev is None:
+                continue
+            prices, net, _ = ev
         total = (net / 100.0) * capped
         if total > best[3]:
             best = (capped, prices, round(net, 2), total)
     return best[0], best[1], best[2]
 
 
-def _candidate_sizes(deepest: int):
-    """Sizes worth evaluating. The ladder only changes price at level boundaries, so a geometric
-    sweep finds the optimum without walking every integer up to several hundred."""
+def _candidate_sizes(deepest: int, ladders=None, cap: int = 400):
+    """Sizes worth evaluating: every point where SOME leg's price changes.
+
+    A set's cost is flat in n between ladder boundaries and jumps at them, so total profit is
+    piecewise-linear with its breakpoints exactly at cumulative depths — the optimum is always AT
+    one of them. The old geometric sweep (1, 2, 3, 4, 6, 8, 11 ...) only landed on a breakpoint by
+    luck, and it got coarser precisely where the sets get big.
+
+    Measured on the ladders recorded on 2026-09-19: it took 62 sets where 75 were available at the
+    same price, and 104 where 125 were. Across the day's stored books that is $28.86 against
+    $34.54 — a fifth of the money, left on the table by the search rather than by the market.
+
+    `cap` bounds the work on a pathological book; the geometric sweep remains the fallback when
+    there are no ladders to read.
+    """
     if deepest < 1:
         return []
-    out, n = [], 1
+    pts = set()
+    for l in (ladders or []):
+        run = 0.0
+        for _, q in l:
+            run += q
+            if 1 <= run <= deepest:
+                pts.add(int(run))
+    if pts:
+        pts.add(deepest)
+        if len(pts) > cap:                # keep the extremes, thin the middle
+            ordered = sorted(pts)
+            step = len(ordered) / cap
+            pts = {ordered[int(i * step)] for i in range(cap)} | {ordered[0], ordered[-1]}
+        return sorted(pts)
+    out, n = [], 1                        # no ladders: fall back to the old sweep
     while n <= deepest:
         out.append(n)
         n = max(n + 1, int(n * 1.3))
