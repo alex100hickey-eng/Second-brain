@@ -1010,6 +1010,31 @@ def sent_domains() -> dict:
     return out
 
 
+# Gmail stops honouring a search string somewhere around two thousand characters. The watch
+# list is every brand emailed and not yet replied or closed out, so it grows with the send rate:
+# at 33 sends the query was 649 chars, but a three-touch sequence keeps a brand on the list for
+# about eight days, so 10/day settles near 80 domains and 20/day near 160 — roughly 1,500 and
+# 3,000 characters. One query would have crossed the limit precisely as volume ramped, and the
+# failure is silent: the fetch raises, the old code returned [], and "no replies" is what you see
+# whether nobody answered or the watcher stopped working. So the query is split.
+QUERY_CHAR_BUDGET = 1200          # well under the limit; the cost of an extra fetch is nothing
+
+
+def _domain_chunks(domains: list, budget: int = QUERY_CHAR_BUDGET) -> list:
+    """Batches whose joined query stays comfortably short. Never drops a domain."""
+    chunks, cur, size = [], [], 0
+    for d in domains:
+        add = len(d) + 4                                    # the " OR " between terms
+        if cur and size + add > budget:
+            chunks.append(cur)
+            cur, size = [], 0
+        cur.append(d)
+        size += add
+    if cur:
+        chunks.append(cur)
+    return chunks
+
+
 def detect_prospect_replies(fetch, seen: set = None) -> list:
     """Find inbound mail from brands Alex pitched. `fetch(query)` -> [msg dicts].
 
@@ -1024,11 +1049,16 @@ def detect_prospect_replies(fetch, seen: set = None) -> list:
     if not watch:
         return []
     seen = seen or set()
-    query = ("from:(" + " OR ".join(sorted(watch)) + ") newer_than:2d")
-    try:
-        msgs = fetch(query) or []
-    except Exception:
-        return []
+    msgs = []
+    for chunk in _domain_chunks(sorted(watch)):
+        query = "from:(" + " OR ".join(chunk) + ") newer_than:2d"
+        try:
+            msgs.extend(fetch(query) or [])
+        except Exception as e:                              # noqa: BLE001
+            # Was a bare `return []`, which reported "no replies" and "the query broke" with
+            # the same value. Keep going through the other chunks — losing one batch is bad,
+            # losing every brand because the first batch failed is worse — and say so.
+            print(f"prospect reply query failed for {len(chunk)} domain(s): {str(e)[:160]}")
     hits = []
     for m in msgs:
         if not isinstance(m, dict):
