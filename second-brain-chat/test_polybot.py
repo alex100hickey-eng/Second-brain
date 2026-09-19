@@ -1040,6 +1040,34 @@ def test_sell_all_is_sized_on_what_a_leg_costs_not_on_the_bid():
     assert r.handle_arb_set(sigs) == len(sigs)
 
 
+def test_hopeless_candidates_are_refused_before_the_depth_call_is_paid_for():
+    """The depth read is the expensive half of the screen -- one book call per leg. The two tests
+    that kill most candidates need only prices and a settlement date, so running them afterwards
+    meant paying five calls every two minutes to re-refuse the same boc set: ~1,200 calls a day
+    for an answer that never changes."""
+    from polybot.strategies.bucket_sum import worth_confirming
+    cfg = _cfg()
+    ev = _event()
+
+    def book(bid, ask):
+        for b in ev.buckets:
+            b.best_bid, b.best_ask = bid, ask
+        return ev.buckets
+
+    # a set that cannot pay for its own unwind is refused without touching the book
+    assert not worth_confirming(book(0.09, 0.10), 7.0, cfg)
+    # one that can, is confirmed
+    assert worth_confirming(book(0.08, 0.09), 16.0, cfg)
+    # a cheap set held for six weeks is still fine -- 16c on $0.81 is 0.51%/day even at 39 days
+    assert worth_confirming(book(0.08, 0.09), 16.0, cfg, days=39.0)
+    # the boc shape is the one that fails: selling nine legs bid at 0.20 ties up $7.20 a set, so
+    # the same 16c is 2.2% on capital and 0.06%/day over 39 days -- fine on cents, hopeless on time
+    assert not worth_confirming(book(0.20, 0.21), 16.0, cfg, days=39.0)
+    assert worth_confirming(book(0.20, 0.21), 16.0, cfg, days=1.25)
+    # below the flat floor it never gets that far
+    assert not worth_confirming(book(0.08, 0.09), 0.2, cfg, days=1.25)
+
+
 def test_arb_must_pay_for_its_own_unwind():
     """A set that half-fills is unwound by selling every filled leg back at the bid -- one full
     spread each. The first real set (chicago, 2026-09-19) paid 6.0c against 20c of spread across

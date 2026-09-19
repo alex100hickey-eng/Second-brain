@@ -66,7 +66,7 @@ def _days_until(iso: str | None) -> float | None:
         return max((when - datetime.now(timezone.utc)).total_seconds() / 86400.0, 0.5)
     except (ValueError, TypeError):
         return None
-from .strategies.bucket_sum import BucketSum, arb_check, arb_possible, unpriced
+from .strategies.bucket_sum import BucketSum, arb_check, arb_possible, unpriced, worth_confirming
 from .strategies.hold_favorites import HoldFavorites
 from .strategies.leadlag import LeadLag
 from .strategies.maker_rewards import MakerRewards
@@ -254,7 +254,8 @@ class Runner:
             kind, net, _ = arb_check(buckets, "us", assume_exhaustive=True)
             for b in buckets:
                 self.ledger.add_snapshot("us", b.yes_token, b.best_bid, b.best_ask, b.last)
-            if kind is None or net < self.cfg.bucket_sum_min_net_cents:
+            days = _days_until((e or {}).get("endDate"))
+            if kind is None or not worth_confirming(buckets, net, self.cfg, days):
                 continue
             self.us.fill_depth_buckets(buckets)
             self.log(f"  arb candidate us {slug} {kind} {net:.1f}c/set ({len(buckets)} legs)")
@@ -263,7 +264,7 @@ class Runner:
                                          bid_qty=b.bid_qty, ask_qty=b.ask_qty)
             ctx = _UniverseCtx(event=_Ev(slug, buckets), venue="us", city=row["series"],
                                date=slug[-10:], kind=row["category"] or "event",
-                               settles_in_days=_days_until((e or {}).get("endDate")))
+                               settles_in_days=days)
             n += self.handle_arb_set(list(self.arb.scan(ctx)))
         return n
 
@@ -430,7 +431,8 @@ class Runner:
                     self.log(f"  arb screen {venue} {city} {ctx.date} {kind}: priced {got} unquoted "
                              f"leg(s) from the book")
             arb_kind, net, _ = arb_check(ctx.event.buckets, venue)
-            if arb_kind is not None and net >= self.cfg.bucket_sum_min_net_cents:
+            if arb_kind is not None and worth_confirming(ctx.event.buckets, net, self.cfg,
+                                                         getattr(ctx, "settles_in_days", None)):
                 got = self.us.fill_depth(ctx.event)
                 self.log(f"  arb candidate {venue} {city} {ctx.date} {kind} {arb_kind} {net:.1f}c/set — "
                          f"depth {'read' if got else 'INCOMPLETE, standing down'}")

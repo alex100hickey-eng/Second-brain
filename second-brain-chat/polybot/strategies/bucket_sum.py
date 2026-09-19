@@ -151,6 +151,40 @@ def sets_available(buckets, kind: str) -> float | None:
     return max(0.0, min(qtys))
 
 
+def worth_confirming(buckets, net: float, cfg, days=None) -> bool:
+    """Is this candidate worth spending a book call per leg to confirm?
+
+    The depth read is the expensive half of the screen, and the two tests that kill most
+    candidates — unwind cover and return per dollar-day — need only prices and a settlement date.
+    Running them after the depth read meant paying five calls every two minutes to re-refuse the
+    same structurally hopeless boc set: ~1,200 calls a day for an answer that never changes.
+    Same rules as `BucketSum.scan`, which keeps them as the hard rail.
+    """
+    if net < cfg.bucket_sum_min_net_cents:
+        return False
+    spreads = [(b.best_ask - b.best_bid) * 100 for b in buckets
+               if b.best_ask is not None and b.best_bid is not None]
+    if len(spreads) == len(buckets) and net < cfg.arb_unwind_cover * sum(spreads):
+        return False
+    if days is not None:
+        set_cost = _set_cost(buckets, net)
+        if set_cost and (net / set_cost) / max(float(days), 0.5) < cfg.arb_min_roc_per_day_pct:
+            return False
+    return True
+
+
+def _set_cost(buckets, net: float) -> float:
+    """Cost of one set in whichever direction the net came from — asks if buying, (1-bid) if
+    selling. Only used for the cheap screen; `scan` recomputes it from the chosen direction."""
+    asks = [b.best_ask for b in buckets]
+    bids = [b.best_bid for b in buckets]
+    if all(a is not None for a in asks) and sum(asks) < 1.0:
+        return sum(asks)
+    if all(x is not None for x in bids):
+        return len(buckets) - sum(bids)
+    return 0.0
+
+
 class BucketSum(Strategy):
     name = "bucket_sum"
 
