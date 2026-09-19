@@ -744,3 +744,26 @@ def test_an_unknown_age_never_blocks_a_send(monkeypatch, quiet_log):
     monkeypatch.setattr(sfd, "_shared", _FakeShared(queue))
     monkeypatch.setattr(sfd, "current_cap", lambda: (10, "pinned"))
     assert sfd.release_first_touches(_FakeOutbox(), "https://mail") == ["Brand1", "Brand2"]
+
+
+def test_nudge_wires_proactive_on_the_mac_without_clobbering_a_real_init(monkeypatch):
+    """The nudge is how Alex vetoes a send inside the 3 h window, so it must not be best-effort.
+    On the Mac proactive was never initialised, so every send_nudge raised and fell through to
+    raw ntfy — delivering, but without dedup or re-nudging."""
+    import types
+    fake = types.ModuleType("proactive")
+    fake.intake_mod = None
+    fake.LOCAL_TZ = None
+    calls = {}
+    fake.send_nudge = lambda *a, **k: calls.setdefault("sent", True) and ""
+    monkeypatch.setitem(__import__("sys").modules, "proactive", fake)
+    monkeypatch.setattr(sfd, "_shared", object())
+    sfd.nudge("t", "b")
+    assert fake.intake_mod is sfd._shared, "should wire the intake module it actually needs"
+    assert fake.LOCAL_TZ is sfd.LOCAL_TZ
+
+    # A module already initialised (the server) must be left exactly as it is.
+    real_intake, real_tz = object(), object()
+    fake.intake_mod, fake.LOCAL_TZ = real_intake, real_tz
+    sfd.nudge("t", "b")
+    assert fake.intake_mod is real_intake and fake.LOCAL_TZ is real_tz

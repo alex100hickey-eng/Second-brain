@@ -455,6 +455,17 @@ def nudge(title: str, body: str) -> None:
     sys.path.insert(0, CHAT)
     try:
         import proactive  # type: ignore
+        # proactive.send_nudge only needs the intake module (for the config and the sent-ledger)
+        # and a timezone — not the Claude client or the tool dispatcher that full init() wants.
+        # On the server app.py does the full init; on the Mac nothing ever did, so every nudge
+        # from this job died with "'NoneType' object has no attribute '_load_state'" and fell
+        # through to raw ntfy. That still delivers, but it loses deduplication and re-nudging,
+        # so the one notification that lets Alex veto a send became best-effort. Wire the two
+        # globals it actually uses, and only when they are unset, so a real init always wins.
+        if getattr(proactive, "intake_mod", None) is None and _shared is not None:
+            proactive.intake_mod = _shared
+        if getattr(proactive, "LOCAL_TZ", None) is None:
+            proactive.LOCAL_TZ = LOCAL_TZ
         reason = proactive.send_nudge("splitframe-daily", title, body, priority="high",
                                       tags="envelope", force=True)
         if not reason:
