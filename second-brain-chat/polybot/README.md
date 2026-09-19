@@ -144,7 +144,11 @@ tuned from data. Output: `backtest-latest.json` + a summary in the log.
   off the same sensor), `hourly` reads the METAR column via aviationweather.gov. The 5-minute feed prints
   1-2°F above the hourly METAR (KSFO 2026-09-12: 72 vs a 70-71 settlement), which is why the first paper
   day's offshore "dead" and "locked" buckets went the wrong way.
-- Polymarket US fees (2026-07-01): taker 0.06·p·(1−p), maker rebate 0.0125·p·(1−p).
+- Polymarket US fees: the July schedule documented taker 0.06·p·(1−p), but every live market
+  reports its own **`feeCoefficient: 0.0695`** (checked across all 30 US weather markets,
+  2026-09-19). The venue's number is what gets charged, and fees are ~30% of an arb's gross
+  edge, so `fees.py` prefers the per-market coefficient and only falls back to the constant.
+  Maker rebate 0.0125·p·(1−p) (unchanged).
 - **Response shapes that have already cost us.** `GET /v1/event/slug/{slug}` answers `{"event": {...}}`
   and `GET /v1/market/slug/{slug}` answers `{"market": {...}}`, while `search.query` answers them bare;
   reading `markets` off the envelope found nothing, so every weather lookup fell through to a second
@@ -153,5 +157,46 @@ tuned from data. Output: `backtest-latest.json` + a summary in the log.
   every US book look one-sided, which is the exact shape that turns `(1 - post)` into phantom edge.
 - Polymarket US lists a **high** market per city per day and **no low market**. A 404'd event slug is
   remembered for an hour (`MISSING_EVENT_RETRY_S`) instead of being asked for every tick.
-- The US venue is scanned **4×/hour** (`minute % 15 == 10`), offshore once at `:55`. US signals are the
-  scarce resource — roughly one a day — and they are the only ones that can ever carry real money.
+- The *weather modules* scan US 4×/hour (`minute % 15 == 10`) and offshore once at `:55`. The **arb
+  sweep is separate and runs on seconds**, not minutes (`_arb_interval_s`): 20s through 09:00–16:59,
+  120s at 17:00 and overnight, 600s in the evening — 18:00–23:00 produced 0 opportunities in 281
+  observed event-minutes. It screens all ten books (5 cities × today+tomorrow) off ONE batched
+  `events.list` call. Measured 2026-09-19: median 21s per book, ~975 book-screens/hour, against ~150
+  before. There is no intra-day "peak": normalised by observation the rate of a positive net is flat
+  (2.7% over 12:00–15:00 vs 2.8% over 09:00–13:00, 1,450 event-minutes).
+
+## bucket_sum (the arb) — state at 2026-09-19, and what is still unknown
+
+The only module whose profit does not require out-forecasting anyone. Buy every leg of an
+exhaustive set for under $1, or sell every leg for over $1; exactly one leg pays $1.
+
+**Depth, not price, decides whether this is a business.** Prices show a positive net after fees on
+a few percent of observed event-minutes, and almost all of those are worth pennies because the
+binding leg holds one or two contracts. The cheap legs are not the problem — measured live, a 1c
+leg offered 505,171 contracts and a 3c leg 508 — so the leg that binds is always the *expensive*
+one, and that is the number we still do not have enough of.
+
+What is known:
+- Best book on record: chicago 2026-09-18 13:54, six legs at ask_sum 0.82, binding leg 21
+  contracts. 21 sets × 15.39c ≈ **$3.23**. It was refused live ("depth INCOMPLETE") because one
+  leg's book call lost the quota race; that is what `DEPTH_RESERVE` and the cooldown retry fix.
+- Bigger books exist and were never depth-read: mdwhigh 2026-09-17 sat at ask_sum **0.52** three
+  times between 14:20 and 14:56 (45.9c/set net), flickering on and off within minutes. Today's
+  code confirms and sizes it; at 20 contracts that is $9.18, and `arb_max_risk_usd` binds at 88
+  sets (~$40).
+- Every candidate now stores its **full ladder**, so the next fat book answers the depth question
+  from evidence rather than modelling. Do not quote a $/week figure until one is measured.
+
+Next levers, in order of expected value:
+1. **Direction-aware screening.** `price_legs` fires whenever a leg is missing *either* side, so we
+   routinely buy books for legs whose ask we already have just to learn a bid we only need for the
+   unwind estimate. Pricing only the side the plausible direction actually needs would cut most
+   screening calls — which matters because those calls compete with the depth read for one shared
+   campus-IP quota, and losing that race is what cost the best book on record.
+2. **Maker legs.** Taker is 0.0695·p(1−p) and the maker rebate is −0.0125: on the miami book that
+   swing is ~4.7c/set against a 13c gross edge. It needs resting orders and a partial-fill policy,
+   so it is a different strategy, not a tweak.
+3. **Live.** `arb_live_ok` is Alex's switch. The executor is ready (group placement, thinnest leg
+   first, execution-based fill detection, unwind of what actually filled) but **no order has ever
+   been sent**, so request/response shapes are checked against the SDK's types and nothing else.
+   The first live set should be small and watched.
