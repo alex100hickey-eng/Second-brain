@@ -496,8 +496,26 @@ class Runner:
                     self.log(f"  arb screen {venue} {city} {ctx.date} {kind}: priced {got} unquoted "
                              f"leg(s) from the book")
             arb_kind, net, _ = arb_check(ctx.event.buckets, venue)
-            if arb_kind is not None and worth_confirming(ctx.event.buckets, net, self.cfg,
-                                                         getattr(ctx, "settles_in_days", None)):
+            taken = False
+            if arb_kind is not None:
+                # Cheap filter before the expensive call, again. handle_arb_set re-arms a set
+                # after arb_dedupe_s, but it does that AFTER the depth read — so an episode that
+                # persists costs six calls a sweep to confirm something already decided. Miami on
+                # 2026-09-19 produced candidates at 13:57:40, 13:58:14, 13:58:47 and 13:59:20;
+                # the first was taken and the rest each paid six calls to be refused. That quota
+                # is shared with every other book, and a depth read losing it is exactly what
+                # stood down the best set on record.
+                side = "BUY_YES" if arb_kind == "buy_all" else "BUY_NO"
+                taken = any(self.ledger.recent_signal_exists("bucket_sum", b.yes_token, side,
+                                                             self.cfg.arb_dedupe_s)
+                            for b in ctx.event.buckets)
+            if taken:
+                # Skip the confirm, not the whole scan: `wanted` can carry the weather modules too
+                # (scan_weather with modules=None), and they have their own work to do here.
+                self.log(f"  arb candidate {venue} {city} {ctx.date} {kind} {arb_kind} "
+                         f"{net:.1f}c/set — already taken this episode, not re-confirming")
+            elif arb_kind is not None and worth_confirming(ctx.event.buckets, net, self.cfg,
+                                                           getattr(ctx, "settles_in_days", None)):
                 got = self.us.fill_depth(ctx.event)
                 self.log(f"  arb candidate {venue} {city} {ctx.date} {kind} {arb_kind} {net:.1f}c/set — "
                          f"depth {'read' if got else 'INCOMPLETE, standing down'}")

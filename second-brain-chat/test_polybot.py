@@ -1701,6 +1701,41 @@ def test_the_best_book_on_record_is_sized_and_taken():
     assert contracts * net_n / 100 >= cfg.arb_min_profit_usd
 
 
+def test_an_already_taken_episode_does_not_pay_for_another_depth_read(monkeypatch):
+    """The depth read is six calls and the dedupe lived AFTER it, so an episode that persists paid
+    six calls a sweep to confirm a set already decided. Miami on 2026-09-19 produced candidates at
+    13:57:40, 13:58:14, 13:58:47 and 13:59:20; the first was taken and the rest each bought a depth
+    read to be refused — and at 13:59:53 the venue rate-limited us. That quota is shared with every
+    other book, and a depth read losing it is exactly what stood down the best set on record."""
+    from polybot import runner as runner_mod
+    from polybot.strategies.base import Signal
+
+    cfg, led = _cfg(), _ledger()
+    cfg.modes["bucket_sum"] = "paper"
+    cfg.arb_dedupe_s = 180.0
+    r = runner_mod.Runner(cfg, led, log=lambda *_: None)
+
+    # Record a set on these legs, as handle_arb_set would have.
+    legs = ["tc-a", "tc-b", "tc-c"]
+    for m in legs:
+        led.add_signal(Signal("bucket_sum", "us", m, m, "BUY_YES", 0.30, 0.60, 9.0, "set",
+                              taker=True, arb=True, meta={"group": "g"}), "paper")
+
+    assert all(led.recent_signal_exists("bucket_sum", m, "BUY_YES", cfg.arb_dedupe_s) for m in legs)
+    # ...and the opposite side is NOT suppressed: a sell-side set on the same book is a
+    # different trade, not a repeat of this one.
+    assert not any(led.recent_signal_exists("bucket_sum", m, "BUY_NO", cfg.arb_dedupe_s)
+                   for m in legs)
+    # ...nor is an untouched book.
+    assert not led.recent_signal_exists("bucket_sum", "tc-other", "BUY_YES", cfg.arb_dedupe_s)
+
+    # Once the window passes, the next episode is confirmable again.
+    led.conn.execute("UPDATE signals SET ts = ts - ?", (cfg.arb_dedupe_s + 10,))
+    led.conn.commit()
+    assert not any(led.recent_signal_exists("bucket_sum", m, "BUY_YES", cfg.arb_dedupe_s)
+                   for m in legs)
+
+
 def test_an_arb_rearms_in_minutes_while_a_view_stays_locked_for_hours():
     """The 3-hour dedupe exists because a directional module re-entered the same bucket every 3
     hours and turned a $20 call into a $60 one. An arb is not a view: a set pays $1 whatever
