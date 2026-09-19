@@ -1,0 +1,195 @@
+======================================================================
+[Court movement] Movement - Drive Position
+======================================================================
+MOVEMENT - DRIVE POSITION
+Morning, 10 min, no ball. Low = low in stride: front shin forward, back leg long, chest tall, front heel down.
+Rotate A, B, C.   LAST: ___
+
+DAILY - 3 min, no rest
+Deep Split Stance Hold - 2x20s ea
+Low Stride Walk - 2x10 strides, hold the bottom of each 2s
+Wall Drive Hold - 2x15s ea
+Ankle Rock in Stride - 2x8 ea
+
+A - DECELERATION - rest 45s
+3-Step Drive to 2-Step Stop - 4x ea
+3-Step Drive to 1-Step Stop - 4x ea
+Stop and Go, Same Direction - 3x ea
+Stop and Go, Opposite Direction - 3x ea
+Stop on the Inside Foot - 3x ea
+Stop on the Outside Foot - 3x ea
+Hold every stop 2s. A hop or a second foot to catch it does not count.
+
+B - DISSOCIATION - rest 45s
+Arc Run, Chest to the Rim - 4x ea way
+Crossover Step to Re-Plant - 4x8 ea
+Drop Step and Open Hip Run - 4x ea
+Snake Run Through 4 Cones, Shoulders Square - 4x ea way
+Zig-Zag Drive Stride, Torso Still - 3x ea way
+Hips turn. Chest stays quiet.
+
+C - OFF AXIS AND RHYTHM - rest 45s
+Single-Leg Landing from an Angle - 3x3 ea
+Off-Balance Recovery Step - 3x5 ea
+Half Speed to Full Speed to Stop - 4x ea
+Full Speed to Half Speed to Full Speed - 4x ea
+Stutter to Burst - 4x ea
+Stick every landing 2s, second foot never touches.
+
+PROGRESS
+A - shorten the stop, never lengthen the run-in. B - faster, same quiet chest. C - steeper angle, less warning.
+Daily holds - add 5s when the last rep looks like the first, cap 30s.
+
+FIRST SESSION OF THE MONTH
+Lane agility ___ s
+5-10-5 ___ s / ___ s
+Steps to stop from a full-court sprint ___
+Split stance hold to failure ___ s / ___ s
+
+======================================================================
+[Court movement] Defense
+======================================================================
+DEFENSE
+25-30 min, after the bag. Nothing here is scored on makes. 2-3 drills a session, levels per drill.
+Hips come up, the rep is over.
+
+1. CLOSEOUT STOP                                              NOW: L___
+Sprint at the target, stop on a dime, hold it, live with what comes next.
+  L1  From 10 ft, stop on two feet, hold 2s
+  L2  From the arc
+  L3  Full sprint from half court
+  L4  Stop on ONE foot and hold
+  L5  Stop, then contain - three slides, no rise
+  L6  Direction called late, as you arrive
+  L7  Arrive on a bad angle, off balance, still stop
+  L8  After conditioning
+
+2. STAY LOW THROUGH THE ACTION                                NOW: L___
+Four chairs as screens and bodies. Navigate the path without your hips rising once. Tape a mark at stance height.
+  L1  Walk the path low
+  L2  Game speed
+  L3  Eyes up on a fixed point
+  L4  Tighter path
+  L5  A direction change at every chair
+  L6  Height standard the entire way, no exceptions
+  L7  Tired
+
+3. ALL WAYS                                                   NOW: L___
+Slide, sprint, backpedal, open-hip run, re-plant. The transitions between them are the skill.
+  L1  Four modes in a fixed order
+  L2  Random order
+  L3  Called late, already moving
+  L4  Full speed
+  L5  No stutter step between modes, ever
+  L6  A chair mid-sequence
+  L7  Tired
+
+4. BEATEN AND BACK                                            NOW: L___
+Start already beaten. Re-accelerate, take the angle to the SPOT, get back in front.
+  L1  Start at his hip
+  L2  Start a full step beaten
+  L3  Start turned the wrong way
+  L4  Start with your back to the ball - find it, then go
+  L5  Recovery angle called late
+  L6  From a dead stop
+  L7  Start further beaten every session
+
+READS HALF - Split Second: On Ball, Ball Screen D, Transition D, Recover and Slide, Flip and Go, Chase.
+Help, rotations, low man - practice only.
+
+======================================================================
+[Court movement] DEFENSE READS - Split Second
+======================================================================
+DEFENSE READS - SPLIT SECOND
+All built and live in the app. Full spec: training-app/split-second-defense.json.
+Section = the situation you already know. Call = what the offense shows you. Move on the countdown, find out as the call lands.
+
+ON BALL - contain, beat him to the spot, hip to hip, no rise
+  Left / Right / Cross / Hesi / Snatch / Blow by
+
+BALL SCREEN D - say your coverage out loud before the rep
+  Come off / Reject / Snake / Split / Pull up / Re-screen
+
+TRANSITION D - sprint back, know who you have before you arrive
+  Ball / Rim / Deepest / Match / Trailer
+
+RECOVER AND SLIDE - slide, touch the floor, sprint back, go the way the call says
+  Left / Right / Left back / Right back
+
+FLIP AND GO - GO CUE mode. Slide in help, beep, flip the hips, sprint to the block or the backboard.
+CHASE - GO CUE + STOPWATCH. Set up curl or flare, beep, chase it, tap to stop. Race your own best time.
+
+Closeout D was cut - Recover and Slide covers it. The braking half is Closeout Stop on the Defense page.
+
+======================================================================
+[Court movement] RECORDING - Does It Sell
+======================================================================
+RECORDING - DOES IT SELL
+Sun, Mon, Fri, Sat. 10-15 min, END of the workout, never cold.
+Camera in FRONT of you at defender height. Tripod, slow-mo, tape the camera spot and your start spot.
+3-4 moves, 3 reps each. About a dozen clips, all watched back.
+
+Every clip gets one verdict:
+SELLS - a frame where the defender has to commit wrong
+DOESN'T SELL - nothing in it would have moved him
+CAN'T TELL - too slow, or the camera was in the wrong place
+
+One BEST REP clip per move. Beat it, replace it. Same angle every time.
+Didn't sell = the move you work next session.
+
+MOVES - your list, rotate through it
+___
+___
+___
+___
+
+LOG - date, move, verdict
+
+======================================================================
+[Court movement] Film Protocol
+======================================================================
+FILM PROTOCOL
+First session of every month, before the session, fresh. Same time of day every month.
+Tripod, never handheld. Slow-mo, 240fps if you have it. Landscape, full body, hip height.
+Tape the camera spot and your start spot. Leave the tape.
+
+THE SEQUENCE - always this order, no warm-up reps in the take
+1. Split stance hold, side view - 10s ea
+2. Low stride walk, side view - 4 strides
+3. 3-step drive to 1-step stop, side view - 2 ea
+4. Zig-zag drive stride, front view - 2 ea way
+5. Closeout to 3 slides, baseline view - 2 ea
+6. Single-leg landing from an angle, front view - 2 ea
+7. Drive and kick pass, baseline view - 2 ea
+
+One folder per month, named by date. Never delete one - the old months are the baseline.
+Analysis is not built. Film anyway - it runs over old months later. Months you skip are gone.
+
+LAST FILMED: ___
+
+======================================================================
+[Court movement] TO BUILD
+======================================================================
+TO BUILD - what is still open
+Cleaned 9/18. Everything done, dead, or overtaken by your 9/12-14 rewrite is gone. This is all that is left.
+
+ONLY YOU CAN WRITE THESE
+1. The move list on RECORDING - the moves you beat people with off the dribble. Four blanks since 8/31.
+2. Nothing on this tab has a number on it yet. Lifts and Good Drills do. NOW lines on Defense, LAST on Movement, monthly numbers, LAST FILMED.
+3. 50/50 Log - 0 rows. The Standard page sets your good-day line from your own first ten days. Ten days have not happened.
+
+YOUR CALL - placement
+4. Film + IQ - lives in Group workouts, on no day. You said night routine, 10 min.
+5. Compete + Fatigue - lives in Conditioning. Says end of bag work twice a week, names no days.
+6. Practice Intentions says pick ONE. PRACTICE - TRANSITION AND READS says pick TWO. One of them is wrong. That page also still names Reps Transition, deleted 8/31.
+
+PARKED BY YOU
+7. Tue - Pull + Trunk - "kinda sucks", come back to it.
+8. DRIBBLE BAG - fixed 3/4 gates, no bar, no number left behind. Good for now, your words.
+9. GROUP WORKOUT IDEAS - all contact and partner work. After the solo system is done.
+10. NERVOUS SYSTEM - Hot and Cold (Group workouts). Written 9/2, unread.
+
+SYSTEM SIDE - Claude builds, you say go
+11. The audition ledger. Game film capture, a per-game production line, and the contact ledger for the 13 D1 staffs before March. Named 9/12, not started.
+12. Rocco retest, week of 10/15, plus the same-day Google Form. Skipping his program and skipping his retest read differently to a coach.
+
