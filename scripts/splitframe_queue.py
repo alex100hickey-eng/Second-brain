@@ -237,17 +237,61 @@ def candidates_to_qualify(rows: list, today: str, limit: int = QUALIFY_BATCH) ->
     return out[:limit]
 
 
-def hunter_targets(rows: list) -> list:
-    """Qualified, in-band, and no real person's address yet — the next Hunter searches."""
+def hunter_targets(rows: list, queue: list = (), cycle_start: str = "") -> list:
+    """Qualified, in-band, still worth a Hunter search — and nothing else.
+
+    Hunter's free tier is 25 searches a CYCLE, so every wasted one is a brand that stays
+    nameless for a month. This returned 81 targets, and the top of the list was Obvi, Maxbone,
+    Moon Juice and Brightland — brands already emailed or already queued to send. Spending the
+    month's whole budget re-looking-up people who had already been written to would have left
+    the 23 unnamed draftable brands exactly as they were.
+
+    Two causes, both fixed here:
+      - Nothing excluded rows that were already contacted, queued, replied or closed out.
+      - The "do we already have a human?" test was `is_person(email)`, which only knows a
+        fixed list of first names. Obvi's `ankit@myobvi.com` is plainly a person and is not in
+        that list, so it read as "needs Hunter". `target_address` already answers this properly,
+        using the tracker's own contact_name as evidence, so ask it instead.
+    """
+    queued = {_c(e.get("to")).lower() for e in (queue or ())}
     out = []
     for r in rows:
-        if _c(r.get("status")) != "qualified" or is_person(r.get("email")):
+        if _c(r.get("status")) != "qualified":
+            continue
+        if _c(r.get("sent_date")) or _c(r.get("replied")) or _c(r.get("outcome")):
+            continue
+        _addr, tier = target_address(r)
+        if tier == "person":
+            continue                                   # a named human is already on the row
+        if {_c(r.get("email")).lower(), _c(r.get("email_generic")).lower()} & queued:
+            continue                                   # written and waiting to go out
+        if cycle_start and _c(r.get("email_checked"))[:10] >= cycle_start:
+            continue                                   # already spent a search this cycle
+        if _c(r.get("email_checked")) and tier == "":
+            # Hunter has run on this row and the only address it could offer is a ticket desk
+            # (target_address returns nothing for those). It already answered "no reachable
+            # person here" — ZitSticka's support@ is the standing example. Asking again next
+            # cycle spends a search on a question that has been answered.
             continue
         n, _ = known_count(r)
         if band(n) in ("zero", "big"):
             continue
         out.append({"brand": _c(r.get("brand")), "domain": _c(r.get("domain")),
-                    "known_count": n, "has_generic": bool(_c(r.get("email")))})
+                    "known_count": n, "band": band(n),
+                    "greetable": bool(greeting_for(tier, _c(r.get("contact_name")), _addr)),
+                    "has_generic": bool(_c(r.get("email")))})
+    # 25 searches a cycle against 58 candidates means the ORDER is the decision, and tracker
+    # order is just the order rows happened to be collected in. Spend them where a name is
+    # worth most: in-band brands first, then the smallest ad counts — a brand running eight ads
+    # is a few people and the founder reads their own mail, which is the whole reason a name
+    # beats a front desk. Unknown counts go last; they have not been read live.
+    # A brand whose about page already gave up a founder name can at least be greeted today;
+    # one with nothing has no way to open warm. With 25 searches against 58 candidates, the
+    # nameless ones need the search more, so they go first.
+    order = {"in": 0, "unknown": 1, "out": 2}
+    out.sort(key=lambda t: (order.get(t["band"], 3), t["greetable"],
+                            t["known_count"] if t["known_count"] is not None else 10_000,
+                            t["brand"].lower()))
     return out
 
 
@@ -817,7 +861,7 @@ def status_report(rows: list, queue: list, today: str) -> dict:
         "cap_why": cap_why,
         "next_targets": next_targets(rows, queue),
         "candidates_to_qualify": candidates_to_qualify(rows, today),
-        "hunter_targets": hunter_targets(rows),
+        "hunter_targets": hunter_targets(rows, queue),
         "next_close": next_close_variant(queue),
         "close_report": close_report(rows, queue),
         "bounces": recent_bounces(),

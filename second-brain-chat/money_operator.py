@@ -329,8 +329,12 @@ def splitframe_inputs(today: date) -> dict:
         queue = list((intake._load_state(sq.QUEUE_KEY) or {}).get("queue") or [])
         pending = sq.pending_entries(queue)
         targets = sq.next_targets(rows, queue)
-        hunters = sq.hunter_targets(rows)
-        used = hunter_used(rows, hunter_cycle_start(today))
+        cycle_start = hunter_cycle_start(today)
+        # Pass the queue and the cycle: without them the list still included brands already
+        # written and waiting to send, and rows whose search was already spent this cycle.
+        # At 25 searches a cycle that is the difference between naming the funnel and not.
+        hunters = sq.hunter_targets(rows, queue, cycle_start.isoformat())
+        used = hunter_used(rows, cycle_start)
         out.update({
             "ok": True, "pending": len(pending),
             "draftable_in_band": sum(1 for t in targets if t["band"] in ("in", "unknown")),

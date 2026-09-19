@@ -624,3 +624,76 @@ def test_revise_leaves_fields_alone_when_not_given():
     q = [_queued(close_variant="offer", offer_image="https://acme.com/a.jpg")]
     entry, problems = sq.plan_revise(q, "hello@acme.com", None, None, None, "acme.com")
     assert problems == [] and entry["subject"] == "s" and entry["body"] == "b"
+
+
+# ---------------------------------------------------------------------------
+# Hunter targets. The free tier is 25 searches a CYCLE, so every wasted one is a
+# brand that stays nameless for a month. This returned 81 targets led by Obvi,
+# Maxbone, Moon Juice and Brightland — all already emailed or already queued.
+# ---------------------------------------------------------------------------
+
+def _hrow(**kw):
+    base = {"brand": "Acme", "domain": "acme.com", "status": "qualified", "email": "",
+            "email_generic": "", "contact_name": "", "sent_date": "", "replied": "",
+            "outcome": "", "email_checked": "", "notes": "adlib 10 active [read live 2026-09-17]"}
+    base.update(kw)
+    return base
+
+
+def test_a_brand_already_emailed_is_not_worth_a_search():
+    rows = [_hrow(brand="Sent", sent_date="2026-09-17"),
+            _hrow(brand="Replied", replied="2026-09-18"),
+            _hrow(brand="Closed", outcome="no_response"),
+            _hrow(brand="Fresh")]
+    assert [t["brand"] for t in sq.hunter_targets(rows)] == ["Fresh"]
+
+
+def test_a_brand_queued_to_send_is_not_worth_a_search():
+    rows = [_hrow(brand="Queued", email_generic="hello@acme.com"), _hrow(brand="Fresh")]
+    queue = [{"to": "hello@acme.com"}]
+    assert [t["brand"] for t in sq.hunter_targets(rows, queue)] == ["Fresh"]
+
+
+def test_a_row_that_already_names_a_human_does_not_need_hunter():
+    """The old test was is_person(email), which only knows a fixed list of first names — so
+    Obvi's ankit@myobvi.com read as 'needs Hunter' despite plainly being a person."""
+    rows = [_hrow(brand="Obvi", email="ankit@myobvi.com", contact_name="Ankit Patel"),
+            _hrow(brand="Fresh")]
+    assert [t["brand"] for t in sq.hunter_targets(rows)] == ["Fresh"]
+
+
+def test_a_search_already_spent_this_cycle_is_not_repeated():
+    rows = [_hrow(brand="Done", email_checked="2026-09-25"), _hrow(brand="Fresh")]
+    assert [t["brand"] for t in sq.hunter_targets(rows, (), "2026-09-24")] == ["Fresh"]
+
+
+def test_hunter_does_not_re_answer_a_question_it_already_answered():
+    """ZitSticka: Hunter ran and the only address it could offer was support@. target_address
+    returns nothing for a ticket desk, so the row looks unreachable forever — asking again
+    next cycle spends a search on a settled question."""
+    rows = [_hrow(brand="ZitSticka", email="support@zitsticka.com",
+                  email_checked="2026-09-10"), _hrow(brand="Fresh")]
+    assert [t["brand"] for t in sq.hunter_targets(rows)] == ["Fresh"]
+    # but a ticket desk Hunter has NEVER been asked about is still worth a search
+    rows2 = [_hrow(brand="Untried", email="support@untried.com")]
+    assert [t["brand"] for t in sq.hunter_targets(rows2)] == ["Untried"]
+
+
+def test_searches_go_to_the_smallest_nameless_in_band_brands_first():
+    """25 searches against 58 candidates makes the ORDER the decision. A brand running eight
+    ads is a few people whose founder reads their own mail; one that already has a name from
+    its about page can at least be greeted today, so it needs the search less."""
+    rows = [
+        _hrow(brand="TooBig", notes="adlib 200 active [read live 2026-09-17]"),
+        _hrow(brand="Borderline", notes="adlib 90 active [read live 2026-09-17]"),
+        _hrow(brand="Named", email_generic="hello@named.com", contact_name="Gillian Ray",
+              notes="adlib 9 active [read live 2026-09-17]"),
+        _hrow(brand="Small", notes="adlib 8 active [read live 2026-09-17]"),
+        _hrow(brand="Mid", notes="adlib 30 active [read live 2026-09-17]"),
+    ]
+    got = [t["brand"] for t in sq.hunter_targets(rows)]
+    assert got[0] == "Small"
+    assert got.index("Mid") < got.index("Named"), "a nameless brand needs it more"
+    # 100+ active ads is an in-house creative team: excluded outright, not merely ranked last.
+    assert "TooBig" not in got
+    assert got[-1] == "Borderline", "the 51-100 band is a last resort, not a first pick"
