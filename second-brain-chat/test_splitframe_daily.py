@@ -708,3 +708,39 @@ def test_local_state_write_is_a_fallback_not_a_second_failure(monkeypatch):
 
 def test_state_path_is_beside_the_module_not_under_home():
     assert "~" not in sfd.STATE and "/root" not in sfd.STATE
+
+
+# ---------------------------------------------------------------------------
+# Stale drafts. A queued first touch states facts about a LIVE ad account, and
+# those facts rot: Ironcroft went 8 active ads -> 0 in the two days between the
+# read and the draft. The pitch only works because Alex says things a founder
+# can check and find true.
+# ---------------------------------------------------------------------------
+
+def test_a_draft_older_than_the_limit_is_held_not_sent(monkeypatch, quiet_log):
+    old = (datetime.now(sfd.LOCAL_TZ) - timedelta(days=sfd.STALE_DRAFT_DAYS + 1)).isoformat()
+    queue = [dict(_entry(1), queued_at=old), _entry(2)]
+    monkeypatch.setattr(sfd, "_shared", _FakeShared(queue))
+    monkeypatch.setattr(sfd, "current_cap", lambda: (10, "pinned"))
+    out = sfd.release_first_touches(_FakeOutbox(), "https://mail")
+    assert out == ["Brand2"], "the aged draft must not go out"
+    assert any("HELD" in line for line in quiet_log)
+
+
+def test_a_fresh_draft_is_unaffected(monkeypatch, quiet_log):
+    fresh = (datetime.now(sfd.LOCAL_TZ) - timedelta(hours=6)).isoformat()
+    queue = [dict(_entry(1), queued_at=fresh)]
+    monkeypatch.setattr(sfd, "_shared", _FakeShared(queue))
+    monkeypatch.setattr(sfd, "current_cap", lambda: (10, "pinned"))
+    assert sfd.release_first_touches(_FakeOutbox(), "https://mail") == ["Brand1"]
+
+
+def test_an_unknown_age_never_blocks_a_send(monkeypatch, quiet_log):
+    """Only a KNOWN old draft is held. A missing or unparseable queued_at must not quietly
+    stop the funnel — that would be a silent halt dressed as a safety feature."""
+    assert sfd._queued_age_days({}) == 0.0
+    assert sfd._queued_age_days({"queued_at": "not-a-date"}) == 0.0
+    queue = [dict(_entry(1), queued_at=""), dict(_entry(2), queued_at="garbage")]
+    monkeypatch.setattr(sfd, "_shared", _FakeShared(queue))
+    monkeypatch.setattr(sfd, "current_cap", lambda: (10, "pinned"))
+    assert sfd.release_first_touches(_FakeOutbox(), "https://mail") == ["Brand1", "Brand2"]

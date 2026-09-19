@@ -825,7 +825,8 @@ def cmd_creator(args) -> int:
     save_queue(q, queue)
     doc = record_creator_doc(name, args.to, args.subject, body, args.evidence, today)
     print(f"QUEUED (creator): {name} <{args.to}> draft {draft_id}; record "
-          f"{os.path.basename(doc)}. It goes on the next 07:30 release (5/day) with the 3 h hold.")
+          f"{os.path.basename(doc)}. It goes on the next morning release "
+          f"({current_per_day()[0]}/day) with the 3 h hold.")
     return 0
 
 
@@ -960,7 +961,8 @@ def cmd_add(args) -> int:
     write_tracker(rows, fields, "shift")
     doc = record_draft_doc(brand, args.to, args.subject, body, args.ad_count, args.evidence, today)
     print(f"QUEUED: {brand} <{args.to}> draft {draft_id}; tracker {', '.join(changes) or 'unchanged'}; "
-          f"record {os.path.basename(doc)}. It goes on the next 07:30 release (5/day) with the 3 h hold.")
+          f"record {os.path.basename(doc)}. It goes on the next morning release "
+          f"({current_per_day()[0]}/day) with the 3 h hold.")
     return 0
 
 

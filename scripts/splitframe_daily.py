@@ -572,6 +572,30 @@ def current_cap() -> tuple:
                  f"in the last {BOUNCE_WINDOW_DAYS}d")
 
 
+# A queued draft states facts about a brand's LIVE ad account — "about 21 active ads", "five of
+# them are the same post". Those facts rot. Ironcroft went from 8 active ads to 0 in the two days
+# between being read and being drafted, and the whole pitch rests on Alex only ever saying things
+# a founder can check and find true. The queue holds two release days of stock, so a draft should
+# never be more than a few days old when it goes; if it is, the release stalled and the right
+# answer is to re-read the account, not to send an aged claim.
+STALE_DRAFT_DAYS = 3
+
+
+def _queued_age_days(entry, now=None) -> float:
+    """How long this draft has been sitting. Unparseable or missing reads as 0 — an unknown age
+    must not silently block a send; only a KNOWN old one does."""
+    raw = (entry.get("queued_at") or "").strip()
+    if not raw:
+        return 0.0
+    try:
+        dt = datetime.fromisoformat(raw)
+    except ValueError:
+        return 0.0
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=LOCAL_TZ)
+    return ((now or datetime.now(LOCAL_TZ)) - dt).total_seconds() / 86400.0
+
+
 def _released_date(entry):
     """The NY-local calendar day this entry actually went out, or None if it never did.
 
@@ -620,7 +644,7 @@ def release_first_touches(outbox_mod, drafts_url: str, limit: int = None) -> lis
     if not pending:
         return []
     waiting = already_waiting(outbox_mod)
-    released, deferred, malformed = [], [], []
+    released, deferred, malformed, stale = [], [], [], []
     for entry in pending:
         if len(released) >= room:
             break
@@ -633,6 +657,13 @@ def release_first_touches(outbox_mod, drafts_url: str, limit: int = None) -> lis
             # entry would land on the SAME "gmail:studio:" row and all of them would be
             # marked released off that one id. Hold them and say so.
             malformed.append(entry.get("brand") or to or "(no recipient)")
+            continue
+        age = _queued_age_days(entry)
+        if age > STALE_DRAFT_DAYS:
+            # Held, not dropped: the email is fine, its FACTS are what expired. Sending "about
+            # 21 active ads" to a brand that now runs none is the one mistake this pitch cannot
+            # survive, and it is checkable in ten seconds by the person receiving it.
+            stale.append(f"{entry.get('brand') or to} ({age:.0f}d)")
             continue
         if to.lower() in waiting:
             # Deferred, NOT retired. This used to write a terminal "skipped" marker, so any
@@ -662,6 +693,9 @@ def release_first_touches(outbox_mod, drafts_url: str, limit: int = None) -> lis
     if malformed:
         log("first touch NOT released — queue entry has no draft_id/recipient, it cannot be "
             "sent by the one-tap path: " + ", ".join(malformed))
+    if stale:
+        log(f"first touch HELD — drafted more than {STALE_DRAFT_DAYS} days ago and its ad-library "
+            "claims may no longer be true; re-read the account and re-draft: " + ", ".join(stale))
     q["key"] = QUEUE_KEY
     q["queue"] = queue
     _shared._save_state(q)
