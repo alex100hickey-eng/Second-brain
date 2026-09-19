@@ -736,6 +736,16 @@ class USVenue:
         """
         if not self.available:
             raise RuntimeError(self.why_unavailable)
+        # Deliberately NOT spaced through the token bucket: an arb set is six orders that have to
+        # land together, and a leg waiting a full window is a leg that fills into a book which has
+        # moved. That looked dangerous — the depth read just spent the budget, so six unthrottled
+        # requests on top should have been refused around the sixth.
+        #
+        # It is not, because orders do not use the rate-limited host. The SDK routes authenticated
+        # calls to api.polymarket.us and market data to gateway.polymarket.us, and only the
+        # gateway is the Cloudflare front that throttles this campus IP. Measured 2026-09-19:
+        # eight back-to-back authenticated calls with no spacing, zero refusals, while the gateway
+        # still refuses the sixth. The order burst and the screening budget are separate.
         body = {
             "marketSlug": slug,
             "intent": self.INTENTS[side],

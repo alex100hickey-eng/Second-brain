@@ -2049,6 +2049,52 @@ _KILLED = {"id": "o", "executions": [{"type": "EXECUTION_TYPE_CANCELED",
                                       "order": {"state": "ORDER_STATE_CANCELED"}}]}
 
 
+def test_a_rate_limit_mid_set_aborts_and_unwinds_rather_than_stranding(monkeypatch):
+    """The most likely way the first live set fails.
+
+    place_limit deliberately bypasses the token bucket — an arb cannot wait a full window between
+    legs — but the depth read immediately before it has just spent about six calls. So the orders
+    go out unthrottled against a budget that is already empty, and a 429 partway through the set
+    is the realistic failure, not a hypothetical one.
+
+    What must NOT happen is silence: the legs already bought are a naked basket."""
+    from polybot import execution
+
+    class RateLimited(Exception):
+        status_code = 429
+
+    nudges, sent = [], []
+    monkeypatch.setattr(execution.notify, "nudge",
+                        lambda title, body, key=None, log=None: nudges.append(title))
+
+    class US:
+        available = True
+
+        def place_limit(self, market, side, price, contracts, tif=None):
+            sent.append((market, tif))
+            if tif == "fok" and market == "c":
+                raise RateLimited("<!doctype html>...You are being rate limited...")
+            return _fill(contracts)
+
+        def bbo(self, slug):
+            return 0.29, 0.31
+
+    led = _ledger()
+    ex = execution.Executor(led, US(), _cfg(), log=lambda *_: None)
+    legs = []
+    for nm, depth in (("a", 10.0), ("b", 20.0), ("c", 30.0), ("d", 40.0)):
+        sig = _arb_sig(nm, depth)
+        legs.append((led.add_signal(sig, "live"), sig))
+    out = ex.place_arb_set(legs)
+
+    assert out["ok"] is False
+    assert out["filled"] == 2                      # a and b bought before c was refused
+    assert ("d", "fok") not in sent                # and d was never sent
+    assert out["unwound"] == 2                     # both bought legs really sold back
+    assert "stranded" not in out and nudges == []  # nothing left unhedged, so nothing to shout about
+    assert {r["market"] for r in led.open_signals(module="bucket_sum")} == set()
+
+
 def test_an_unwind_that_did_not_fill_is_not_counted_as_unwound(monkeypatch):
     """An immediate-or-cancel unwind is killed exactly like the fill-or-kill that started the
     set, so "unwound" has to mean the contracts actually left — not that a request was sent. A
