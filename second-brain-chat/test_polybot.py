@@ -1172,6 +1172,30 @@ def test_hopeless_candidates_are_refused_before_the_depth_call_is_paid_for():
     assert not worth_confirming(book(0.08, 0.09), 0.2, cfg, days=1.25)
 
 
+def test_unwind_cost_prices_a_one_sided_leg_instead_of_skipping_the_test():
+    """A leg bought at the ask with NO bid behind it returns nothing when you try to close it --
+    the worst case. The old test skipped entirely whenever any leg was one-sided, so exactly those
+    sets went through unchecked, and a survey of buy-side arbs came back empty because it had
+    quietly thrown out every book with an unquoted tail leg (most of them)."""
+    from polybot.strategies.bucket_sum import unwind_cost_cents
+    import math as _m
+    ev = _event()
+    for b in ev.buckets:
+        b.best_bid, b.best_ask = 0.09, 0.10
+    assert unwind_cost_cents(ev.buckets, "buy_all") == pytest.approx(9.0)      # 9 legs x 1c
+    ev.buckets[4].best_bid = None                                              # nobody will buy it back
+    assert unwind_cost_cents(ev.buckets, "buy_all") == pytest.approx(8 * 1.0 + 10.0)
+    # selling: closing a NO means buying the YES back, so a leg with no ASK is the stuck one
+    for b in ev.buckets:
+        b.best_bid, b.best_ask = 0.09, 0.10
+    assert unwind_cost_cents(ev.buckets, "sell_all") == pytest.approx(9.0)
+    ev.buckets[2].best_ask = None
+    assert unwind_cost_cents(ev.buckets, "sell_all") == pytest.approx(8 * 1.0 + 91.0)
+    # a leg we cannot even price is untradable, not free
+    ev.buckets[2].best_bid = None
+    assert unwind_cost_cents(ev.buckets, "sell_all") == _m.inf
+
+
 def test_an_empty_ladder_clears_the_stale_quote_it_replaces():
     """Once the book has answered, the book is the truth. miahigh's "92 or above" showed ask=0.04
     from the event object and NO offers at all in the book on 2026-09-19; leaving the stale quote

@@ -151,6 +151,30 @@ def sets_available(buckets, kind: str) -> float | None:
     return max(0.0, min(qtys))
 
 
+def unwind_cost_cents(buckets, kind: str) -> float:
+    """What it costs, in cents per set, to undo a set that only half-filled.
+
+    Per leg: what we paid for it, minus what closing it would return. Buying YES at the ask and
+    selling back at the bid loses the spread — but a leg with NO bid returns NOTHING, so it loses
+    the whole stake. That is the worst case, and the old code SKIPPED the entire unwind test
+    whenever any leg was one-sided (`len(spreads) == len(buckets)`), which let exactly those sets
+    through unchecked and made a survey of buy-side arbs come back empty because it had quietly
+    thrown out every book with an unquoted tail leg.
+    """
+    total = 0.0
+    for b in buckets:
+        if kind == "buy_all":
+            paid = b.best_ask
+            back = b.best_bid or 0.0          # no bid: nobody will take it off us at any price
+        else:
+            paid = None if b.best_bid is None else 1.0 - b.best_bid
+            back = 0.0 if b.best_ask is None else 1.0 - b.best_ask
+        if paid is None:
+            return math.inf                   # cannot even price the leg: treat as untradable
+        total += max(paid - back, 0.0)
+    return total * 100
+
+
 def limit_for(levels, n: int) -> float | None:
     """The worst price we must accept to get `n` contracts from a price ladder, or None if the
     ladder is too thin.
@@ -197,9 +221,7 @@ def size_for_profit(buckets, kind: str, cfg, days=None):
             set_cost = len(buckets) - sum(prices)
         if net <= 0 or set_cost <= 0:
             continue
-        spreads = [(b.best_ask - b.best_bid) * 100 for b in buckets
-                   if b.best_ask is not None and b.best_bid is not None]
-        if len(spreads) == len(buckets) and net < cfg.arb_unwind_cover * sum(spreads):
+        if net < cfg.arb_unwind_cover * unwind_cost_cents(buckets, kind):
             continue
         if days is not None and (net / set_cost) / max(float(days), 0.5) < cfg.arb_min_roc_per_day_pct:
             continue
@@ -237,9 +259,9 @@ def worth_confirming(buckets, net: float, cfg, days=None) -> bool:
     """
     if net < cfg.bucket_sum_min_net_cents:
         return False
-    spreads = [(b.best_ask - b.best_bid) * 100 for b in buckets
-               if b.best_ask is not None and b.best_bid is not None]
-    if len(spreads) == len(buckets) and net < cfg.arb_unwind_cover * sum(spreads):
+    kind = "buy_all" if _set_cost(buckets, net) and all(b.best_ask is not None for b in buckets) \
+        and sum(b.best_ask for b in buckets) < 1.0 else "sell_all"
+    if net < cfg.arb_unwind_cover * unwind_cost_cents(buckets, kind):
         return False
     if days is not None:
         set_cost = _set_cost(buckets, net)
