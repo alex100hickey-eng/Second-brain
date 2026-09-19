@@ -477,6 +477,21 @@ class Runner:
                 got = self.us.fill_depth(ctx.event)
                 self.log(f"  arb candidate {venue} {city} {ctx.date} {kind} {arb_kind} {net:.1f}c/set — "
                          f"depth {'read' if got else 'INCOMPLETE, standing down'}")
+                if got:
+                    # Say what the BOOK said, not just what the quotes promised. Six of the eight
+                    # candidates that got this far produced no set and gave no reason, which is
+                    # this bot's oldest failure mode wearing a new hat — the answer turned out to
+                    # be legs with no offers at any price, but that took an evening of forensics
+                    # on the snapshot table to establish. One line makes it readable live.
+                    post_kind, post_net, _ = arb_check(ctx.event.buckets, venue)
+                    depths = [b.ask_qty if arb_kind == "buy_all" else b.bid_qty
+                              for b in ctx.event.buckets]
+                    known = [d for d in depths if d is not None]
+                    self.log(f"    book says {post_kind or 'NO ARB'} "
+                             f"{post_net:.1f}c/set (screen said {net:.1f}c), "
+                             f"thinnest leg {min(known) if known else '?'} contracts"
+                             + (" — a leg has no offers at any price"
+                                if known and min(known) == 0 else ""))
                 # Record the book WITH sizes. Whether these arbs are big enough to be worth taking
                 # is the one question the old snapshots cannot answer, so every candidate leaves
                 # evidence behind whether or not it trades.
