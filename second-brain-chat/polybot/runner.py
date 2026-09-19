@@ -689,6 +689,7 @@ class Runner:
     def settle(self) -> dict:
         counts = self.paper.settle_open("offshore", self.log)
         if self.us.available and self._us_settle_due():
+            self._last_us_settle = time.time()
             us_counts = self.paper.settle_open("us", self.log)
             for k, v in us_counts.items():
                 counts[k] = counts.get(k, 0) + v
@@ -711,7 +712,16 @@ class Runner:
         stop happening are only the ones that were always going to say no.
         """
         hour = (now or datetime.now(ET)).hour
-        return not (9 <= hour <= 16)
+        if not (9 <= hour <= 16):
+            return True
+        # ...unless we have simply missed it. The jobs are keyed to an exact minute, so a stall or
+        # a watchdog restart across :20 loses that tick entirely — the 17:20 settle vanished today
+        # inside the stall the watchdog killed at 17:22. Harmless most hours; not harmless at
+        # 08:20, because the next allowed hour after a missed 08:20 is 17:20, and that is nine
+        # hours of not knowing what the overnight sets paid. Three hours is the most this may
+        # quietly drift.
+        last = getattr(self, "_last_us_settle", 0.0)
+        return (time.time() - last) >= 3 * 3600
 
     def backtest(self, days: int = 7, cities=None, kinds=("high",)) -> str:
         out = f"{config.ROOT}/backtest-latest.json"
@@ -886,6 +896,9 @@ class Runner:
         done = set()
         next_arb = 0.0        # sweep immediately on start, then on its own seconds clock
         self._heartbeat = time.time()
+        # Start the catch-up clock at boot, not at zero: a restart should not fire a 25-call
+        # settle burst into the same cold cache that is already re-pricing every leg.
+        self._last_us_settle = time.time()
         self._start_watchdog()
         while True:
             self._heartbeat = time.time()

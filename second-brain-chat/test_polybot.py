@@ -1829,14 +1829,34 @@ def test_us_settle_stays_out_of_the_hours_the_arb_sweep_owns():
 
     at = lambda h: datetime(2026, 9, 19, h, 20)
     due = Runner._us_settle_due
+
+    class Fresh:                                    # settled a moment ago: nothing is overdue
+        _last_us_settle = time.time()
+
     for h in range(9, 17):
-        assert due(None, at(h)) is False, f"{h}:20 is inside the fast arb sweep"
-    # 08:20 runs, immediately after the 8 AM ET settlement that the whole day's positions wait on
-    assert due(None, at(8)) is True
+        assert due(Fresh(), at(h)) is False, f"{h}:20 is inside the fast arb sweep"
+    # 08:20 runs, immediately after the 8 AM ET settlement the whole day's positions wait on
+    assert due(Fresh(), at(8)) is True
     for h in list(range(17, 24)) + list(range(0, 9)):
-        assert due(None, at(h)) is True
+        assert due(Fresh(), at(h)) is True
     # sixteen opportunities a day for something that happens once
-    assert sum(1 for h in range(24) if due(None, at(h))) == 16
+    assert sum(1 for h in range(24) if due(Fresh(), at(h))) == 16
+
+    # ...but a MISSED tick must not hide for nine hours. These jobs are keyed to an exact minute,
+    # so a stall or a watchdog restart across :20 loses that tick entirely — today's 17:20 settle
+    # vanished inside the stall the watchdog killed at 17:22. Harmless most hours; after a missed
+    # 08:20 the next allowed hour is 17:20, which is nine hours of not knowing what the overnight
+    # sets paid, on the morning the first real P&L is supposed to arrive.
+    class Stale:
+        _last_us_settle = time.time() - 4 * 3600
+
+    assert due(Stale(), at(13)) is True             # peak hour, but it has drifted too long
+    assert due(Stale(), at(2)) is True
+
+    class Recent:
+        _last_us_settle = time.time() - 600
+
+    assert due(Recent(), at(13)) is False           # ten minutes ago: still stay out of the way
 
 
 def test_paper_cannot_buy_the_same_liquidity_twice(tmp_path):
