@@ -223,7 +223,13 @@ class USVenue:
         self.key_id = os.environ.get("POLYMARKET_KEY_ID")
         self.secret = os.environ.get("POLYMARKET_SECRET_KEY")
         self.sdk_installed = PolymarketUS is not None
-        self._base_available = bool(self.sdk_installed and self.key_id and self.secret)
+        # Never live in the test suite. The keys are in the environment whenever the loop's own
+        # .env is sourced, so constructing a Runner in a test was making REAL calls to the
+        # gateway (Runner.__init__ reads the account balance) — flaky, slow, and spending the
+        # same shared campus quota the running bot needs. A test that wants a venue says so by
+        # assigning `available = True` and injecting a fake client, which is what they all do.
+        self._base_available = bool(self.sdk_installed and self.key_id and self.secret
+                                    and not TEST_MODE)
         # The SDK defaults to a 30s timeout. For a scanner that wants to sweep five markets every
         # two minutes a 30s call has already failed — on 2026-09-19 a pass stalled between nyc and
         # los-angeles for fifteen minutes with no error and no rate limit, just slow sockets on

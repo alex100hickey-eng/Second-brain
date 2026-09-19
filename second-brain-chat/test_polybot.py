@@ -1701,6 +1701,55 @@ def test_the_best_book_on_record_is_sized_and_taken():
     assert contracts * net_n / 100 >= cfg.arb_min_profit_usd
 
 
+def test_watchdog_exits_when_the_loop_stops_making_progress(monkeypatch):
+    """A hung socket blinded this bot for thirty-four minutes on 2026-09-19, mid-afternoon, in
+    total silence:
+
+        15:34:31  arb screen us nyc ...        <- last line
+        16:08:25  us scan over its 75s budget  <- 34 minutes later
+
+    Nothing upstream could catch it: arb_pass_budget_s is only tested BETWEEN city-days, so a
+    call that never returns is never measured; the SDK's own 10s timeout did not fire; and _beat
+    runs on the same thread, so a blocked loop stops reporting its own liveness and the server
+    would not call it stale for three hours. The check has to live where the stall cannot reach
+    it, and it has to exit hard, because a blocked thread cannot be unwound politely."""
+    from polybot import runner as runner_mod
+
+    r = object.__new__(runner_mod.Runner)
+    said, exited = [], []
+    r.log = lambda m: said.append(m)
+    monkeypatch.setattr(runner_mod.os, "_exit", lambda code: exited.append(code))
+
+    # Run the watchdog's body once per state rather than waiting on the wall clock.
+    def tick(limit_s=300.0):
+        age = time.time() - r._heartbeat
+        if age > limit_s:
+            r.log(f"WATCHDOG: no loop progress for {age:.0f}s — exiting for a restart")
+            runner_mod.os._exit(1)
+
+    r._heartbeat = time.time()
+    tick()
+    assert exited == [] and said == []            # a live loop is left alone
+
+    r._heartbeat = time.time() - 120              # a slow pass (budget is 75s) is not a stall
+    tick()
+    assert exited == []
+
+    r._heartbeat = time.time() - 2040             # the real 34-minute stall
+    tick()
+    assert exited == [1]
+    assert "WATCHDOG" in said[0] and "2040s" in said[0]
+
+    # And the thread itself is a daemon, so it can never hold the process open.
+    import threading
+    before = {t.name for t in threading.enumerate()}
+    r2 = object.__new__(runner_mod.Runner)
+    r2.log, r2._heartbeat = lambda m: None, time.time()
+    r2._start_watchdog(limit_s=9999)
+    t = next(t for t in threading.enumerate() if t.name == "polybot-watchdog")
+    assert t.daemon is True
+
+
 def test_us_settle_stays_out_of_the_hours_the_arb_sweep_owns():
     """Every open US position costs a resolution() call, so an hourly settle is a ~25-request
     burst into a budget of five per window. On 2026-09-19 it tripped the limiter at 14:20:53 and

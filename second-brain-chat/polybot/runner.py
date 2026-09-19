@@ -735,11 +735,50 @@ class Runner:
             return 120.0
         return 600.0
 
+    def _start_watchdog(self, limit_s: float = 300.0) -> None:
+        """Kill the process if the loop stops making progress, so launchd can restart it.
+
+        A hung socket blinded this bot for THIRTY-FOUR MINUTES on 2026-09-19, in the middle of
+        the liquid window, and said nothing at all:
+
+            15:34:31  arb screen us nyc ...          <- last line
+            16:08:25  us scan over its 75s budget    <- 34 minutes later
+
+        Nothing upstream could catch it. `arb_pass_budget_s` is only tested BETWEEN city-days, so
+        a call that never returns is never measured; the SDK's own 10s timeout did not fire; and
+        `_beat` is called from this same thread, so a blocked loop stops reporting its own
+        liveness and the server would not call it stale for three hours.
+
+        So the check has to live somewhere the stall cannot reach. A daemon thread watches a
+        timestamp the loop updates every iteration — the loop sleeps 20s and a pass is capped at
+        75s, so five minutes of no progress is unambiguous — and exits hard. launchd's KeepAlive
+        brings it straight back. Losing a cold cache costs one pass; losing half an hour of the
+        best trading window costs the day.
+        """
+        import threading
+
+        def watch():
+            while True:
+                time.sleep(30)
+                age = time.time() - self._heartbeat
+                if age > limit_s:
+                    self.log(f"WATCHDOG: no loop progress for {age:.0f}s — exiting for a restart")
+                    try:
+                        sys.stdout.flush()
+                    except Exception:
+                        pass
+                    os._exit(1)
+
+        threading.Thread(target=watch, daemon=True, name="polybot-watchdog").start()
+
     def loop(self):
         self.log("polybot loop started (Ctrl+C to stop)")
         done = set()
         next_arb = 0.0        # sweep immediately on start, then on its own seconds clock
+        self._heartbeat = time.time()
+        self._start_watchdog()
         while True:
+            self._heartbeat = time.time()
             now = datetime.now(ET)
             key = now.strftime("%Y-%m-%d %H:%M")
             if key not in done:
