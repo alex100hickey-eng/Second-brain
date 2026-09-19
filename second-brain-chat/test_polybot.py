@@ -1966,6 +1966,47 @@ def test_an_open_arb_is_carried_at_cost_not_marked_leg_by_leg(tmp_path):
     assert ((led.paper_row(wid) or {}).get("pnl_usd") or 0) > 0
 
 
+def test_exhaustive_is_strict_about_what_it_calls_a_tiling():
+    """The function the entire guarantee rests on. "Buy every outcome for under $1" is only
+    risk-free if the outcomes really are every outcome — one gap and some temperature pays nobody,
+    one overlap and the set costs more than it can ever return.
+
+    It is deliberately not the venue's negRisk flag, which was not trustworthy."""
+    from polybot.strategies.bucket_sum import exhaustive
+    from polybot.feeds.offshore import Bucket
+
+    def bs(*ranges):
+        return [Bucket(title=f"{lo}-{hi}", lo=lo, hi=hi, unit="F", yes_token=f"t{i}",
+                       no_token=f"t{i}", market_id=f"t{i}", condition_id=str(i), best_bid=0.1,
+                       best_ask=0.2, last=0.15, closed=False, outcome=None, liquidity=0.0)
+                for i, (lo, hi) in enumerate(ranges)]
+
+    inf = math.inf
+    # the real shape: open at both ends, contiguous whole degrees
+    assert exhaustive(bs((-inf, 69), (70, 71), (72, 73), (74, inf)))
+    assert exhaustive(bs((-inf, 69), (70, inf)))                  # two legs is a valid tiling
+    # order must not matter
+    assert exhaustive(bs((72, 73), (-inf, 69), (74, inf), (70, 71)))
+
+    assert not exhaustive(bs((-inf, 69)))                         # one leg is not a set
+    assert not exhaustive(bs((70, 71), (72, inf)))                # nothing covers the cold tail
+    assert not exhaustive(bs((-inf, 69), (70, 71)))               # nothing covers the hot tail
+    assert not exhaustive(bs((-inf, 69), (71, inf)))              # 70 pays nobody
+    assert not exhaustive(bs((-inf, 70), (70, inf)))              # 70 pays twice
+    assert not exhaustive(bs((-inf, 69), (-inf, 69), (70, inf)))  # duplicated leg
+    assert not exhaustive(bs((-inf, 69), (70, inf), (71, inf)))   # two open hot ends
+    assert not exhaustive(bs((-inf, 69), (69.5, inf)))            # half-degree: refuse, do not guess
+
+    # and arb_check will not price a set it cannot prove, however tempting the numbers look
+    from polybot.strategies.bucket_sum import arb_check
+    gappy = bs((-inf, 69), (71, inf))
+    for b in gappy:
+        b.best_bid, b.best_ask = 0.10, 0.20                       # "buy both for 0.40, win $1"
+    assert arb_check(gappy, "us") == (None, 0.0, [])
+    # unless the universe has PROVED it by settlement, which is the only override there is
+    assert arb_check(gappy, "us", assume_exhaustive=True)[0] == "buy_all"
+
+
 def test_a_settled_arb_pays_the_same_whatever_wins(tmp_path):
     """The one property the whole strategy rests on, driven through the real settlement code.
 
