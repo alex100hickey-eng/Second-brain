@@ -1701,6 +1701,45 @@ def test_the_best_book_on_record_is_sized_and_taken():
     assert contracts * net_n / 100 >= cfg.arb_min_profit_usd
 
 
+def test_arb_places_the_thinnest_leg_first():
+    """The venue has no atomic multi-leg order, so legs go out one at a time and whichever leg is
+    killed decides the unwind bill. Killed on the first leg costs nothing; killed on the fifth
+    means selling four legs back at the bid. The leg most likely to be killed is the one whose
+    ladder barely covers the order -- chicago 2026-09-18 had five legs holding thousands of
+    contracts and a binding leg holding exactly 21."""
+    from polybot import execution
+
+    class Sig:
+        def __init__(self, market, depth):
+            self.market, self.label, self.side = market, market, "BUY_YES"
+            self.price, self.contracts = 0.10, 21
+            self.meta = {"depth": depth} if depth is not None else {}
+
+    sent = []
+
+    class US:
+        available = True
+
+        def place_limit(self, market, side, price, contracts, tif=None):
+            sent.append(market)
+            return {"status": "FILLED", "id": market}
+
+    led = _ledger()
+    ex = execution.Executor(led, US(), _cfg(), log=lambda *_: None)
+    legs = [(i, Sig(m, d)) for i, (m, d) in enumerate(
+        [("fat-a", 22716.0), ("fat-b", 27764.0), ("thin", 21.0), ("fat-c", 10157.0)])]
+
+    ex.place_arb_set(legs)
+    assert sent[0] == "thin"                  # the leg that can actually fail goes out first
+    assert set(sent) == {"fat-a", "fat-b", "thin", "fat-c"}
+
+    # A leg with no depth recorded must not jump the queue ahead of a known-thin one.
+    sent.clear()
+    legs = [(0, Sig("unknown", None)), (1, Sig("thin", 3.0))]
+    ex.place_arb_set(legs)
+    assert sent[0] == "thin"
+
+
 class _RateLimited(Exception):
     status_code = 429
 

@@ -54,6 +54,13 @@ class Executor:
         if not self.us.available:
             self.log("  arb set: venue unavailable, nothing sent")
             return out
+        # Thinnest leg first. The legs go out one at a time -- the venue has no atomic multi-leg
+        # order -- so whichever leg is going to be killed decides how much unwinding we pay for.
+        # Killed on the first leg costs nothing; killed on the fifth means selling four legs back
+        # at the bid. The leg most likely to be killed is the one whose ladder barely covers the
+        # order, and that is usually the one the whole set was sized on: chicago on 2026-09-18 had
+        # five legs holding thousands of contracts and a binding leg holding exactly 21.
+        legs = sorted(legs, key=lambda sl: (sl[1].meta or {}).get("depth", float("inf")))
         filled = []
         for sid, sig in legs:
             try:

@@ -177,6 +177,20 @@ def unwind_cost_cents(buckets, kind: str) -> float:
     return total * 100
 
 
+def depth_at(levels, limit_px: float | None, kind: str) -> float:
+    """Contracts available at `limit_px` or better on this leg's ladder.
+
+    This is the leg's margin for error when the set goes out: an order for 21 contracts against a
+    ladder holding 22 is far likelier to be killed than the same order against a ladder holding
+    20,000, and execution uses that to decide what to risk first.
+    """
+    if not levels or limit_px is None:
+        return 0.0
+    if kind == "buy_all":
+        return sum(q for px, q in levels if px <= limit_px + 1e-9)
+    return sum(q for px, q in levels if px >= limit_px - 1e-9)
+
+
 def limit_for(levels, n: int) -> float | None:
     """The worst price we must accept to get `n` contracts from a price ladder, or None if the
     ladder is too thin.
@@ -340,7 +354,10 @@ class BucketSum(Strategy):
                                     "roc_pct": round(roc_pct, 2),
                                     "settles_in_days": days,
                                     "unwind_usd": round(unwind_cost_cents(ev.buckets, kind)
-                                                        / 100.0 * contracts, 2)}))
+                                                        / 100.0 * contracts, 2),
+                                    "depth": round(depth_at(
+                                        b.ask_levels if kind == "buy_all" else b.bid_levels,
+                                        px, kind), 2)}))
         # Belt and braces. `contracts` is derived from size_usd/price, and the arithmetic only
         # round-trips exactly while prices are well behaved — a 4-decimal price rounded to cents
         # silently produced 11 contracts on one leg and 12 on another in test. An unbalanced set
