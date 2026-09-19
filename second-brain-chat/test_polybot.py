@@ -1740,6 +1740,17 @@ def test_watchdog_exits_when_the_loop_stops_making_progress(monkeypatch):
     assert exited == [1]
     assert "WATCHDOG" in said[0] and "2040s" in said[0]
 
+    # A job that legitimately runs for minutes must not be read as a stall. The backtest, the
+    # nightly calibration and the universe sweeps all outlast a scan pass by a wide margin, and a
+    # watchdog that kills them turns a safety net into a way of never finishing the backtest.
+    r._heartbeat = time.time()
+    with runner_mod.Runner._long_job(r, "backtest", grace_s=1800):
+        assert r._heartbeat > time.time() + 1700      # held off while it runs
+        exited.clear(); said.clear()
+        tick()
+        assert exited == []
+    assert r._heartbeat <= time.time() + 1            # and handed straight back afterwards
+
     # And the thread itself is a daemon, so it can never hold the process open.
     import threading
     before = {t.name for t in threading.enumerate()}

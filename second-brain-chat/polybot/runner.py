@@ -21,6 +21,7 @@ import sys
 import time
 import json
 import traceback
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -735,6 +736,21 @@ class Runner:
             return 120.0
         return 600.0
 
+    @contextmanager
+    def _long_job(self, name: str, grace_s: float = 1800.0):
+        """Hold the watchdog off a job that legitimately takes minutes.
+
+        The backtest, the nightly calibration rebuild, the pairs build and the universe sweeps all
+        run for far longer than a scan pass. Without this the watchdog would read them as a stall
+        and kill the process in the middle — turning a safety net into a way of never finishing
+        the weekly backtest.
+        """
+        self._heartbeat = time.time() + grace_s
+        try:
+            yield
+        finally:
+            self._heartbeat = time.time()
+
     def _start_watchdog(self, limit_s: float = 300.0) -> None:
         """Kill the process if the loop stops making progress, so launchd can restart it.
 
@@ -827,9 +843,11 @@ class Runner:
                     if now.minute == 20:
                         self.settle()
                     if now.weekday() == 6 and now.hour == 4 and now.minute == 0:
-                        self.backtest(7)
+                        with self._long_job("backtest"):
+                            self.backtest(7)
                     if now.hour == 5 and now.minute == 0 and self.us.available:
-                        self.log(self.build_pairs())
+                        with self._long_job("build_pairs"):
+                            self.log(self.build_pairs())
                     if now.hour in (9, 21) and now.minute == 0:
                         self.scan_other(modules=["hold_favorites"])
                     if now.hour == 7 and now.minute == 0:
@@ -845,15 +863,18 @@ class Runner:
                     # series a settled instance has now proved. The registry compounds: every
                     # proof is permanent and every future instance of that series is tradable.
                     if now.hour in (6, 18) and now.minute == 30:
-                        self.log(self.refresh_universe())
+                        with self._long_job("refresh_universe"):
+                            self.log(self.refresh_universe())
                     # Weekly: try to prove recurring series from their own past instances instead
                     # of waiting for the next one to settle. banxico meets every six weeks;
                     # usfed-fomc eight times a year. Both became tradable this way on 2026-09-18.
                     if now.weekday() == 6 and now.hour == 5 and now.minute == 30:
-                        n = self.prove_by_date_sweep()
+                        with self._long_job("date_sweep"):
+                            n = self.prove_by_date_sweep()
                         self.log(f"universe: date sweep proved {n} series")
                     if now.hour == 3 and now.minute == 0:
-                        calibration.save_table(calibration.build(log=self.log))
+                        with self._long_job("calibration"):
+                            calibration.save_table(calibration.build(log=self.log))
                         self.log(f"pruned {self.ledger.prune_snapshots(self.cfg.snapshot_keep_days)} snapshots older than {self.cfg.snapshot_keep_days}d")
                 except Exception as exc:
                     self.log(f"loop error: {exc}\n{traceback.format_exc(limit=3)}")
