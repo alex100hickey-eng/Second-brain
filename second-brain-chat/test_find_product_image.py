@@ -87,3 +87,46 @@ def test_non_image_og_content_is_rejected(monkeypatch):
         '<meta property="og:image" content="https://x.com/video.mp4">'))
     img, _t = fpi.image_for_product("https://x.com/products/p", "https://x.com")
     assert img is None
+
+
+# --- the founder-name finder's own false positive, kept here beside its sibling tool ---
+
+def _ffn():
+    import importlib.util, os
+    s = importlib.util.spec_from_file_location(
+        "find_founder_names", os.path.expanduser("~/second-brain/scripts/find_founder_names.py"))
+    m = importlib.util.module_from_spec(s)
+    s.loader.exec_module(m)
+    return m
+
+
+def test_a_name_is_never_a_prefix_of_a_longer_token():
+    """"Site Created by GoldBear.Media" produced the founder name "Gold" for Goose Ridge Soaps.
+    Greeting someone "Gold" is exactly the mail-merge tell the greeting rule exists to avoid."""
+    f = _ffn()
+    text = "Copyright 2026 Goose Ridge Soaps, LLC. Site Created by GoldBear.Media"
+    names = f.load_first_names()
+    accepted = [m.group(1) for pat, w in f.PATTERNS for m in pat.finditer(text)
+                if f.plausible(m.group(1), {"goose", "ridge", "soaps"}, names, w)
+                and not f.is_credit_line(text, m.start())]
+    assert accepted == [], accepted
+
+
+def test_vendor_credits_are_not_founder_stories():
+    """'created by', 'designed by', 'built by' introduce a web designer as often as a founder."""
+    f = _ffn()
+    for credit in ("Site Created by Jane Smith", "Website designed by Mark Jones",
+                   "Store built by Sarah Lee", "Photography by Emily Ross"):
+        assert f.is_credit_line(credit, credit.rindex("by") + 3), credit
+    assert not f.is_credit_line("Founded by Jane Smith", len("Founded by "))
+
+
+def test_a_real_founder_line_still_matches():
+    """The guard must not cost recall on the cases the tool exists for."""
+    f = _ffn()
+    text = "Co-Founders Eileen & James Ray"
+    names = f.load_first_names()
+    accepted = [m.group(1) for pat, w in f.PATTERNS for m in pat.finditer(text)
+                if f.plausible(m.group(1), {"little", "seed", "farm"}, names, w)
+                and not f.is_credit_line(text, m.start())]
+    assert "Eileen" in accepted

@@ -58,7 +58,11 @@ PATHS = ["/pages/about", "/pages/about-us", "/pages/our-story", "/pages/story",
          "/pages/meet-the-founder", "/pages/who-we-are", "/pages/our-mission", ""]
 
 # A human name: one to three capitalised tokens, allowing O'Brien and Smith-Jones.
-NAME = r"([A-Z][a-z'’\-]{1,15}(?:\s+[A-Z][a-z'’\.\-]{1,20}){0,2})"
+NAME = r"([A-Z][a-z'’\-]{1,15}(?:\s+[A-Z][a-z'’\.\-]{1,20}){0,2})(?![A-Za-z])"
+# The trailing (?![A-Za-z]) is load-bearing: without it the name could match a PREFIX of a
+# longer CamelCase token. "Site Created by GoldBear.Media" — a web designer's footer credit —
+# yielded the founder name "Gold" for Goose Ridge Soaps, and "Gold —" is exactly the
+# mail-merge tell the whole greeting rule exists to avoid.
 
 # Each pattern carries a weight: an explicit founder phrase is worth far more than "Meet X",
 # which on a DTC site is as likely to introduce a dog or a product as a person.
@@ -183,6 +187,21 @@ def plausible(name: str, banned: set, first_names: set, weight: int = 0) -> bool
     return low[0] in first_names or (3 <= len(low[0]) <= 12)
 
 
+# "Created by", "designed by", "built by", "powered by" introduce a VENDOR as often as a founder —
+# the web designer, the photographer, the agency. When one of these words sits just before the
+# match, it is a credit line, not a founder story.
+CREDIT_CONTEXT = re.compile(
+    # One optional verb may sit between the noun and "by" — the real case was
+    # "Site Created by GoldBear.Media", where `site` and `by` are not adjacent.
+    r"(site|website|web|store|theme|design|designed|developed|built|powered|photo|photography|"
+    r"branding|logo|template|shopify)\s+(?:\w+\s+)?(by|:)\s*$", re.I)
+
+
+def is_credit_line(text: str, start: int) -> bool:
+    """Is the run-up to this match a 'Site Created by ...' style credit?"""
+    return bool(CREDIT_CONTEXT.search(text[max(0, start - 40):start]))
+
+
 def sentence_around(text: str, idx: int, width: int = 180) -> str:
     start = max(0, idx - width // 2)
     snippet = text[start:idx + width].strip()
@@ -261,6 +280,8 @@ def names_for(brand: str, domain: str, first_names: set, verbose=False):
             for m in pat.finditer(text):
                 cand = re.sub(r"\s+", " ", m.group(1)).strip(" .,")
                 if not plausible(cand, banned, first_names, weight):
+                    continue
+                if is_credit_line(text, m.start()):
                     continue
                 key = cand.lower()
                 scores[key] = scores.get(key, 0) + weight
