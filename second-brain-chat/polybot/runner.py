@@ -612,9 +612,28 @@ class Runner:
         return "\n".join(lines)
 
     # ---- the loop --------------------------------------------------------------------------
+    def _arb_interval_s(self, now) -> float:
+        """Seconds between US arb sweeps at this hour.
+
+        Every fully-quoted sub-$1 book on record landed between 11:00 and 17:00 ET, peaking at
+        13:00-14:00, and an episode lasts about a minute. A once-a-minute sweep therefore samples
+        a peak episode about once and misses a short one entirely, which is the difference between
+        catching a 21-contract book and reading about it afterwards.
+
+        20s is not the venue's limit, it is the loop's: a batched pass costs ~3.4 calls, so three
+        sweeps a minute spend ~10 against a budget near 25. The loop sleeps 20s, so this is as
+        fast as the peak can be swept without restructuring the whole tick.
+        """
+        if 12 <= now.hour <= 15:
+            return 20.0
+        if 10 <= now.hour <= 18:
+            return 60.0
+        return 300.0
+
     def loop(self):
         self.log("polybot loop started (Ctrl+C to stop)")
         done = set()
+        next_arb = 0.0        # sweep immediately on start, then on its own seconds clock
         while True:
             now = datetime.now(ET)
             key = now.strftime("%Y-%m-%d %H:%M")
@@ -651,24 +670,12 @@ class Runner:
                     # (5 events + ~2.4 leg-pricings) against a budget near 17 a minute, so even
                     # the minute cadence runs at well under half, leaving room for the six-call
                     # depth read a candidate triggers.
-                    arb_period = 1 if 12 <= now.hour <= 15 else 2 if 10 <= now.hour <= 18 else 5
-                    arb_tick = now.minute % arb_period == 0
-                    if arb_tick:
-                        # US only. bucket_sum cannot size a set without book depth, and depth is a
-                        # call per bucket that is only worth spending on a venue we can actually
-                        # trade — so the offshore pass could never emit a signal, while costing
-                        # ~60 gamma-api calls every five minutes (17k a day) for nothing.
-                        if self.us.available:
-                            # The budget is five requests a window and the window is shared with
-                            # the campus, so spend it where arbs are actually brief: TODAY's five
-                            # weather markets. Tomorrow's books and the central banks settle weeks
-                            # out and were costing ten of the fifteen calls a pass — which is what
-                            # pushed the venue into repeated silent backoffs and left 12-to-16
-                            # minute holes in the 2-minute scan on 2026-09-19.
-                            self.scan_weather(modules=["bucket_sum"], venue="us", day_offsets=(0,))
-                            if now.minute % 10 == 0 and self.cfg.mode("bucket_sum") != "off":
-                                self.scan_weather(modules=["bucket_sum"], venue="us", day_offsets=(1,))
-                                self.scan_universe()
+                    # The arb sweep itself is no longer minute-gated — see _arb_interval_s and
+                    # the sweep below. Only the central-bank universe stays on a slow cadence:
+                    # those settle weeks out and the dollar-day filter refuses them anyway, so
+                    # they are worth a look for the record, not worth a place in the hot path.
+                    if now.minute % 10 == 0 and self.us.available and self.cfg.mode("bucket_sum") != "off":
+                        self.scan_universe()
                     if now.minute % 5 == 0:
                         self.scan_other(modules=["leadlag", "maker_rewards"])
                         if self.us.available:
@@ -708,6 +715,24 @@ class Runner:
                     self.log(f"loop error: {exc}\n{traceback.format_exc(limit=3)}")
                 if len(done) > 5000:
                     done = set(sorted(done)[-100:])
+            # ---- the arb sweep runs on seconds, not minutes -----------------------------------
+            # An episode lasts about a minute, so a once-a-minute sweep samples each one roughly
+            # once and misses anything shorter outright. It was minute-gated because a pass cost
+            # ~7.4 calls against a shared quota; batching the event lookups cut that to ~3.4, and
+            # at three sweeps a minute that is ~10 calls against a budget near 25 — so the limit
+            # is now the loop's own granularity, not the venue's. If the campus IP does start
+            # refusing, the token bucket widens its own window and these sweeps simply space
+            # themselves out: the cadence degrades instead of the bot going blind.
+            if (self.us.available and time.time() >= next_arb
+                    and self.cfg.mode("bucket_sum") != "off"):
+                next_arb = time.time() + self._arb_interval_s(now)
+                try:
+                    # Both days. Tomorrow's event rides the same batched call and came back fully
+                    # quoted, so it costs nothing extra to screen — and a thinner, worse-quoted
+                    # book is where a set under $1 is MORE likely, not less.
+                    self.scan_weather(modules=["bucket_sum"], venue="us", day_offsets=(0, 1))
+                except Exception as exc:
+                    self.log(f"  arb sweep error: {exc}\n{traceback.format_exc(limit=2)}")
             _beat("polybot", 3 * 3600, f"{self.cfg.mode('weather_lock')} lock")
             try:
                 ready = [m for m in config.MODULES

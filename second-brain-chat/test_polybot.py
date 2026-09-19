@@ -1632,6 +1632,22 @@ def _fake_us_weather_event(slug, n_markets=3):
         for i in range(n_markets)]}
 
 
+def test_arb_sweep_interval_follows_where_the_arbs_are():
+    """Episodes last about a minute and cluster 11:00-17:00 ET, peaking 13:00-14:00. A
+    once-a-minute sweep samples a peak episode about once and misses a short one outright, so the
+    peak is swept every 20s -- the loop's own granularity, not the venue's: a batched pass is
+    ~3.4 calls, so three sweeps a minute spend ~10 against a budget near 25."""
+    from polybot.runner import Runner
+
+    at = lambda h: datetime(2026, 9, 19, h, 0)
+    f = Runner._arb_interval_s
+    assert f(None, at(13)) == 20.0 and f(None, at(15)) == 20.0     # the peak
+    assert f(None, at(10)) == 60.0 and f(None, at(18)) == 60.0     # the shoulders
+    assert f(None, at(3)) == 300.0 and f(None, at(22)) == 300.0    # overnight
+    # Strictly finer where the money is, and never finer outside it.
+    assert f(None, at(13)) < f(None, at(11)) < f(None, at(20))
+
+
 def test_arb_uses_the_market_own_fee_coefficient_not_a_constant():
     """The fee is ~30% of an arb's gross edge, so which number gets used decides whether a set is
     taken. The venue states `feeCoefficient` per market; it must reach arb_check, not be replaced
