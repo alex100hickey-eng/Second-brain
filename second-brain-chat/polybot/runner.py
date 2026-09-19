@@ -353,11 +353,22 @@ class Runner:
         cost = sum(s.size_usd for s in sigs)
         self.log(f"    {mode.upper():<6} arb set {sigs[0].module} {len(sigs)} legs, {sigs[0].contracts} sets, "
                  f"${cost:.2f} in for $1.00/set out — {sigs[0].reason}")
+        profit = (sigs[0].edge_cents / 100.0) * sigs[0].contracts
         if mode == "signal":
             notify.nudge(f"polybot arb: {sigs[0].label}",
                          f"{len(sigs)} legs, {sigs[0].contracts} sets, ${cost:.2f} for "
                          f"{sigs[0].edge_cents:.1f}c/set. Must be taken together.",
                          key="polybot-arb", log=self.log)
+        elif mode == "paper" and profit >= self.cfg.arb_notify_usd:
+            # Almost every set is worth pennies, and those can stay in the log. A big one is a
+            # different event: it is the case the whole strategy exists for, it lasts about a
+            # minute, and while arb_live_ok is off it passes by with nobody told. Say so, so the
+            # decision to go live is made against a real opportunity rather than a backtest.
+            notify.nudge(f"polybot arb (paper): ${profit:.2f} on the table",
+                         f"{sigs[0].label} — {len(sigs)} legs, {sigs[0].contracts} sets, "
+                         f"${cost:.2f} in at {sigs[0].edge_cents:.1f}c/set. Paper only: "
+                         f"arb_live_ok is off.",
+                         key="polybot-arb-big", log=self.log)
         if mode == "live":
             self.executor.place_arb_set(legs)
         return len(legs)

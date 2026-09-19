@@ -1701,6 +1701,44 @@ def test_the_best_book_on_record_is_sized_and_taken():
     assert contracts * net_n / 100 >= cfg.arb_min_profit_usd
 
 
+def test_a_big_paper_arb_is_announced_and_a_small_one_is_not():
+    """Almost every set is worth pennies and belongs in the log. A big one is a different event:
+    it is the case the whole strategy exists for, it lasts about a minute, and while arb_live_ok
+    is off it would otherwise pass by with nobody told."""
+    from polybot import runner as runner_mod
+
+    sent = []
+    monkey = lambda title, body, key=None, log=None: sent.append((title, body))
+
+    cfg, led = _cfg(), _ledger()
+    cfg.modes["bucket_sum"] = "paper"
+    cfg.arb_notify_usd = 2.0
+    r = runner_mod.Runner(cfg, led, log=lambda *_: None)
+    r.risk.allow = lambda sig, mode=None: (True, "ok")
+
+    from polybot.strategies.base import Signal
+
+    def legs(edge_cents, contracts):
+        # `contracts` is derived from size_usd/price, so the size IS how you ask for N contracts.
+        return [Signal("bucket_sum", "us", f"m{i}-{edge_cents}", f"leg {i}", "BUY_YES",
+                       0.30, round(0.30 * contracts, 2), edge_cents, "test set",
+                       taker=True, arb=True, meta={"group": f"g{edge_cents}"})
+                for i in range(3)]
+
+    import polybot.notify as notify
+    old = notify.nudge
+    notify.nudge = monkey
+    try:
+        r.handle_arb_set(legs(0.5, 4))          # $0.02 — dust, stays in the log
+        assert sent == []
+        r.handle_arb_set(legs(15.4, 21))        # $3.23 — the chicago set, worth waking him for
+        assert len(sent) == 1
+        assert "$3.23" in sent[0][0]
+        assert "arb_live_ok is off" in sent[0][1]
+    finally:
+        notify.nudge = old
+
+
 def test_a_killed_order_is_never_read_as_filled():
     """The check the whole all-or-nothing design rests on, against the SDK's REAL response shape.
 

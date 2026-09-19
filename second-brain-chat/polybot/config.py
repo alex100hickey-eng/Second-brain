@@ -188,6 +188,7 @@ class Config:
     arb_unwind_cover: float = 0.25
     arb_min_profit_usd: float = 0.10       # below this a set is not worth the calls or the risk
     arb_pass_budget_s: float = 75.0   # a COLD pass prices ~10 unquoted legs from scratch; 45s cut it off mid-sweep
+    arb_notify_usd: float = 2.0            # a PAPER set worth at least this much is worth waking Alex for
     arb_live_ok: bool = False              # ALEX'S SWITCH. Executor is ready; no order has ever been sent, so the venue's real reply shape is still unverified
     hourly_rule_discount_f: float = 0.0    # offshore hourly-max rule discount; backtest fit 2026-09-12 (208 city-days) says 0.0, not the 1.0 assumed
     leadlag_move_cents: float = 3.0
