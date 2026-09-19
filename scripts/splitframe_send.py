@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import csv
 import os
+import re
 import subprocess
 import sys
 from datetime import date, datetime
@@ -32,7 +33,7 @@ VAULT = os.path.expanduser("~/Library/Mobile Documents/com~apple~CloudDocs/Obsid
 TRACKER = os.path.join(VAULT, "Money", "prospect-tracker.csv")
 LOG = os.path.expanduser("~/second-brain/scripts/splitframe_send.log")
 PAUSE_FILE = os.path.expanduser("~/second-brain/scripts/SPLITFRAME_PAUSE")
-DAILY_CAP = 5           # the plan's cadence, and the blast radius of any bug in the drafter
+DAILY_CAP = 5           # FLOOR only — see daily_cap(). Also the blast radius of a drafter bug.
 CHAT = os.path.expanduser("~/second-brain/second-brain-chat")
 SEND_SLUG = "GMAIL_" + "SEND_DRAFT"      # split so the suite's marker scan stays honest elsewhere
 
@@ -55,14 +56,71 @@ def _sent_today() -> int:
         return 0
 
 
+def daily_cap() -> int:
+    """How many auto-sends this script allows today — the SAME cadence the release uses.
+
+    These were two numbers that had to agree and didn't. The release cadence is bounce-aware and
+    had been raised to 10/day; this script's cap stayed hardcoded at 5. So ten drafts were released
+    each morning and five of them quietly waited for tomorrow, forever — the lane running at half
+    throttle with nothing in any log saying so, because "daily cap reached" reads like correct
+    behaviour. Read the one source of truth instead of restating it.
+    """
+    try:
+        sys.path.insert(0, os.path.expanduser("~/second-brain/scripts"))
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "_sfd_cap", os.path.expanduser("~/second-brain/scripts/splitframe_daily.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        cap, _why = mod.current_cap()
+        return max(DAILY_CAP, int(cap))
+    except Exception:
+        return DAILY_CAP       # fail to the floor, never to "unlimited"
+
+
+# How long a refused row waits before trying again. Long enough that a genuinely wrong address
+# cannot nag every two minutes; short enough that fixing the list the same day still sends.
+REFUSED_HOLD_HOURS = 6
+
+CREATOR_LIST = os.path.join(VAULT, "Money", "Creator Lane — Prospects.md")
+_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+
+
 def approved_recipients() -> set:
-    """Every verified address in the tracker. The send is only ever allowed to reach one of these."""
+    """Every curated address this script is allowed to reach.
+
+    The point of the whitelist is that a replayed or forged approval can still only push an
+    already-written email at an already-chosen prospect. So it has to cover every list the drafter
+    is allowed to draft from — and it silently did not.
+
+    It read only the tracker's `email` column, the named-person address. On 2026-09-17 the queue
+    gained address tiers and started drafting to FRONT DESK addresses, which live in a separate
+    `email_generic` column; that is how draftable went 0 -> 41. The gate was never widened to
+    match, so from that day every front-desk send was refused at the last step — the drafts were
+    written, released, approved and then thrown away with the outbox row closed. Ten of them died
+    that way on 2026-09-19 before anyone noticed, because the refusal looks like a safety feature.
+    The creator lane has the same hole: its prospects are in a vault doc, never in the tracker.
+
+    Lesson worth keeping: when the drafter learns a new source of recipients, the SEND GATE is
+    part of that change, not a separate concern.
+    """
+    out = set()
     try:
         with open(TRACKER, newline="") as f:
-            return {(r.get("email") or "").strip().lower()
-                    for r in csv.DictReader(f) if (r.get("email") or "").strip()}
+            for r in csv.DictReader(f):
+                for col in ("email", "email_generic"):
+                    addr = (r.get(col) or "").strip().lower()
+                    if addr:
+                        out.add(addr)
     except OSError:
-        return set()
+        pass
+    # Creator-lane prospects are curated by hand in the vault and never enter the tracker.
+    try:
+        with open(CREATOR_LIST) as f:
+            out.update(a.lower() for a in _EMAIL_RE.findall(f.read()))
+    except OSError:
+        pass
+    return out
 
 
 def parse_ref(ref: str) -> tuple:
@@ -92,7 +150,15 @@ def nudge(title: str, body: str) -> None:
 
 def stamp_tracker(address: str) -> None:
     """A first touch that just went out gets its sent_date and follow-up clocks, so the daily
-    operator picks the sequence up from here without anyone typing a date."""
+    operator picks the sequence up from here without anyone typing a date.
+
+    Matches BOTH address columns. It used to compare only `email`, which meant every front-desk
+    send (the `email_generic` column, and the majority of the list since 2026-09-17) went out and
+    was never stamped — no sent_date, so no +3d and no +7d, so the brand got exactly one email and
+    was then invisible to the follow-up drafter forever. Replies come from follow-ups, so that is
+    the difference between a prospect and a wasted send. Found 2026-09-19 on the same day the send
+    gate turned out to have the identical blind spot.
+    """
     try:
         with open(TRACKER, newline="") as f:
             rows = list(csv.DictReader(f))
@@ -102,7 +168,8 @@ def stamp_tracker(address: str) -> None:
     today = date.today()
     changed = False
     for r in rows:
-        if (r.get("email") or "").strip().lower() != address or (r.get("sent_date") or "").strip():
+        addrs = {(r.get(c) or "").strip().lower() for c in ("email", "email_generic")}
+        if address not in addrs or (r.get("sent_date") or "").strip():
             continue
         r["sent_date"] = today.isoformat()
         r["followup1_date"] = date.fromordinal(today.toordinal() + 3).isoformat()
@@ -148,14 +215,15 @@ def main() -> int:
     # hands-off. The cap is what stops a Mac that slept through three days of drafts waking up and
     # firing all of them into the same morning.
     sent_today = _sent_today()
-    room = max(0, DAILY_CAP - sent_today)
+    cap = daily_cap()
+    room = max(0, cap - sent_today)
     if room:
         for it in outbox.due_to_auto_send(datetime.now().isoformat()):
             if it["id"] in approved_ids or len(pending) - len(approved_ids) >= room:
                 continue
             pending.append(it)
     elif outbox.due_to_auto_send(datetime.now().isoformat()):
-        log(f"daily cap reached ({sent_today}/{DAILY_CAP}) — auto-sends deferred to tomorrow")
+        log(f"daily cap reached ({sent_today}/{cap}) — auto-sends deferred to tomorrow")
     if not pending:
         return 0
 
@@ -170,10 +238,24 @@ def main() -> int:
             log(f"item {item['id']}: approved but not a studio draft ({item.get('ref')!r}) — left for Alex")
             continue
         if who not in allowed:
-            log(f"item {item['id']}: recipient {who!r} is not a verified tracker address — REFUSED")
-            nudge("Splitframe: send refused", f"{who or 'unknown recipient'} isn't a verified "
-                  "address in the tracker, so nothing was sent. Send it by hand if it's right.")
-            outbox.close(item["id"], outbox.DONE, note="send refused: recipient not in tracker")
+            # HELD, never closed. This used to close the row DONE, which threw the email away:
+            # a written, released, approved first touch was destroyed and the row then read as
+            # if it had been sent. That is the wrong direction for a SAFETY gate — the gate
+            # exists because the whitelist might be wrong, and the whitelist being wrong is
+            # exactly the case where the email is fine and the list needs fixing.
+            #
+            # It nearly cost ten emails today: the gate had never been widened to cover
+            # front-desk addresses, so the whole 2026-09-19 batch was refused, and it only
+            # survived because the list was fixed within two minutes. An hour later and all ten
+            # would have been silently closed DONE.
+            #
+            # Snoozing keeps the row open and retries on its own once the list is corrected,
+            # and spaces the nudge so a genuinely wrong address cannot nag every two minutes.
+            log(f"item {item['id']}: recipient {who!r} is not an approved address — HELD, not sent")
+            outbox.snooze(item["id"], hours=REFUSED_HOLD_HOURS)
+            nudge("Splitframe: send held", f"{who or 'unknown recipient'} isn't on the approved "
+                  "list, so nothing was sent. The email is still queued — add the address to the "
+                  "tracker or the creator list and it goes on the next pass.")
             continue
         # Close FIRST: a crash between send and bookkeeping must never leave a row that
         # another pass would send a second time.

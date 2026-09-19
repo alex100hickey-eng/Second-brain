@@ -243,8 +243,15 @@ def due_to_auto_send(now_iso: str, limit: int = 30) -> list:
 
 
 def awaiting_send(limit: int = 30) -> list:
-    """Open email_draft items Alex has approved and nobody has sent yet."""
-    return [it for it in open_items(limit=limit)
+    """Open email_draft items Alex has approved and nobody has sent yet.
+
+    Snoozed rows are excluded. open_items() includes them by default, which is right for "what
+    is still on his plate" but wrong here: the sender runs every two minutes, so an item held
+    back for any reason would be retried — and re-nudged — every two minutes. The send gate
+    holds a refused recipient by snoozing it, and that hold only means anything if the next
+    pass actually respects it.
+    """
+    return [it for it in open_items(limit=limit, include_snoozed=False)
             if it.get("kind") == "email_draft" and it.get("send_approved")
             and not it.get("sent_at")]
 
