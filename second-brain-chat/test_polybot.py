@@ -1701,6 +1701,45 @@ def test_the_best_book_on_record_is_sized_and_taken():
     assert contracts * net_n / 100 >= cfg.arb_min_profit_usd
 
 
+def test_an_arb_rearms_in_minutes_while_a_view_stays_locked_for_hours():
+    """The 3-hour dedupe exists because a directional module re-entered the same bucket every 3
+    hours and turned a $20 call into a $60 one. An arb is not a view: a set pays $1 whatever
+    happens, so taking the same one twice is two independent profitable trades, limited by the
+    exposure caps rather than by a clock.
+
+    That window cost real repeats. On 2026-09-19 miami offered sets at 11:47, 11:48, 11:51, 12:10
+    and 12:13; the first was taken and every later one refused -- including 12:10 at 10.7c/set,
+    worth more than the one taken. But some window is still needed: at a 20s sweep the same
+    episode is seen repeatedly, and in paper that would book it several times over."""
+    from polybot import runner as runner_mod
+    from polybot.strategies.base import Signal
+
+    cfg, led = _cfg(), _ledger()
+    cfg.modes["bucket_sum"] = "paper"
+    cfg.arb_dedupe_s = 180.0
+    r = runner_mod.Runner(cfg, led, log=lambda *_: None)
+    r.risk.allow = lambda sig, mode=None: (True, "ok")
+
+    def arb_legs():
+        return [Signal("bucket_sum", "us", f"m{i}", f"leg {i}", "BUY_YES", 0.30, 0.60, 5.0,
+                       "set", taker=True, arb=True, meta={"group": "g"}) for i in range(3)]
+
+    assert r.handle_arb_set(arb_legs()) == 3
+    assert r.handle_arb_set(arb_legs()) == 0        # same episode, seen again 20s later
+
+    # ...but once the short window has passed, the next episode is takeable.
+    led.conn.execute("UPDATE signals SET ts = ts - ?", (cfg.arb_dedupe_s + 10,))
+    led.conn.commit()
+    assert r.handle_arb_set(arb_legs()) == 3
+
+    # A non-arb signal keeps the long window: it IS a view, and re-entering doubles it.
+    led.conn.execute("UPDATE signals SET ts = ts - ?", (cfg.arb_dedupe_s + 10,))
+    led.conn.commit()
+    view = Signal("weather_obs", "us", "m0", "leg 0", "BUY_YES", 0.30, 6.0, 5.0, "view")
+    assert led.recent_signal_exists("bucket_sum", "m0", "BUY_YES", runner_mod.DEDUPE_S) is True
+    assert led.recent_signal_exists("bucket_sum", "m0", "BUY_YES", cfg.arb_dedupe_s) is False
+
+
 def test_a_big_paper_arb_is_announced_and_a_small_one_is_not():
     """Almost every set is worth pennies and belongs in the log. A big one is a different event:
     it is the case the whole strategy exists for, it lasts about a minute, and while arb_live_ok

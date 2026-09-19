@@ -342,7 +342,20 @@ class Runner:
             return 0
         if mode == "live" and any(s.venue != "us" for s in sigs):
             mode = "paper"
-        if any(self.ledger.recent_signal_exists(s.module, s.market, s.side, DEDUPE_S) for s in sigs):
+        # An arb is not a view, so the 3-hour window that stops a directional module re-entering
+        # the same bucket is the wrong rule here. A set is self-liquidating -- it pays $1 whatever
+        # happens -- so taking the same arb twice is two independent profitable trades, not a
+        # doubled opinion, and what should limit it is the exposure and per-market caps that
+        # already do. The 3-hour window cost real repeats: on 2026-09-19 miami offered sets at
+        # 11:47, 11:48, 11:51, 12:10 and 12:13; the first was taken and every later one was
+        # refused, including 12:10 at 10.7c/set, which was worth MORE than the one taken.
+        #
+        # A short window is still wanted. At a 20s sweep the same episode is seen several times
+        # over, and in paper that would book the same set repeatedly and overstate the strategy.
+        # Three minutes is long enough to cover one episode and short enough to let the next one
+        # through.
+        window = self.cfg.arb_dedupe_s if any(s.arb for s in sigs) else DEDUPE_S
+        if any(self.ledger.recent_signal_exists(s.module, s.market, s.side, window) for s in sigs):
             return 0
         for s in sigs:
             ok, why = self.risk.allow(s, mode=mode)
