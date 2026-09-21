@@ -104,7 +104,12 @@ def test_body_parsing_survives_a_chatty_model():
     assert sfd.parse_body('```json\n{"body": "fenced"}\n```') == "fenced"
     assert sfd.parse_body('Here you go:\n{"body": "after preamble"}') == "after preamble"
     assert sfd.parse_body('just the prose, no json at all') == "just the prose, no json at all"
-    assert sfd.parse_body('{"body": ""}') == '{"body": ""}'      # empty body is not a body
+    # An empty body is NOT a body, and it is no longer answered with the raw text either: a
+    # reply that was trying to be JSON and failed must go back through the retry loop rather
+    # than become the email. Returning the raw string is how `{"body": "` nearly reached a
+    # founder (Guzu touch 2, 2026-09-19).
+    assert sfd.parse_body('{"body": ""}') == ""
+    assert sfd.parse_body('{"body": "cut off mid-sen') == "", "truncated JSON is not prose"
 
 
 class _FlakyClient:
@@ -386,6 +391,18 @@ def _entry(n, draft_id="d%s", **kw):
          "subject": "s", "body": "b", "draft_id": draft_id % n if "%s" in draft_id else draft_id}
     e.update(kw)
     return e
+
+
+@pytest.fixture(autouse=True)
+def _no_live_followup_budget(monkeypatch):
+    """First touches now share the daily cap with follow-ups, so the release reads the real
+    tracker to see how much of today's budget is already claimed. That made every release test
+    depend on today's live follow-up schedule — with 23 due, the cap left room for zero and the
+    tests failed for a reason that had nothing to do with what they were testing.
+
+    Pinned to 0 here so each test controls only its own variable; the tests that are ABOUT the
+    budget override it."""
+    monkeypatch.setattr(sfd, "followups_due_today", lambda *a, **k: 0)
 
 
 @pytest.fixture
@@ -767,3 +784,64 @@ def test_nudge_wires_proactive_on_the_mac_without_clobbering_a_real_init(monkeyp
     fake.intake_mod, fake.LOCAL_TZ = real_intake, real_tz
     sfd.nudge("t", "b")
     assert fake.intake_mod is real_intake and fake.LOCAL_TZ is real_tz
+
+
+# ---------------------------------------------------------------------------
+# First touches and follow-ups share ONE daily cap, because the cap is what the
+# sending domain experiences. The release used to ask for the whole cap as if
+# it owned it, so on 2026-09-20 five follow-ups and five first touches filled
+# it by 11:05 and ten more sat deferred all evening — and a first touch that
+# waits long enough is HELD as stale, so the work is thrown away, not sent late.
+# ---------------------------------------------------------------------------
+
+def _fu_row(fu1="", fu2="", replied="", outcome=""):
+    return {"brand": "B", "sent_date": "2026-09-01", "email": "a@b.com", "email_generic": "",
+            "contact_name": "", "followup1_date": fu1, "followup2_date": fu2,
+            "replied": replied, "outcome": outcome}
+
+
+def test_followups_due_counts_only_touches_that_will_actually_send(monkeypatch):
+    monkeypatch.undo()                     # this test IS about the real counter
+    today = date(2026, 9, 21)
+    rows = [
+        _fu_row(fu1="2026-09-21"),                       # due today
+        _fu_row(fu1="2026-09-15"),                       # overdue, still owed
+        _fu_row(fu1="2026-09-30"),                       # not yet
+        _fu_row(fu1="2026-09-21", replied="2026-09-19"), # answered: never chased
+        _fu_row(fu1="2026-09-21", outcome="no_response"),# closed out
+    ]
+    assert sfd.followups_due_today(rows, today) == 2
+
+
+def test_one_touch_per_prospect_even_when_both_are_overdue(monkeypatch):
+    monkeypatch.undo()                     # this test IS about the real counter
+    """due_followups sends one touch per prospect per run; the budget must count the same way
+    or it reserves capacity that will not be used."""
+    rows = [_fu_row(fu1="2026-09-10", fu2="2026-09-14")]
+    assert sfd.followups_due_today(rows, date(2026, 9, 21)) == 1
+
+
+def test_the_release_only_asks_for_what_the_sender_can_still_send(monkeypatch, quiet_log):
+    queue = [_entry(n) for n in range(1, 9)]
+    monkeypatch.setattr(sfd, "_shared", _FakeShared(queue))
+    monkeypatch.setattr(sfd, "current_cap", lambda: (10, "pinned"))
+    monkeypatch.setattr(sfd, "followups_due_today", lambda *a, **k: 6)
+    out = sfd.release_first_touches(_FakeOutbox(), "https://mail")
+    assert len(out) == 4, "10 cap minus 6 follow-ups leaves 4 first touches"
+
+
+def test_follow_ups_can_take_the_whole_day(monkeypatch, quiet_log):
+    """Their clock is a date already promised to a prospect; a first touch can wait."""
+    monkeypatch.setattr(sfd, "_shared", _FakeShared([_entry(1)]))
+    monkeypatch.setattr(sfd, "current_cap", lambda: (10, "pinned"))
+    monkeypatch.setattr(sfd, "followups_due_today", lambda *a, **k: 14)
+    assert sfd.release_first_touches(_FakeOutbox(), "https://mail") == []
+    assert any("follow-ups alone fill the cap" in line for line in quiet_log)
+
+
+def test_an_unreadable_tracker_does_not_silently_stop_first_touches(monkeypatch):
+    """Failing to 0 means the release proceeds at full cap. The opposite default would stop the
+    funnel on a file-read error and look exactly like a quiet day."""
+    monkeypatch.undo()
+    monkeypatch.setattr(sfd, "TRACKER", "/nonexistent-dir-for-tests/tracker.csv")
+    assert sfd.followups_due_today() == 0

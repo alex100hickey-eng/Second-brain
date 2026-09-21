@@ -209,7 +209,7 @@ def target_address(row: dict) -> tuple:
     return "", ""
 
 
-VOICE = """You are drafting a follow-up email as Alex Hickey, 19, who runs Splitframe Studio,
+AD_VOICE = """You are drafting a follow-up email as Alex Hickey, 19, who runs Splitframe Studio,
 a one-person ad-creative service for DTC brands ($650 flat drop, $950/mo retainer).
 
 How Alex writes:
@@ -252,6 +252,45 @@ Follow-up rules:
 - End with something answerable, not a CTA wearing a question mark.
 
 Return STRICT JSON: {"body": "..."} and nothing else. No subject — it is a threaded reply."""
+
+
+# The creator lane sells a completely different thing to completely different people: a $400/mo
+# clip retainer to Twitch streamers, not ad creative to DTC founders. Running those follow-ups
+# through AD_VOICE would quote the wrong offer and reason about an "ad account" the streamer does
+# not have — an email that reads as a mail-merge accident to a live, qualified prospect. The first
+# touches went out 2026-09-19 with follow-ups dated 09-22 and 09-26, so this was three days from
+# sending itself.
+CREATOR_VOICE = AD_VOICE.replace(
+    "who runs Splitframe Studio,\na one-person ad-creative service for DTC brands "
+    "($650 flat drop, $950/mo retainer).",
+    "who cuts streamers' VODs into short-form clips for\nTikTok and YouTube Shorts. "
+    "The offer is $400/mo for 3 clips a week, posted to their channels.",
+).replace(
+    """HARD CONSTRAINT — what you actually know:
+You have NOT looked at their ad account since the first email. You have no new data about them.
+So you may NOT:
+- claim to have "pulled the account again", "checked", or "looked since"
+- state the current state of their ads (what is live, how many versions, what came down)""",
+    """HARD CONSTRAINT — what you actually know:
+You have NOT watched their streams or VODs since the first email. You have no new data about them.
+So you may NOT:
+- claim to have "watched since", "caught the stream", "checked", or "looked since"
+- state the current state of their channel (viewer counts, recent streams, what they played)""",
+).replace(
+    "- claim work has been produced (\"I actually built it\", \"made a couple already\") unless the\n"
+    "  brief below explicitly says the asset exists",
+    "- claim clips have been cut (\"I actually made one\", \"cut a couple already\") unless the\n"
+    "  brief below explicitly says the clip exists",
+)
+
+# Category -> the voice that lane sells in. `category` is the tracker's own column.
+VOICES = {"creator": CREATOR_VOICE}
+
+
+def voice_for(row: dict) -> str:
+    """The system prompt for this prospect's lane. Unknown categories get the ad-creative voice,
+    which is what the overwhelming majority of the tracker is."""
+    return VOICES.get((row or {}).get("category", "").strip().lower(), AD_VOICE)
 
 
 # Phrases that assert Alex did work he did not do. The prompt forbids them; this is the check that
@@ -412,7 +451,8 @@ def original_email(c, entity: str, address: str) -> dict:
             "body": str(body)[:2500], "sent": str(m.get("messageTimestamp") or "")[:10]}
 
 
-def write_followup(client, brand: str, contact: str, touch: int, original: str, days_since: int) -> str:
+def write_followup(client, brand: str, contact: str, touch: int, original: str, days_since: int,
+                   voice: str = None) -> str:
     last = touch == MAX_TOUCHES
     ask = (f"Brand: {brand}\nContact first name: {contact or '(unknown — do not guess a name)'}\n"
            f"This is touch {touch} of {MAX_TOUCHES}. {days_since} days have passed since the first email.\n"
@@ -425,7 +465,7 @@ def write_followup(client, brand: str, contact: str, touch: int, original: str, 
     # brand is marked drafted, and nobody ever writes to them again. Retry before giving up.
     body = ""
     for _ in range(3):
-        msg = client.messages.create(model=MODEL, max_tokens=700, system=VOICE,
+        msg = client.messages.create(model=MODEL, max_tokens=1400, system=voice or AD_VOICE,
                                      messages=[{"role": "user", "content": ask}])
         text = "".join(b.text for b in msg.content if getattr(b, "type", "") == "text").strip()
         body = parse_body(text)
@@ -437,9 +477,19 @@ def write_followup(client, brand: str, contact: str, touch: int, original: str, 
 def parse_body(text: str) -> str:
     """The model is asked for {"body": ...} and mostly complies. A strict json.loads on the raw
     reply turns any preamble into a crash, which in an unattended job means no follow-up and no
-    reason why — so pull the JSON object out, and fall back to the prose itself."""
+    reason why — so pull the JSON object out, and fall back to the prose itself.
+
+    The fallback is deliberately NOT applied to a reply that was trying to be JSON and got cut off.
+    A generation truncated at max_tokens has no closing brace, so the old fallback returned the raw
+    text — meaning the email body literally began `{"body": "` and then stopped mid-sentence. It
+    cleared every downstream guard (45 words, well over MIN_BODY_WORDS, no fabrication tells) and
+    would have been sent to a live prospect. Reproduced on Guzu touch 2, 2026-09-19.
+
+    Returning "" instead puts it back through write_followup's retry loop, and if every attempt
+    fails the caller rejects it loudly rather than sending braces to a founder."""
     if text.startswith("```"):
         text = text.split("```")[1].removeprefix("json").strip()
+    text = text.strip()
     start, end = text.find("{"), text.rfind("}")
     if start != -1 and end > start:
         try:
@@ -448,7 +498,11 @@ def parse_body(text: str) -> str:
                 return body.strip()
         except (ValueError, AttributeError):
             pass
-    return text.strip()
+    if text.startswith("{"):
+        # It committed to JSON and the JSON is unusable — truncated, or malformed past repair.
+        # Prose that merely mentions a brace elsewhere is unaffected.
+        return ""
+    return text
 
 
 def nudge(title: str, body: str) -> None:
@@ -607,6 +661,32 @@ def _queued_age_days(entry, now=None) -> float:
     return ((now or datetime.now(LOCAL_TZ)) - dt).total_seconds() / 86400.0
 
 
+def followups_due_today(rows=None, today=None) -> int:
+    """How much of today's send budget the follow-up sequence has already claimed.
+
+    Counts scheduled touches that will actually go: a brand that replied or was closed out is
+    not chased. Reads the tracker directly and fails to 0 — an unreadable tracker must not
+    silently stop first touches, which is the failure the logger bug already taught once.
+    """
+    today = today or datetime.now(LOCAL_TZ).date()
+    if rows is None:
+        try:
+            with open(TRACKER, newline="", encoding="utf-8") as f:
+                rows = list(csv.DictReader(f))
+        except (OSError, csv.Error):
+            return 0
+    n = 0
+    for r in rows:
+        if not _s(r.get("sent_date")) or _s(r.get("replied")) or _s(r.get("outcome")):
+            continue
+        for column in ("followup1_date", "followup2_date"):
+            when = _d(r.get(column, ""))
+            if when and when <= today:
+                n += 1
+                break                      # one touch per prospect per run, as due_followups does
+    return n
+
+
 def _released_date(entry):
     """The NY-local calendar day this entry actually went out, or None if it never did.
 
@@ -642,8 +722,28 @@ def release_first_touches(outbox_mod, drafts_url: str, limit: int = None) -> lis
     if not _shared:
         return []
     if limit is None:
-        limit, why = current_cap()
-        log(f"daily cap {limit}/day ({why})")
+        cap, why = current_cap()
+        # The cap is TOTAL sends a day — that is what the sending domain experiences, and the
+        # sender enforces it across first touches and follow-ups alike. The release used to ask
+        # for the whole cap as if it were its own, so on a heavy follow-up day it queued emails
+        # the sender could not send: on 2026-09-20 five follow-ups and five first touches filled
+        # the cap by 11:05 and ten more sat deferred all evening.
+        #
+        # That is not just delay. The backlog grows every day the two compete, and a first touch
+        # that waits long enough is HELD as stale (STALE_DRAFT_DAYS) because its ad-library
+        # claims have expired — so the work is thrown away rather than sent late.
+        #
+        # Follow-ups win the tie on purpose. They go to someone who has already been written to,
+        # they are where replies actually come from, and their clock is fixed by a date already
+        # promised to a prospect. A first touch can wait a day; a follow-up cannot be moved
+        # without lying about the sequence.
+        due = followups_due_today()
+        limit = max(0, cap - due)
+        log(f"daily cap {cap}/day ({why}); {due} follow-up(s) due today, "
+            f"so up to {limit} first touch(es)")
+        if limit == 0 and due:
+            log("no first touches today — follow-ups alone fill the cap. If that repeats, the "
+                "ceiling is what limits new prospects, not the drafting.")
     q = _shared._load_state(QUEUE_KEY)
     queue = q.get("queue") or []
     today = datetime.now(LOCAL_TZ).date()
@@ -773,7 +873,8 @@ def main() -> int:
         sent_on = _d(row.get("sent_date", "")) or today
         try:
             body = write_followup(client, brand, (row.get("contact_name") or "").split(" ")[0],
-                                  touch, original.get("body", ""), (today - sent_on).days)
+                                  touch, original.get("body", ""), (today - sent_on).days,
+                                  voice_for(row))
         except Exception as exc:
             log(f"{brand}: draft generation failed — {str(exc)[:160]}")
             continue
