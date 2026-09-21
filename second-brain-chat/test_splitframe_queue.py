@@ -16,6 +16,10 @@ TODAY = "2026-09-16"
 
 GOOD_BODY = " ".join(["word"] * 118)     # 118 words, no tells
 
+# A subject that passes the quality gate. Plain "s" is refused since 2026-09-21 — see
+# test_subject_gate.py. These tests exercise the other guards, so they need a valid one.
+SUBJECT = "19 ads, one product"
+
 GOOD_BODY_PROSE = (
     "Nineteen active ads and every one of them is the same product shot on the same white "
     "background. The caption changes, the picture never does. Nothing shows the collagen "
@@ -150,34 +154,34 @@ def test_plan_add_refuses_everything_that_must_not_go_out():
             _row(brand="Replied", email="r@x.com", replied="2026-09-15")]
     queue = [{"to": "ankit@myobvi.com", "released": ""}]
 
-    row, p = sq.plan_add(rows, [], "nobody@nowhere.com", "s", GOOD_BODY_PROSE, 19)
+    row, p = sq.plan_add(rows, [], "nobody@nowhere.com", SUBJECT, GOOD_BODY_PROSE, 19)
     assert row is None and "not in the tracker" in p[0]
 
-    _, p = sq.plan_add(rows, queue, "ankit@myobvi.com", "s", GOOD_BODY_PROSE, 19)
+    _, p = sq.plan_add(rows, queue, "ankit@myobvi.com", SUBJECT, GOOD_BODY_PROSE, 19)
     assert any("already in the first-touch queue" in x for x in p)
 
-    _, p = sq.plan_add(rows, [], "sent@x.com", "s", GOOD_BODY_PROSE, 19)
+    _, p = sq.plan_add(rows, [], "sent@x.com", SUBJECT, GOOD_BODY_PROSE, 19)
     assert any("already emailed" in x for x in p)
-    _, p = sq.plan_add(rows, [], "support@zitsticka.com", "s", GOOD_BODY_PROSE, 19)
+    _, p = sq.plan_add(rows, [], "support@zitsticka.com", SUBJECT, GOOD_BODY_PROSE, 19)
     assert any("ticket queue" in x for x in p)
 
     # A front desk is allowed through now — it is the only address most small brands publish.
-    row, p = sq.plan_add(rows, [], "hello@desk.com", "s", GOOD_BODY_PROSE, 19)
+    row, p = sq.plan_add(rows, [], "hello@desk.com", SUBJECT, GOOD_BODY_PROSE, 19)
     assert row is not None and p == []
-    _, p = sq.plan_add(rows, [], "c@x.com", "s", GOOD_BODY_PROSE, 19)
+    _, p = sq.plan_add(rows, [], "c@x.com", SUBJECT, GOOD_BODY_PROSE, 19)
     assert any("not qualified" in x for x in p)
-    _, p = sq.plan_add(rows, [], "r@x.com", "s", GOOD_BODY_PROSE, 19)
+    _, p = sq.plan_add(rows, [], "r@x.com", SUBJECT, GOOD_BODY_PROSE, 19)
     assert any("already replied" in x for x in p)
 
     _, p = sq.plan_add(rows, [], "ankit@myobvi.com", "", GOOD_BODY_PROSE, 19)
     assert any("no subject" in x for x in p)
-    _, p = sq.plan_add(rows, [], "ankit@myobvi.com", "s", GOOD_BODY_PROSE, None)
+    _, p = sq.plan_add(rows, [], "ankit@myobvi.com", SUBJECT, GOOD_BODY_PROSE, None)
     assert any("--ad-count is required" in x for x in p)
-    _, p = sq.plan_add(rows, [], "ankit@myobvi.com", "s", GOOD_BODY_PROSE, 0)
+    _, p = sq.plan_add(rows, [], "ankit@myobvi.com", SUBJECT, GOOD_BODY_PROSE, 0)
     assert any("0 active ads" in x for x in p)
-    _, p = sq.plan_add(rows, [], "ankit@myobvi.com", "s", GOOD_BODY_PROSE, 130)
+    _, p = sq.plan_add(rows, [], "ankit@myobvi.com", SUBJECT, GOOD_BODY_PROSE, 130)
     assert any("in-house team" in x for x in p)
-    _, p = sq.plan_add(rows, [], "ankit@myobvi.com", "s", GOOD_BODY_PROSE, 19, brand="Diggs")
+    _, p = sq.plan_add(rows, [], "ankit@myobvi.com", SUBJECT, GOOD_BODY_PROSE, 19, brand="Diggs")
     assert any("does not match" in x for x in p)
 
     row, p = sq.plan_add(rows, [], "Ankit@MyObvi.com", "19 ads, one product", GOOD_BODY_PROSE, 19, brand="obvi")
@@ -294,9 +298,9 @@ def _fake_gmail(monkeypatch, draft_id="r123"):
 
 def test_create_studio_draft_never_files_an_outbox_row(monkeypatch):
     calls = _fake_gmail(monkeypatch)
-    draft_id, msg = sq.create_studio_draft("ankit@myobvi.com", "s", GOOD_BODY_PROSE)
+    draft_id, msg = sq.create_studio_draft("ankit@myobvi.com", SUBJECT, GOOD_BODY_PROSE)
     assert draft_id == "r123"
-    assert calls["draft"] == ("studio", "ankit@myobvi.com", "s")
+    assert calls["draft"] == ("studio", "ankit@myobvi.com", SUBJECT)
     assert "filed" not in calls, "a first touch must reach the outbox only via the server's release"
 
 
@@ -347,7 +351,7 @@ def test_add_dry_run_touches_nothing(monkeypatch, tmp_path):
     monkeypatch.setattr(sq, "write_tracker", lambda *a, **k: pytest.fail("dry run wrote the tracker"))
     body = tmp_path / "b.txt"
     body.write_text(GOOD_BODY_PROSE)
-    rc = sq.main(["add", "--to", "ankit@myobvi.com", "--subject", "s", "--body-file", str(body),
+    rc = sq.main(["add", "--to", "ankit@myobvi.com", "--subject", SUBJECT, "--body-file", str(body),
                   "--ad-count", "19", "--dry-run"])
     assert rc == 0 and "draft" not in calls
 
@@ -386,7 +390,7 @@ def test_creator_entry_reads_the_list():
 
 
 def test_plan_creator_refuses_everything_that_must_not_go_out():
-    ok = dict(list_text=CREATOR_LIST, queue=[], to="guzubusiness@hotmail.com", subject="s",
+    ok = dict(list_text=CREATOR_LIST, queue=[], to="guzubusiness@hotmail.com", subject=SUBJECT,
               body=GOOD_BODY_PROSE, evidence=GOOD_EVIDENCE, offer_approved=True)
 
     _, p = sq.plan_creator(**ok)
@@ -506,13 +510,13 @@ def test_offer_close_must_name_a_photo_on_their_own_site():
 
 def test_plan_add_only_demands_the_photo_for_the_offer_arm():
     rows = [_row(domain="myobvi.com")]
-    _, p = sq.plan_add(rows, [], "ankit@myobvi.com", "s", GOOD_BODY_PROSE, 19, "", "question", "")
+    _, p = sq.plan_add(rows, [], "ankit@myobvi.com", SUBJECT, GOOD_BODY_PROSE, 19, "", "question", "")
     assert p == []
 
-    _, p = sq.plan_add(rows, [], "ankit@myobvi.com", "s", GOOD_BODY_PROSE, 19, "", "offer", "")
+    _, p = sq.plan_add(rows, [], "ankit@myobvi.com", SUBJECT, GOOD_BODY_PROSE, 19, "", "offer", "")
     assert any("--offer-image is required" in x for x in p)
 
-    _, p = sq.plan_add(rows, [], "ankit@myobvi.com", "s", GOOD_BODY_PROSE, 19, "", "offer",
+    _, p = sq.plan_add(rows, [], "ankit@myobvi.com", SUBJECT, GOOD_BODY_PROSE, 19, "", "offer",
                        "https://myobvi.com/cdn/shop/files/tub.jpg")
     assert p == []
 

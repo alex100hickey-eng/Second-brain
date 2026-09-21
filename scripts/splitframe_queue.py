@@ -443,6 +443,46 @@ def offer_image_problems(url: str, domain: str) -> list:
     return []
 
 
+# ---------------------------------------------------------------------------
+# Subject quality.
+#
+# 2026-09-20: five first touches went out with the subject line "your ad account" — Cape Candle,
+# Dakota Tallow, Final Boss Sour, Friday Pickleball, Geode Swimwear. Every other send that week
+# carried a real one ("Seven of your ten ads are the same post", "Sold out 6x, unchanged since
+# March"). The drafting worker had passed a placeholder and the only check here was `if not
+# subject`, so empty was refused and generic sailed through.
+#
+# The subject is the one line that decides whether the email is opened at all, and a vague one
+# reads as exactly the blast this pitch depends on not being. A placeholder subject wastes the
+# prospect AND the ad-account read that earned the right to write to them.
+GENERIC_SUBJECTS = {
+    "your ad account", "your ads", "your account", "your ad creative", "ad creative",
+    "your facebook ads", "your meta ads", "quick question", "question", "hello", "hi",
+    "your brand", "your marketing", "intro", "introduction", "reaching out", "following up",
+}
+MIN_SUBJECT_WORDS = 4      # "Fourteen ads, one sentence" is the shortest real one written so far
+
+
+def subject_problem(subject: str) -> str:
+    """Why this subject cannot go out, or "" if it is specific enough to send.
+
+    Deliberately narrow: an exact-match blocklist plus a word floor. Anything cleverer risks
+    refusing a good subject, and a refused draft is a prospect that waits — the failure this is
+    guarding against is the opposite one, a bad subject that sends."""
+    raw = _c(subject)
+    if not raw:
+        return "no subject"
+    norm = re.sub(r"[^a-z0-9 ]", "", raw.lower()).strip()
+    norm = re.sub(r"\s+", " ", norm)
+    if norm in GENERIC_SUBJECTS:
+        return (f"subject {raw!r} is a placeholder, not an observation — it is the line that "
+                "decides whether this gets opened, so it has to say what was found in the account")
+    if len(norm.split()) < MIN_SUBJECT_WORDS:
+        return (f"subject {raw!r} is {len(norm.split())} word(s) — too vague to open; "
+                f"name the specific thing found in the account")
+    return ""
+
+
 def plan_add(rows: list, queue: list, to: str, subject: str, body: str,
              ad_count, brand: str = "", close: str = "", offer_image: str = ""):
     """(tracker row, problems). An empty problems list is the only permission to queue."""
@@ -466,8 +506,9 @@ def plan_add(rows: list, queue: list, to: str, subject: str, body: str,
         problems.append(f"--brand {brand!r} does not match the tracker row ({row.get('brand')!r})")
     if any(_c(e.get("to")).lower() == to for e in queue):
         problems.append("already in the first-touch queue")
-    if not _c(subject):
-        problems.append("no subject")
+    sub_problem = subject_problem(subject)
+    if sub_problem:
+        problems.append(sub_problem)
     if ad_count is None:
         problems.append("--ad-count is required: the live count read tonight is the proof "
                         "the account was actually opened before writing")
@@ -683,8 +724,10 @@ def plan_revise(queue: list, to: str, subject: str, body: str, offer_image: str,
                         "it is in the outbox or already sent")
     if not _c(entry.get("draft_id")):
         problems.append("queue entry has no draft id, so there is no Gmail draft to rewrite")
-    if subject is not None and not _c(subject):
-        problems.append("no subject")
+    if subject is not None:
+        sub_problem = subject_problem(subject)
+        if sub_problem:
+            problems.append(sub_problem)
     if body is not None:
         problems += guard_body(body)
     img = offer_image if offer_image is not None else _c(entry.get("offer_image"))
@@ -801,8 +844,9 @@ def plan_creator(list_text: str, queue: list, to: str, subject: str, body: str,
         problems.append("ticket queue — this never reaches the creator")
     if any(_c(e.get("to")).lower() == to for e in queue):
         problems.append("already in the queue")
-    if not _c(subject):
-        problems.append("no subject")
+    sub_problem = subject_problem(subject)
+    if sub_problem:
+        problems.append(sub_problem)
     if len(_c(evidence)) < 25:
         problems.append("--evidence must say which stream and which moment was actually watched: "
                         "the pitch is their own footage back at them, and it is the one claim "
