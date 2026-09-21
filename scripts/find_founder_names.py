@@ -116,15 +116,30 @@ STOP = {
 }
 
 MAX_PAGES = 6           # per brand: enough to reach the real About page, few enough to stay polite
+# A real About page is a few thousand characters of prose. Anything vastly larger is a data
+# dump, and its noise drowns the page that actually names the founder.
+MAX_PAGE_CHARS = 60000
 
 TAG_RE = re.compile(r"<(script|style|noscript)[^>]*>.*?</\1>", re.I | re.S)
 
 
 def strip_html(raw: str) -> str:
-    """Page text, roughly. Good enough for sentence-shaped pattern matching."""
+    """Page text, roughly. Good enough for sentence-shaped pattern matching.
+
+    Script and style blocks go FIRST. Shopify themes inline their whole catalogue as JSON in a
+    <script> tag, and without that removal the JSON becomes "page text": Hedley & Bennett's
+    /about stripped to 607,672 chars, inside which a video caption for a COLLABORATOR's brand
+    read "Fatima, owner of KOMAL" — matching the `NAME, owner` pattern at full weight and beating
+    the real founder page, which says "My name is Ellen Marie Bennett". A wrong name is the one
+    outcome this script exists to avoid, so the noise goes before the matching starts.
+    """
+    raw = re.sub(r"(?is)<(script|style|noscript|template)\b[^>]*>.*?</\1\s*>", " ", raw)
     raw = TAG_RE.sub(" ", raw)
     raw = re.sub(r"<[^>]+>", " ", raw)
     raw = html_mod.unescape(raw)
+    # Any JSON surviving outside a script tag (data-* attributes, JSON-LD) is not prose and must
+    # never supply a candidate name.
+    raw = re.sub(r'"[A-Za-z_]+"\s*:\s*"[^"]*"', " ", raw)
     return re.sub(r"[ \t ]+", " ", raw)
 
 
@@ -209,7 +224,7 @@ def sentence_around(text: str, idx: int, width: int = 180) -> str:
 
 
 ABOUT_HREF = re.compile(
-    r'href=["\']([^"\']*(?:about|our-story|ourstory|/story|founder|meet-|who-we-are|'
+    r'href=["\']([^"\']*(?:about|our-story|ourstory|/story|founder|meet-|who-we-are|philosophy|our-mission|/mission|our-values|our-why|'
     r'our-team|the-team|our-mission)[^"\']*)["\']', re.I)
 
 
@@ -276,6 +291,10 @@ def names_for(brand: str, domain: str, first_names: set, verbose=False):
         pages += 1
         if verbose:
             print(f"      {path or '/'} -> {len(text)} chars")
+        if len(text) > MAX_PAGE_CHARS:
+            if verbose:
+                print(f"      {path or '/'} skipped: {len(text)} chars is a data dump, not prose")
+            continue
         for pat, weight in PATTERNS:
             for m in pat.finditer(text):
                 cand = re.sub(r"\s+", " ", m.group(1)).strip(" .,")
