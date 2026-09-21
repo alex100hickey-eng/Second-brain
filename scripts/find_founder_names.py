@@ -40,6 +40,7 @@ import shutil
 import ssl
 import sys
 import time
+import urllib.error
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -85,6 +86,11 @@ PATTERNS = [
     # "Co-Founders Eileen & James Ray" — the title runs straight into the name with no
     # punctuation at all, which is how most About pages caption a founder photo.
     (re.compile(r"\b(?i:(?:co-?)?(?:founders?|owners?))\s+" + NAME), 4),
+    # "Amy Hall Our Founder", "Randy McMillan, Our Founder" — the name first and the title after
+    # with a possessive in between, which is how a photo caption reads. The plain NAME+title
+    # pattern above misses these because of the intervening word. Found on goldilocksgoods.com
+    # 2026-09-21, where the founder is named in plain text and the scraper returned nothing.
+    (re.compile(NAME + r"\s*,?\s+(?i:(?:our|the)\s+(?:co-?)?(?:founder|owner|ceo))\b"), 4),
     (re.compile(r"\b(?i:i'?m)\s+" + NAME + r"[,.]?\s+(?i:(?:the\s+)?(?:founder|owner)|and i)"), 4),
     (re.compile(r"\b(?i:hi,?\s*i'?m)\s+" + NAME), 2),
     (re.compile(r"\b(?i:meet)\s+" + NAME), 1),
@@ -119,6 +125,9 @@ MAX_PAGES = 6           # per brand: enough to reach the real About page, few en
 # A real About page is a few thousand characters of prose. Anything vastly larger is a data
 # dump, and its noise drowns the page that actually names the founder.
 MAX_PAGE_CHARS = 60000
+# Total HTTP requests per brand, successes and failures alike. Thirteen rapid requests
+# reads as a scan; this keeps the crawl polite enough to be served.
+MAX_FETCHES = 8
 
 TAG_RE = re.compile(r"<(script|style|noscript)[^>]*>.*?</\1>", re.I | re.S)
 
@@ -281,9 +290,27 @@ def names_for(brand: str, domain: str, first_names: set, verbose=False):
     except Exception as e:
         if verbose:
             print(f"      homepage -> {type(e).__name__}")
+    # Every ATTEMPT counts against the budget, not just the successes. A failed fetch used to cost
+    # nothing, so a site whose first paths 404 got all thirteen tried at 0.3s intervals — which
+    # looks like a scanner and earns an HTTP 429. Goldilocks Goods rate-limited us on 2026-09-21
+    # and the run reported "no clear founder name (0 pages read)" for a brand that names its
+    # founder in plain text on its own about page. A throttled read is an unknown, not a no.
+    attempts = 0
+    throttled = False
     for path in paths:
+        if attempts >= MAX_FETCHES or throttled:
+            break
+        attempts += 1
         try:
             text = strip_html(fetch(base + path))
+        except urllib.error.HTTPError as e:
+            if e.code == 429:
+                throttled = True
+                if verbose:
+                    print(f"      {path or '/'} -> HTTP 429, backing off (result is UNKNOWN, not no)")
+            elif verbose:
+                print(f"      {path or '/'} -> HTTP {e.code}")
+            continue
         except Exception as e:
             if verbose:
                 print(f"      {path or '/'} -> {type(e).__name__}")
@@ -318,9 +345,11 @@ def names_for(brand: str, domain: str, first_names: set, verbose=False):
             # first weak candidate is what made Moon Juice return nothing while its About page
             # said "Amanda Chantal Bacon Founder & CEO" in plain text. Decide on all of it.
             break
-        time.sleep(0.3)
+        time.sleep(0.6)
     if not scores:
-        return None, "", "", pages
+        # "" pages read because we were throttled is a different answer from "read them, found
+        # nothing" — and only the second one means the brand publishes no founder.
+        return None, ("throttled" if throttled and not pages else ""), "", pages
     ranked = sorted(scores.items(), key=lambda kv: -kv[1])
     top_key, top_score = ranked[0]
     # A clear winner, or nothing. Two founders tied is a real and common case (co-founders),
@@ -404,6 +433,12 @@ def main():
             if title and not (r.get("contact_title") or "").strip():
                 r["contact_title"] = title.title()
             r["contact_name_source"] = f"{r['domain']} about page, auto {time.strftime('%Y-%m-%d')}: {ev[:200]}"
+        elif title == "throttled":
+            # We never got to read the site. Recording "no clear founder name" here would write a
+            # false fact into the tracker — a human reading the row would believe this brand
+            # publishes no founder when nobody has actually looked.
+            print(f"      ~ rate-limited (HTTP 429) — UNKNOWN, not a no; retry this brand later")
+            r["contact_name_source"] = f"rate-limited, not yet read, auto {time.strftime('%Y-%m-%d')}"
         else:
             print(f"      ✗ no clear founder name ({pages} page(s) read)")
             r["contact_name_source"] = f"no clear founder name, auto {time.strftime('%Y-%m-%d')}"

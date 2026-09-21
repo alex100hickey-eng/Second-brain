@@ -61,3 +61,73 @@ def test_plausible_still_rejects_the_brand_name_itself():
     banned = ff.brand_words("Hedley & Bennett", "hedleyandbennett.com")
     first = ff.load_first_names()
     assert not ff.plausible("Hedley Bennett", banned, first, 5)
+
+
+# ---------------------------------------------------------------------------
+# Throttling is an unknown, not a no.
+#
+# 2026-09-21: bulk runs reported 0/45, 0/35 and 0/40 — read as "these brands publish no founder",
+# and written into the tracker as `no clear founder name`. A probe of 30 of those domains returned
+# HTTP 429 on 29 of them: a shared CDN edge was rate-limiting our IP because the crawler tried up
+# to thirteen URLs per brand, 0.3s apart, and FAILED fetches did not count against the page budget
+# — so a site whose first paths 404'd got the whole list hammered.
+#
+# The negatives were artifacts. Recording them as fact is the expensive part: a human reading the
+# row believes someone looked, when nobody did.
+# ---------------------------------------------------------------------------
+
+def test_every_attempt_counts_against_the_budget():
+    # The bug: only successes were counted, so a 404-heavy site got every path tried.
+    assert ff.MAX_FETCHES <= len(ff.PATHS), "budget must be able to bind before the path list ends"
+
+
+def test_the_crawl_is_slow_enough_to_be_served():
+    import inspect
+    assert "time.sleep(0.6)" in inspect.getsource(ff.names_for)
+
+
+def test_a_throttled_brand_reports_unknown_not_no(monkeypatch):
+    import urllib.error
+
+    def always_429(url, timeout=9):
+        raise urllib.error.HTTPError(url, 429, "Too Many Requests", {}, None)
+
+    monkeypatch.setattr(ff, "fetch", always_429)
+    name, title, ev, pages = ff.names_for("Goldilocks Goods", "goldilocksgoods.com",
+                                          ff.load_first_names())
+    assert name is None
+    assert pages == 0
+    assert title == "throttled", "a rate-limited read must be distinguishable from a real miss"
+
+
+def test_a_genuine_miss_is_still_reported_as_a_miss(monkeypatch):
+    # The other half of the contract: a site we DID read, with no founder on it, is a real no.
+    monkeypatch.setattr(ff, "fetch", lambda url, timeout=9: "<p>We sell candles.</p>")
+    name, title, ev, pages = ff.names_for("Nose Dive Scents", "nosedivescents.com",
+                                          ff.load_first_names())
+    assert name is None
+    assert title != "throttled"
+    assert pages > 0
+
+
+def test_a_throttled_run_stops_hammering_the_site(monkeypatch):
+    import urllib.error
+    calls = []
+
+    def count_429(url, timeout=9):
+        calls.append(url)
+        raise urllib.error.HTTPError(url, 429, "Too Many Requests", {}, None)
+
+    monkeypatch.setattr(ff, "fetch", count_429)
+    ff.names_for("Goldilocks Goods", "goldilocksgoods.com", ff.load_first_names())
+    # The homepage read plus at most one more: once 429 comes back, backing off is the only
+    # behaviour that gets us served again.
+    assert len(calls) <= 2, f"kept hammering after a 429: {len(calls)} requests"
+
+
+def test_the_caption_pattern_finds_a_name_after_its_title():
+    # "Amy Hall Our Founder" — name first, possessive title after, which is how a photo caption
+    # reads. goldilocksgoods.com names its founder that way and the scraper returned nothing.
+    text = ff.strip_html("<p>Amy Hall Our Founder is an art historian and ocean lover.</p>")
+    found = {m.group(1).strip() for pat, _w in ff.PATTERNS for m in pat.finditer(text)}
+    assert any("Amy Hall" in n for n in found), found
