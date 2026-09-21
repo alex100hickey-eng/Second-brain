@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Splitframe reply watcher — the one thing that must never sit unseen.
 
-Every run: read the studio inbox for mail from any prospect domain in the tracker (or any
-address the tracker has a `sent_date` for), and for each new one:
-  - nudge Alex's phone (ntfy, via CLARVIS send_nudge when importable)
-  - stamp `replied` in `Money/prospect-tracker.csv` (backup written first)
-  - append to scripts/reply_watch.log
+Every run: read the studio inbox for mail from any prospect domain or address in the tracker,
+and for each new one:
+  - decide whether it is a HUMAN reply or an autoresponder (see auto_reply_reason)
+  - human: nudge Alex's phone, stamp `replied` in `Money/prospect-tracker.csv` (backup first)
+  - automatic: log it and leave `replied` empty, so the follow-up sequence stays alive
+  - append to scripts/reply_watch.log either way
 Read-only on Gmail. Never sends. Runs every 30 min under launchd (com.secondbrain.replywatch).
 """
 from __future__ import annotations
@@ -14,6 +15,8 @@ import csv
 import json
 import os
 import shutil
+import signal
+import socket
 import sys
 import time
 from datetime import datetime
@@ -23,6 +26,126 @@ TRACKER = os.path.join(VAULT, "Money", "prospect-tracker.csv")
 STATE = os.path.expanduser("~/second-brain/scripts/reply_watch_state.json")
 LOG = os.path.expanduser("~/second-brain/scripts/reply_watch.log")
 OWN = {"splitframestudio.com", "gmail.com", "google.com", "hunter.io", "stripe.com", "icloud.com"}
+
+# ---------------------------------------------------------------------------
+# Watchdog.
+#
+# 2026-09-21: this job was "healthy" — loaded, live PID, exit status 0 — and had not run for 34
+# hours. A run started Sunday 03:00 blocked on a network call during an overnight DNS wobble and
+# never returned. launchd will not start a new instance while the previous one is still alive, so
+# ONE hung run silently disables the job forever. That is strictly worse than the disabled plist
+# found on 09-19, because every external signal says the job is fine.
+#
+# The Composio client takes no timeout argument, so a per-call timeout cannot cover this. The
+# watchdog does: whatever the run is doing, it dies well inside the 30-minute interval, and launchd
+# starts a clean one next tick. A missed scan costs 30 minutes; a hung scan costs every scan after
+# it.
+RUN_BUDGET_SECONDS = 600
+socket.setdefaulttimeout(60)       # belt and braces for anything using the socket layer
+
+
+_armed_for = RUN_BUDGET_SECONDS
+
+
+def _watchdog(_sig, _frm):
+    # Report the budget actually armed, not the default — a diagnostic line that lies about its
+    # own numbers is worse than no line.
+    log(f"ABORTED: run exceeded {_armed_for}s and was killed so the next one can start")
+    os._exit(1)
+
+
+def arm_watchdog(seconds: int = RUN_BUDGET_SECONDS) -> None:
+    global _armed_for
+    _armed_for = seconds
+    try:
+        signal.signal(signal.SIGALRM, _watchdog)
+        signal.alarm(seconds)
+    except (AttributeError, ValueError):
+        pass                       # not the main thread, or a platform without SIGALRM
+
+
+# ----------------------------------------------------------------------------
+# Auto-reply detection.
+#
+# A helpdesk autoresponder ("thanks, we got your ticket") is NOT a reply, but it arrives from the
+# prospect's own domain and looks exactly like one. Stamping `replied` for it is silent and
+# expensive: due_followups() skips any row with `replied` set, so one autoresponder retires a live
+# prospect after a single touch and no follow-up can ever be drafted again. Calypsa hit this on
+# 2026-09-19.
+#
+# The asymmetry that shapes the thresholds below: wrongly calling a HUMAN reply automatic kills
+# follow-ups AND buries a buying signal, while wrongly calling an autoresponder human only costs
+# one unnecessary follow-up. So only high-confidence signals count, and anything ambiguous is
+# treated as a real human reply.
+AUTO_HEADERS = ("x-autoreply", "x-autorespond", "x-auto-response-suppress", "x-autoreply-domain")
+AUTO_PRECEDENCE = ("bulk", "auto_reply", "junk", "list")
+AUTO_SUBJECT = ("auto:", "auto-reply", "autoreply", "automatic reply", "out of office",
+                "out-of-office", "away from the office", "automated response", "[ticket ")
+# Deliberately specific. "thanks" or "received" alone would match real founder replies.
+AUTO_BODY = ("we've received your request", "we have received your request",
+             "we've received your message", "we have received your message",
+             "this is an automated", "this is an automatic", "do not reply to this",
+             "please do not reply", "we usually respond within", "we typically respond within",
+             "your ticket has been", "a member of our team will",
+             "currently out of the office", "i am out of the office", "i'm out of the office")
+
+
+def headers_of(msg: dict) -> dict:
+    """Lower-cased header name -> value. Gmail nests these under payload.headers."""
+    out = {}
+    for h in ((msg.get("payload") or {}).get("headers") or []):
+        name = str(h.get("name") or "").strip().lower()
+        if name:
+            out[name] = str(h.get("value") or "").strip()
+    return out
+
+
+def auto_reply_reason(msg: dict) -> str:
+    """Why this message is an autoresponder, or "" if it reads as a human reply.
+
+    Header evidence is authoritative (RFC 3834 `Auto-Submitted`); subject and body are fallbacks
+    for senders that don't set it."""
+    h = headers_of(msg)
+    submitted = h.get("auto-submitted", "").lower()
+    if submitted and submitted != "no":
+        return f"Auto-Submitted: {submitted}"
+    for name in AUTO_HEADERS:
+        if h.get(name):
+            return f"{name} header present"
+    prec = h.get("precedence", "").lower()
+    if prec in AUTO_PRECEDENCE:
+        return f"Precedence: {prec}"
+    subject = str(msg.get("subject") or "").strip().lower()
+    for frag in AUTO_SUBJECT:
+        if subject.startswith(frag) or frag in subject:
+            return f"subject says {frag!r}"
+    body = body_text(msg).lower()
+    for frag in AUTO_BODY:
+        if frag in body:
+            return f"body says {frag!r}"
+    return ""
+
+
+def body_text(msg: dict) -> str:
+    """The message body, preferring full text over the preview.
+
+    Quoted history is dropped: our own outbound copy is quoted underneath the reply, and matching
+    autoresponder phrases against our own sent words would be nonsense."""
+    raw = msg.get("messageText")
+    if not raw:
+        p = msg.get("preview")
+        raw = p.get("body") if isinstance(p, dict) else p
+    text = str(raw or "")
+    lines = []
+    for line in text.splitlines():
+        stripped = line.lstrip()
+        if stripped.startswith(">"):
+            continue
+        if stripped.lower().startswith("on ") and stripped.rstrip().endswith("wrote:"):
+            break
+        lines.append(line)
+    return "\n".join(lines)
+
 
 
 def log(msg: str) -> None:
@@ -50,16 +173,48 @@ def tracker_rows() -> list:
         return list(csv.DictReader(f))
 
 
+# Shared mailboxes we must never treat as "this whole domain belongs to one prospect". A brand
+# whose contact address is @gmail.com is matched on the exact address instead.
+FREEMAIL = {"gmail.com", "yahoo.com", "hotmail.com", "outlook.com", "icloud.com", "aol.com",
+            "me.com", "live.com", "msn.com", "proton.me", "protonmail.com", "gmx.com"}
+
+
 def prospect_domains(rows) -> dict:
-    """domain -> brand for every tracker row (a reply can come from anyone at the brand)."""
+    """domain -> brand for every tracker row (a reply can come from anyone at the brand).
+
+    Reads `email_generic` as well as `email`. Most of the funnel is front-desk brands that carry
+    their address in email_generic and leave `email` empty, and their sending domain is often not
+    the `domain` column either (Universal Standard mails from .net, Fly By Jing from isetta.co).
+    Keying on the other two columns alone left those brands' replies invisible — the same
+    email_generic blind spot already found in the send gate, the tracker stamper and the daily cap.
+    Freemail domains are excluded here and handled by prospect_addresses()."""
     out = {}
     for r in rows:
+        brand = r.get("brand") or ""
         d = (r.get("domain") or "").strip().lower().removeprefix("www.")
-        if d:
-            out[d] = r.get("brand") or d
-        e = (r.get("email") or "").strip().lower()
-        if "@" in e:
-            out[e.split("@", 1)[1]] = r.get("brand") or d
+        if d and d not in FREEMAIL:
+            out[d] = brand or d
+        for col in ("email", "email_generic"):
+            e = (r.get(col) or "").strip().lower()
+            if "@" in e:
+                dom = e.split("@", 1)[1]
+                if dom not in FREEMAIL:
+                    out[dom] = brand or dom
+    return out
+
+
+def prospect_addresses(rows) -> dict:
+    """exact address -> brand, for prospects reachable only at a shared mailbox.
+
+    A brand whose contact address is @gmail.com cannot be matched on its domain: gmail.com is in
+    OWN, so every such prospect was unreachable by the watcher entirely. Matching the full address
+    keeps them visible without opening the door to all of Gmail."""
+    out = {}
+    for r in rows:
+        for col in ("email", "email_generic"):
+            e = (r.get(col) or "").strip().lower()
+            if "@" in e and e.split("@", 1)[1] in FREEMAIL:
+                out[e] = r.get("brand") or e
     return out
 
 
@@ -80,23 +235,36 @@ def stamp_replied(brand: str, when: str) -> None:
         w.writerows(rows)
 
 
-def nudge(title: str, body: str) -> None:
+def nudge(title: str, body: str, priority: str = "high", key: str = "splitframe-reply") -> None:
+    """Best-effort phone alert. Every outcome is logged.
+
+    The fallback used to succeed or fail in silence, so "did Alex actually get told a prospect
+    replied?" could not be answered from the log — the one question this job exists to answer.
+    proactive.send_nudge only works inside the server process (it needs proactive.init to wire up
+    intake_mod), so the direct ntfy POST is the normal path here, not an emergency one."""
     sys.path.insert(0, os.path.expanduser("~/second-brain/second-brain-chat"))
     try:
         import proactive  # type: ignore
-        reason = proactive.send_nudge("splitframe-reply", title, body, priority="high", tags="incoming_envelope", force=True)
+        reason = proactive.send_nudge(key, title, body, priority=priority,
+                                      tags="incoming_envelope", force=True)
         if not reason:
+            log(f"  nudge sent via send_nudge ({priority})")
             return
-        log(f"send_nudge refused: {reason}")
+        log(f"  send_nudge refused: {reason}")
     except Exception as exc:
-        log(f"send_nudge unavailable: {exc}")
+        log(f"  send_nudge unavailable: {exc}")
     topic = os.environ.get("NTFY_TOPIC")
     if not topic:
+        log("  NUDGE NOT SENT: no NTFY_TOPIC configured")
         return
     import urllib.request
     req = urllib.request.Request(f"{os.environ.get('NTFY_SERVER', 'https://ntfy.sh')}/{topic}", data=body.encode(),
-                                 headers={"Title": title[:120], "Priority": "high", "Tags": "incoming_envelope"})
-    urllib.request.urlopen(req, timeout=10).read()
+                                 headers={"Title": title[:120], "Priority": priority, "Tags": "incoming_envelope"})
+    try:
+        urllib.request.urlopen(req, timeout=10).read()
+        log(f"  nudge sent via ntfy ({priority})")
+    except Exception as exc:
+        log(f"  NUDGE NOT SENT: ntfy failed: {exc}")
 
 
 
@@ -114,43 +282,58 @@ def _beat(note: str = "") -> None:
         pass
 
 def main() -> int:
+    arm_watchdog()
     from composio import Composio  # type: ignore
     c = Composio(api_key=os.environ["COMPOSIO_API_KEY"])
     ent = os.environ.get("STUDIO_GMAIL_ENTITY")
     rows = tracker_rows()
     domains = prospect_domains(rows)
+    addresses = prospect_addresses(rows)
     st = load_state()
     seen = set(st.get("seen", []))
     res = c.tools.execute("GMAIL_FETCH_EMAILS", user_id=ent, dangerously_skip_version_check=True,
                           arguments={"query": "in:inbox newer_than:14d", "max_results": 30})
     msgs = (res.get("data") or {}).get("messages") or []
     hits = 0
+    autos = 0
     for m in msgs:
         mid = m.get("messageId") or m.get("id")
         sender = str(m.get("sender") or "")
         addr = sender.split("<")[-1].rstrip(">").strip().lower()
         dom = addr.split("@", 1)[1] if "@" in addr else ""
-        if not mid or mid in seen or not dom or dom in OWN:
+        if not mid or mid in seen or not dom:
             continue
-        brand = domains.get(dom)
+        # Exact address first: a prospect at a freemail mailbox is invisible to the domain map.
+        brand = addresses.get(addr) or (None if dom in OWN else domains.get(dom))
         if not brand:
             continue
         subject = str(m.get("subject") or "")[:80]
-        preview = str(m.get("preview") or m.get("snippet") or "")
-        if isinstance(m.get("preview"), dict):
-            preview = str(m["preview"].get("body") or "")
+        preview = body_text(m)
         when = datetime.now().strftime("%Y-%m-%d")
-        log(f"REPLY from {brand} <{addr}>: {subject}")
-        stamp_replied(brand, when)
-        nudge(f"{brand} replied", f"{sender}: {subject}\n{preview[:180]}\nReply today. Call card: Money/call-card.md")
+        auto = auto_reply_reason(m)
+        if auto:
+            # Not a reply. Do NOT stamp `replied` — that would retire a live prospect after one
+            # touch. Still worth saying out loud: it proves the address is real and monitored,
+            # which is the deliverability signal the lane otherwise has no way to observe.
+            log(f"AUTO-REPLY from {brand} <{addr}>: {subject} [{auto}] — follow-ups left open")
+            autos += 1
+        else:
+            log(f"REPLY from {brand} <{addr}>: {subject}")
+            stamp_replied(brand, when)
+            nudge(f"{brand} replied", f"{sender}: {subject}\n{preview[:180]}\nReply today. Call card: Money/call-card.md")
+            hits += 1
         seen.add(mid)
-        hits += 1
     st["seen"] = sorted(seen)[-500:]
     st["last_run"] = datetime.now().isoformat()
     save_state(st)
     _beat(f"{len(msgs)} scanned")
     if not hits:
-        log(f"no prospect replies ({len(msgs)} inbox messages scanned)")
+        tail = f", {autos} auto-reply(s) ignored" if autos else ""
+        log(f"no prospect replies ({len(msgs)} inbox messages scanned{tail})")
+    try:
+        signal.alarm(0)
+    except (AttributeError, ValueError):
+        pass
     return 0
 
 
