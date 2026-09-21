@@ -2118,6 +2118,48 @@ def test_the_gate_refuses_a_record_that_is_one_trade(tmp_path):
     assert min(sum(all_legs[:6]), sum(all_legs[6:])) > 0   # per-set: every decision made money
 
 
+def test_settling_asks_each_market_once_not_each_leg(tmp_path):
+    """A market's outcome is a property of the market. The same market appears once per set that
+    touched it, so settling asked the venue the same question over and over: on 2026-09-19 that
+    was 24 open legs across only 6 distinct markets, four times the calls needed, against a
+    five-per-window budget.
+
+        09-20 17:21:04 settle: {'closed': 15, 'open': 14}
+        09-20 17:21:04   us venue blind for 15s — RateLimitError
+
+    Fifteen legs closed and the limiter cut off the rest — including four legs of a set whose
+    other two HAD closed, which reported a $52.70 arb as a $1.33 loss. An arb settles whole or it
+    says nothing true at all."""
+    from polybot.ledger import Ledger
+    from polybot.paper import PaperEngine
+    from polybot.strategies.base import Signal
+
+    led = Ledger(str(tmp_path / "s.db"))
+    markets = ["lt84", "b84", "b86", "b88", "b90", "b92"]
+    for group in ("set1", "set2", "set3", "set4"):          # four sets over the same six markets
+        for m in markets:
+            sid = led.add_signal(Signal("bucket_sum", "us", m, m, "BUY_YES", 0.10, 1.0, 9.0,
+                                        "set", taker=True, arb=True, meta={"group": group}), "paper")
+            led.upsert_paper(sid, filled_ts=time.time() - 60, fill_price=0.10, status="filled")
+
+    asked = []
+
+    def resolve(sig):
+        asked.append(sig["market"])
+        return 1 if sig["market"] == "b90" else 0
+
+    pe = PaperEngine(led, history_fn=lambda sig: [], resolution_fn=resolve)
+    out = pe.settle_open("us", log=lambda *a, **k: None)
+
+    assert len(asked) == len(set(asked)) == 6, f"asked {len(asked)} times for 6 markets: {asked}"
+    assert out["closed"] == 24                    # every leg of every set still settles
+
+    # and the answer is applied to every set, not just the first — no half-closed sets
+    rows = list(led.conn.execute(
+        "SELECT p.status FROM signals s JOIN paper_trades p ON p.signal_id=s.id"))
+    assert {r[0] for r in rows} == {"closed"}
+
+
 def test_a_settled_arb_pays_the_same_whatever_wins(tmp_path):
     """The one property the whole strategy rests on, driven through the real settlement code.
 

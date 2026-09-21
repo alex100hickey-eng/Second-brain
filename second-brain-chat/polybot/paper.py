@@ -130,6 +130,26 @@ class PaperEngine:
 
     def settle_open(self, venue: str = "offshore", log=print) -> dict:
         counts = {"filled": 0, "closed": 0, "expired": 0, "open": 0}
+        # One resolution per MARKET, not per signal. A market's outcome is a property of the
+        # market, and the same market appears once per set that touched it — on 2026-09-19 that
+        # was 24 open legs across only 6 distinct miami/nyc markets, so settling asked the venue
+        # the same six questions four times over. Against a five-per-window budget that is a
+        # guaranteed rate limit, and it is exactly what happened:
+        #
+        #   09-20 17:21:04 settle: {'closed': 15, 'open': 14}
+        #   09-20 17:21:04   us venue blind for 15s — RateLimitError
+        #
+        # Fifteen legs closed, then the limiter cut it off and left 14 — including four legs of a
+        # set whose other two HAD closed, which reports a $52.70 arb as a $1.33 loss. An arb set
+        # settles whole or it says nothing true at all.
+        resolved = {}
+
+        def resolve_once(sig):
+            key = (sig["venue"], sig["market"])
+            if key not in resolved:
+                resolved[key] = self.resolve(sig)
+            return resolved[key]
+
         for sig in self.ledger.open_signals(venue=venue):
             row = self.ledger.paper_row(sig["id"]) or {}
             try:
@@ -156,7 +176,7 @@ class PaperEngine:
             outcome = None
             if exit_ts is None:
                 try:
-                    outcome = self.resolve(sig)
+                    outcome = resolve_once(sig)
                 except Exception as exc:
                     log(f"  resolution error signal {sig['id']}: {exc}")
                 if outcome is None:

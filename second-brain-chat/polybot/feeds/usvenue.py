@@ -627,11 +627,16 @@ class USVenue:
         return done
 
     def resolution(self, slug: str) -> int | None:
-        """1/0 once the market settled, else None. Settlement is a 404 until it exists."""
+        """1/0 once the market settled, else None. Settlement is a 404 until it exists.
+
+        A priority call. Settling is what turns a paper record into evidence, and a settle that
+        runs out of budget half way leaves an arb set part-closed — which does not merely delay
+        the answer, it reports a profitable set as a loss until the rest catches up.
+        """
         if not self.available:
             return None
         try:
-            self._space()
+            self._space(priority=True)
             s = self._client.markets.settlement(slug) or {}
         except Exception as exc:
             if _is_rate_limited(exc):
