@@ -232,12 +232,67 @@ def check_nodes():
         ok("local node on HEAD")
 
 
+
+# ---------------------------------------------------------------------------
+# Are the background jobs that make money actually loaded?
+#
+# On 2026-09-19 the Splitframe reply watcher had been dead for two days: its plist had been renamed
+# `.plist.disabled`, so launchctl had no row for it at all. Nothing caught it, because a dead job
+# and a quiet job produce identical evidence — the last log line read "no prospect replies", which
+# is exactly what a healthy run writes. 46 cold emails were out with nothing watching for answers.
+#
+# So this checks two separate things, because either alone can be true while the job is broken:
+#   1. launchctl still knows the label  (catches disabled/unloaded/never-installed)
+#   2. the job's log has moved recently (catches loaded-but-erroring, or running stale code)
+# ---------------------------------------------------------------------------
+
+# label -> (log filename, how many hours of silence is abnormal)
+MONEY_JOBS = {
+    "com.secondbrain.replywatch": ("reply_watch.log", 2),
+    "com.secondbrain.splitframesend": ("splitframe_send.log", 24),
+    "com.secondbrain.capabilitywatcher": ("capability_watcher.log", 2),
+    "com.secondbrain.kickscan": ("kick_scan.log", 26),
+}
+
+
+def _loaded_labels() -> set:
+    try:
+        out = subprocess.run(["launchctl", "list"], capture_output=True, text=True, timeout=15).stdout
+    except Exception:
+        return set()
+    return {ln.split("\t")[-1].strip() for ln in out.splitlines()[1:] if ln.strip()}
+
+
+def check_jobs(now=None):
+    now = now or datetime.now(LOCAL_TZ)
+    loaded = _loaded_labels()
+    if not loaded:
+        warn("launchctl list returned nothing — cannot tell whether any money job is alive")
+        return
+    for label, (logname, max_quiet_h) in sorted(MONEY_JOBS.items()):
+        short = label.replace("com.secondbrain.", "")
+        if label not in loaded:
+            warn(f"{short}: NOT LOADED — launchctl has no such job (check for a .plist.disabled)")
+            continue
+        path = os.path.join(ROOT, "scripts", logname)
+        try:
+            age_h = (now.timestamp() - os.path.getmtime(path)) / 3600.0
+        except OSError:
+            warn(f"{short}: loaded, but its log {logname} is missing — has it ever run?")
+            continue
+        if age_h > max_quiet_h:
+            warn(f"{short}: loaded but silent for {age_h:.1f}h (expected within {max_quiet_h}h)")
+        else:
+            ok(f"{short}: alive, last wrote {age_h:.1f}h ago")
+
+
 def main():
     _env()
     today = datetime.now(LOCAL_TZ).date()
     check_vault(today)
     check_supabase(datetime.now(timezone.utc))
     check_nodes()
+    check_jobs()
     print(f"ROT CHECK — {today}")
     for s in WARN:
         print("  ⚠", s)
