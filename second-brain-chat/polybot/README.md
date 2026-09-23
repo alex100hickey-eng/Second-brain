@@ -30,8 +30,8 @@ Alex's multi-strategy Polymarket bot. Design doc: vault `Money/Polymarket Bot �
 | weather_hold | Open-Meteo ensemble vs bucket price | **off** — backtest −8.9%, paper −$2,456 |
 | weather_model_update | new model run vs last run | **off** — 71 closed paper trades, 63% wins, −$291, losing in every edge band |
 | bucket_sum | mutually-exclusive buckets ≠ $1 | **paper — the one that doesn't need a forecast.** US only |
-| hold_favorites | our own calibration table (run `calibrate`) | paper on offshore books |
-| leadlag | offshore price vs US book | idle until `pairs.json` |
+| hold_favorites | our own calibration table (run `calibrate`) | paper on offshore books. 0 signals ever until 2026-09-23 (see below) |
+| leadlag | offshore price vs US book | paper. `pairs.json` + a 60 s recorder since 2026-09-23 (see below) |
 | maker_rewards | incentive-program quoting | idle |
 
 ### bucket_sum: the only module that isn't a forecast bet
@@ -108,12 +108,52 @@ python3 -m polybot.runner settle               # fill/close paper signals from w
 python3 -m polybot.runner report --days 7
 python3 -m polybot.runner arbs --days 7        # every moment the US books offered a set under $1, and how deep
 python3 -m polybot.runner promote              # flip every gate-passing paper module to live (writes config.json)
-python3 -m polybot.runner calibrate --events 300
+python3 -m polybot.runner calibrate            # ADD newly closed markets to the sample cache (incremental)
 python3 -m polybot.runner backtest --days 7    # replay the weather modules on real past days (also Sundays 04:00)
-python3 -m polybot.runner pairs                # match US markets to offshore twins for leadlag (needs the key)
+python3 -m polybot.runner pairs                # match US markets to offshore twins for leadlag (needs the key, ~2 min)
+python3 -m polybot.runner leadlag --minutes 20 # record the pairs + run leadlag on the loop's cadence, standalone
 python3 -m polybot.runner loop                 # the schedule, forever
 ```
 Tests: `python3 -m pytest test_polybot.py -q` (no network).
+
+## leadlag: pairs and the recorder (2026-09-23)
+Zero signals in its life, for three separate reasons — all three had to go:
+- **No universe.** `pairs.json` was never written: the builder asked `events.list` for the US
+  catalogue and that call answers *sports* unless given `categories=[...]` (it ignores `tagSlug`),
+  and leadlag skips sports (Ohio). It was also pinned to 05:00, when this Mac is asleep.
+  `USVenue.events_by_category` now lists the whole non-sports catalogue in ~20 calls (1,290 events
+  on 2026-09-23, 1,175 of them politics) and gamma's `tag_slug` gives the offshore side.
+- **Fuzzy matching is the wrong tool here.** Polymarket US copies offshore titles almost word for
+  word, so the danger is a near-identical title asking a different question (Tarrant vs Denton
+  County, October vs December). `pairs.same_question` demands equal content-word sets (fillers
+  dropped, parties and plurals folded, a year only when both sides carry one), then the outcome
+  labels must match the same way, and a pair whose two prices sit more than 25c apart is refused
+  as a mismatch (on 2026-09-23 those were all US books quoting BOTH candidates of a race at 0.975).
+  First build: **5,747 market pairs over 1,086 of 1,290 US events**, 623 with a two-sided US quote.
+- **Nothing recorded the prices.** Its series came from the snapshot table (weather books only) and
+  it ran every 5 minutes against a 120 s window, which cannot see a 2-minute move by construction.
+  `pairs.PairRecorder` samples the first 40 US events' worth of pairs every 60 s (2 batched US calls
+  + 1 CLOB call), keeps every sample in memory for the move test, and writes only CHANGES to the
+  snapshot table (paper needs them to fill and exit). leadlag runs right after each sample.
+
+## hold_favorites: why it never fired (2026-09-23)
+- `calibration.lookup` needs n ≥ 25 in a band. The 2026-09-12 table held 146 samples in total —
+  10 in 0.85-0.90, 15 in 0.90-0.95 — so every favourite looked up None. The build walked 300 events
+  newest-first, which meant a couple of hours of 5-minute crypto coin flips, and the 03:00 rebuild
+  never ran again (Mac asleep). Now: an incremental sample cache (`calibration-samples.json`), the
+  Up-or-Down and sports tags excluded server-side, 6,606 samples on the first build (55 and 89 in
+  the favourite bands). The lookup also falls back to `all` when a category cell is THIN, as its
+  docstring always said (it only did when the cell was missing). min_n and shrink are unchanged.
+- The universe was one gamma page: the 100 soonest-ending events, i.e. the next 40 minutes of crypto
+  coin flips. It now pages the whole 7-day horizon (past gamma's 2,000-offset cap), minus coin flips,
+  sports and the daily temperature events (those belong to weather_lock / weather_obs).
+- It can still never pass the gate: every signal is offshore, and the gate needs 10 US signals.
+
+## Daily jobs catch up
+Calibration (03:00), the pairs build (05:00) and hold_favorites (09:00, 21:00) used to fire on one
+exact minute — asleep, or stepped over by a 75 s arb pass. `Runner._due` runs a missed slot at the
+next chance (the long ones outside 09:00-16:59, the arb window) and remembers runs in
+`jobs-state.json` so a watchdog restart does not repeat them. The 03:00 snapshot prune is unchanged.
 
 ## The backtester
 `backtest.py` replays each city-day hour by hour with the same strategy code: real bucket price

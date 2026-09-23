@@ -79,7 +79,8 @@ def _days_until(iso: str | None) -> float | None:
         return max((when - datetime.now(timezone.utc)).total_seconds() / 86400.0, 0.5)
     except (ValueError, TypeError):
         return None
-from .strategies.bucket_sum import consume_levels, BucketSum, arb_check, arb_possible, unpriced, worth_confirming
+from .strategies.bucket_sum import (consume_levels, BucketSum, arb_check, arb_possible, explain_no_set, unpriced,
+                                    worth_confirming)
 from .strategies.hold_favorites import HoldFavorites
 from .strategies.leadlag import LeadLag
 from .strategies.maker_rewards import MakerRewards
@@ -107,6 +108,48 @@ def _arm_hard_watchdog(seconds: float) -> None:
         faulthandler.dump_traceback_later(max(seconds, 60.0), exit=True)
     except Exception:
         pass        # a watchdog that breaks the loop is worse than no watchdog
+
+
+# Hours the arb sweep owns (see _arb_interval_s). Long jobs that hold the loop stay out of them.
+ARB_HOURS = range(9, 17)
+QUIET_REPEAT_S = 600.0
+JOBS_PATH = os.path.join(config.ROOT, "jobs-state.json")
+# Where the leadlag universe comes from. US: every non-sports category events.list honours.
+# Offshore: the gamma tags those questions live under (checked 2026-09-23).
+PAIR_US_CATEGORIES = ("politics", "macro", "culture", "finance", "climate", "crypto", "geopolitics", "science")
+PAIR_OFFSHORE_TAGS = ("politics", "elections", "midterms", "us-politics", "trump", "economy", "fed", "fed-rates",
+                      "economic-policy", "inflation", "geopolitics", "world", "pop-culture", "awards", "oscars",
+                      "finance", "tech", "science", "climate", "crypto-prices", "bitcoin")
+
+
+def _last_slot(now, hours):
+    """The latest datetime at one of `hours` (ET, on the hour) that is not after `now`."""
+    best = None
+    for back in (0, 1):
+        day = (now - timedelta(days=back)).date()
+        for h in hours:
+            t = datetime(day.year, day.month, day.day, h, tzinfo=ET)
+            if t <= now and (best is None or t > best):
+                best = t
+    return best
+
+
+def _load_jobs(path: str | None = None) -> dict:
+    try:
+        with open(path or JOBS_PATH) as f:
+            return {k: float(v) for k, v in json.load(f).items()}
+    except (OSError, ValueError, AttributeError):
+        return {}
+
+
+def _save_jobs(jobs: dict, path: str | None = None) -> None:
+    try:
+        tmp = (path or JOBS_PATH) + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(jobs, f)
+        os.replace(tmp, path or JOBS_PATH)
+    except OSError:
+        pass          # losing the record costs one repeated job, never a missed trade
 
 
 class SeriesStore:
@@ -178,6 +221,10 @@ class Runner:
         self.executor = Executor(self.ledger, self.us, self.cfg, self.log)
         self.uni = universe.Universe(self.ledger.conn)
         self.arb = BucketSum(self.cfg)      # the universe path runs the arb outside scan_weather
+        self.pair_rec = pairs.PairRecorder(self.ledger, self.us, log=self.log)
+        self._pairs_cache = (None, [])
+        self._quiet: dict = {}              # log-line dedupe, see _quiet_log
+        self._jobs = _load_jobs()
         if self.us.available:
             # Account VALUE, not buying power: money already in positions is still the bankroll.
             # Reading buying power halted the bot at "bankroll under floor" the moment anything
@@ -194,7 +241,8 @@ class Runner:
         }
         self.other_modules = {
             "hold_favorites": HoldFavorites(self.cfg),
-            "leadlag": LeadLag(self.cfg, self.us, SeriesStore(self.ledger)),
+            "leadlag": LeadLag(self.cfg, self.us, self.pair_rec, quote_fn=self.pair_rec.quote,
+                               pairs_fn=self.leadlag_pairs),
             "maker_rewards": MakerRewards(self.cfg, self.us),
         }
 
@@ -297,16 +345,19 @@ class Runner:
             side = "BUY_YES" if kind == "buy_all" else "BUY_NO"
             if any(self.ledger.recent_signal_exists("bucket_sum", b.yes_token, side,
                                                     self.cfg.arb_dedupe_s) for b in buckets):
-                self.log(f"  arb candidate us {slug} {kind} {net:.1f}c/set — already taken this "
-                         f"episode, not re-confirming")
+                self._quiet_log((slug, "taken"), [f"  arb candidate us {slug} {kind} {net:.1f}c/set — "
+                                                  f"already taken this episode, not re-confirming"])
                 continue
             got = self.us.fill_depth_buckets(buckets)
-            self.log(f"  arb candidate us {slug} {kind} {net:.1f}c/set ({len(buckets)} legs) — "
-                     f"depth {'read' if got else 'INCOMPLETE, standing down'}")
+            confirm = [f"  arb candidate us {slug} {kind} {net:.1f}c/set ({len(buckets)} legs) — "
+                       f"depth {'read' if got else 'INCOMPLETE, standing down'}"]
             if not got:
+                self._quiet_log((slug, "confirm"), confirm)
                 continue          # the return was being ignored; unknown depth is not zero depth
+            held_max = 0.0
             for b in buckets:     # a position we already hold has eaten that liquidity
                 held = self.ledger.held_contracts("us", b.yes_token, "bucket_sum")
+                held_max = max(held_max, held)
                 if held <= 0:
                     continue
                 if kind == "buy_all":
@@ -325,7 +376,15 @@ class Runner:
             ctx = _UniverseCtx(event=_Ev(slug, buckets), venue="us", city=row["series"],
                                date=slug[-10:], kind=row["category"] or "event",
                                settles_in_days=days)
-            n += self.handle_arb_set(list(self.arb.scan(ctx)))
+            sigs = list(self.arb.scan(ctx))
+            if sigs:
+                self._quiet.pop((slug, "confirm"), None)
+                for line in confirm:
+                    self.log(line)
+                n += self.handle_arb_set(sigs)
+            else:
+                confirm.append("    no set: " + explain_no_set(buckets, kind, self.cfg, days, held_max))
+                self._quiet_log((slug, "confirm"), confirm)
         return n
 
     def prove_by_date_sweep(self, days_back: int = 200, series=None, max_series: int = 6) -> int:
@@ -570,6 +629,7 @@ class Runner:
             ctx.settles_in_days = max(ctx.settles_in_days, 0.5) + 0.5
         for b in ctx.event.buckets:
             self.ledger.add_snapshot(venue, b.yes_token, b.best_bid, b.best_ask, b.last)
+        confirm = confirm_key = confirm_arb = None     # an arb confirm waiting to be told, see below
         # Cheap screen, expensive confirm. The quotes come free with the event (one call); depth
         # costs a book call per bucket. bucket_sum needs depth to size a set at all, so look it up
         # only when the quotes say a set might be there — 34 event-minutes out of 3,353 over 8 days
@@ -603,11 +663,13 @@ class Runner:
             if taken:
                 # Skip the confirm, not the whole scan: `wanted` can carry the weather modules too
                 # (scan_weather with modules=None), and they have their own work to do here.
-                self.log(f"  arb candidate {venue} {city} {ctx.date} {kind} {arb_kind} "
-                         f"{net:.1f}c/set — already taken this episode, not re-confirming")
+                self._quiet_log((ctx.event.slug, "taken"),
+                                [f"  arb candidate {venue} {city} {ctx.date} {kind} {arb_kind} "
+                                 f"{net:.1f}c/set — already taken this episode, not re-confirming"])
             elif arb_kind is not None and worth_confirming(ctx.event.buckets, net, self.cfg,
                                                            getattr(ctx, "settles_in_days", None)):
                 got = self.us.fill_depth(ctx.event)
+                held_max = 0.0
                 if got:
                     # A position we already hold has consumed that liquidity. Paper orders do not,
                     # so without this the same mispricing is bought over and over against the same
@@ -616,6 +678,7 @@ class Runner:
                     # best_bid/best_ask stay the real market so the logs keep telling the truth.
                     for b in ctx.event.buckets:
                         held = self.ledger.held_contracts(venue, b.yes_token, "bucket_sum")
+                        held_max = max(held_max, held)
                         if held <= 0:
                             continue
                         if arb_kind == "buy_all":
@@ -626,8 +689,10 @@ class Runner:
                             b.bid_levels = consume_levels(b.bid_levels, held)
                             b.bid_qty = sum(q for px, q in b.bid_levels
                                             if b.bid_levels and px == b.bid_levels[0][0]) or 0.0
-                self.log(f"  arb candidate {venue} {city} {ctx.date} {kind} {arb_kind} {net:.1f}c/set — "
-                         f"depth {'read' if got else 'INCOMPLETE, standing down'}")
+                confirm = [f"  arb candidate {venue} {city} {ctx.date} {kind} {arb_kind} {net:.1f}c/set — "
+                           f"depth {'read' if got else 'INCOMPLETE, standing down'}"]
+                confirm_key = (ctx.event.slug, "confirm")
+                confirm_arb = (arb_kind, getattr(ctx, "settles_in_days", None), held_max)
                 if got:
                     # Say what the BOOK said, not just what the quotes promised. Six of the eight
                     # candidates that got this far produced no set and gave no reason, which is
@@ -638,11 +703,14 @@ class Runner:
                     depths = [b.ask_qty if arb_kind == "buy_all" else b.bid_qty
                               for b in ctx.event.buckets]
                     known = [d for d in depths if d is not None]
-                    self.log(f"    book says {post_kind or 'NO ARB'} "
-                             f"{post_net:.1f}c/set (screen said {net:.1f}c), "
-                             f"thinnest leg {min(known) if known else '?'} contracts"
-                             + (" — a leg has no offers at any price"
-                                if known and min(known) == 0 else ""))
+                    confirm.append(f"    book says {post_kind or 'NO ARB'} "
+                                   f"{post_net:.1f}c/set (screen said {net:.1f}c), "
+                                   f"thinnest leg {min(known) if known else '?'} contracts"
+                                   + (" — a leg has no offers at any price"
+                                      if known and min(known) == 0 else ""))
+                else:
+                    self._quiet_log(confirm_key, confirm)
+                    confirm = None
                 # Record the book WITH sizes. Whether these arbs are big enough to be worth taking
                 # is the one question the old snapshots cannot answer, so every candidate leaves
                 # evidence behind whether or not it trades.
@@ -655,6 +723,11 @@ class Runner:
             try:
                 sigs = list(self.weather_modules[name].scan(ctx))
                 if sigs and all(s.arb for s in sigs):
+                    if confirm is not None:          # a new set is news: always tell it
+                        self._quiet.pop(confirm_key, None)
+                        for line in confirm:
+                            self.log(line)
+                        confirm = None
                     n += self.handle_arb_set(sigs)      # all legs or none
                     continue
                 for sig in sigs:
@@ -662,6 +735,11 @@ class Runner:
                         n += 1
             except Exception as exc:
                 self.log(f"  {name} error: {exc}\n{traceback.format_exc(limit=2)}")
+        if confirm is not None:
+            # The book was read and nothing was booked. Say why — once, not every 20 s sweep.
+            kind_, days_, held_ = confirm_arb
+            confirm.append("    no set: " + explain_no_set(ctx.event.buckets, kind_, self.cfg, days_, held_))
+            self._quiet_log(confirm_key, confirm)
         return n
 
     def scan_other(self, modules=None) -> int:
@@ -731,27 +809,98 @@ class Runner:
         return text
 
     def build_pairs(self) -> str:
-        """Match Polymarket US markets to offshore twins (needs the key). Writes pairs.json."""
+        """Match Polymarket US markets to the offshore markets asking the same question. Writes
+        pairs.json, leadlag's universe. ~20 US calls (the catalogue by category, 100 to a call)
+        and ~60 gamma calls, so it runs once a day outside the arb window, not every tick."""
         if not self.us.available:
             return f"pairs: idle — {self.us.why_unavailable}"
-        us_markets = []
-        for e in self.us.events(limit=200, active=True):
-            for m in e.get("markets", []) or []:
-                us_markets.append({"slug": m.get("slug") or e.get("slug"), "title": m.get("title") or m.get("question") or e.get("title", ""),
-                                   "end": m.get("endDate") or e.get("endDate"), "category": (e.get("category") or "").lower() or None})
-        off = []
-        for e in offshore.events_ending_within(14, limit=200):
-            cat = offshore.event_category(e)
-            for m in e.get("markets", []):
-                toks = m.get("clobTokenIds")
-                try:
-                    tok = __import__("json").loads(toks or "[]")[0]
-                except (ValueError, IndexError):
-                    continue
-                off.append({"token": tok, "title": m.get("question") or e.get("title", ""), "end": m.get("endDate") or e.get("endDate"), "category": cat})
-        found = pairs.match_pairs(us_markets, off)
+        cats = PAIR_US_CATEGORIES + (("sports",) if self.cfg.caps.sports_enabled else ())
+        us_events = list(self.us.events_by_category(cats).values())
+        if not us_events:
+            return "pairs: the US catalogue came back empty — keeping the pairs we had"
+        tags = PAIR_OFFSHORE_TAGS + (("sports",) if self.cfg.caps.sports_enabled else ())
+        off = {}
+        for tag in tags:
+            try:
+                for e in offshore.active_events_by_tag(tag):
+                    off[e.get("id")] = e
+            except Exception as exc:
+                self.log(f"  pairs: offshore tag {tag} failed ({exc})")
+        found, counts = pairs.match_events(us_events, list(off.values()))
+        if not found:
+            return (f"pairs: 0 matched from {len(us_events)} US × {len(off)} offshore events — "
+                    "keeping the pairs we had")
         path = pairs.save_pairs(found)
-        return f"pairs: {len(found)} matched from {len(us_markets)} US × {len(off)} offshore markets → {path}"
+        self._pairs_cache = (None, [])
+        return (f"pairs: {len(found)} market pairs over {counts['events_matched']} of {len(us_events)} US events "
+                f"({counts['quoted_events']} with a two-sided US quote; {counts['gap_rejected']} refused on a "
+                f"price gap over {pairs.MAX_PRICE_GAP:.0%}) × {len(off)} offshore events → {path}")
+
+    def leadlag_pairs(self) -> list:
+        """pairs.json, re-read only when the file changes, without the categories leadlag may not
+        trade (sports, until the Ohio switch is flipped)."""
+        try:
+            mtime = os.path.getmtime(pairs.PAIRS_PATH)
+        except OSError:
+            return []
+        if self._pairs_cache[0] != mtime:
+            self._pairs_cache = (mtime, pairs.load_pairs())
+        rows = self._pairs_cache[1]
+        if self.cfg.caps.sports_enabled:
+            return rows
+        return [p for p in rows if p.get("category") != "sports"]
+
+    def record_pairs(self) -> int:
+        """Sample both sides of every recorded pair, then run leadlag on the fresh paths."""
+        rows = self.leadlag_pairs()
+        if not rows or not self.us.available:
+            return 0
+        got = self.pair_rec.record(rows)
+        n = self.scan_other(modules=["leadlag"])
+        if time.time() - getattr(self, "_pairs_logged", 0.0) >= 3600:
+            self._pairs_logged = time.time()
+            self.log(f"  pairs: recording {got['events']} US events every {pairs.RECORD_INTERVAL_S:.0f}s — "
+                     f"{got['us']} US and {got['offshore']} offshore quotes this tick")
+        return n
+
+    def _quiet_log(self, key, lines, every_s: float = QUIET_REPEAT_S) -> bool:
+        """Log `lines` unless this key logged exactly the same lines within `every_s`.
+
+        The arb sweep runs every 20 s and re-reads a persisting candidate each time, so one book
+        on 2026-09-23 wrote the same two lines every ~33 s for six minutes (09:41-09:44 miami,
+        "book says sell_all 2.8c/set ... thinnest leg 42"). The first telling says everything; a
+        repeat says only that nothing changed, and it now says so once, with a count, when the
+        story does change."""
+        now = time.time()
+        text = "\n".join(lines)
+        st = self._quiet.get(key)
+        if st and st["text"] == text and now - st["ts"] < every_s:
+            st["n"] += 1
+            st["last"] = now
+            return False
+        if st and st["n"]:
+            self.log(f"    (the previous {key[0] if isinstance(key, tuple) else key} lines repeated {st['n']}x "
+                     f"more, until {datetime.fromtimestamp(st['last'], ET).strftime('%H:%M:%S')})")
+        self._quiet[key] = {"text": text, "ts": now, "n": 0, "last": now}
+        for line in lines:
+            self.log(line)
+        return True
+
+    def _due(self, name: str, now, hours, quiet_hours=()) -> bool:
+        """Has the most recent scheduled slot for `name` passed without a run?
+
+        Every daily job used to fire on one exact minute, and this loop is on a laptop: asleep at
+        03:00 and 05:00 (calibration last built 2026-09-12; pairs.json never built at all), and a
+        20 s tick behind a 75 s arb pass can step over any given minute. A slot that was missed now
+        runs at the next chance instead — outside `quiet_hours`, which keeps the long jobs out of
+        the arb window. Runs are remembered on disk so a watchdog restart does not repeat them."""
+        if now.hour in quiet_hours:
+            return False
+        return self._jobs.get(name, 0.0) < _last_slot(now, hours).timestamp()
+
+    def _ran(self, name: str) -> None:
+        self._jobs[name] = time.time()
+        _save_jobs(self._jobs)
 
     def reload_config_if_changed(self) -> bool:
         """Pick up an edited config.json without a restart. The loop used to read config once at
@@ -810,7 +959,10 @@ class Runner:
                  f"${self.cfg.caps.max_exposure_usd:.0f} total · floor ${self.cfg.caps.bankroll_floor_usd:.0f} · "
                  f"sports {'ON' if self.cfg.caps.sports_enabled else 'off (Ohio)'}",
                  f"  open signals: {len(self.ledger.open_signals())} · calibration: "
-                 f"{'built ' + calibration.load_table().get('_built', '')[:10] if calibration.load_table() else 'not built'}"]
+                 f"{'built ' + calibration.load_table().get('_built', '')[:10] if calibration.load_table() else 'not built'}"
+                 f"{' (' + str(calibration.load_table().get('_n')) + ' samples)' if calibration.load_table().get('_n') else ''}",
+                 f"  leadlag pairs: {len(self.leadlag_pairs())}"
+                 + (f" (built {pairs.pairs_age_s() / 3600:.0f}h ago)" if pairs.pairs_age_s() is not None else " — pairs.json missing")]
         return "\n".join(lines)
 
     # ---- the loop --------------------------------------------------------------------------
@@ -895,6 +1047,7 @@ class Runner:
         self.log("polybot loop started (Ctrl+C to stop)")
         done = set()
         next_arb = 0.0        # sweep immediately on start, then on its own seconds clock
+        next_pairs = 0.0
         self._heartbeat = time.time()
         # Start the catch-up clock at boot, not at zero: a restart should not fire a 25-call
         # settle burst into the same cold cache that is already re-pricing every leg.
@@ -946,7 +1099,9 @@ class Runner:
                         with self._long_job("scan_universe", grace_s=300):
                             self.scan_universe()
                     if now.minute % 5 == 0:
-                        self.scan_other(modules=["leadlag", "maker_rewards"])
+                        # leadlag runs on the recorder's own clock below: a 5-minute tick cannot
+                        # see a move inside its 2-minute window.
+                        self.scan_other(modules=["maker_rewards"])
                         if self.us.available:
                             with self._long_job("sync", grace_s=300):
                                 self.executor.sync()
@@ -956,12 +1111,16 @@ class Runner:
                     if now.weekday() == 6 and now.hour == 4 and now.minute == 0:
                         with self._long_job("backtest"):
                             self.backtest(7)
-                    if now.hour == 5 and now.minute == 0 and self.us.available:
+                    if (self.us.available and self.cfg.mode("leadlag") != "off"
+                            and self._due("build_pairs", now, (5,), quiet_hours=ARB_HOURS)):
                         with self._long_job("build_pairs"):
                             self.log(self.build_pairs())
-                    if now.hour in (9, 21) and now.minute == 0:
-                        with self._long_job("hold_favorites", grace_s=300):
-                            self.scan_other(modules=["hold_favorites"])
+                        self._ran("build_pairs")
+                    if self.cfg.mode("hold_favorites") != "off" and self._due("hold_favorites", now, (9, 21)):
+                        with self._long_job("hold_favorites", grace_s=600):
+                            n = self.scan_other(modules=["hold_favorites"])
+                        self._ran("hold_favorites")
+                        self.log(f"  hold_favorites: {n} signal(s)")
                     if now.hour == 7 and now.minute == 0:
                         self.log(self.report(1))
                         promoted = self.promote() if self.cfg.auto_promote else []
@@ -984,9 +1143,11 @@ class Runner:
                         with self._long_job("date_sweep"):
                             n = self.prove_by_date_sweep()
                         self.log(f"universe: date sweep proved {n} series")
-                    if now.hour == 3 and now.minute == 0:
+                    if self._due("calibration", now, (3,), quiet_hours=ARB_HOURS):
                         with self._long_job("calibration"):
                             calibration.save_table(calibration.build(log=self.log))
+                        self._ran("calibration")
+                    if now.hour == 3 and now.minute == 0:
                         self.log(f"pruned {self.ledger.prune_snapshots(self.cfg.snapshot_keep_days)} snapshots older than {self.cfg.snapshot_keep_days}d")
                 except Exception as exc:
                     self.log(f"loop error: {exc}\n{traceback.format_exc(limit=3)}")
@@ -1017,6 +1178,13 @@ class Runner:
                     self.scan_weather(modules=["bucket_sum"], venue="us", day_offsets=(0,))
                 except Exception as exc:
                     self.log(f"  arb sweep error: {exc}\n{traceback.format_exc(limit=2)}")
+            if (self.us.available and self.cfg.mode("leadlag") != "off"
+                    and time.time() >= next_pairs):
+                next_pairs = time.time() + pairs.RECORD_INTERVAL_S
+                try:
+                    self.record_pairs()
+                except Exception as exc:
+                    self.log(f"  pairs record error: {exc}\n{traceback.format_exc(limit=2)}")
             _beat("polybot", 3 * 3600, f"{self.cfg.mode('weather_lock')} lock")
             try:
                 ready = [m for m in config.MODULES
@@ -1046,12 +1214,13 @@ def _stamped_log(*parts):
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="polybot")
     ap.add_argument("cmd", choices=["scan", "settle", "report", "calibrate", "status", "loop", "backtest",
-                                   "pairs", "promote", "arbs", "universe"])
+                                   "pairs", "promote", "arbs", "universe", "leadlag"])
     ap.add_argument("--city", action="append")
     ap.add_argument("--modules", nargs="*")
     ap.add_argument("--venue", default="offshore", choices=["offshore", "us"], help="scan: which books to read")
     ap.add_argument("--days", type=int, default=1)
-    ap.add_argument("--events", type=int, default=300)
+    ap.add_argument("--events", type=int, default=3000)
+    ap.add_argument("--minutes", type=float, default=10, help="leadlag: how long to record")
     ap.add_argument("--kinds", nargs="*", default=["high"])
     a = ap.parse_args(argv)
     r = Runner(log=_stamped_log if a.cmd == "loop" else print)
@@ -1066,6 +1235,16 @@ def main(argv=None):
         print(r.backtest(a.days if a.days > 1 else 7, a.city, tuple(a.kinds)))
     elif a.cmd == "pairs":
         print(r.build_pairs())
+    elif a.cmd == "leadlag":
+        # Record and scan on the loop's cadence for a while: proof the pairs produce paper signals
+        # without waiting for the loop, and without touching anything else it schedules.
+        end = time.time() + a.minutes * 60
+        total = 0
+        while time.time() < end:
+            t0 = time.time()
+            total += r.record_pairs()
+            time.sleep(max(0.0, pairs.RECORD_INTERVAL_S - (time.time() - t0)))
+        print(f"leadlag: {total} signal(s) in {a.minutes:.0f} min")
     elif a.cmd == "scan":
         n = r.scan(a.city, a.modules) if a.venue == "offshore" else r.scan_weather(a.city, a.modules, venue="us")
         print(f"{n} signal(s) recorded")
