@@ -130,11 +130,21 @@ def vault(tmp_path, monkeypatch):
     monkeypatch.setattr(q, "TRACKER", str(tracker))
     monkeypatch.setattr(q, "CREATOR_PROSPECTS", str(tmp_path / "list.md"))
     monkeypatch.setattr(q, "SEND_LOG", str(tmp_path / "send.log"))
+    monkeypatch.setattr(q, "load_queue", lambda: ({}, []))      # never the live queue
 
     def rows():
         with open(tracker, newline="", encoding="utf-8") as f:
             return list(csv.DictReader(f))
     return rows
+
+
+def test_a_creator_queued_before_rows_existed_is_found():
+    rows = [q.creator_tracker_row(LIST, "zerbs@evolved.gg", "Zerbs", "x", FIELDS)]
+    queue = [{"lane": "creator", "to": "sequishalive@gmail.com", "brand": "Sequisha"},
+             {"lane": "creator", "to": "zerbs@evolved.gg", "brand": "Zerbs"},
+             {"lane": "creator", "to": "gone@x.com", "brand": "Sent", "released": "2026-09-20T09:00:00"},
+             {"to": "info@nativepet.com", "brand": "Native Pet"}]
+    assert q.untracked_queued_creators(rows, queue) == [("sequishalive@gmail.com", "Sequisha")]
 
 
 def test_backfill_is_a_dry_run_unless_told_to_write(vault):

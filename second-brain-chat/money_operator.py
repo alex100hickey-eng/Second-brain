@@ -610,7 +610,13 @@ def brief_poly_review(poly: dict) -> str:
 
 
 def brief_creator_draft(cr: dict) -> str:
-    return (f"The creator retainer is approved at $400/mo for 3 clips a week and "
+    # A creator emailed or queued without a tracker row gets no follow-up clock, and at a Gmail
+    # address no reply watch. `creator` adds the row now; the backfill catches older entries and
+    # needs the tracker's writer, which is this worker.
+    return ("First run `python3 scripts/splitframe_queue.py creator-backfill --write` (it adds a "
+            "tracker row for any creator emailed or queued without one; it prints nothing to do "
+            "when there is none). Then: "
+            f"The creator retainer is approved at $400/mo for 3 clips a week and "
             f"{cr['available']} verified creator(s) on the list have never been written to. Write "
             "ONE first touch. Read \"<Money folder>/Creator Lane — Offer (approved).md\" for the "
             "terms and the sending rules, pick the top un-queued creator from \"Creator Lane — "

@@ -946,6 +946,17 @@ def tracked_addresses(rows: list) -> set:
     return {_c(r.get(c)).lower() for r in rows for c in ("email", "email_generic")} - {""}
 
 
+def untracked_queued_creators(rows: list, queue: list) -> list:
+    """[(address, name)] for creator entries still waiting in the queue with no tracker row.
+    `creator` adds the row at queue time, but only since 2026-09-23. Anything queued before
+    that would send with no follow-up clock and, at a Gmail address, no reply watch."""
+    tracked = tracked_addresses(rows)
+    return sorted({(_c(e.get("to")).lower(), _c(e.get("brand")))
+                   for e in queue
+                   if e.get("lane") == "creator" and not _released_date(e)
+                   and _c(e.get("to")) and _c(e.get("to")).lower() not in tracked})
+
+
 def untracked_creator_sends(list_text: str, rows: list, log_text: str) -> list:
     """[(address, first send date)] for creator-list addresses the sender has emailed that have
     no tracker row: the ones with no follow-up clock and no reply or bounce watch."""
@@ -1151,8 +1162,19 @@ def cmd_creator_backfill(args) -> int:
         print(f"{'ADD' if args.write else 'would add'}: {row['brand']} <{addr}> sent {first}, "
               f"FU1 {row['followup1_date']}, FU2 {row['followup2_date']}"
               + (f", outcome={row['outcome']!r} (no follow-ups)" if row["outcome"] else ""))
+    try:
+        _q, queue = load_queue()
+    except Exception as exc:                                   # noqa: BLE001
+        queue = []
+        print(f"(queue unreadable, {type(exc).__name__}: only sent creators are checked)")
+    for addr, name in untracked_queued_creators(rows + new, queue):
+        row = creator_tracker_row(list_text, addr, creator_entry(list_text, addr)["name"] or name,
+                                  today, fields)
+        new.append(row)
+        print(f"{'ADD' if args.write else 'would add'}: {row['brand']} <{addr}> queued, not sent "
+              "yet: the sender stamps its dates when it goes")
     if not new:
-        print("nothing to backfill: every creator the sender has emailed has a tracker row")
+        print("nothing to backfill: every creator emailed or queued has a tracker row")
         return 0
     if args.write:
         bak = write_tracker(rows + new, fields, "creator-backfill")
