@@ -31,7 +31,7 @@ Alex's multi-strategy Polymarket bot. Design doc: vault `Money/Polymarket Bot �
 | weather_model_update | new model run vs last run | **off** — 71 closed paper trades, 63% wins, −$291, losing in every edge band |
 | bucket_sum | mutually-exclusive buckets ≠ $1 | **paper — the one that doesn't need a forecast.** US only |
 | hold_favorites | our own calibration table (run `calibrate`) | paper on offshore books. 0 signals ever until 2026-09-23 (see below) |
-| leadlag | offshore price vs US book | paper. `pairs.json` + a 60 s recorder since 2026-09-23 (see below) |
+| leadlag | offshore price vs US book | paper. `pairs.json` + a 40 s recorder since 2026-09-23 (see below) |
 | maker_rewards | incentive-program quoting | idle |
 
 ### bucket_sum: the only module that isn't a forecast bet
@@ -132,9 +132,11 @@ Zero signals in its life, for three separate reasons — all three had to go:
   First build: **5,747 market pairs over 1,086 of 1,290 US events**, 623 with a two-sided US quote.
 - **Nothing recorded the prices.** Its series came from the snapshot table (weather books only) and
   it ran every 5 minutes against a 120 s window, which cannot see a 2-minute move by construction.
-  `pairs.PairRecorder` samples the first 40 US events' worth of pairs every 60 s (2 batched US calls
-  + 1 CLOB call), keeps every sample in memory for the move test, and writes only CHANGES to the
-  snapshot table (paper needs them to fill and exit). leadlag runs right after each sample.
+  `pairs.PairRecorder` samples the first 40 US events' worth of pairs every 40 s (2 batched US calls
+  + 1 CLOB call), keeps every sample in memory for the move test, and writes changes plus a 30-min
+  heartbeat to the snapshot table (paper needs them to fill and exit). leadlag runs right after each
+  sample. Within a category the events with the most ≤4c US books are recorded first: a gap inside
+  the US spread is refused, so a 38c-wide book can never produce a signal.
 
 ## hold_favorites: why it never fired (2026-09-23)
 - `calibration.lookup` needs n ≥ 25 in a band. The 2026-09-12 table held 146 samples in total —
