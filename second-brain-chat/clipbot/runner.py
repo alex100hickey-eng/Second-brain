@@ -522,6 +522,28 @@ class Runner:
         self.log(f"backfill {camp['name']}: {n} new variant(s)")
         return n
 
+    def recaption(self, campaign_ref=None) -> int:
+        """Rewrite the caption file beside every staged clip from the campaign's CURRENT rules. A
+        caption file is written once at staging; a later rule change (a platform caption, a fixed
+        tag) otherwise leaves stale, non-compliant text sitting next to the video."""
+        camp = self.ledger.campaign(campaign_ref) if campaign_ref else None
+        n = 0
+        for v in self.ledger.variants("staged"):
+            clip = self.ledger.clip(v["clip_id"])
+            src = next((s for s in self.ledger.sources() if s["id"] == clip["source_id"]), {})
+            c = self.ledger.campaign(src.get("campaign_id")) or {}
+            if camp and c.get("id") != camp["id"]:
+                continue
+            txt = (v["staged_path"] or "").replace(".mp4", ".txt")
+            if not txt or not os.path.exists(os.path.dirname(txt)):
+                continue
+            title, body = posting.build_caption(v["platform"], clip, c, v["text_hook"])
+            with open(txt, "w") as f:
+                f.write(posting.caption_file_text(v["platform"], title, body, c, clip, v["id"]))
+            n += 1
+        self.log(f"recaption: {n} caption file(s) rewritten")
+        return n
+
     def _platforms_for_clip(self, clip) -> list:
         camp = self._campaign_for_clip(clip)
         if camp and camp.get("platforms"):
@@ -884,6 +906,8 @@ def main(argv=None):
     ac.add_argument("--connector", default="", help="Higgsfield TikTok connector_id")
     ac.add_argument("--notes", default="")
     sub.add_parser("refresh-views", help="re-read TikTok + YouTube view counts from their public pages")
+    rc = sub.add_parser("recaption", help="rewrite staged caption files from the campaign's current rules")
+    rc.add_argument("--campaign", default="")
     bf = sub.add_parser("backfill", help="render platforms a campaign gained after its clips were made")
     bf.add_argument("--campaign", required=True)
     sub.add_parser("views-report")
@@ -973,6 +997,8 @@ def main(argv=None):
             nxt = r.next_for(a.handle)
             print(f"allowed now: {n} ({why})")
             print(f"next: v{nxt['variant']} {nxt['file']} · {nxt['line']!r}" if nxt else "next: nothing staged for this account")
+    elif a.cmd == "recaption":
+        r.recaption(a.campaign or None)
     elif a.cmd == "backfill":
         r.backfill_platforms(a.campaign)
         r.stage_made()

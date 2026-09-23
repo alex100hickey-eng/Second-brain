@@ -780,3 +780,20 @@ def test_post_order_quota_is_per_platform_not_shared():
     rows = posting.post_order(led, today="2026-09-23")
     assert all(r["day"] == 0 for r in rows) and len(rows) == 4
     assert "Whop" in posting.format_post_order(rows) and "Vyro" not in posting.format_post_order(rows)
+
+
+def test_recaption_rewrites_stale_caption_files(tmp_path, monkeypatch):
+    r = _runner(tmp_path, monkeypatch)
+    cid = r.ledger.add_campaign("ct", "whop", 2.1, rules={"caption": "old line"})
+    sid = r.ledger.add_source(cid, "/x/s.mp4", "s", 10, 10)
+    clip = r.ledger.add_clip(sid, {"clip_id": "k", "title": "t"})
+    v = r.ledger.add_variant(clip, "reels", "/x/v.mp4", "", "hook")
+    staged = tmp_path / "0001_t.mp4"
+    (tmp_path / "0001_t.txt").write_text("CAPTION:\nold line\n")
+    r.ledger.update_variant(v, staged_path=str(staged), status="staged")
+    r.ledger.conn.execute("UPDATE campaigns SET rules=? WHERE id=?",
+                          (json.dumps({"caption": "old line", "captions": {"reels": "new line"}}), cid))
+    r.ledger.conn.commit()
+    assert r.recaption(cid) == 1
+    text = (tmp_path / "0001_t.txt").read_text()
+    assert "new line" in text and "old line" not in text
