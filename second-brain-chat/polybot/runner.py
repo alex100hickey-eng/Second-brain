@@ -117,7 +117,9 @@ JOB_RETRY_S = 3600.0
 JOBS_PATH = os.path.join(config.ROOT, "jobs-state.json")
 # Where the leadlag universe comes from. US: every non-sports category events.list honours.
 # Offshore: the gamma tags those questions live under (checked 2026-09-23).
-PAIR_US_CATEGORIES = ("politics", "macro", "culture", "finance", "climate", "crypto", "geopolitics", "science")
+# "technology" is its own category (6 events on 2026-09-23); asking for "tech" returns nothing.
+PAIR_US_CATEGORIES = ("politics", "macro", "culture", "finance", "climate", "crypto", "geopolitics", "science",
+                      "technology")
 PAIR_OFFSHORE_TAGS = ("politics", "elections", "midterms", "us-politics", "trump", "economy", "fed", "fed-rates",
                       "economic-policy", "inflation", "geopolitics", "world", "pop-culture", "awards", "oscars",
                       "finance", "tech", "science", "climate", "crypto-prices", "bitcoin")
