@@ -21,7 +21,7 @@
     <key>RunAtLoad</key>
     <true/>
     <key>StartInterval</key>
-    <integer>120</integer>
+    <integer>600</integer>
     <key>StandardOutPath</key>
     <string>/Users/alexhickey24/second-brain/scripts/splitframe_send.launchd.log</string>
     <key>StandardErrorPath</key>

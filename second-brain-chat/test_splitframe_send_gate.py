@@ -235,27 +235,24 @@ def test_a_draft_with_no_detail_is_treated_as_a_first_touch():
     assert not sfs.is_follow_up({"detail": ""})
 
 
-# ---- pacing, quiet hours, watchdog (deliverability audit, 2026-09-23) ----
+# ---- what the deliverability audit (2026-09-23) pinned; the pacing itself is tested in
+# test_splitframe_send_pacing.py ----
 
 from datetime import datetime  # noqa: E402
+import re  # noqa: E402
 
 
-def _t(h, m=0, day=23):
-    return datetime(2026, 9, day, h, m)
+def _plist_interval() -> int:
+    plist = os.path.join(os.path.dirname(SENDER), "com.secondbrain.splitframesend.plist")
+    m = re.search(r"<key>StartInterval</key>\s*<integer>(\d+)</integer>", open(plist).read())
+    return int(m.group(1))
 
 
-def test_watchdog_budget_fits_inside_the_launchd_interval():
-    """launchd fires every 120 s and never starts a second instance while one lives. On 2026-09-23
-    one run blocked in an SSL read for eight hours and ALL sending stopped, with the process looking
-    healthy. The budget has to expire before the next tick."""
-    assert 0 < sfs.RUN_BUDGET_SECONDS < 120
-
-
-def test_main_arms_the_watchdog_before_doing_any_work():
-    src = open(SENDER).read()
-    body = src[src.index("def main("):]
-    first = [l.strip() for l in body.splitlines()[1:] if l.strip() and not l.strip().startswith(("#", '"'))][0]
-    assert first == "arm_watchdog()", first
+def test_watchdog_budget_fits_inside_the_launchd_interval_in_the_repo_plist():
+    """launchd never starts a second instance while one lives. On 2026-09-23 one run blocked in
+    an SSL read for eight hours and ALL sending stopped, with the process looking healthy. The
+    budget has to expire before the next tick — of the interval the plist actually declares."""
+    assert 0 < sfs.RUN_BUDGET_SECONDS < _plist_interval()
 
 
 def test_the_process_exits_through_os_exit_so_no_atexit_hook_can_hang_it():
@@ -265,64 +262,11 @@ def test_the_process_exits_through_os_exit_so_no_atexit_hook_can_hang_it():
 
 
 def test_quiet_hours_cover_the_night_and_nothing_else():
-    assert not sfs.in_quiet_hours(_t(21, 59))
-    assert sfs.in_quiet_hours(_t(22, 0))
-    assert sfs.in_quiet_hours(_t(0, 56))        # the 09-22 batch went out here
-    assert sfs.in_quiet_hours(_t(7, 29))
-    assert not sfs.in_quiet_hours(_t(7, 30))
-    assert not sfs.in_quiet_hours(_t(12, 36))
-
-
-def test_only_one_item_is_chosen_per_run():
-    items = [{"id": 3, "detail": "Subject: Re: a\n\nb"}, {"id": 2, "detail": "Subject: cold\n\nb"},
-             {"id": 1, "detail": "Subject: cold2\n\nb"}]
-    assert [i["id"] for i in sfs.choose(items, {}, _t(10, 30))] == [3]
-
-
-def test_the_gap_after_a_send_is_four_to_nine_minutes():
-    st = sfs.after_send({}, _t(10, 0), rng=lambda: 0.0)
-    assert st["not_before"] == _t(10, 4).isoformat()
-    st = sfs.after_send({}, _t(10, 0), rng=lambda: 0.999)
-    nb = datetime.fromisoformat(st["not_before"])
-    assert _t(10, 8) <= nb < _t(10, 9)
-
-
-def test_nothing_sends_while_the_gap_is_running():
-    st = sfs.after_send({}, _t(10, 0), rng=lambda: 0.0)          # not before 10:04
-    items = [{"id": 1, "detail": "Subject: cold\n\nb"}]
-    assert sfs.choose(items, st, _t(10, 3)) == []
-    assert [i["id"] for i in sfs.choose(items, st, _t(10, 4))] == [1]
-
-
-def test_a_corrupt_pace_state_never_stops_sending_for_good():
-    items = [{"id": 1}]
-    assert sfs.may_send_now({"not_before": "garbage"}, _t(10)) is True
-    assert sfs.choose(items, {"not_before": None}, _t(10)) == items
-
-
-def test_quiet_hours_hold_automatic_sends_but_not_an_approved_one():
-    auto = {"id": 1, "detail": "Subject: cold\n\nb"}
-    tapped = {"id": 2, "detail": "Subject: cold\n\nb", "send_approved": "2026-09-22T23:10:00"}
-    assert sfs.choose([auto], {}, _t(23, 15)) == []
-    assert [i["id"] for i in sfs.choose([auto, tapped], {}, _t(23, 15))] == [2]
-    assert [i["id"] for i in sfs.choose([auto, tapped], {}, _t(9, 15))] == [1]
-
-
-def test_a_snoozed_row_is_skipped_rather_than_blocking_the_queue():
-    """A HELD auto-send row (bad address) used to be re-refused and re-nudged every two minutes;
-    with one send per run it would also have blocked every row behind it."""
-    held = {"id": 1, "snooze_until": _t(16, 0).isoformat()}
-    ok = {"id": 2}
-    assert [i["id"] for i in sfs.choose([held, ok], {}, _t(10, 0))] == [2]
-    assert [i["id"] for i in sfs.choose([held, ok], {}, _t(16, 1))] == [1]
-    assert sfs.not_snoozed([{"id": 3, "snooze_until": "not a date"}], _t(10)) == [{"id": 3, "snooze_until": "not a date"}]
-
-
-def test_main_chooses_one_and_records_the_gap():
-    """Pinned at the source: main() must go through choose() and after_send(), or the loop is
-    back to firing every expired hold in one minute."""
-    src = open(SENDER).read()
-    body = src[src.index("def main("):]
-    assert "choose(pending, state, now)" in body
-    assert "after_send(state" in body
-    assert body.index("choose(pending") < body.index("for item in pending")
+    def t(h, m=0):
+        return datetime(2026, 9, 23, h, m)
+    assert not sfs.in_quiet_hours(t(21, 59))
+    assert sfs.in_quiet_hours(t(22, 0))
+    assert sfs.in_quiet_hours(t(0, 56))        # the 09-22 batch went out here
+    assert sfs.in_quiet_hours(t(7, 59))
+    assert not sfs.in_quiet_hours(t(8, 0))
+    assert not sfs.in_quiet_hours(t(12, 36))
