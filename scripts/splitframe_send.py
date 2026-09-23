@@ -123,6 +123,35 @@ def approved_recipients() -> set:
     return out
 
 
+def is_follow_up(item: dict) -> bool:
+    """A reply on an existing thread, rather than a cold first touch.
+
+    The outbox stores "Subject: ..." at the head of `detail`, and the daily operator always
+    prefixes a follow-up with "Re:" so it threads. That is the only marker either has.
+    """
+    detail = (item.get("detail") or "")
+    head = detail.split("\n", 1)[0].strip().lower()
+    return head.startswith("subject: re:")
+
+
+def follow_ups_first(items: list) -> list:
+    """Order the day's auto-sends so FOLLOW-UPS take the cap before cold first touches.
+
+    The queue reads newest-id-first, and the daily operator drafts follow-ups and THEN releases
+    first touches — so the cold emails are newer and were winning every slot. On 2026-09-22 that
+    would have put 10 first touches out and starved 33 follow-ups.
+
+    That is exactly backwards. Follow-ups are replies on threads that already delivered, so they
+    carry almost no deliverability risk, and they are where replies come from: this whole daily
+    operator exists because "every follow-up missed" is what produced $0 from an otherwise
+    complete machine. A cold email deferred a day costs a day. A follow-up deferred past its
+    window is a sequence that never finishes.
+
+    Stable within each group, so the existing newest-first order is preserved otherwise.
+    """
+    return sorted(items, key=lambda it: 0 if is_follow_up(it) else 1)
+
+
 def parse_ref(ref: str) -> tuple:
     """'gmail:studio:r123' -> ('studio', 'r123')."""
     parts = (ref or "").split(":")
@@ -218,7 +247,7 @@ def main() -> int:
     cap = daily_cap()
     room = max(0, cap - sent_today)
     if room:
-        for it in outbox.due_to_auto_send(datetime.now().isoformat()):
+        for it in follow_ups_first(outbox.due_to_auto_send(datetime.now().isoformat())):
             if it["id"] in approved_ids or len(pending) - len(approved_ids) >= room:
                 continue
             pending.append(it)

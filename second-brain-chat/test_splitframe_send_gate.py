@@ -197,3 +197,37 @@ def test_a_snoozed_row_stays_open_and_comes_back():
     assert 1 not in ids, "still snoozed — the sender runs every 2 min and must respect the hold"
     assert 2 in ids, "snooze expired, should come back"
     assert 3 not in ids, "closed rows never come back"
+
+
+# ---- who wins the daily cap ----
+
+def test_follow_ups_take_the_cap_before_cold_first_touches():
+    """The queue reads newest-id-first and the daily operator drafts follow-ups BEFORE releasing
+    first touches, so the cold emails were newer and won every slot. On 2026-09-22 that would have
+    sent 10 first touches and starved 33 follow-ups — the emails that actually produce replies."""
+    items = [{"id": 9, "detail": "Subject: Fifty three ads, one offer\n\nb"},
+             {"id": 8, "detail": "Subject: Re: Your crate ads skip new rescues\n\nb"},
+             {"id": 7, "detail": "Subject: Forty eight ads, all from June 12\n\nb"},
+             {"id": 6, "detail": "Subject: RE: your ad library has a gap\n\nb"}]
+    assert [i["id"] for i in sfs.follow_ups_first(items)] == [8, 6, 9, 7]
+
+
+def test_ordering_is_stable_inside_each_group():
+    """Newest-first is preserved within follow-ups and within first touches; only the two groups
+    move relative to each other."""
+    items = [{"id": 5, "detail": "Subject: Re: a\n\nb"},
+             {"id": 4, "detail": "Subject: Re: b\n\nb"},
+             {"id": 3, "detail": "Subject: cold\n\nb"}]
+    assert [i["id"] for i in sfs.follow_ups_first(items)] == [5, 4, 3]
+
+
+def test_a_reply_is_recognised_whatever_the_case():
+    assert sfs.is_follow_up({"detail": "Subject: Re: thing\n\nb"})
+    assert sfs.is_follow_up({"detail": "Subject: RE: thing\n\nb"})
+    assert not sfs.is_follow_up({"detail": "Subject: Rethinking your ads\n\nb"})
+
+
+def test_a_draft_with_no_detail_is_treated_as_a_first_touch():
+    """Unknown must not jump the queue ahead of a real follow-up."""
+    assert not sfs.is_follow_up({})
+    assert not sfs.is_follow_up({"detail": ""})
