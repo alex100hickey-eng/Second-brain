@@ -101,7 +101,8 @@ def test_a_backfilled_creator_gets_its_follow_ups_and_a_bounced_one_does_not():
 
 # ---- the DTC side must never see a creator ----
 
-def test_no_dtc_list_offers_a_creator_row():
+def test_no_dtc_list_offers_a_creator_row(monkeypatch):
+    monkeypatch.setattr(q._sfd, "NAMED_ONLY", False)     # Native Pet is a front desk
     creator = q.creator_tracker_row(LIST, "dishsoap@evolved.gg", "Dishsoap", "x", FIELDS)
     rows = [creator, _dtc()]
     assert [t["brand"] for t in q.next_targets(rows, [])] == ["Native Pet"]

@@ -210,6 +210,59 @@ def target_address(row: dict) -> tuple:
     return "", ""
 
 
+# ---------------------------------------------------------------------------
+# Named person or no send. Adopted 2026-09-23 from the Deliverability Audit (vault), relayed by
+# the money session.
+#
+# 23 of the first 49 first touches went to a front desk (hello@, info@, press@). Two of them,
+# Calypsa and Geode, came back as Gorgias support tickets: read by a support agent with no say
+# over creative, whose job is to close the ticket. Every signal says the mail is ARRIVING. What
+# the evidence points at is who reads it.
+#
+# So, for the ad-creative lane only: a queued first touch to a front desk is held at release,
+# new front-desk drafts are refused, and a front-desk brand waits until a founder's address is on
+# its row. The creator lane is exempt, because a streamer's business inbox IS the person.
+#
+# The cost is real: first-touch volume falls to the rate at which named addresses are found
+# (Hunter's monthly quota, plus founders' published addresses). Set False to restore front-desk
+# sends; nothing else changes.
+NAMED_ONLY = True
+
+
+def is_named_address(row, address: str) -> bool:
+    """A person's own inbox: the row's named contact, a known first name, or first.last."""
+    a = _s(address).lower()
+    if not a or "@" not in a or is_ticket_desk(a):
+        return False
+    name = _s((row or {}).get("contact_name"))
+    return bool(name and matches_contact(a, name)) or is_person(a)
+
+
+def front_desk_hold(entry: dict, rows_by_address: dict) -> str:
+    """Why this queued first touch must wait under NAMED_ONLY, or "" to let it go."""
+    if not NAMED_ONLY or _s(entry.get("lane")) == "creator":
+        return ""
+    to = _s(entry.get("to")).lower()
+    row = rows_by_address.get(to)
+    if is_named_address(row, to):
+        return ""
+    brand = _s(entry.get("brand")) or to
+    better, tier = target_address(row) if row else ("", "")
+    if tier == "person" and better != to:
+        return f"{brand} (a named address, {better}, is on the row now: re-draft to it)"
+    return f"{brand} ({to})"
+
+
+def rows_by_address(rows) -> dict:
+    out = {}
+    for r in rows or []:
+        for col in ("email", "email_generic"):
+            a = _s(r.get(col)).lower()
+            if a:
+                out[a] = r
+    return out
+
+
 AD_VOICE = """You are drafting a follow-up email as Alex Hickey, 19, who runs Splitframe Studio,
 a one-person ad-creative service for DTC brands ($650 flat drop, $950/mo retainer).
 
@@ -756,7 +809,11 @@ def release_first_touches(outbox_mod, drafts_url: str, limit: int = None) -> lis
     if not pending:
         return []
     waiting = already_waiting(outbox_mod)
-    released, deferred, malformed, stale = [], [], [], []
+    try:
+        by_address = rows_by_address(tracker_rows())
+    except (OSError, csv.Error):
+        by_address = {}            # no row to consult: is_person(to) alone decides the tier
+    released, deferred, malformed, stale, desk = [], [], [], [], []
     for entry in pending:
         if len(released) >= room:
             break
@@ -776,6 +833,10 @@ def release_first_touches(outbox_mod, drafts_url: str, limit: int = None) -> lis
             # 21 active ads" to a brand that now runs none is the one mistake this pitch cannot
             # survive, and it is checkable in ten seconds by the person receiving it.
             stale.append(f"{entry.get('brand') or to} ({age:.0f}d)")
+            continue
+        hold = front_desk_hold(entry, by_address)
+        if hold:
+            desk.append(hold)
             continue
         if to.lower() in waiting:
             # Deferred, NOT retired. This used to write a terminal "skipped" marker, so any
@@ -805,6 +866,9 @@ def release_first_touches(outbox_mod, drafts_url: str, limit: int = None) -> lis
     if malformed:
         log("first touch NOT released — queue entry has no draft_id/recipient, it cannot be "
             "sent by the one-tap path: " + ", ".join(malformed))
+    if desk:
+        log("first touch HELD — named person or no send (NAMED_ONLY): a front desk waits until "
+            "a founder's address is on its row: " + ", ".join(desk))
     if stale:
         log(f"first touch HELD — drafted more than {STALE_DRAFT_DAYS} days ago and its ad-library "
             "claims may no longer be true; re-read the account and re-draft: " + ", ".join(stale))
