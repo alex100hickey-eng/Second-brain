@@ -3424,3 +3424,30 @@ def test_a_us_timeout_costs_the_recorder_one_tick_of_us_quotes_only():
                              offshore_prices=lambda toks: {t: (0.40, 0.41) for t in toks})
     got = rec.record([{"us_slug": "a", "us_event": "ev", "offshore_token": "ta"}])
     assert got["us"] == 0 and got["offshore"] == 1 and rec.get("offshore", "ta")
+
+
+def test_a_closed_us_market_leaves_the_recorder_with_no_price_at_all():
+    """US markets close by STATUS, not the `closed` flag, and keep their last quotes. One read as an
+    87c leadlag edge on 2026-09-23 (Trump Jr. VP, closed at 0.93/0.94 against 0.06 offshore)."""
+    from polybot import pairs
+
+    class US:
+        available, status = True, "MARKET_STATUS_OPEN"
+        def events_by_slug(self, slugs):
+            return {"ev": {"slug": "ev", "markets": [{"slug": "a", "status": self.status,
+                                                       "bestBidQuote": {"value": "0.93"},
+                                                       "bestAskQuote": {"value": "0.94"}}]}}
+
+    us, now = US(), [1000.0]
+    rec = pairs.PairRecorder(_ledger(), us, clock=lambda: now[0], offshore_prices=lambda toks: {})
+    rows = [{"us_slug": "a", "us_event": "ev", "offshore_token": "ta"}]
+    rec.record(rows)
+    assert rec.get("us", "a") and rec.quote("a") == (0.93, 0.94)
+    us.status, now[0] = "MARKET_STATUS_CLOSED", 1040.0
+    rec.record(rows)
+    assert rec.get("us", "a") == [] and rec.quote("a") == (None, None)
+    closed_event = {"slug": "ev", "title": "Fed Decision in October", "markets": [
+        {"slug": "a", "title": "No Change", "status": "MARKET_STATUS_CLOSED"}]}
+    got, _ = pairs.match_events([closed_event], [_off_event("f", "Fed Decision in October?",
+                                                            [(1, "No change", "t", 0.4, 0.41)])])
+    assert got == []

@@ -31,6 +31,7 @@ from datetime import datetime
 from difflib import SequenceMatcher
 
 from . import config
+from .feeds.usvenue import _market_closed
 
 PAIRS_PATH = os.path.join(config.ROOT, "pairs.json")
 
@@ -191,7 +192,7 @@ def match_events(us_events: list, off_events: list, max_gap: float = MAX_PRICE_G
     counts = {"us_events": len(us_events), "events_matched": 0, "pairs": 0, "gap_rejected": 0}
     out = []
     for ue in us_events:
-        u_markets = [m for m in ue.get("markets") or [] if m.get("slug") and not m.get("closed")]
+        u_markets = [m for m in ue.get("markets") or [] if m.get("slug") and not _market_closed(m)]
         if not u_markets:
             continue
         cands = [e for e in idx.get(_key(ue.get("title", "")), [])
@@ -360,8 +361,17 @@ class PairRecorder:
                 got_events = {}
             for slug, e in got_events.items():
                 for m in e.get("markets") or []:
-                    if m.get("slug"):
-                        us_quotes[m["slug"]] = _us_quote(m)
+                    if not m.get("slug"):
+                        continue
+                    if _market_closed(m):
+                        # A US market that stops trading keeps publishing its last quotes. On
+                        # 2026-09-23 "Trump Jr. for 2028 GOP VP" closed mid-day still showing 0.93/0.94,
+                        # and leadlag read that against the 0.06 offshore price as an 87c edge. A
+                        # closed book has no price: forget its path so nothing compares against it.
+                        self.series.pop(("us", m["slug"]), None)
+                        self.quotes.pop(m["slug"], None)
+                        continue
+                    us_quotes[m["slug"]] = _us_quote(m)
         try:
             off = self.offshore_prices([p["offshore_token"] for p in chosen]) or {}
         except Exception as exc:
