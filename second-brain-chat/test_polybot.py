@@ -3399,3 +3399,14 @@ def test_hold_favorites_leaves_the_temperature_buckets_to_the_weather_modules():
                "endDate": end_iso, "markets": [mk(2)]}]
     sigs = HoldFavorites(_cfg(), table).scan(events=events)
     assert [s.market for s in sigs] == ["t2"]
+
+
+def test_the_recorder_puts_two_intervals_inside_leadlags_window():
+    """At a 60 s cadence the oldest in-window sample was the one 60 s back (ticks drift late), so a
+    3.5c move over 120 s read as 1.5c. The window only works if two sampling intervals fit in it."""
+    from polybot import pairs
+    window = _cfg().leadlag_window_s
+    for interval, ok in ((60.0, False), (pairs.RECORD_INTERVAL_S, True)):
+        ts = [1000.0 + i * (interval + 0.05) for i in range(6)]          # each tick a little late
+        first_in = next(t for t in ts if t >= ts[-1] - window)
+        assert (ts[-1] - first_in >= 2 * interval - 1) is ok

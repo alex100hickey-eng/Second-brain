@@ -275,8 +275,12 @@ def pairs_age_s(path: str | None = None) -> float | None:
 
 
 # ---- the recorder ---------------------------------------------------------------------------
-RECORD_INTERVAL_S = 60.0     # leadlag compares moves over 120 s: two samples inside every window
-RECORD_MAX_EVENTS = 40       # 2 batched US calls a minute, against a quota the arb sweep also spends
+# leadlag measures a move from the OLDEST sample inside its 120 s window. At a 60 s cadence the
+# ticks drift a fraction of a second late, so the sample 120 s back always fell just outside and the
+# rule was really measuring 60 s moves (2026-09-23 10:57: governorships ref +3.5c over 120 s, +1.5c
+# over 60 s — no signal). 40 s puts two samples back inside every window.
+RECORD_INTERVAL_S = 40.0
+RECORD_MAX_EVENTS = 40       # 2 batched US calls a sample (~3 a minute), on a quota the arb sweep shares
 SERIES_WINDOW_S = 900
 # An unchanged quote is re-written this often anyway. Paper closes a leadlag position at the first
 # price on record after its 6 h horizon; with changes only, a quiet book's "first price after" could
