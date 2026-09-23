@@ -93,7 +93,8 @@ CREATE TABLE IF NOT EXISTS accounts (
     campaigns TEXT DEFAULT '',       -- comma-separated campaign ids: the one niche this account posts
     connector_id TEXT DEFAULT '',    -- Higgsfield TikTok connector
     status TEXT DEFAULT 'active',    -- active | retired (retired = never post from it)
-    notes TEXT DEFAULT ''
+    notes TEXT DEFAULT '',
+    linked TEXT DEFAULT ''           -- boards the account is verified on ("whop"); a post from an unlinked account can't be submitted
 );
 """
 
@@ -131,6 +132,10 @@ class Ledger:
             self.conn.commit()
         if "submitted_at" not in pcols:
             self.conn.execute("ALTER TABLE posts ADD COLUMN submitted_at REAL")
+            self.conn.commit()
+        acols = {r[1] for r in self.conn.execute("PRAGMA table_info(accounts)")}
+        if "linked" not in acols:                     # boards this account is verified on, e.g. "whop"
+            self.conn.execute("ALTER TABLE accounts ADD COLUMN linked TEXT DEFAULT ''")
             self.conn.commit()
 
     def _rows(self, q, args=()):
@@ -286,6 +291,14 @@ class Ledger:
 
     def accounts(self, status="active"):
         return self._rows("SELECT * FROM accounts WHERE status=? ORDER BY registered_at", (status,))
+
+    def link_account(self, handle, board) -> None:
+        a = self.account(handle)
+        if not a:
+            raise ValueError(f"no account {handle}")
+        boards = sorted({b for b in (a.get("linked") or "").split(",") if b} | {board})
+        self.conn.execute("UPDATE accounts SET linked=? WHERE handle=?", (",".join(boards), a["handle"]))
+        self.conn.commit()
 
     def set_account_status(self, handle, status) -> None:
         self.conn.execute("UPDATE accounts SET status=? WHERE handle=?", (status, "@" + handle.lstrip("@")))

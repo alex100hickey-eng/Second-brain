@@ -797,3 +797,24 @@ def test_recaption_rewrites_stale_caption_files(tmp_path, monkeypatch):
     assert r.recaption(cid) == 1
     text = (tmp_path / "0001_t.txt").read_text()
     assert "new line" in text and "old line" not in text
+
+
+def test_submission_queue_shows_what_can_still_be_submitted(tmp_path, monkeypatch):
+    """Whop takes a post only from a linked account and only within 30 minutes of posting, so the
+    queue has to say both, per post, the moment linking happens."""
+    r = _runner(tmp_path, monkeypatch)
+    _, (fresh, old, done) = _posted_variants(r.ledger, "whop", 2.1, 3)
+    _, (vy,) = _posted_variants(r.ledger, "vyro", 2.0, 1)
+    r.ledger.add_account("@ct", "tiktok", created_at=time.time() - 5 * 86400)
+    r.ledger.mark_posted(fresh, "https://www.tiktok.com/@ct/video/1", posted_at=time.time() - 600)
+    r.ledger.mark_posted(old, "https://www.tiktok.com/@ct/video/2", posted_at=time.time() - 7200)
+    r.ledger.mark_posted(done, "https://www.tiktok.com/@ct/video/3")
+    r.ledger.mark_submitted(done)
+    r.ledger.mark_posted(vy, "https://www.tiktok.com/@ct/video/4")
+    q = r.submission_queue("whop")
+    assert [x["variant"] for x in q] == [fresh, old], "submitted and other-board posts drop out"
+    assert q[0]["in_window"] and not q[1]["in_window"]
+    assert not q[0]["linked"] and "ACCOUNT NOT LINKED" in r.submission_queue_text()
+    r.ledger.link_account("@ct", "whop")
+    assert all(x["linked"] for x in r.submission_queue("whop"))
+    assert "IN WINDOW" in r.submission_queue_text() and "2h00m old" in r.submission_queue_text()

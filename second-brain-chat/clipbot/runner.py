@@ -707,6 +707,41 @@ class Runner:
                  f"${est['usd_if_all_paid']:.2f} if every view paid")
         return {"read": read, "unread": unread, "views": views, **est}
 
+    SUBMIT_WINDOW_MIN = 30    # Whop's submit form: "posted within the last 30 minutes" (seen 2026-09-19)
+
+    def submission_queue(self, board: str = "whop") -> list:
+        """Every live post on `board`'s campaigns that hasn't been submitted, newest first, with what
+        decides whether it can still go in: the account's link status and the post's age against the
+        board's submit window. Old ones are listed too: the window was read off the form once, and
+        trying an old URL costs one paste."""
+        accts = {a["handle"]: a for a in self.ledger.accounts() + self.ledger.accounts("retired")}
+        rows = []
+        for p in self.ledger.posts():
+            if (p.get("marketplace") or "").lower() != board or p.get("submitted_at"):
+                continue
+            a = accts.get(p.get("account") or "")
+            age_min = (time.time() - (p["posted_at"] or 0)) / 60
+            rows.append({"variant": p["variant_id"], "url": p["url"], "platform": p["platform"],
+                         "account": p.get("account") or "?", "campaign": p["campaign"],
+                         "posted": datetime.fromtimestamp(p["posted_at"] or 0, ET).strftime("%m-%d %H:%M"),
+                         "age_min": int(age_min), "in_window": age_min <= self.SUBMIT_WINDOW_MIN,
+                         "linked": bool(a and board in (a.get("linked") or "").split(","))})
+        return sorted(rows, key=lambda r: r["age_min"])
+
+    def submission_queue_text(self, board: str = "whop") -> str:
+        rows = self.submission_queue(board)
+        if not rows:
+            return f"{board}: nothing waiting to be submitted"
+        out = [f"{board.upper()} SUBMIT QUEUE — {len(rows)} post(s), newest first · written {datetime.now(ET):%m-%d %H:%M} ET",
+               f"Submit each from its linked account within {self.SUBMIT_WINDOW_MIN} min of posting, then: "
+               "python3 -m clipbot.runner submitted --variant <N>", ""]
+        for r in rows:
+            flags = ("IN WINDOW" if r["in_window"] else f"{r['age_min'] // 60}h{r['age_min'] % 60:02d}m old") \
+                + ("" if r["linked"] else " · ACCOUNT NOT LINKED")
+            out.append(f"v{r['variant']:<4} {r['platform']:<7} {r['account']:<26} posted {r['posted']} · {flags}")
+            out.append(f"      {r['url']}")
+        return "\n".join(out) + "\n"
+
     def views_report(self) -> str:
         """Per-account and per-campaign view totals plus the honest payout number."""
         posts = self.ledger.posts()
@@ -898,7 +933,8 @@ def main(argv=None):
     sm = sub.add_parser("submitted", help="the post was accepted by its board (Vyro/Whop) — only then can it earn")
     sm.add_argument("--variant", type=int, required=True)
     ac = sub.add_parser("account", help="accounts that post, each held to its own posting_policy() ramp")
-    ac.add_argument("verb", choices=["add", "list", "retire", "check", "next"])
+    ac.add_argument("verb", choices=["add", "list", "retire", "check", "next", "link"])
+    ac.add_argument("--board", default="whop", help="for `link`: the board the account was verified on")
     ac.add_argument("--handle", default="")
     ac.add_argument("--platform", default="tiktok")
     ac.add_argument("--created", default="", help="when the account was made, 'YYYY-MM-DD HH:MM' ET (default now)")
@@ -911,6 +947,9 @@ def main(argv=None):
     bf = sub.add_parser("backfill", help="render platforms a campaign gained after its clips were made")
     bf.add_argument("--campaign", required=True)
     sub.add_parser("views-report")
+    sq = sub.add_parser("submit-queue", help="posts not yet submitted to their board, with window + link status")
+    sq.add_argument("--board", default="whop")
+    sq.add_argument("--write", action="store_true", help="also write it beside POST ORDER in the ready folder")
     b = sub.add_parser("blockers", help="what is stopping posting; carried in the stalled nudge")
     b.add_argument("--set", nargs="*", default=None, help="replace the list (no args clears it)")
     v = sub.add_parser("views")
@@ -989,6 +1028,9 @@ def main(argv=None):
             print(r.account_policy(a.handle)[1])
         elif a.verb == "retire":
             r.ledger.set_account_status(a.handle, "retired")
+        elif a.verb == "link":
+            r.ledger.link_account(a.handle, a.board)
+            print(f"{a.handle} linked on {a.board}")
         elif a.verb == "check":
             n, why = r.account_policy(a.handle)
             print(f"{n} {why}")
@@ -1008,6 +1050,12 @@ def main(argv=None):
         print(r.views_report())
     elif a.cmd == "views-report":
         print(r.views_report())
+    elif a.cmd == "submit-queue":
+        text = r.submission_queue_text(a.board)
+        print(text, end="")
+        if a.write:
+            with open(os.path.join(config.READY_DIR, f"{a.board.upper()} SUBMIT QUEUE.txt"), "w") as f:
+                f.write(text)
     elif a.cmd == "views":
         r.views(a.variant, a.views, a.qualified, a.approved, a.settled)
     elif a.cmd == "report":
