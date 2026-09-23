@@ -764,3 +764,19 @@ def test_backfill_renders_only_the_missing_platforms_and_keeps_the_line(tmp_path
     assert plats == ["reels", "shorts", "tiktok"]
     assert all(text == "b" for _, text in made), "the clip keeps the line it already went out with"
     assert r.backfill_platforms(cid) == 0, "idempotent"
+
+
+def test_post_order_quota_is_per_platform_not_shared():
+    """Two a day on TikTok and two a day on Reels are four posts, not two: each platform is a
+    separate account with its own cadence."""
+    led = _ledger()
+    c = led.add_campaign("ct", rules={"per_day": 2})
+    s = led.add_source(c, "/ct.mp4", "ct", 10, 10)
+    for i in range(2):
+        clip = led.add_clip(s, {"clip_id": f"k{i}", "title": f"t{i}", "score": 90 - i, "duration_s": 20})
+        for plat in ("tiktok", "reels"):
+            v = led.add_variant(clip, plat, f"/v/{i}{plat}.mp4", "", f"t{i}")
+            led.update_variant(v, staged_path=f"/r/{i}{plat}.mp4", status="staged")
+    rows = posting.post_order(led, today="2026-09-23")
+    assert all(r["day"] == 0 for r in rows) and len(rows) == 4
+    assert "Whop" in posting.format_post_order(rows) and "Vyro" not in posting.format_post_order(rows)

@@ -64,9 +64,12 @@ def post_order(ledger, today: str | None = None) -> list:
     rows = _interleave_lines(rows)
     seen = {}
     for r in rows:
-        n = seen.get(r["campaign"], 0)
+        # per_day is a per-ACCOUNT cadence, and each platform is its own account: Reels and Shorts
+        # don't spend TikTok's two a day.
+        key = (r["campaign"], r["platform"])
+        n = seen.get(key, 0)
         r["day"] = n // max(1, r["per_day"])
-        seen[r["campaign"]] = n + 1
+        seen[key] = n + 1
         r["days_left"] = None if r["ends"] == "9999-12-31" else (datetime.strptime(r["ends"], "%Y-%m-%d") - datetime.strptime(today, "%Y-%m-%d")).days
     return rows
 
@@ -87,10 +90,13 @@ def format_post_order(rows: list) -> str:
     if not rows:
         return "POST ORDER — nothing staged.\n"
     out = [f"POST ORDER — {len(rows)} staged clips · written {datetime.now().strftime('%Y-%m-%d %H:%M')}",
-           "Post in this order, top to bottom. Submit each URL on Vyro (Add Posts) the same hour, then:",
-           "  python3 -m clipbot.runner posted --variant <N> --url <post url>", ""]
+           "Post in this order, top to bottom. Submit each URL on its campaign's board (Whop for Crazy Taxi:",
+           "within 30 minutes of posting, from a linked account), then:",
+           "  python3 -m clipbot.runner posted --variant <N> --url <post url> [--account @handle]",
+           "  python3 -m clipbot.runner submitted --variant <N>", ""]
     day_names = {0: "TODAY", 1: "TOMORROW"}
     cur = None
+    rows = sorted(rows, key=lambda r: (r["day"], r["ends"], r["campaign"]))
     for r in rows:
         key = (r["campaign"], r["day"])
         if key != cur:
