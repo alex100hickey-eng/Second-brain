@@ -196,6 +196,7 @@ def watch(tmp_path, monkeypatch):
     monkeypatch.setattr(rw, "nudge", lambda title, body, *a, **k: nudges.append((title, body)))
     monkeypatch.setattr(rw, "_beat", lambda note="": None)
     monkeypatch.setattr(rw, "arm_watchdog", lambda *a, **k: None)
+    monkeypatch.setattr(rw, "_refresh_funnel", lambda: None)   # would write the REAL vault report
     monkeypatch.setenv("COMPOSIO_API_KEY", "test")
 
     def run(sender):

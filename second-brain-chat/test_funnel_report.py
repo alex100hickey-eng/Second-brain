@@ -259,6 +259,43 @@ def test_the_daily_job_still_has_no_send_path():
         assert forbidden not in src
 
 
+# ---- keeping itself current ----
+
+def test_refresh_rewrites_only_when_the_content_changed(tmp_path, monkeypatch):
+    """reply_watch calls this every 30 minutes. A rewrite for a moved timestamp would be a vault
+    commit every half hour with nothing in it."""
+    vault = tmp_path / "vault"
+    (vault / "Money").mkdir(parents=True)
+    tracker = vault / "Money" / "prospect-tracker.csv"
+    _write_csv(tracker, [_row()])
+    log = tmp_path / "send.log"
+    log.write_text("2026-09-10 08:00 item 1: SENT to dana@acme.com (draft r1)\n")
+    monkeypatch.setattr(fr, "VAULT", str(vault))
+    monkeypatch.setattr(fr, "TRACKER", str(tracker))
+    monkeypatch.setattr(fr, "SEND_LOG", str(log))
+    path = fr.refresh(TODAY)
+    assert path and os.path.exists(path)
+    assert fr.refresh(TODAY) is None, "same data, no rewrite"
+    _write_csv(tracker, [_row(replied="2026-09-19")])
+    assert fr.refresh(TODAY) == path, "a reply landed, so the report changes"
+    assert "| Acme |" in open(path, encoding="utf-8").read()
+
+
+def test_the_reply_watcher_refreshes_the_report_and_cannot_be_killed_by_it(tmp_path, monkeypatch):
+    rw = _load("reply_watch")
+    tree = ast.parse(open(os.path.join(SCRIPTS, "reply_watch.py"), encoding="utf-8").read())
+    main = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "main")
+    assert any(isinstance(c, ast.Call) and getattr(c.func, "id", "") == "_refresh_funnel"
+               for c in ast.walk(main))
+    monkeypatch.setattr(rw, "LOG", str(tmp_path / "watch.log"))
+
+    def boom(*a, **k):
+        raise RuntimeError("funnel report broke")
+    monkeypatch.setattr(importlib.util, "spec_from_file_location", boom)
+    rw._refresh_funnel()                     # must not raise
+    assert "funnel report not refreshed" in (tmp_path / "watch.log").read_text()
+
+
 # ---- the contract against the real tracker, when this machine has it ----
 
 def test_the_real_tracker_reads_cleanly_and_every_send_is_sliced():

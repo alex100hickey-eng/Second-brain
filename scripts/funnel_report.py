@@ -450,6 +450,29 @@ def write_report(text: str, path: str) -> str:
     return path
 
 
+def _body(text: str) -> str:
+    """The report minus its "Generated" line, which changes every run even when nothing else did."""
+    return "\n".join(ln for ln in (text or "").splitlines() if not ln.startswith("*Generated "))
+
+
+def refresh(today: date = None, send_log: str = None):
+    """Rewrite today's report only if its content changed. Returns the path written, or None.
+
+    reply_watch calls this after every scan (every 30 min on the Mac), so the report already
+    shows a reply by the time Alex reads the nudge. Writing only on change keeps vault sync from
+    committing a new version every half hour just because the timestamp moved."""
+    today = today or datetime.now(LOCAL_TZ).date()
+    text = render(build(tracker_rows(), today, sends=read_send_log(send_log)))
+    path = report_path(today)
+    try:
+        with open(path, encoding="utf-8") as f:
+            if _body(f.read()) == _body(text):
+                return None
+    except OSError:
+        pass
+    return write_report(text, path)
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--stdout", action="store_true", help="print the report, write nothing")

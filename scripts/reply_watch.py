@@ -320,6 +320,24 @@ def _beat(note: str = "") -> None:
     except Exception:
         pass
 
+def _refresh_funnel() -> None:
+    """Keep Money/Funnel — <date>.md current: after a reply is stamped, the report already says
+    which close, which kind of inbox and which wave it answered. It never takes the scan down: a
+    stale report costs nothing, a dead reply watcher costs the reply."""
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "funnel_report", os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                          "funnel_report.py"))
+        fr = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(fr)
+        path = fr.refresh()
+        if path:
+            log(f"funnel report refreshed: {os.path.basename(path)}")
+    except Exception as exc:                          # noqa: BLE001
+        log(f"funnel report not refreshed ({type(exc).__name__}: {str(exc)[:80]})")
+
+
 def main() -> int:
     arm_watchdog()
     from composio import Composio  # type: ignore
@@ -377,6 +395,7 @@ def main() -> int:
     if not hits:
         tail = f", {autos} auto-reply(s) ignored" if autos else ""
         log(f"no prospect replies ({len(msgs)} inbox messages scanned{tail})")
+    _refresh_funnel()
     try:
         signal.alarm(0)
     except (AttributeError, ValueError):
