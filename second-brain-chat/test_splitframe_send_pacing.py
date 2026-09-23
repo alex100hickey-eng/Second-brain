@@ -93,7 +93,7 @@ def run(tmp_path, monkeypatch):
     calls = {"stamped": [], "nudged": [], "armed": []}
 
     def go(items, now=MORNING, allowed=None, fail_drafts=(), cap=10, sent_today=0,
-           close_raises=False):
+           close_raises=False, followups_sent_today=0, ceiling=20, share=False):
         box = FakeOutbox(items, close_raises=close_raises)
         sent = []
 
@@ -117,12 +117,17 @@ def run(tmp_path, monkeypatch):
             monkeypatch.setenv(k, "test")
         log = tmp_path / "send.log"
         today = date.today().isoformat()
+        # first touches as unmarked lines (the pre-09-23 format), follow-ups marked
         log.write_text("".join(f"{today} 08:0{i} item {i}: SENT to old{i}@x.com (draft d)\n"
-                               for i in range(sent_today)))
+                               for i in range(sent_today))
+                       + "".join(f"{today} 09:0{i} item 5{i}: SENT to fu{i}@x.com (draft d) — "
+                                 f"automatically [follow-up]\n" for i in range(followups_sent_today)))
         monkeypatch.setattr(sfs, "LOG", str(log))
         monkeypatch.setattr(sfs, "PAUSE_FILE", str(tmp_path / "no-pause"))
         monkeypatch.setattr(sfs, "_now", lambda: now)
         monkeypatch.setattr(sfs, "daily_cap", lambda: cap)
+        monkeypatch.setattr(sfs, "total_ceiling", lambda: ceiling)
+        monkeypatch.setattr(sfs, "followups_share_cap", lambda: share)
         monkeypatch.setattr(sfs, "approved_recipients", lambda: set(
             allowed if allowed is not None
             else [it["title"].split()[-1].lower() for it in items]))
@@ -168,15 +173,60 @@ def test_nothing_auto_sends_at_night_but_a_send_alex_tapped_still_goes(run):
 
 
 def test_a_first_touch_leaves_the_slots_the_waiting_follow_ups_need(run):
-    """Two follow-ups are drafted but still inside their 3-hour hold. With 2 slots left today,
-    a cold email that's due now must not take one of them."""
+    """Two follow-ups are drafted but still inside their 3-hour hold. With 2 slots left under
+    the day's ceiling, a cold email that's due now must not take one of them."""
     later = "2026-09-23T13:00:00"
     items = [_draft(9, "cold@a.com", follow_up=False),
              _draft(5, "held1@x.com", due=later), _draft(4, "held2@y.com", due=later)]
-    _box, sent, _log = run(items, cap=10, sent_today=8)
+    _box, sent, _log = run(items, cap=10, sent_today=5, followups_sent_today=13)   # 18 of 20
     assert sent == []
-    _box, sent, _log = run(items, cap=10, sent_today=7)
+    _box, sent, _log = run(items, cap=10, sent_today=5, followups_sent_today=12)   # 17 of 20
     assert sent == ["r9"], "with a third slot free, the first touch may have it"
+
+
+# ---- decision A (2026-09-23): the cap counts first touches, follow-ups have their own budget ----
+
+def test_follow_ups_still_go_after_the_first_touch_cap_is_spent(run):
+    items = [_draft(9, "cold@a.com", follow_up=False), _draft(8, "fu@b.com")]
+    _box, sent, log = run(items, cap=10, sent_today=10)
+    assert sent == ["r8"]
+    _box, sent, log = run([_draft(9, "cold@a.com", follow_up=False)], cap=10, sent_today=10)
+    assert sent == [] and "first-touch cap reached" in log
+
+
+def test_the_ceiling_stops_everything(run):
+    items = [_draft(9, "cold@a.com", follow_up=False), _draft(8, "fu@b.com")]
+    _box, sent, log = run(items, cap=10, sent_today=8, followups_sent_today=12)
+    assert sent == [] and "daily ceiling reached (20/20" in log
+
+
+def test_the_sent_line_carries_the_kind_and_old_lines_read_as_first_touches(run, tmp_path):
+    _box, sent, log = run([_draft(8, "fu@b.com"), _draft(7, "cold@c.com", follow_up=False)],
+                          sent_today=2)
+    assert log.rstrip().endswith("[follow-up]")
+    counts = sfs.sent_counts_today()
+    assert counts == {"first": 2, "follow": 1, "total": 3}
+
+
+def test_the_switch_restores_the_shared_cap_in_the_sender(run):
+    _box, sent, log = run([_draft(8, "fu@b.com")], cap=10, sent_today=10, share=True)
+    assert sent == [] and "ceiling reached" in log
+
+
+def test_send_budget_arithmetic():
+    c = {"first": 3, "follow": 9, "total": 12}
+    assert sfs.send_budget(c, 10, 20, share=False) == (7, 8)
+    assert sfs.send_budget(c, 10, 20, share=True) == (0, 0)
+    assert sfs.send_budget({"first": 10, "follow": 0, "total": 10}, 10, 20, False) == (0, 10)
+    assert sfs.send_budget({"first": 0, "follow": 20, "total": 20}, 10, 20, False) == (0, 0)
+
+
+def test_pick_keeps_first_touches_inside_their_own_cap():
+    due = [_draft(9, "cold@a.com", follow_up=False), _draft(8, "fu@b.com"),
+           _draft(7, "cold2@c.com", follow_up=False)]
+    assert [i["id"] for i in sfs.pick_auto_sends(due, 1, 5, 0, limit=5)] == [8, 9]
+    assert [i["id"] for i in sfs.pick_auto_sends(due, 0, 5, 0, limit=5)] == [8]
+    assert [i["id"] for i in sfs.pick_auto_sends(due, 2, 5, 3, limit=5)] == [8, 9]   # 5-1 > 3, 5-2 <= 3
 
 
 def test_the_reserve_only_counts_follow_ups_that_are_written_and_unsent():

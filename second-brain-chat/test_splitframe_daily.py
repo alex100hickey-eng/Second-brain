@@ -7,8 +7,9 @@ from datetime import date, datetime, timedelta
 
 import pytest
 
-SPEC = importlib.util.spec_from_file_location(
-    "splitframe_daily", os.path.expanduser("~/second-brain/scripts/splitframe_daily.py"))
+# This checkout's scripts/, not ~/second-brain: a worktree must test its own copy.
+DAILY = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts", "splitframe_daily.py")
+SPEC = importlib.util.spec_from_file_location("splitframe_daily", DAILY)
 sfd = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(sfd)
 
@@ -27,7 +28,7 @@ TODAY = date(2026, 9, 15)
 def test_no_send_capability():
     """The guardrail the whole business rests on: this module drafts, Alex sends. If someone ever
     wires a send call in here, this test is what stops it shipping."""
-    src = open(os.path.expanduser("~/second-brain/scripts/splitframe_daily.py")).read()
+    src = open(DAILY).read()
     for forbidden in ("GMAIL_SEND_EMAIL", "GMAIL_SEND", "send_email", "smtplib", "SEND_DRAFT"):
         assert forbidden not in src, f"a send path appeared in splitframe_daily: {forbidden}"
 
@@ -159,7 +160,7 @@ def test_retrying_gives_up_rather_than_looping():
 
 SEND_MARKERS = ("GMAIL_SEND_DRAFT", "GMAIL_SEND_EMAIL", "GMAIL_REPLY_TO_THREAD",
                 "smtplib", "sendmail")
-SENDER = os.path.expanduser("~/second-brain/scripts/splitframe_send.py")
+SENDER = os.path.join(os.path.dirname(DAILY), "splitframe_send.py")
 
 
 def test_the_server_still_cannot_send():
@@ -225,7 +226,7 @@ def test_daily_job_initialises_the_outbox():
     """The chain starts with an outbox row: no row, no nudge, no /do page, no Send button — and
     create_email_draft files that row fail-soft, so forgetting outbox.init() looks like success
     and leaves the draft exactly as invisible as before any of this existed. It did, once."""
-    src = open(os.path.expanduser("~/second-brain/scripts/splitframe_daily.py")).read()
+    src = open(DAILY).read()
     tree = ast.parse(src)
     main = next(n for n in ast.walk(tree)
                 if isinstance(n, ast.FunctionDef) and n.name == "main")
@@ -821,22 +822,54 @@ def test_one_touch_per_prospect_even_when_both_are_overdue(monkeypatch):
     assert sfd.followups_due_today(rows, date(2026, 9, 21)) == 1
 
 
-def test_the_release_only_asks_for_what_the_sender_can_still_send(monkeypatch, quiet_log):
+def test_follow_ups_no_longer_eat_the_first_touch_cap(monkeypatch, quiet_log):
+    """Decision A (2026-09-23): the cap counts first touches only. Six follow-ups due used to
+    leave four first touches; now all eight queued go, because 10 + 6 is under the ceiling."""
     queue = [_entry(n) for n in range(1, 9)]
     monkeypatch.setattr(sfd, "_shared", _FakeShared(queue))
     monkeypatch.setattr(sfd, "current_cap", lambda: (10, "pinned"))
     monkeypatch.setattr(sfd, "followups_due_today", lambda *a, **k: 6)
     out = sfd.release_first_touches(_FakeOutbox(), "https://mail")
-    assert len(out) == 4, "10 cap minus 6 follow-ups leaves 4 first touches"
+    assert len(out) == 8
+    assert any("on their own budget" in line for line in quiet_log)
 
 
-def test_follow_ups_can_take_the_whole_day(monkeypatch, quiet_log):
-    """Their clock is a date already promised to a prospect; a first touch can wait."""
+def test_the_ceiling_still_bounds_first_touches_after_the_days_follow_ups(monkeypatch, quiet_log):
+    """14 follow-ups due under a ceiling of 20 leaves room for 6 first touches, cap or not —
+    releasing more would queue drafts the sender cannot send today and they would go stale."""
+    queue = [_entry(n) for n in range(1, 9)]
+    monkeypatch.setattr(sfd, "_shared", _FakeShared(queue))
+    monkeypatch.setattr(sfd, "current_cap", lambda: (10, "pinned"))
+    monkeypatch.setattr(sfd, "followups_due_today", lambda *a, **k: 14)
+    assert len(sfd.release_first_touches(_FakeOutbox(), "https://mail")) == 6
+
+
+def test_follow_ups_can_still_take_the_whole_day_at_the_ceiling(monkeypatch, quiet_log):
+    """22 due (the real 2026-09-23 number) is past the ceiling: no first touch today, said so."""
     monkeypatch.setattr(sfd, "_shared", _FakeShared([_entry(1)]))
     monkeypatch.setattr(sfd, "current_cap", lambda: (10, "pinned"))
+    monkeypatch.setattr(sfd, "followups_due_today", lambda *a, **k: 22)
+    assert sfd.release_first_touches(_FakeOutbox(), "https://mail") == []
+    assert any("reach the daily ceiling" in line for line in quiet_log)
+
+
+def test_the_switch_restores_the_shared_cap(monkeypatch, quiet_log):
+    """FOLLOWUPS_SHARE_CAP = True is the one-line reversal of decision A: 10 cap minus 6
+    follow-ups leaves 4, and 14 due fills the day."""
+    monkeypatch.setattr(sfd, "FOLLOWUPS_SHARE_CAP", True)
+    monkeypatch.setattr(sfd, "current_cap", lambda: (10, "pinned"))
+    monkeypatch.setattr(sfd, "_shared", _FakeShared([_entry(n) for n in range(1, 9)]))
+    monkeypatch.setattr(sfd, "followups_due_today", lambda *a, **k: 6)
+    assert len(sfd.release_first_touches(_FakeOutbox(), "https://mail")) == 4
+    monkeypatch.setattr(sfd, "_shared", _FakeShared([_entry(1)]))
     monkeypatch.setattr(sfd, "followups_due_today", lambda *a, **k: 14)
     assert sfd.release_first_touches(_FakeOutbox(), "https://mail") == []
     assert any("follow-ups alone fill the cap" in line for line in quiet_log)
+
+
+def test_the_ceiling_is_a_real_bound_above_the_cap():
+    assert sfd.TOTAL_DAILY_CEILING >= max(cap for _t, cap in sfd.RAMP) or sfd.TOTAL_DAILY_CEILING >= 20
+    assert sfd.FOLLOWUPS_SHARE_CAP is False
 
 
 def test_an_unreadable_tracker_does_not_silently_stop_first_touches(monkeypatch):
