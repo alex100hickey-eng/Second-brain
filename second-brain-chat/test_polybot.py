@@ -3270,6 +3270,12 @@ def test_daily_jobs_catch_up_after_a_missed_slot(monkeypatch):
     assert not r._due("hold_favorites", datetime(2026, 9, 23, 20, 59, tzinfo=et), (9, 21))
     assert r._due("hold_favorites", datetime(2026, 9, 23, 21, 3, tzinfo=et), (9, 21))
     assert runner_mod._last_slot(datetime(2026, 9, 23, 2, 0, tzinfo=et), (3,)).day == 22
+    # a failed run stays due, but is not retried every minute
+    r._jobs.pop("calibration")
+    r._attempt("calibration")
+    assert not r._due("calibration", datetime(2026, 9, 24, 8, 0, tzinfo=et), (3,))
+    r._attempts["calibration"] -= runner_mod.JOB_RETRY_S
+    assert r._due("calibration", datetime(2026, 9, 24, 8, 0, tzinfo=et), (3,))
 
 
 def test_calibration_falls_back_when_the_category_cell_is_thin():

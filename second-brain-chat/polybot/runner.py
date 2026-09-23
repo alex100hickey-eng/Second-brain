@@ -113,6 +113,7 @@ def _arm_hard_watchdog(seconds: float) -> None:
 # Hours the arb sweep owns (see _arb_interval_s). Long jobs that hold the loop stay out of them.
 ARB_HOURS = range(9, 17)
 QUIET_REPEAT_S = 600.0
+JOB_RETRY_S = 3600.0
 JOBS_PATH = os.path.join(config.ROOT, "jobs-state.json")
 # Where the leadlag universe comes from. US: every non-sports category events.list honours.
 # Offshore: the gamma tags those questions live under (checked 2026-09-23).
@@ -225,6 +226,7 @@ class Runner:
         self._pairs_cache = (None, [])
         self._quiet: dict = {}              # log-line dedupe, see _quiet_log
         self._jobs = _load_jobs()
+        self._attempts: dict = {}
         if self.us.available:
             # Account VALUE, not buying power: money already in positions is still the bankroll.
             # Reading buying power halted the bot at "bankroll under floor" the moment anything
@@ -896,7 +898,14 @@ class Runner:
         the arb window. Runs are remembered on disk so a watchdog restart does not repeat them."""
         if now.hour in quiet_hours:
             return False
+        # A job that failed stays due; without this it would be retried every minute, and the pairs
+        # build alone is ~20 calls on the US quota the arb sweep needs.
+        if time.time() - self._attempts.get(name, 0.0) < JOB_RETRY_S:
+            return False
         return self._jobs.get(name, 0.0) < _last_slot(now, hours).timestamp()
+
+    def _attempt(self, name: str) -> None:
+        self._attempts[name] = time.time()
 
     def _ran(self, name: str) -> None:
         self._jobs[name] = time.time()
@@ -1113,10 +1122,12 @@ class Runner:
                             self.backtest(7)
                     if (self.us.available and self.cfg.mode("leadlag") != "off"
                             and self._due("build_pairs", now, (5,), quiet_hours=ARB_HOURS)):
+                        self._attempt("build_pairs")
                         with self._long_job("build_pairs"):
                             self.log(self.build_pairs())
                         self._ran("build_pairs")
                     if self.cfg.mode("hold_favorites") != "off" and self._due("hold_favorites", now, (9, 21)):
+                        self._attempt("hold_favorites")
                         with self._long_job("hold_favorites", grace_s=600):
                             n = self.scan_other(modules=["hold_favorites"])
                         self._ran("hold_favorites")
@@ -1144,6 +1155,7 @@ class Runner:
                             n = self.prove_by_date_sweep()
                         self.log(f"universe: date sweep proved {n} series")
                     if self._due("calibration", now, (3,), quiet_hours=ARB_HOURS):
+                        self._attempt("calibration")
                         with self._long_job("calibration"):
                             calibration.save_table(calibration.build(log=self.log))
                         self._ran("calibration")
