@@ -103,14 +103,41 @@ def arm_watchdog(seconds: int = RUN_BUDGET_SECONDS) -> None:
 
 
 
-def _sent_today() -> int:
-    """How many this script has already sent today, read back from its own log."""
+def sent_counts_today() -> dict:
+    """{first, follow, total} sent today, read back from this script's own log.
+
+    A SENT line ends with "[follow-up]" or "[first touch]" since 2026-09-23. Older lines carry no
+    marker and count as first touches — the conservative reading for the first-touch cap, and
+    the same either way for the total ceiling."""
     today = date.today().isoformat()
+    out = {"first": 0, "follow": 0, "total": 0}
     try:
         with open(LOG) as f:
-            return sum(1 for line in f if line.startswith(today) and ": SENT to " in line)
+            for line in f:
+                if not (line.startswith(today) and ": SENT to " in line):
+                    continue
+                out["total"] += 1
+                out["follow" if line.rstrip().endswith("[follow-up]") else "first"] += 1
     except OSError:
-        return 0
+        pass
+    return out
+
+
+def _sent_today() -> int:
+    """How many this script has already sent today, all kinds."""
+    return sent_counts_today()["total"]
+
+
+def _daily_module():
+    """scripts/splitframe_daily.py, loaded from beside this file: the one source of truth for
+    the cadence, the ceiling and the follow-up budget rule. A worktree reads its own copy."""
+    import importlib.util
+    here = os.path.dirname(os.path.abspath(__file__))
+    sys.path.insert(0, here)
+    spec = importlib.util.spec_from_file_location("_sfd_cap", os.path.join(here, "splitframe_daily.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
 def daily_cap() -> int:
@@ -123,16 +150,46 @@ def daily_cap() -> int:
     behaviour. Read the one source of truth instead of restating it.
     """
     try:
-        sys.path.insert(0, os.path.expanduser("~/second-brain/scripts"))
-        import importlib.util
-        spec = importlib.util.spec_from_file_location(
-            "_sfd_cap", os.path.expanduser("~/second-brain/scripts/splitframe_daily.py"))
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        cap, _why = mod.current_cap()
+        cap, _why = _daily_module().current_cap()
         return max(DAILY_CAP, int(cap))
     except Exception:
         return DAILY_CAP       # fail to the floor, never to "unlimited"
+
+
+# Follow-ups on their own budget — decision A, 2026-09-23 (relayed by the money session, logged in
+# the Shift Log with the reversal). Until then one cap covered everything the mailbox sent, and
+# with ten first touches a day owing twenty follow-ups, follow-ups alone filled it for days while
+# first touches got no slot. Now the bounce-gated cap (daily_cap) counts FIRST TOUCHES only,
+# follow-ups run on the same one-per-run pacing, and a hard ceiling bounds the day's total.
+# Both numbers and the rule live in splitframe_daily.py so the server's release and this sender
+# cannot drift apart again; the fallbacks below are the conservative direction.
+DEFAULT_TOTAL_CEILING = 20
+
+
+def total_ceiling() -> int:
+    try:
+        return max(DAILY_CAP, int(_daily_module().TOTAL_DAILY_CEILING))
+    except Exception:
+        return DEFAULT_TOTAL_CEILING
+
+
+def followups_share_cap() -> bool:
+    """True restores the pre-09-23 rule: one cap for first touches and follow-ups together."""
+    try:
+        return bool(_daily_module().FOLLOWUPS_SHARE_CAP)
+    except Exception:
+        return False
+
+
+def send_budget(counts: dict, cap: int, ceiling: int, share: bool) -> tuple:
+    """(room for first touches, room for anything) left today. Pure, so the arithmetic is
+    testable without a log file."""
+    if share:
+        room = max(0, cap - counts["total"])
+        return room, room
+    room_total = max(0, ceiling - counts["total"])
+    room_first = max(0, min(cap - counts["first"], room_total))
+    return room_first, room_total
 
 
 # How long a refused row waits before trying again. Long enough that a genuinely wrong address
@@ -251,15 +308,19 @@ def followups_waiting(open_items: list, exclude_ids: set) -> int:
                and not it.get("sent_at") and it.get("id") not in exclude_ids)
 
 
-def pick_auto_sends(due: list, room: int, reserved: int, limit: int = MAX_SENDS_PER_RUN) -> list:
-    """Which expired drafts this run sends. Follow-ups first; a first touch only when the cap
-    has room beyond every follow-up still waiting to be sent today."""
-    out = []
+def pick_auto_sends(due: list, room_first: int, room_total: int, reserved: int,
+                    limit: int = MAX_SENDS_PER_RUN) -> list:
+    """Which expired drafts this run sends. Follow-ups first, out of `room_total`; a first touch
+    only while its own cap (`room_first`) has room AND the day's remaining total leaves a slot
+    for every follow-up still waiting inside its hold."""
+    out, first_taken = [], 0
     for it in follow_ups_first(due):
-        if len(out) >= min(room, limit):
+        if len(out) >= min(room_total, limit):
             break
-        if not is_follow_up(it) and room - len(out) <= reserved:
-            continue
+        if not is_follow_up(it):
+            if first_taken >= room_first or room_total - len(out) <= reserved:
+                continue
+            first_taken += 1
         out.append(it)
     return out
 
@@ -362,16 +423,21 @@ def main() -> int:
     due = [it for it in outbox.due_to_auto_send(now.replace(tzinfo=None).isoformat())
            if it["id"] not in approved_ids]
     if due and not in_quiet_hours(now):
-        sent_today = _sent_today()
-        cap = daily_cap()
-        room = max(0, cap - sent_today)
-        if room:
+        counts = sent_counts_today()
+        cap, ceiling = daily_cap(), total_ceiling()
+        room_first, room_total = send_budget(counts, cap, ceiling, followups_share_cap())
+        if room_total:
             reserved = followups_waiting(outbox.open_items(), {it["id"] for it in due})
-            # limit=room, not 1: the per-run limit counts SUCCESSFUL sends (below), so a draft
-            # that fails or is refused can't take the run's only slot every ten minutes forever.
-            pending.extend(pick_auto_sends(due, room, reserved, limit=room))
+            # limit=room_total, not 1: the per-run limit counts SUCCESSFUL sends (below), so a
+            # draft that fails or is refused can't take the run's only slot every ten minutes.
+            picked = pick_auto_sends(due, room_first, room_total, reserved, limit=room_total)
+            if not picked and not room_first and not any(is_follow_up(it) for it in due):
+                log(f"first-touch cap reached ({counts['first']}/{cap}) — cold emails wait for "
+                    f"tomorrow; follow-ups still go")
+            pending.extend(picked)
         else:
-            log(f"daily cap reached ({sent_today}/{cap}) — auto-sends deferred to tomorrow")
+            log(f"daily ceiling reached ({counts['total']}/{ceiling}: {counts['first']} first "
+                f"touch(es), {counts['follow']} follow-up(s)) — auto-sends deferred to tomorrow")
     if not pending:
         return 0
 
@@ -436,7 +502,8 @@ def main() -> int:
         # The record FIRST, the bookkeeping after. It used to be the other way round, and on
         # 2026-09-23 a run hung inside the bookkeeping after Antler Farms' follow-up had gone:
         # the email left, and neither the log nor the daily count ever knew.
-        log(f"item {item['id']}: SENT to {who} (draft {draft_id}) — {route}")
+        kind = "follow-up" if is_follow_up(item) else "first touch"
+        log(f"item {item['id']}: SENT to {who} (draft {draft_id}) — {route} [{kind}]")
         sent += 1
         for phase, step in (("close", lambda: outbox.close(item["id"], outbox.DONE,
                                                             note=f"sent from the Mac {route}")),

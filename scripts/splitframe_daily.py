@@ -626,6 +626,16 @@ PER_DAY = 5                # the floor, and where a cold or a troubled domain se
 # needs no one to remember it.
 RAMP = ((120, 20), (60, 15), (20, 10), (0, 5))
 BOUNCE_WINDOW_DAYS = 14
+
+# Follow-ups on their own budget — decision A, 2026-09-23, relayed by the money session and
+# logged in the Shift Log with this reversal. One shared cap meant ten first touches a day owed
+# twenty follow-ups, and follow-ups alone filled the cap for days while first touches got no
+# slot (22 due on 09-23 against a cap of 10). Now the bounce-gated cap above counts FIRST
+# TOUCHES only; follow-ups go on the sender's one-per-run pacing; and TOTAL_DAILY_CEILING is a
+# hard bound on everything the mailbox sends in a day, which is what the domain experiences.
+# Flip FOLLOWUPS_SHARE_CAP to True to restore the pre-09-23 rule in the release AND the sender.
+FOLLOWUPS_SHARE_CAP = False
+TOTAL_DAILY_CEILING = 20
 BOUNCE_HOLD_RATE, BOUNCE_HOLD_MIN = 0.08, 2   # same threshold the bounce nudge fires on
 BOUNCE_KEY = "splitframe:bounces"
 
@@ -793,12 +803,23 @@ def release_first_touches(outbox_mod, drafts_url: str, limit: int = None) -> lis
         # promised to a prospect. A first touch can wait a day; a follow-up cannot be moved
         # without lying about the sequence.
         due = followups_due_today()
-        limit = max(0, cap - due)
-        log(f"daily cap {cap}/day ({why}); {due} follow-up(s) due today, "
-            f"so up to {limit} first touch(es)")
-        if limit == 0 and due:
-            log("no first touches today — follow-ups alone fill the cap. If that repeats, the "
-                "ceiling is what limits new prospects, not the drafting.")
+        if FOLLOWUPS_SHARE_CAP:
+            limit = max(0, cap - due)
+            log(f"daily cap {cap}/day ({why}); {due} follow-up(s) due today, "
+                f"so up to {limit} first touch(es)")
+            if limit == 0 and due:
+                log("no first touches today — follow-ups alone fill the cap. If that repeats, "
+                    "the ceiling is what limits new prospects, not the drafting.")
+        else:
+            # First touches get their own cap; what the ceiling leaves after today's follow-ups
+            # still bounds them, or the release would queue drafts the sender cannot send today
+            # and they would go stale in the outbox.
+            limit = max(0, min(cap, TOTAL_DAILY_CEILING - due))
+            log(f"first-touch cap {cap}/day ({why}); {due} follow-up(s) due today on their own "
+                f"budget under a ceiling of {TOTAL_DAILY_CEILING}, so up to {limit} first touch(es)")
+            if limit == 0 and due:
+                log("no first touches today — follow-ups alone reach the daily ceiling. If that "
+                    "repeats, the ceiling is what limits new prospects, not the drafting.")
     q = _shared._load_state(QUEUE_KEY)
     queue = q.get("queue") or []
     today = datetime.now(LOCAL_TZ).date()
