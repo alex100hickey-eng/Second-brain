@@ -245,19 +245,10 @@ def size_for_profit(buckets, kind: str, cfg, days=None):
 
     def evaluate(n):
         """(prices, net_cents, set_cost) for exactly n sets, or None if n is not worth taking."""
-        prices = [limit_for(l, n) for l in ladders]
-        if any(px is None for px in prices):
+        got = _set_net(ladders, buckets, kind, n)
+        if got is None:
             return None
-        if kind == "buy_all":
-            cost = sum(prices) + sum(fees.leg_cost(px, 1, "us", maker=False, theta=b.fee_coefficient)
-                                     for px, b in zip(prices, buckets))
-            net = (1.0 - cost) * 100
-            set_cost = sum(prices)
-        else:
-            proceeds = sum(prices) - sum(fees.leg_cost(px, 1, "us", maker=False, theta=b.fee_coefficient)
-                                         for px, b in zip(prices, buckets))
-            net = (proceeds - 1.0) * 100
-            set_cost = len(buckets) - sum(prices)
+        prices, net, set_cost = got
         if net <= 0 or set_cost <= 0:
             return None
         if net < cfg.arb_unwind_cover * unwind_cost_cents(buckets, kind):
@@ -291,6 +282,48 @@ def size_for_profit(buckets, kind: str, cfg, days=None):
         if total > best[3]:
             best = (capped, prices, round(net, 2), total)
     return best[0], best[1], best[2]
+
+
+def _set_net(ladders, buckets, kind: str, n: int):
+    """(limit prices, net cents per set after taker fees, capital per set) for exactly n sets, or
+    None when some ladder cannot fill n. The arithmetic size_for_profit and explain_no_set share."""
+    prices = [limit_for(l, n) for l in ladders]
+    if any(px is None for px in prices):
+        return None
+    if kind == "buy_all":
+        cost = sum(prices) + sum(fees.leg_cost(px, 1, "us", maker=False, theta=b.fee_coefficient)
+                                 for px, b in zip(prices, buckets))
+        return prices, (1.0 - cost) * 100, sum(prices)
+    proceeds = sum(prices) - sum(fees.leg_cost(px, 1, "us", maker=False, theta=b.fee_coefficient)
+                                 for px, b in zip(prices, buckets))
+    return prices, (proceeds - 1.0) * 100, len(buckets) - sum(prices)
+
+
+def explain_no_set(buckets, kind: str, cfg, days=None, held: float = 0.0) -> str:
+    """Why a book that confirmed an arb produced no set. For the log only — it decides nothing.
+
+    The silent case on 2026-09-23: miami's book said "sell_all 2.8c/set" six times in six minutes
+    and nothing was booked or refused, because the 13 sets already held had eaten the top of two
+    ladders and the NEXT set netted under the unwind cover. The top-of-book net in that line is the
+    market's; this is ours."""
+    ladders = [(b.bid_levels if kind == "sell_all" else b.ask_levels) for b in buckets]
+    if any(l is None for l in ladders):
+        return "a leg's ladder was never read"
+    ours = f" after the {held:.0f} set(s) already held" if held > 0 else ""
+    got = _set_net(ladders, buckets, kind, 1)
+    if got is None:
+        return f"no depth left on some leg{ours}"
+    _, net, set_cost = got
+    if net <= 0:
+        return f"the next set nets {net:.1f}c{ours}"
+    cover = cfg.arb_unwind_cover * unwind_cost_cents(buckets, kind)
+    if net < cover:
+        return f"the next set nets {net:.1f}c{ours}, under the unwind cover ({cover:.1f}c)"
+    if days is not None and set_cost > 0:
+        per_day = (net / set_cost) / max(float(days), 0.5)
+        if per_day < cfg.arb_min_roc_per_day_pct:
+            return f"{per_day:.2f}%/day on capital, under the {cfg.arb_min_roc_per_day_pct}%/day floor"
+    return f"no size clears the caps and the ${cfg.arb_min_profit_usd:.2f} minimum profit"
 
 
 def _candidate_sizes(deepest: int, ladders=None, cap: int = 400):

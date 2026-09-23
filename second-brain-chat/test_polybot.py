@@ -1654,6 +1654,9 @@ def test_us_venue_backs_off_on_rate_limit_instead_of_hammering():
 
     v = usvenue.USVenue()
     v.available, v._client = True, Client()
+    # why_unavailable names a missing key before a backoff, so without these the test passed only in
+    # a shell that had sourced the real keys (the launchd loop's env) and failed everywhere else.
+    v.key_id, v.secret = "test-key", "test-secret"
     assert v.resolution("some-slug") is None          # degrades cleanly, no raw HTML propagates
     assert calls["n"] == 1
     assert v.available is False                        # backoff engaged
@@ -3100,3 +3103,351 @@ def test_weather_lock_refuses_a_cheap_ask_even_on_a_tight_book():
     winner.best_bid, winner.best_ask = 0.88, 0.90
     sigs = WeatherLock(cfg).scan(ctx)
     assert len(sigs) == 1 and sigs[0].price == 0.90 and sigs[0].taker
+
+
+# ---- 2026-09-23: more paper signals through the gate -------------------------------------------
+def _us_catalogue_event(slug, title, markets, category="politics", end="2026-11-03T23:59:00Z"):
+    """A Polymarket US event as events.list returns it. markets: [(slug, title, bid, ask)]."""
+    q = lambda v: None if v is None else {"value": f"{v:.4f}", "currency": "USD"}
+    return {"slug": slug, "title": title, "category": category, "endDate": end,
+            "markets": [{"slug": s, "title": t, "bestBidQuote": q(b), "bestAskQuote": q(a)} for s, t, b, a in markets]}
+
+
+def _off_event(slug, title, markets, end="2026-11-03T12:00:00Z", volume=1000.0):
+    """A gamma event. markets: [(id, label, token, bid, ask)] — outcomes Yes/No, YES token first."""
+    return {"id": slug, "slug": slug, "title": title, "endDate": end, "volume24hr": volume,
+            "markets": [{"id": i, "groupItemTitle": lab, "question": f"{title} {lab}",
+                         "clobTokenIds": json.dumps([tok, tok + "-no"]), "outcomes": json.dumps(["Yes", "No"]),
+                         "bestBid": str(b), "bestAsk": str(a), "active": True, "closed": False}
+                        for i, lab, tok, b, a in markets]}
+
+
+def test_pairs_same_question_catches_the_near_identical_titles():
+    """Polymarket US copies offshore titles almost word for word, so the dangerous pair is not a
+    loose match but a near-exact one that asks a different question. A character ratio scores the
+    Tarrant/Denton county races at ~0.9; content words make them plainly different."""
+    from polybot import pairs
+    assert not pairs.same_question("Texas Senate Election: Tarrant County Winner",
+                                   "Texas Senate Election: Denton County Winner")
+    assert not pairs.same_question("Fed Decision in October", "Fed Decision in December?")
+    assert pairs.same_question("Fed Decision in October", "Fed Decision in October?")
+    # a year counts only when both titles carry one
+    assert pairs.same_question("2026 Nobel Peace Prize Winner", "Nobel Peace Prize Winner 2026")
+    assert pairs.same_question("Nobel Peace Prize Winner", "Nobel Peace Prize Winner 2026")
+    assert not pairs.same_question("Nobel Peace Prize Winner 2026", "Nobel Peace Prize Winner 2027")
+    # the House/Senate control markets are worded completely differently and are the same question
+    assert pairs.same_question("U.S House Midterm Winner", "Which party will win the House in 2026?")
+    assert not pairs.same_question("U.S House Midterm Winner", "Which party will win the Senate in 2026?")
+    # parties fold, numbers stay
+    assert pairs.same_question("Democratic Party", "Democrats")
+    assert not pairs.same_question("48", "49") and pairs.same_question("25 bps Decrease", "25 bps decrease")
+
+
+def test_pairs_match_events_pairs_markets_and_refuses_what_it_cannot_prove():
+    from polybot import pairs
+    us = [
+        _us_catalogue_event("usfed-fomc-2026-10-28", "Fed Decision in October",
+                  [("rdc-nochg", "No Change", 0.35, 0.36), ("rdc-hike25", "25 bps Increase", 0.59, 0.60),
+                   ("rdc-cut50", "50+ bps Decrease", None, 0.02)], category="macro", end="2026-10-28T23:59:00Z"),
+        _us_catalogue_event("usse-tx-den-2026-11-03", "Texas Senate Election: Denton County Winner",
+                  [("den-d", "James Talarico (D)", 0.96, 0.99), ("den-r", "Ken Paxton (R)", 0.96, 0.99)]),
+        _us_catalogue_event("usfedgvmt-by", "Government Shutdown?", [("shut-oct1", "By October 1, 2026", 0.01, 0.02)],
+                  end="2026-10-01T00:00:00Z"),
+        _us_catalogue_event("nobody-else", "Who will host the 2030 Winter Olympics?", [("x", "Sweden", 0.5, 0.6)]),
+    ]
+    off = [
+        _off_event("fed-decision-in-october", "Fed Decision in October?",
+                   [(1, "No change", "tokNC", 0.38, 0.39), (2, "25 bps increase", "tokH25", 0.60, 0.61),
+                    (3, "50+ bps decrease", "tokC50", 0.0, 0.005)], end="2026-10-29T00:00:00Z", volume=9e6),
+        _off_event("fed-decision-in-december", "Fed Decision in December?",
+                   [(4, "No change", "tokDecNC", 0.5, 0.51)], end="2026-12-10T00:00:00Z"),
+        # the county race exists offshore too, but the US book is quoting nonsense on both candidates
+        _off_event("texas-senate-election-denton-county-winner", "Texas Senate Election: Denton County Winner",
+                   [(5, "James Talarico (D)", "tokDenD", 0.40, 0.41), (6, "Ken Paxton (R)", "tokDenR", 0.58, 0.59)]),
+        _off_event("government-shutdown-by-october-1", "Government shutdown by October 1?",
+                   [(7, "Government shutdown by October 1?", "tokShut", 0.015, 0.016)], end="2026-10-02T00:00:00Z"),
+    ]
+    got, counts = pairs.match_events(us, off)
+    by_slug = {p["us_slug"]: p for p in got}
+    assert by_slug["rdc-nochg"]["offshore_token"] == "tokNC"
+    assert by_slug["rdc-hike25"]["offshore_token"] == "tokH25"
+    assert by_slug["rdc-cut50"]["offshore_token"] == "tokC50" and by_slug["rdc-cut50"]["us_mid"] is None
+    assert "tokDecNC" not in {p["offshore_token"] for p in got}          # December is a different question
+    assert by_slug["shut-oct1"]["offshore_token"] == "tokShut"          # single market: title + label
+    assert "den-d" not in by_slug and "den-r" not in by_slug             # 0.975 vs 0.41: a bad quote, not a lag
+    assert counts["gap_rejected"] == 2
+    assert "x" not in by_slug                                            # no twin offshore, no pair
+    assert got[0]["us_event"] == "usfed-fomc-2026-10-28"                 # quoted + busiest reference first
+
+
+def test_pair_recorder_keeps_every_sample_but_writes_only_changes():
+    from polybot import pairs
+
+    class FakeUS:
+        available = True
+        def __init__(self):
+            self.quotes, self.calls = {"a": (0.40, 0.42), "b": (0.10, 0.12)}, 0
+        def events_by_slug(self, slugs):
+            self.calls += 1
+            q = lambda v: {"value": str(v)}
+            return {"ev": {"slug": "ev", "markets": [{"slug": s, "bestBidQuote": q(b), "bestAskQuote": q(a)}
+                                                      for s, (b, a) in self.quotes.items()]}}
+
+    led, us, now = _ledger(), FakeUS(), [1000.0]
+    offp = {"ta": (0.45, 0.46), "tb": (0.11, 0.12)}
+    rec = pairs.PairRecorder(led, us, clock=lambda: now[0], offshore_prices=lambda toks: {t: offp[t] for t in toks})
+    rows = [{"us_slug": "a", "us_event": "ev", "offshore_token": "ta"},
+            {"us_slug": "b", "us_event": "ev", "offshore_token": "tb"}]
+    for step in range(3):
+        now[0] = 1000.0 + 60 * step
+        rec.record(rows)
+    assert us.calls == 3                                  # one batched call per tick, not one per market
+    assert [p for _, p in rec.get("us", "a")] == pytest.approx([0.41, 0.41, 0.41])
+    assert len(led.snapshots("us", "a", 0)) == 1          # unchanged quotes are not re-written
+    us.quotes["a"] = (0.44, 0.46)
+    now[0] = 1180.0
+    rec.record(rows)
+    assert len(led.snapshots("us", "a", 0)) == 2 and rec.quote("a") == (0.44, 0.46)
+    now[0] = 1180.0 + 1000
+    assert rec.quote("a") == (None, None)                 # a stale quote is no quote
+    now[0] = 1180.0 + pairs.SNAPSHOT_HEARTBEAT_S
+    rec.record(rows)
+    assert len(led.snapshots("us", "a", 0)) == 3          # ...but a quiet book still leaves a heartbeat
+
+
+def test_leadlag_fires_on_recorded_paths_and_lands_as_a_paper_signal(monkeypatch):
+    """End to end on fakes: the reference moves 6c inside the window, the US book does not follow,
+    and the runner records a PAPER leadlag signal priced off the recorder's own quote."""
+    from polybot import pairs, runner as runner_mod
+
+    class FakeUS:
+        available, why_unavailable = True, ""
+        def __init__(self):
+            self.book = (0.40, 0.42)
+        def events_by_slug(self, slugs):
+            q = lambda v: {"value": str(v)}
+            return {"ev": {"slug": "ev", "markets": [{"slug": "us-a", "bestBidQuote": q(self.book[0]),
+                                                       "bestAskQuote": q(self.book[1])}]}}
+        def bbo(self, slug):
+            raise AssertionError("the recorder's quote should have been used")
+
+    cfg, led = _cfg(), _ledger()
+    cfg.modes["leadlag"] = "paper"
+    r = runner_mod.Runner(cfg, led, log=lambda *_: None)
+    fake, now, ref = FakeUS(), [5000.0], [(0.41, 0.42)]
+    r.us = fake
+    r.pair_rec = pairs.PairRecorder(led, fake, clock=lambda: now[0],
+                                    offshore_prices=lambda toks: {"tok-a": ref[0]})
+    rows = [{"us_slug": "us-a", "us_event": "ev", "offshore_token": "tok-a", "label": "Fed: No Change",
+             "category": "macro"}]
+    from polybot.strategies.leadlag import LeadLag
+    r.other_modules["leadlag"] = LeadLag(cfg, fake, r.pair_rec, quote_fn=r.pair_rec.quote, pairs_fn=lambda: rows)
+    monkeypatch.setattr(r, "leadlag_pairs", lambda: rows)
+    assert r.record_pairs() == 0                           # one sample: nothing to compare yet
+    now[0], ref[0] = 5060.0, (0.47, 0.48)                  # reference +6c in a minute, US still 0.41
+    assert r.record_pairs() == 1
+    sig = led.conn.execute("SELECT module, venue, market, side, mode, price FROM signals").fetchone()
+    assert tuple(sig) == ("leadlag", "us", "us-a", "BUY_YES", "paper", 0.41)
+
+
+def test_daily_jobs_catch_up_after_a_missed_slot(monkeypatch):
+    """calibration last built 2026-09-12 and pairs.json was never built: both were pinned to one
+    minute (03:00, 05:00) while this Mac sleeps. A missed slot now runs at the next chance."""
+    from polybot import runner as runner_mod
+    monkeypatch.setattr(runner_mod, "_save_jobs", lambda jobs, path=None: None)
+    r = runner_mod.Runner(_cfg(), _ledger(), log=lambda *_: None)
+    r._jobs = {}
+    et = runner_mod.ET
+    morning = datetime(2026, 9, 23, 7, 40, tzinfo=et)
+    assert r._due("calibration", morning, (3,), quiet_hours=runner_mod.ARB_HOURS)    # asleep at 03:00
+    r._ran("calibration")
+    r._jobs["calibration"] = datetime(2026, 9, 23, 7, 41, tzinfo=et).timestamp()
+    assert not r._due("calibration", datetime(2026, 9, 23, 22, 0, tzinfo=et), (3,))  # done for today
+    assert r._due("calibration", datetime(2026, 9, 24, 8, 0, tzinfo=et), (3,))       # tomorrow's slot
+    assert not r._due("build_pairs", datetime(2026, 9, 23, 13, 0, tzinfo=et), (5,),
+                      quiet_hours=runner_mod.ARB_HOURS)                                # the arb window
+    r._jobs["hold_favorites"] = datetime(2026, 9, 23, 9, 2, tzinfo=et).timestamp()
+    assert not r._due("hold_favorites", datetime(2026, 9, 23, 20, 59, tzinfo=et), (9, 21))
+    assert r._due("hold_favorites", datetime(2026, 9, 23, 21, 3, tzinfo=et), (9, 21))
+    assert runner_mod._last_slot(datetime(2026, 9, 23, 2, 0, tzinfo=et), (3,)).day == 22
+    # a failed run stays due, but is not retried every minute
+    r._jobs.pop("calibration")
+    r._attempt("calibration")
+    assert not r._due("calibration", datetime(2026, 9, 24, 8, 0, tzinfo=et), (3,))
+    r._attempts["calibration"] -= runner_mod.JOB_RETRY_S
+    assert r._due("calibration", datetime(2026, 9, 24, 8, 0, tzinfo=et), (3,))
+
+
+def test_calibration_falls_back_when_the_category_cell_is_thin():
+    """A politics 0.85-0.90 cell with 2 samples used to SHADOW an `all` cell with 60 — the lookup
+    took `category_cell or all_cell`, which only falls back when the cell is missing."""
+    table = {}
+    for _ in range(2):
+        calibration.add_sample(table, "politics", 0.88, 1)
+    for _ in range(58):
+        calibration.add_sample(table, "all", 0.88, 1)
+    for _ in range(2):
+        calibration.add_sample(table, "all", 0.88, 0)
+    assert calibration.lookup(table, 0.88, "politics") == pytest.approx((58 + 20 * 0.88) / 80)
+    assert calibration.lookup({"all": {}}, 0.88, "politics") is None
+
+
+def test_calibration_build_accumulates_and_never_samples_a_market_twice(tmp_path):
+    def market(i, outcome=1):
+        return {"id": i, "closed": True, "outcomePrices": json.dumps(["1" if outcome else "0", "0"]),
+                "clobTokenIds": json.dumps([f"tok{i}", f"tok{i}n"])}
+    day = 86400.0
+    pages_seen = []
+    batches = [[{"endDate": "2026-09-22T12:00:00Z", "tags": [{"slug": "politics"}], "markets": [market(1), market(2)]}],
+               [{"endDate": "2026-09-23T12:00:00Z", "tags": [{"slug": "politics"}], "markets": [market(3)]},
+                {"endDate": "2026-09-22T12:00:00Z", "tags": [{"slug": "politics"}], "markets": [market(1), market(2)]}]]
+
+    def pages(end_max, end_min, max_events):
+        pages_seen.append((end_max, end_min))
+        yield batches[min(len(pages_seen) - 1, 1)] if end_min is None or "2026-09-22" not in str(end_min) else batches[1][:1]
+
+    calls = []
+
+    def history(tok):
+        calls.append(tok)
+        return [(0.0, 0.9), (2 * day, 0.91), (3 * day, 1.0)]     # 0.90 a day before it settled
+
+    path = str(tmp_path / "samples.json")
+    t1 = calibration.build(samples_path=path, history_fn=history, pages_fn=pages, log=lambda *_: None)
+    assert t1["_n"] == 2 and sorted(calls) == ["tok1", "tok2"]
+    t2 = calibration.build(samples_path=path, history_fn=history, pages_fn=pages, log=lambda *_: None)
+    assert "tok1" not in calls[2:] and "tok2" not in calls[2:]           # cached, never re-fetched
+    assert t2["_n"] == 3 and t2["all"]["0.90-0.95"]["n"] == 3
+
+
+def test_offshore_paging_moves_past_the_offset_cap(monkeypatch):
+    """Gamma 422s past offset ~2,000, which is where a plain offset loop stopped dead."""
+    served = []
+
+    def fake_get(url, params=None):
+        served.append(dict(params))
+        if params["offset"] > offshore.MAX_GAMMA_OFFSET:
+            raise requests.HTTPError("422")
+        floor = params.get("end_date_min", "")
+        if floor >= "2026-09-24":
+            return [{"id": f"late{params['offset']}", "endDate": "2026-09-25T00:00:00Z"}] if params["offset"] == 0 else []
+        return [{"id": f"e{params['offset']}-{k}", "endDate": "2026-09-24T00:00:00Z"} for k in range(100)]
+
+    monkeypatch.setattr(offshore, "_get", fake_get)
+    got = offshore._paged_events({"end_date_min": "2026-09-23T00:00:00Z"}, max_events=5000)
+    ids = {e["id"] for e in got}
+    assert len(ids) == 2101 and "late0" in ids
+    assert any(p.get("end_date_min") == "2026-09-24T00:00:00Z" for p in served)
+
+
+def test_hold_favorites_reads_the_whole_horizon_without_the_coin_flips(monkeypatch):
+    asked = {}
+
+    def fake(days, **kw):
+        asked.update(kw, days=days)
+        return []
+
+    monkeypatch.setattr(offshore, "events_ending_within", fake)
+    HoldFavorites(_cfg(), {"all": {}}).scan()
+    assert asked["days"] == 7
+    assert offshore.TAG_UP_OR_DOWN in asked["exclude_tag_ids"] and offshore.TAG_SPORTS in asked["exclude_tag_ids"]
+
+
+def test_a_confirmed_book_with_no_set_says_why_once(monkeypatch):
+    """2026-09-23 09:41-09:44: miami's depth read said "sell_all 2.8c/set, thinnest leg 42" every
+    ~33 s and nothing was booked or refused. The 13 sets already held had eaten the top of two
+    ladders, so the next set netted under the unwind cover. Say that — once."""
+    from polybot import runner as runner_mod
+    from polybot.strategies.bucket_sum import explain_no_set
+
+    def leg(bid, ladder, tok):
+        b = _bucket("70-71°F", bid, bid + 0.02, tok)
+        b.bid_levels, b.fee_coefficient = ladder, 0.0695
+        return b
+    # the miami book after consuming 13 held sets from each ladder (stored snapshot, 09:41:29)
+    legs = [leg(0.32, [[0.32, 42.0], [0.31, 122.0]], "a"), leg(0.42, [[0.42, 64.0]], "b"),
+            leg(0.22, [[0.22, 72.0]], "c"), leg(0.03, [[0.02, 232.0], [0.01, 1614.0]], "d"),
+            leg(0.01, [[0.01, 1826.8]], "e"), leg(0.08, [[0.07, 322.0], [0.06, 515.0]], "f")]
+    why = explain_no_set(legs, "sell_all", _cfg(), days=1.0, held=13)
+    assert "after the 13 set(s) already held" in why and "unwind cover" in why
+
+    lines = []
+    r = runner_mod.Runner(_cfg(), _ledger(), log=lines.append)
+    for _ in range(6):
+        r._quiet_log(("temp-miahigh", "confirm"), ["  arb candidate ... 2.8c/set — depth read", "    no set: " + why])
+    assert len(lines) == 2                                   # told once
+    r._quiet_log(("temp-miahigh", "confirm"), ["  arb candidate ... 3.8c/set — depth read"])
+    assert any("repeated 5x more" in l for l in lines) and lines[-1].endswith("3.8c/set — depth read")
+
+
+def test_backtest_history_window_is_bounded_to_the_day(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(offshore, "_get", lambda url, params=None: seen.update(params) or {"history": []})
+    offshore.prices_history("tok", since_ts=1_000_000, until_ts=1_086_400)
+    assert seen["startTs"] == 1_000_000 and seen["endTs"] == 1_086_400
+
+
+def test_hold_favorites_leaves_the_temperature_buckets_to_the_weather_modules():
+    table = {"all": {"0.85-0.90": {"n": 60, "yes": 59}}}
+    end = datetime.now(ZoneInfo("UTC")).timestamp() + 86400
+    end_iso = datetime.fromtimestamp(end, ZoneInfo("UTC")).strftime("%Y-%m-%dT%H:%M:%SZ")
+    mk = lambda i: {"id": i, "question": "q", "outcomePrices": json.dumps(["0.87", "0.13"]), "endDate": end_iso,
+                    "clobTokenIds": json.dumps([f"t{i}", f"t{i}n"]), "bestBid": "0.86", "bestAsk": "0.88"}
+    events = [{"slug": "highest-temperature-in-nyc-on-september-24-2026", "title": "Highest temperature in NYC",
+               "tags": [{"slug": "weather"}], "endDate": end_iso, "markets": [mk(1)]},
+              {"slug": "will-the-bill-pass", "title": "Will the bill pass?", "tags": [{"slug": "politics"}],
+               "endDate": end_iso, "markets": [mk(2)]}]
+    sigs = HoldFavorites(_cfg(), table).scan(events=events)
+    assert [s.market for s in sigs] == ["t2"]
+
+
+def test_the_recorder_puts_two_intervals_inside_leadlags_window():
+    """At a 60 s cadence the oldest in-window sample was the one 60 s back (ticks drift late), so a
+    3.5c move over 120 s read as 1.5c. The window only works if two sampling intervals fit in it."""
+    from polybot import pairs
+    window = _cfg().leadlag_window_s
+    for interval, ok in ((60.0, False), (pairs.RECORD_INTERVAL_S, True)):
+        ts = [1000.0 + i * (interval + 0.05) for i in range(6)]          # each tick a little late
+        first_in = next(t for t in ts if t >= ts[-1] - window)
+        assert (ts[-1] - first_in >= 2 * interval - 1) is ok
+
+
+def test_a_us_timeout_costs_the_recorder_one_tick_of_us_quotes_only():
+    from polybot import pairs
+
+    class Flaky:
+        available = True
+        def events_by_slug(self, slugs):
+            raise TimeoutError("Request timed out.")
+
+    rec = pairs.PairRecorder(_ledger(), Flaky(), clock=lambda: 1000.0,
+                             offshore_prices=lambda toks: {t: (0.40, 0.41) for t in toks})
+    got = rec.record([{"us_slug": "a", "us_event": "ev", "offshore_token": "ta"}])
+    assert got["us"] == 0 and got["offshore"] == 1 and rec.get("offshore", "ta")
+
+
+def test_a_closed_us_market_leaves_the_recorder_with_no_price_at_all():
+    """US markets close by STATUS, not the `closed` flag, and keep their last quotes. One read as an
+    87c leadlag edge on 2026-09-23 (Trump Jr. VP, closed at 0.93/0.94 against 0.06 offshore)."""
+    from polybot import pairs
+
+    class US:
+        available, status = True, "MARKET_STATUS_OPEN"
+        def events_by_slug(self, slugs):
+            return {"ev": {"slug": "ev", "markets": [{"slug": "a", "status": self.status,
+                                                       "bestBidQuote": {"value": "0.93"},
+                                                       "bestAskQuote": {"value": "0.94"}}]}}
+
+    us, now = US(), [1000.0]
+    rec = pairs.PairRecorder(_ledger(), us, clock=lambda: now[0], offshore_prices=lambda toks: {})
+    rows = [{"us_slug": "a", "us_event": "ev", "offshore_token": "ta"}]
+    rec.record(rows)
+    assert rec.get("us", "a") and rec.quote("a") == (0.93, 0.94)
+    us.status, now[0] = "MARKET_STATUS_CLOSED", 1040.0
+    rec.record(rows)
+    assert rec.get("us", "a") == [] and rec.quote("a") == (None, None)
+    closed_event = {"slug": "ev", "title": "Fed Decision in October", "markets": [
+        {"slug": "a", "title": "No Change", "status": "MARKET_STATUS_CLOSED"}]}
+    got, _ = pairs.match_events([closed_event], [_off_event("f", "Fed Decision in October?",
+                                                            [(1, "No change", "t", 0.4, 0.41)])])
+    assert got == []

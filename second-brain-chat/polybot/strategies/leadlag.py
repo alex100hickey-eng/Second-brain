@@ -6,18 +6,16 @@
   S4 in-play   the same rule on live sports pairs (sports gate applies; Ohio).
 
 The pure functions work on two price series so they can be tested and back-run on recordings.
-The Strategy needs the US venue (the key) plus a pairs file mapping US slugs to offshore tokens;
-without the key it reports idle and returns nothing.
+The Strategy needs the US venue (the key), `pairs.json` (built by `pairs.match_events`) and a series
+store that is sampled faster than the 120 s window — `pairs.PairRecorder`, which the runner feeds
+every minute. Without the key it reports idle and returns nothing.
 """
 from __future__ import annotations
 
-import json
-import os
-
-from .. import config
+from .. import config, pairs as pairs_mod
 from .base import Signal, Strategy
 
-PAIRS_PATH = os.path.join(config.ROOT, "pairs.json")
+PAIRS_PATH = pairs_mod.PAIRS_PATH
 
 
 def _move(series, window_s: float):
@@ -59,29 +57,34 @@ def noise_signal(ref, tgt, window_s: float, move_cents: float, quiet_ratio: floa
     return ("BUY_YES" if gap > 0 else "BUY_NO", ref_now, tgt_now, round(gap, 1))
 
 
-def load_pairs(path: str = PAIRS_PATH) -> list:
+def load_pairs(path: str | None = None) -> list:
     """[{'us_slug':..., 'offshore_token':..., 'category': 'politics'|'sports'|..., 'label':...}]"""
-    if not os.path.exists(path):
-        return []
-    with open(path) as f:
-        return json.load(f)
+    return pairs_mod.load_pairs(path)
 
 
 class LeadLag(Strategy):
     name = "leadlag"
 
-    def __init__(self, cfg: config.Config, us_venue, series_store):
-        """series_store: object with .get(venue, market) -> [(ts, price)] (recent samples)."""
+    def __init__(self, cfg: config.Config, us_venue, series_store, quote_fn=None, pairs_fn=None):
+        """series_store: object with .get(venue, market) -> [(ts, price)] (recent samples).
+        quote_fn(us_slug) -> (bid, ask): a fresh quote already in hand; falls back to a book call."""
         self.cfg = cfg
         self.us = us_venue
         self.store = series_store
-        self.idle_reason = None if us_venue.available else us_venue.why_unavailable
+        self.quote_fn = quote_fn
+        self.pairs_fn = pairs_fn or load_pairs
+
+    @property
+    def idle_reason(self):
+        # Asked at scan time, not frozen at startup: a rate-limit backoff in the first second of a
+        # restart used to leave leadlag reporting "idle" until the next restart.
+        return None if self.us.available else self.us.why_unavailable
 
     def scan(self, ctx=None) -> list:
         out = []
         if not self.us.available:
             return out
-        for pair in load_pairs():
+        for pair in self.pairs_fn():
             cat = pair.get("category", "other")
             if cat == "sports" and not self.cfg.caps.sports_enabled:
                 continue
@@ -96,7 +99,9 @@ class LeadLag(Strategy):
             if hit is None:
                 continue
             side, ref_now, tgt_now, gap = hit
-            bid, ask = self.us.bbo(pair["us_slug"])
+            bid, ask = self.quote_fn(pair["us_slug"]) if self.quote_fn else (None, None)
+            if bid is None or ask is None:
+                bid, ask = self.us.bbo(pair["us_slug"])
             if bid is None or ask is None:
                 continue
             spread = round((ask - bid) * 100, 1)

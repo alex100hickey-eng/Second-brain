@@ -17,6 +17,10 @@ from ..feeds import offshore
 from .base import Signal, Strategy, size_for
 
 _DEADLINE_RE = re.compile(r"\b(by|before|until)\b", re.I)
+# The daily temperature events belong to weather_lock / weather_obs. One position per market holds in
+# paper too, so a favourite taken here is a lock or obs signal refused there — the way weather_hold
+# starved weather_lock of 95 signals on 2026-09-13 — and those two are accumulating gate evidence.
+WEATHER_MODULE_SLUGS = ("highest-temperature-in-", "lowest-temperature-in-")
 
 
 def _hours_left(end_iso: str) -> float | None:
@@ -41,10 +45,17 @@ class HoldFavorites(Strategy):
             self.table = calibration.load_table()   # the loop rebuilds it nightly
         if not self.table:
             return out
-        events = events if events is not None else offshore.events_ending_within(self.cfg.horizon_days)
+        if events is None:
+            # The whole horizon, not its first page. The calibration never samples the Up-or-Down
+            # coin flips, so a favourite there would be priced off a table that knows nothing about
+            # them; sports are skipped below anyway, so don't page through them either.
+            skip = (offshore.TAG_UP_OR_DOWN,) + (() if self.cfg.caps.sports_enabled else (offshore.TAG_SPORTS,))
+            events = offshore.events_ending_within(self.cfg.horizon_days, exclude_tag_ids=skip)
         lo_f, hi_f = self.cfg.favorites_band
         lo_l, hi_l = self.cfg.longshot_band
         for e in events:
+            if (e.get("slug") or "").startswith(WEATHER_MODULE_SLUGS):
+                continue
             cat = offshore.event_category(e)
             if cat == "sports" and not self.cfg.caps.sports_enabled:
                 continue

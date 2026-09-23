@@ -9,3 +9,6 @@ pairs.json
 loop.log
 backtest-latest.json
 backtest-run.log
+calibration-samples.json
+jobs-state.json
+*.tmp

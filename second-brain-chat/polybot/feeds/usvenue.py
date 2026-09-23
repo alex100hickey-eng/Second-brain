@@ -575,6 +575,27 @@ class USVenue:
                 found[e["slug"]] = e
         return found
 
+    def events_by_category(self, categories, max_pages: int = 20) -> dict:
+        """{slug: event} for every open event in the given categories, 100 to a call.
+
+        `events.list` answers sports to anything it does not understand — `tagSlug`, `seriesSlug` —
+        which is why the catalogue has been reached through search. It DOES honour `categories`
+        (checked 2026-09-23: 100/100 politics events back for ["politics"]), and that makes the
+        whole non-sports catalogue ~20 calls: politics 1,175 events, culture 53, macro 28,
+        finance 11, climate 10, crypto 8, geopolitics 3, science 2. Search tops out at 10 a query."""
+        out = {}
+        for cat in categories:
+            for page in range(max_pages):
+                r = self._guarded(lambda c=cat, o=page * 100: self._client.events.list(
+                    {"categories": [c], "limit": 100, "offset": o, "active": True, "closed": False}), default=None)
+                events = (r or {}).get("events", []) if isinstance(r, dict) else (r or [])
+                for e in events:
+                    if isinstance(e, dict) and e.get("slug"):
+                        out[e["slug"]] = e
+                if len(events) < 100:
+                    break
+        return out
+
     def events_by_slug(self, slugs, batch: int = 20) -> dict:
         """{slug: event} for specific slugs, CLOSED ones included, many per call.
 

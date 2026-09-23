@@ -212,11 +212,17 @@ def best_bid_ask(token: str):
     return (b["bids"][0][0] if b["bids"] else None, b["asks"][0][0] if b["asks"] else None, b)
 
 
-def prices_history(token: str, interval: str = "1d", fidelity: int = 5, since_ts: float | None = None):
+def prices_history(token: str, interval: str = "1d", fidelity: int = 5, since_ts: float | None = None,
+                   until_ts: float | None = None):
+    """`until_ts` bounds the window. The CLOB 400s when startTs..endTs is too wide for the fidelity,
+    and an open-ended window is "since then until NOW" — so a backtest of a day three weeks ago
+    asked for three weeks of 5-minute points and got nothing back (2026-09-18: $0.00 on 987 of 987
+    buckets). A day only needs its own day."""
     params = {"market": token, "fidelity": fidelity}
     if since_ts:
         params["startTs"] = int(since_ts)
-        params["endTs"] = int(datetime.now(timezone.utc).timestamp())
+        now = datetime.now(timezone.utc).timestamp()
+        params["endTs"] = int(min(until_ts, now) if until_ts else now)
     else:
         params["interval"] = interval
     d = _get(f"{CLOB}/prices-history", params)
@@ -235,20 +241,111 @@ def market_resolution(market_id: str) -> int | None:
     return _outcome(m) if m else None
 
 
+def batch_prices(tokens) -> dict:
+    """{token: (bid, ask)} for many tokens in one POST per 200. The leadlag recorder samples every
+    paired market each minute, and one book call per token would be ~100 calls a minute for a
+    number the CLOB will hand over in a single request."""
+    out = {}
+    tokens = [t for t in dict.fromkeys(tokens) if t]
+    for i in range(0, len(tokens), 200):
+        chunk = tokens[i:i + 200]
+        r = _session.post(f"{CLOB}/prices", json=[{"token_id": t, "side": s} for t in chunk for s in ("BUY", "SELL")],
+                          timeout=TIMEOUT)
+        r.raise_for_status()
+        for tok, sides in (r.json() or {}).items():
+            px = [p for p in (_f((sides or {}).get("BUY")), _f((sides or {}).get("SELL"))) if p is not None]
+            # BUY is the best bid and SELL the best ask (checked live 2026-09-23: 0.65 / 0.66 on a
+            # 0.655 midpoint). Order them rather than trust the labels: a swapped pair would make
+            # every mid right and every spread negative, which is the kind of error nobody sees.
+            out[tok] = (min(px), max(px)) if len(px) == 2 else (px[0], px[0]) if px else (None, None)
+    return out
+
+
 # ---- generic events (hold_favorites, leadlag pairs, calibration) ----------------------------
-def events_ending_within(days: int, limit: int = 200, closed: bool = False):
-    end_max = datetime.now(timezone.utc).timestamp() + days * 86400
-    params = {"closed": "true" if closed else "false", "limit": limit, "order": "endDate", "ascending": "true",
-              "end_date_min": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-              "end_date_max": datetime.fromtimestamp(end_max, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
+# Gamma tag ids (checked via /tags/{id} 2026-09-23). "Up or Down" is the 5- and 15-minute crypto
+# coin-flip series: ~1,600 of every 2,100 events closing in a 12-hour window, never priced anywhere
+# near a favourite a day out, and it buries everything else in any listing ordered by end date.
+TAG_UP_OR_DOWN = 102127
+TAG_SPORTS = 1
+
+
+# Gamma refuses any offset past ~2,000 (HTTP 422, measured 2026-09-23), so a listing that only pages
+# by offset stops dead there. Past it, move the date window forward and start the offsets again.
+MAX_GAMMA_OFFSET = 2000
+
+
+def _iso(ts: float) -> str:
+    return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _paged_events(params: dict, max_events: int, date_key: str = "end_date_min") -> list:
+    """Every event a gamma listing answers, ordered by endDate ascending, deduped by id.
+
+    Pages by offset within one `date_key` floor and, when the offset cap or a full page of equal
+    end dates stops that, restarts from the last end date seen. Stops at `max_events`."""
+    seen: dict = {}
+    base = dict(params, limit=100, order="endDate", ascending="true")
+    floor = base.get(date_key)
+    while len(seen) < max_events:
+        progressed = False
+        offset = 0
+        last_end = None
+        while offset <= MAX_GAMMA_OFFSET and len(seen) < max_events:
+            q = dict(base, offset=offset)
+            if floor:
+                q[date_key] = floor
+            try:
+                page = _get(f"{GAMMA}/events", q)
+            except requests.HTTPError:
+                break                          # the offset cap: move the floor instead
+            for e in page:
+                if e.get("id") not in seen:
+                    seen[e.get("id")] = e
+                    progressed = True
+                last_end = e.get("endDate") or last_end
+            if len(page) < 100:
+                return list(seen.values())
+            offset += 100
+        if not progressed or not last_end or last_end == floor:
+            break                              # more than ~2,000 events share one end date
+        floor = last_end
+    return list(seen.values())
+
+
+def events_ending_within(days: int, limit: int = 200, closed: bool = False, max_events: int = 20000,
+                         exclude_tag_ids=()):
+    """Every open event ending in the next `days` days.
+
+    This used to be ONE page of the soonest-ending events, and gamma caps a page at 100: on
+    2026-09-23 that page was the next 40 minutes — 98 crypto "Up or Down" coin flips and two KHL
+    games — out of 3,677 events ending inside a single day. hold_favorites looked at 147 markets,
+    two of them in its 85-95c band, and never fired once. `limit` is kept for callers that really
+    do want only the first page."""
+    now = datetime.now(timezone.utc).timestamp()
+    params = {"closed": "true" if closed else "false", "end_date_min": _iso(now),
+              "end_date_max": _iso(now + days * 86400)}
+    if exclude_tag_ids:
+        params["exclude_tag_id"] = list(exclude_tag_ids)
     if not closed:
         params["active"] = "true"
+    if limit and limit <= 100:
+        return _get(f"{GAMMA}/events", dict(params, limit=limit, order="endDate", ascending="true"))
+    return _paged_events(params, max_events)
+
+
+def active_events_by_tag(tag: str, max_events: int = 6000, exclude_tag_ids=(TAG_UP_OR_DOWN,)) -> list:
+    """Open events carrying a gamma tag (`politics`, `midterms`, `fed` ...), past the offset cap."""
+    params = {"active": "true", "closed": "false", "tag_slug": tag}
+    if exclude_tag_ids:
+        params["exclude_tag_id"] = list(exclude_tag_ids)
+    return _paged_events(params, max_events)
+
+
+def closed_events(limit: int = 100, offset: int = 0, end_date_max: str | None = None):
+    params = {"closed": "true", "limit": limit, "offset": offset, "order": "endDate", "ascending": "false"}
+    if end_date_max:
+        params["end_date_max"] = end_date_max
     return _get(f"{GAMMA}/events", params)
-
-
-def closed_events(limit: int = 100, offset: int = 0):
-    return _get(f"{GAMMA}/events", {"closed": "true", "limit": limit, "offset": offset,
-                                     "order": "endDate", "ascending": "false"})
 
 
 def event_category(e: dict) -> str:
