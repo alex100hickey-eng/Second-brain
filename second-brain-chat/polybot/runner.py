@@ -1254,7 +1254,10 @@ def main(argv=None):
         total = 0
         while time.time() < end:
             t0 = time.time()
-            total += r.record_pairs()
+            try:
+                total += r.record_pairs()
+            except Exception as exc:
+                print(f"  pairs record error: {exc}")
             time.sleep(max(0.0, pairs.RECORD_INTERVAL_S - (time.time() - t0)))
         print(f"leadlag: {total} signal(s) in {a.minutes:.0f} min")
     elif a.cmd == "scan":

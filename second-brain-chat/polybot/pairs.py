@@ -353,7 +353,12 @@ class PairRecorder:
             return got
         us_quotes = {}
         if self.us is not None and self.us.available:
-            for slug, e in (self.us.events_by_slug(events) or {}).items():
+            try:
+                got_events = self.us.events_by_slug(events) or {}
+            except Exception as exc:            # a campus-wifi timeout costs this tick's US half, no more
+                self.log(f"  pairs: US quotes failed ({type(exc).__name__})")
+                got_events = {}
+            for slug, e in got_events.items():
                 for m in e.get("markets") or []:
                     if m.get("slug"):
                         us_quotes[m["slug"]] = _us_quote(m)

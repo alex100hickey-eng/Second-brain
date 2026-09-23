@@ -3410,3 +3410,17 @@ def test_the_recorder_puts_two_intervals_inside_leadlags_window():
         ts = [1000.0 + i * (interval + 0.05) for i in range(6)]          # each tick a little late
         first_in = next(t for t in ts if t >= ts[-1] - window)
         assert (ts[-1] - first_in >= 2 * interval - 1) is ok
+
+
+def test_a_us_timeout_costs_the_recorder_one_tick_of_us_quotes_only():
+    from polybot import pairs
+
+    class Flaky:
+        available = True
+        def events_by_slug(self, slugs):
+            raise TimeoutError("Request timed out.")
+
+    rec = pairs.PairRecorder(_ledger(), Flaky(), clock=lambda: 1000.0,
+                             offshore_prices=lambda toks: {t: (0.40, 0.41) for t in toks})
+    got = rec.record([{"us_slug": "a", "us_event": "ev", "offshore_token": "ta"}])
+    assert got["us"] == 0 and got["offshore"] == 1 and rec.get("offshore", "ta")
