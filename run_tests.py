@@ -5974,6 +5974,40 @@ def suite_browser(app, live):
 
 
 
+def module_test_cmd(path: str) -> list:
+    """The command that actually RUNS one standalone test file's tests.
+
+    There are two kinds of file here. A self-running harness (test_action_links.py) calls its
+    checks at import and ends in sys.exit(), so `python file.py` is right for it. A pytest-style
+    file only DEFINES test_ functions. Run as a script, it defines them, runs none, and exits 0.
+    Until 2026-09-23 this suite ran every file as a script, so 19 pytest files (every Splitframe,
+    money-operator, reply-watch, polybot and clipbot test, 464 tests) "passed" on every run
+    without executing once.
+
+    Pytest-style = top-level test_ functions and no way of running itself: no __main__ block
+    and no module-level sys.exit / raise SystemExit. Anything else keeps the script path.
+    """
+    import ast
+    name = os.path.basename(path)
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            tree = ast.parse(f.read())
+    except (OSError, SyntaxError):
+        return [sys.executable, name]              # let the script path fail loudly
+    has_tests = any(isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and n.name.startswith("test_") for n in tree.body)
+    main_block = any(isinstance(n, ast.If) and "__main__" in ast.unparse(n.test)
+                     for n in tree.body)
+    exits_itself = any(
+        isinstance(n, ast.Raise)
+        or (isinstance(n, ast.Expr) and isinstance(n.value, ast.Call)
+            and ast.unparse(n.value.func) in ("sys.exit", "exit", "os._exit"))
+        for n in tree.body)
+    if has_tests and not main_block and not exits_itself:
+        return [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", name]
+    return [sys.executable, name]
+
+
 def suite_modules(app, live):
     """Run the standalone per-module test files (second-brain-chat/test_*.py).
 
@@ -5987,9 +6021,15 @@ def suite_modules(app, live):
     files = sorted(f for f in os.listdir(chat)
                    if f.startswith("test_") and f.endswith(".py"))
     check("module test files are discoverable", bool(files), chat)
+    # The runner's own classifier, on the two shapes it must tell apart. If it ever sends a
+    # pytest file down the script path again, every test in that file silently stops running.
+    check("a pytest-style file is run by pytest",
+          "pytest" in module_test_cmd(os.path.join(chat, "test_splitframe_daily.py")))
+    check("a self-running harness keeps the script path",
+          "pytest" not in module_test_cmd(os.path.join(chat, "test_action_links.py")))
     for fname in files:
         try:
-            r = subprocess.run([sys.executable, fname], cwd=chat,
+            r = subprocess.run(module_test_cmd(os.path.join(chat, fname)), cwd=chat,
                                capture_output=True, text=True, timeout=300)
         except subprocess.SubprocessError as e:
             check(f"{fname} runs", False, str(e)[:200])
