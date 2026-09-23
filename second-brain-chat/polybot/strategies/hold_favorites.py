@@ -1,8 +1,14 @@
 """hold_favorites (H2 + S12): the calibration table says contracts in a price band resolve YES more
 (or less) often than the price implies.
 
-  favorites   YES priced 85-95c, resolving within `horizon_days` → BUY_YES when realized − price ≥ edge
-  deadline NO 'by <date>' style longshots priced 3-20c → BUY_NO when realized ≪ price
+  favorites   a YES we would POST at 85-95c, resolving within `horizon_days` → BUY_YES when
+              realized − post ≥ edge
+  deadline NO 'by <date>' style longshots BID at 3-20c → BUY_NO when realized ≪ bid
+
+The band and the calibration lookup read the price the order actually trades at, not the market's
+last mark. Reading the mark let a wide book through with a fake edge: mark 0.86, bid 0.70, post 0.71,
+looked up in the 85-90c band and "worth" 15-20c — 30 of the first 102 live favourites (2026-09-23
+15:56) were posted under 85c that way. Bands, edge, min_n and shrink are unchanged.
 
 Category comes from the event's tags; sports stays off until the Ohio gate is flipped.
 """
@@ -63,9 +69,8 @@ class HoldFavorites(Strategy):
                 if m.get("closed"):
                     continue
                 try:
-                    yes = float(json.loads(m.get("outcomePrices") or "[]")[0])
                     toks = json.loads(m.get("clobTokenIds") or "[]")
-                except (ValueError, IndexError, TypeError):
+                except (ValueError, TypeError):
                     continue
                 if not toks:
                     continue
@@ -75,11 +80,11 @@ class HoldFavorites(Strategy):
                     continue
                 label = f"{cat}: {m.get('question') or e.get('title')}"
                 spread = None if (bid is None or ask is None) else round((ask - bid) * 100, 1)
-                if lo_f <= yes <= hi_f and bid is not None and ask is not None:
-                    realized = calibration.lookup(self.table, yes, cat)
+                post = round(min(bid + 0.01, ask - 0.01), 2) if bid is not None and ask is not None else None
+                if post is not None and lo_f <= post <= hi_f:
+                    realized = calibration.lookup(self.table, post, cat)
                     if realized is None:
                         continue
-                    post = round(min(bid + 0.01, ask - 0.01), 2)
                     edge = (realized - post) * 100
                     if edge >= self.cfg.edge_min_cents / 2:
                         size = size_for(realized, post, self.cfg.bankroll_usd, self.cfg.caps)
@@ -88,8 +93,8 @@ class HoldFavorites(Strategy):
                                               f"calibration {realized:.0%} vs post {post:.2f} ({hours:.0f}h left)",
                                               exit="settle", horizon_hours=hours, category=cat, spread_cents=spread,
                                               meta={"market_id": str(m.get("id")), "band": "favorite"}))
-                elif lo_l <= yes <= hi_l and bid is not None and bid >= lo_l and _DEADLINE_RE.search(m.get("question") or ""):
-                    realized = calibration.lookup(self.table, yes, cat)
+                elif bid is not None and lo_l <= bid <= hi_l and _DEADLINE_RE.search(m.get("question") or ""):
+                    realized = calibration.lookup(self.table, bid, cat)
                     if realized is None:
                         continue
                     no_price = round(1 - bid + 0.01, 2)

@@ -3451,3 +3451,25 @@ def test_a_closed_us_market_leaves_the_recorder_with_no_price_at_all():
     got, _ = pairs.match_events([closed_event], [_off_event("f", "Fed Decision in October?",
                                                             [(1, "No change", "t", 0.4, 0.41)])])
     assert got == []
+
+
+def test_hold_favorites_reads_the_price_it_would_post_not_the_last_mark():
+    """30 of the first 102 live favourites (2026-09-23 15:56) posted under 85c: the band and the
+    lookup read the mark (0.86) while the order rested at bid + 1c (0.71) — a 15c "edge" that is
+    only the spread."""
+    table = {"all": {"0.85-0.90": {"n": 60, "yes": 59}, "0.70-0.75": {"n": 60, "yes": 40},
+                     "0.10-0.15": {"n": 60, "yes": 1}, "0.00-0.05": {"n": 60, "yes": 1}}}
+    end = datetime.now(ZoneInfo("UTC")).timestamp() + 86400
+    end_iso = datetime.fromtimestamp(end, ZoneInfo("UTC")).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def ev(i, mark, bid, ask, q="Will it happen?"):
+        return {"slug": f"e{i}", "title": q, "tags": [{"slug": "politics"}], "endDate": end_iso,
+                "markets": [{"id": i, "question": q, "outcomePrices": json.dumps([str(mark), str(1 - mark)]),
+                             "endDate": end_iso, "clobTokenIds": json.dumps([f"t{i}", f"t{i}n"]),
+                             "bestBid": str(bid), "bestAsk": str(ask)}]}
+    sigs = HoldFavorites(_cfg(), table).scan(events=[
+        ev(1, 0.86, 0.70, 0.90),                       # wide book: posts at 0.71 → not a favourite at all
+        ev(2, 0.86, 0.86, 0.88),                       # tight book: posts at 0.87, in band
+        ev(3, 0.04, 0.12, 0.14, "Will it happen by Friday?"),   # longshot read at its BID (0.12), not the 4c mark
+    ])
+    assert sorted((s.market, s.side, s.price) for s in sigs) == [("t2", "BUY_YES", 0.87), ("t3", "BUY_NO", 0.89)]
