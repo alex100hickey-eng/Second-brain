@@ -13,56 +13,175 @@ is still yours to do.
 ---
 
 ## 💰 Money lanes — what only you can do
-*Kept current by the money operator. The SERVER (CLARVIS on Hetzner) files the next unblocked task every
-10 minutes; your Mac's capability watcher runs it as a headless Claude Code worker. Ask CLARVIS "what is
-the money operator doing", or run `python3 scripts/money_task.py status`. Everything else in the three
-lanes happens without you.*
 
-Rewritten 2026-09-17 16:40. The worker has no Browser pane — it reads sites through its own Chrome
-profile, so the logins below are done ONCE in a headed window on that profile:
-`open -na "Google Chrome" --args --user-data-dir="$HOME/.money-operator-chrome" <url>` — log in, then
-close the window (the worker cannot read while it is open).
+**2026-09-23 10:32 — a stray Chrome window is blocking every Ad Library read (10-second fix, close it).**
+The headless reader (`adlib_read.py`) and the one-time-login window from item 3 below share the same
+`~/.money-operator-chrome` profile, and Chrome only allows one process on a profile at a time. That
+window is open right now, sitting on `tiktok.com/signup/phone-or-email/email` and Vyro's add-clips page
+(launched 10:07). Every keyword/discover/page-id read fails with "PROFILE IN USE" while it's up, which
+means **no new brands can be sourced and no ad counts can be verified until it's closed** — today's
+sourcing task (find 6 new in-band brands) could not run because of it. Log into Vyro on that window if
+you want it connected (see item 3), then **close the window** — that's the whole fix.
 
-1. **Log in to Vyro once on the operator profile** (1 min):
-   `open -na "Google Chrome" --args --user-data-dir="$HOME/.money-operator-chrome" https://app.vyro.com`
-   → "Continue with Google" with the alt account (basketballlacrosse387@gmail.com), then close the window.
-   Until then 24 posted clips can't be submitted and views never count toward payment. This is the only
-   reason the clipping lane is at $0.
-2. **Fix the 5 Instagram Reel captions in the IG app** (replace `%23` with `#`). The API can't edit them
-   and Vyro rejects them as they are; unfixed, they stay unpaid forever.
-3. **Log in to Whop on the same operator profile** (same alt account):
-   `open -na "Google Chrome" --args --user-data-dir="$HOME/.money-operator-chrome" https://whop.com/discover/content-rewards`
-   You joined Clipping Culture, but the worker's browser has no session, so it can't read the board.
-   *Confirmed 2026-09-17 this is the only route: whop.com hangs the desktop Browser pane outright —
-   two attempts, one of them a 300 s timeout on a fresh tab — so I cannot read the board for you
-   from here either. Don't let a future session spend time trying.*
-4. **YouTube Studio: why were all 5 Shorts deleted?** Open studio.youtube.com on @wildestmomentsclips and
-   read the notification. Nothing gets re-uploaded to YouTube until you say what it said.
+**2026-09-23 10:45 — Splitframe: the deliverability audit is in `Money/Deliverability Audit — 2026-09-23.md`.**
+Verdict: the mail is arriving and authenticating (DMARC clean at Google and Microsoft, 1 bounce in 103, two
+support-desk autoresponders); the problem is that 23 of 49 first touches went to hello@/info@ desks. Also
+found the send arm **hung for 8 hours overnight** (nothing sent 01:56→10:15); cleared it and paced today's
+10 follow-ups 6.5 min apart. Four things are yours, in order:
 
-> **Closed 2026-09-17, both by decision rather than by you doing anything:**
->
-> - *"The outreach queue goes dry Friday and cannot refill itself."* It was not true, and it was the top
->   item on this page. The claim was that 33 in-band brands had nobody to write to and Hunter's quota was
->   shut until ~Sep 24. But `scripts/find_prospect_emails.py` reads brands' own sites for a published
->   address, needs no quota, and **had never been run on 54 of them**. It found addresses for 77 of 99.
->   The queue also refused every one of those addresses, because `is_person()` counted any shared inbox as
->   unreachable. That is right about `support@` and wrong about `hello@`: at a brand running 5-50 ads the
->   company is a few people and one of them reads the front desk. Named founders still go first and are
->   the only ones greeted by name; ticket queues are still never written to. Draftable went **0 → 41**.
-> - *"The creator lane: yes or no at $400/mo."* You said to decide it: *"whatever you think is the best way
->   to get me $. You make the decisions."* **Approved at $400/mo for 3 clips a week** —
->   `Money/Creator Lane — Offer (approved).md`. It runs on the same queue, cap and 3 h veto as Splitframe.
->   One rule carried in: MISTERARTHER's address is still unverified and does not go out until it is read
->   off his own page.
+1. **Seed placement test (5 min, phone).** Studio Gmail → Drafts → send the one addressed to
+   `alex100hickey@gmail.com`, then 10 min later the one to `alex2hoop@icloud.com`. Note which folder each
+   lands in (iCloud: check Junk explicitly) in the table in the audit note. **There is no Outlook address of
+   yours anywhere** — make one at outlook.com (accounts are yours to create), tell me the address, and the
+   third draft is filed the same minute. Optional: paste the same body to the address mail-tester.com gives
+   you and read the score; that gate has not been run since 08-21.
+2. **Merge `deliverability-fixes` between shifts (nothing else is running), then push so the server picks
+   up the bounce-watcher half.** The branch's first commit carries main's uncommitted `follow_ups_first`
+   change byte-for-byte, so discard those two working-tree copies first:
+   ```
+   cd ~/second-brain && git checkout -- scripts/splitframe_send.py second-brain-chat/test_splitframe_send_gate.py && git merge deliverability-fixes && git push origin main
+   ```
+   What it changes (mine plus the funnel session's sender hardening, lifted in): one send per
+   10-minute sender run, follow-ups keep their slots even before they are due, no automatic sends
+   22:00–08:00 (your "Send it now" tap still goes at night), a 420 s watchdog so a hung run can never
+   stop sending again, the SENT line logged before the bookkeeping that hung last night, the rot check
+   flags a hung job by process age, and the bounce watcher finally sees creator-lane addresses. The
+   repo plist is reconciled to the installed 600 s interval.
+3. **Follow-up backlog needs a decision.** The 10/day cap is shared between first touches and follow-ups.
+   22 follow-ups were due today, ~10 more land tomorrow, then the 09-18/19/20 batches' second follow-ups.
+   Follow-ups alone fill the cap for 3–4 days and first touches get zero slots. Say **A** or **B**:
+   **A** = the cap counts first touches only (follow-ups are replies on delivered threads, low risk) — I
+   code it, ~20 lines + tests. **B** = leave it; first touches pause until the backlog clears, which is
+   also what "named person or no send" wants until Hunter resets 09-24. I'd pick A.
+4. **Hunter resets 09-24.** The first nine searches should be founder addresses for brands already
+   emailed at a front desk where the name is known: Moon Juice (Amanda Chantal Bacon), Brightland
+   (Aishwarya Iyer), SwimZip (Betsy Johnson), Calypsa (Nava Brief Fried), Formula 369 (Eric Ellis),
+   Saltair (Iskra Lawrence), Oaktown Spice Shop (John Beaver), Native Pet (Dan), Plant Press (Ariana) —
+   so their second follow-up goes to a person, not a ticket desk. Hunter Starter ($34/mo, your card) is
+   still the real unlock and I did not sign up for anything.
 
-Also on the clock: **Sep 19 Claude Max renewal ($106)**. Every worker run spends Claude Code usage and the
-operator is capped at 10 runs a day (MONEY_OPERATOR_MAX_RUNS on the server). On Pro (~$21) that cap would
-have to drop to 1-2 a day.
 
-> **Polybot, 2026-09-17 — no action needed, but know this:** weather_lock's paper record splits cleanly by
-> entry price. Under 50c it went **0 for 7** (-$139.73, the module's entire loss); at 80c+ it went 19/20
-> (+$13.78). I added a 50c floor and committed it. No module is near promotion, and nothing here asks you
-> to flip anything live.
+**UPDATE 10:20: no action needed.** Something other than me killed the frozen process at 10:09
+(most likely a money-shift worker). launchd restarted it and sends resumed at 10:15 (immi FU2
+first). The command below is only for if it freezes again. The branch fix is still worth merging,
+because nothing stops the next hang until it's in.
+
+**2026-09-23 10:10 — the Mac email sender has been frozen since 01:56 (one command fixes it).**
+A send at 01:56 was waiting on the network when the Mac went to sleep. The connection died and
+the process never gave up, and launchd won't start a new run while the old one is alive. **Nothing
+has sent since.** 12 follow-ups due yesterday and 10 due today are drafted and waiting (Moon
+Juice, Brightland, Calypsa, immi, Fly By Jing, Ghia, Swoon, Tower 28, Gracie's, Formula 369,
+Faded Floral, Beauty From Bees, then today's Bask, Bite, The Sill, Kirrin Finch, Universal
+Standard, Cape Candle, Friday, Dakota, Final Boss, Geode). Restarting it lets them go at the usual
+cap (10/day, follow-ups first), so it counts as sending and I've left it to you. Paste this in
+Terminal:
+`launchctl kickstart -k gui/$(id -u)/com.secondbrain.splitframesend`
+The permanent fix (a watchdog, quiet hours, one send per run, room held back for follow-ups,
+and the send logged before its bookkeeping) is on the deliverability session's branch
+`deliverability-fixes`. Two sessions built it in parallel. That session adopted my version,
+so there's one sender, not two conflicting ones.
+
+**2026-09-23 — merge `funnel-report` (funnel report + creator-lane tracking), then 2 commands.**
+Held for you because the polybot loop and the money worker run all day. It touches none of
+`deliverability-fixes`' files, so the two merge in either order without conflicts. Full
+`run_tests.py` on the branch: 1062 passed, 0 failed. In Terminal:
+```
+cd ~/second-brain && git merge --ff-only funnel-report || git merge --no-edit funnel-report
+git push
+python3 scripts/splitframe_queue.py creator-backfill --bounced masondota2@afkcreators.com
+```
+`git push` deploys the server, whose daily job then logs a funnel headline. The last line is a
+**dry run**. It should list Dishsoap, Sequisha and Zerbs, each sent 09-22 with FU1 on 09-25, and
+masondota2 closed as bounced. If that's what it shows, run it again with `--write` on the end.
+Those 4 creators were emailed with no tracker row, so they have no follow-ups and no reply watch.
+Dishsoap's reply would have been credited to Zerbs, because they share an agency domain. It
+writes the tracker, which is why it's yours to run. After that,
+`python3 scripts/funnel_report.py` refreshes `Money/Funnel — <date>.md`.
+
+**2026-09-19 — Hunter is out of searches until Sep 24, and it gates the thing that gets replies.**
+Free plan, 53 of 50 searches used, resets **2026-09-24**. Hunter is how a prospect gets a *named
+founder* address instead of `hello@`. That matters more than it sounds: all 24 of the person-tier
+emails went to a named founder, and today's 9 front-desk sends are what running dry looks like.
+Four good brands went to a generic inbox today even though we know the founder's name — Moon Juice
+(Amanda Chantal Bacon), Brightland (Aishwarya Iyer), Calypsa (Nava Brief Fried), Formula 369 (Eric
+Ellis). Calypsa's went into a **Gorgias support ticket**, where a support agent with no authority to
+buy ad creative is the one reading it.
+**Your call, and only yours (it needs a card):** Hunter Starter is $34/mo for 500 searches. At a
+$650 drop or a $950/mo retainer, one reply pays for a year of it. The alternative is waiting until
+Sep 24 and sending front-desk until then. I did not sign up for anything.
+
+
+**2026-09-19 ~5:39 PM — ignore the "Calypsa replied" buzz on your phone.** That was mine and it was
+wrong. Calypsa's support desk sent an automatic "we've received your request", the reply watcher
+read it as a human answer, and the alert went out before I caught it. Nobody has replied to a cold
+email yet — still 0 from 46. Fixed so it can't happen again, and Calypsa's follow-ups (09-22, 09-26)
+are back on.
+
+*Rewritten 2026-09-18 19:40. There are compliant, finished clips sitting in iCloud waiting for an
+account. One thing is blocking money, and it takes about a minute.*
+
+### 1. RESOLVED 2026-09-23 — Higgsfield MCP now scoped into the `second-brain` project
+`claude mcp add --transport http higgsfield https://mcp.higgsfield.ai/mcp` was run from
+`~/second-brain` in an interactive session; `~/.claude.json` now carries the entry under the
+`second-brain` project. Workers spawned after this should see the Higgsfield tools. If a shift
+still reports zero Higgsfield tools, that is a new problem, not this one.
+
+### 2. Clipping: the 4 things only you can do (updated 2026-09-23 11:00 by the clipping tab)
+Every Crazy Taxi view pays only after the post is **submitted on Whop**, and Whop only accepts posts from
+**linked** accounts, apparently within 30 minutes of posting. Instagram and YouTube posting already run without
+you. Linking is the bottleneck.
+1. **Sign into Whop in the Claude browser pane** (Google, basketballlacrosse387). You're currently signed out there,
+   so I can't check the budget, submit anything, or find other gaming campaigns.
+2. **Link Instagram @wildestmomentsclips and YouTube @wildestmomentsclips on Whop.** Clipping Culture → Settings →
+   Connected accounts → Connect → pick the platform → type the handle → Whop shows a code. Put the code in that
+   account's bio (IG: the app → Edit profile; YouTube: Studio → Customization → Description), click Verify, then
+   remove the code. I can't edit bios through the APIs I have.
+3. **New TikTok account (retry later; TikTok locked you out after too many code attempts).** Use the real Chrome
+   window I open, not the Claude pane (TikTok silently rejects codes there):
+   `open -na "Google Chrome" --args --user-data-dir="$HOME/.money-operator-chrome" https://www.tiktok.com/signup/phone-or-email/email`
+   Email `basketballlacrosse387+ct2@gmail.com`, then tell me the handle. After that: approve the Higgsfield
+   link I send, and link the account on Whop the same way as step 2.
+4. **Close that Chrome window when you're done with it.** I can't read Vyro (or anything else on that profile)
+   while it's open.
+
+### 3. Vyro: expect $0; only v48 is worth one paste
+Vyro pays nothing under **5,000 views a post**; the best of the 25 has 536. Of the 25:
+- 9 were already submitted.
+- 5 are Shorts that YouTube deleted.
+- 5 are Reels whose captions have `%23` instead of `#`.
+- The Shards campaign has ended, and Battlbox's budget is fully paid out.
+The only live, unsubmitted one is **v48** (FX Adults, ends 09-24):
+`https://www.tiktok.com/@wildest_moments/video/7686866622350494990`
+
+### 4. Later, once it has about a week of analytics
+The campaign wants a **screen recording of your audience geography** (≥50% Americas) at
+`https://tally.so/r/GxZGQe`. Nothing to do until the account has data. Either the page *or* the
+individual post can satisfy it.
+
+> **THE CAMPAIGN IS LIVE AND THE CLIPS ARE MADE.** `Crazy Taxi: World Tour — Multiplayer CNT Clips`
+> (Whop / Clipping Culture). **$11,941 of $12,000 unspent, 5 clippers, top earner $36.** Pays on
+> TikTok $2.10/1k, YouTube $2.10, Instagram $2.00 — one edit, three platforms. Min payout = one
+> clip's rate, so it **pays from the first 1,000 views**; max $660/clip.
+> **12 clips are rendering out of a 48-minute TorteDeLini stream**, staged to
+> `iCloud/ClipBot/ready/tiktok/` with a caption file each. Every one carries the required logo
+> watermark and a caption that passes the brief: exact wishlist line, @crazytaxi_game tagged, source
+> creator credited, `#Ad` alone on its own line as the first hashtag.
+> Post 2/day from the POST ORDER, then `python3 -m clipbot.runner posted --variant N --url <url>`.
+
+> **Optional second pool — [US] Double Date Island** ($10,493 of $10,500 left, 3 clippers, $2.60/1k,
+> TikTok only). Its footage is behind a WeTransfer terms-of-service accept at
+> `https://we.tl/t-0XEnVTLxj3K0pHo4`, which is your click, not mine. **I'd hold it** until Crazy Taxi
+> is actually earning — one niche per account is the whole lesson from the last account.
+
+> **Closed 2026-09-18:** the Whop board is no longer read-only guesswork. It is a cross-origin iframe,
+> but navigating to the app origin directly makes the whole board, every brief and every link plain
+> readable. All 22 campaigns were read and ranked; the regional ones ([UK]/[FRANCE]/[Mexico]/[Brazil])
+> are out because they need that region's audience.
+
+> **Polybot — no action needed.** Nothing near its gate, everything in paper, 0 live orders,
+> bankroll $205.69.
+
+Also on the clock: **Sep 19 Claude Max renewal ($106)**.
 
 ---
 
@@ -215,6 +334,14 @@ That is the thing to build next, and it is blocked behind the lift question in #
   redirects to login.case.edu; nothing was read tonight either. No new phone alert was
   sent (one already went out inside the last 3 days). This is the 5th consecutive
   night with no Canvas data.
+- **2026-09-17 — still blocked; this is now a week.** canvas.case.edu redirected
+  straight to login.case.edu again, so no submissions, grades or announcements were
+  read. A phone alert went out tonight (none had been sent since ~09-14). **Last good
+  read: 2026-09-10 10:26 — 7 days stale.** One login on the Mac fixes this: open the
+  Browser pane, go to canvas.case.edu, log in, and leave that tab open with the Mac
+  awake. Until you do, anything you have already submitted keeps showing as **open**,
+  and the school brief, ranked daily orders and phone nudges are all wrong in that
+  direction — a week's worth now.
 
 - **2026-09-11 — the nightly Canvas status sync could not run.** canvas.case.edu
   redirected to login.case.edu (SSO expired), so no submissions, grades or

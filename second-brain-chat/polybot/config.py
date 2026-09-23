@@ -204,7 +204,7 @@ class Config:
     gate_since_ts: float = 0.0             # signals before this epoch don't count toward the report or the gate
     min_us_signals: int = 10               # a module cannot go live on offshore evidence alone (see the gate)
     auto_promote: bool = False             # True: the 07:00 report flips PASS modules paper -> live by itself
-    snapshot_keep_days: int = 7            # book snapshots older than this are pruned at 03:00
+    snapshot_keep_days: int = 30           # book snapshots older than this are pruned at 03:00
 
     def mode(self, module: str) -> str:
         return self.modes.get(module, "off")
