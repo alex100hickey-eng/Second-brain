@@ -695,13 +695,19 @@ def test_refresh_views_never_writes_a_false_zero(tmp_path, monkeypatch):
     r.ledger.mark_posted(a, "https://www.tiktok.com/@x/video/1")
     r.ledger.mark_posted(b, "https://www.tiktok.com/@x/video/2")
     r.ledger.mark_posted(yt, "https://www.youtube.com/shorts/abc")
+    _, (ig,) = _posted_variants(r.ledger, "whop2", 2.0, 1)
+    r.ledger.mark_posted(ig, "https://www.instagram.com/reel/XYZ/")
     r.ledger.update_post(b, views=77)
+    r.ledger.update_post(ig, views=144)
     pages = {"https://www.tiktok.com/@x/video/1": '{"stats":{"diggCount":3,"playCount":1234,"collectCount":"0"}}',
-             "https://www.tiktok.com/@x/video/2": "<html>Video currently unavailable</html>"}
+             "https://www.tiktok.com/@x/video/2": "<html>Video currently unavailable</html>",
+             "https://www.youtube.com/shorts/abc": '{"videoDetails":{"videoId":"abc","viewCount":"456"}}'}
     out = r.refresh_views(fetch=pages.get, pause_s=0)
-    assert out["read"] == 1 and out["unread"] == [b]
+    assert out["read"] == 2 and out["unread"] == [b]
     views = {p["variant_id"]: p["views"] for p in r.ledger.posts()}
-    assert views[a] == 1234 and views[b] == 77, "an unreadable page keeps its last number"
+    assert views[a] == 1234 and views[yt] == 456
+    assert views[b] == 77, "an unreadable page keeps its last number"
+    assert views[ig] == 144, "Instagram isn't scraped, so its API-read number is left alone"
 
 
 def test_old_posts_get_their_account_backfilled_from_the_url(tmp_path):

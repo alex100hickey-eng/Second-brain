@@ -653,18 +653,23 @@ class Runner:
         return None
 
     def refresh_views(self, fetch=None, pause_s: float = 1.5) -> dict:
-        """Re-read every TikTok post's play count from its public page (no login) into the ledger.
-        A page with no readable stats (deleted, private, rate-limited) keeps its last number and is
-        counted as unread rather than written as 0 — a false zero is how a live lane got called dead."""
+        """Re-read every TikTok and YouTube post's view count from its public page (no login) into the
+        ledger. Instagram hides plays from logged-out pages, so Reels are refreshed through the
+        Instagram API by whoever holds that connection, not here. A page with no readable count
+        (deleted, private, rate-limited) keeps its last number and is counted as unread rather than
+        written as 0 — a false zero is how a live lane got called dead."""
         fetch = fetch or (lambda u: subprocess.run(
             ["curl", "-sL", "--max-time", "20", "-A", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
              "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36", u],
             capture_output=True, text=True).stdout)
         read, unread = 0, []
+        patterns = {"tiktok.com/": r'"stats":\{[^}]*"playCount":(\d+)',
+                    "youtube.com/": r'"viewCount":"(\d+)"'}
         for p in self.ledger.posts():
-            if "tiktok.com/" not in (p["url"] or ""):
+            pat = next((rx for host, rx in patterns.items() if host in (p["url"] or "")), None)
+            if not pat:
                 continue
-            m = re.search(r'"stats":\{[^}]*"playCount":(\d+)', fetch(p["url"]) or "")
+            m = re.search(pat, fetch(p["url"]) or "")
             if m:
                 self.ledger.update_post(p["variant_id"], views=int(m.group(1)))
                 read += 1
@@ -878,7 +883,7 @@ def main(argv=None):
     ac.add_argument("--campaign", default="", help="campaigns this account posts, comma-separated ids or names")
     ac.add_argument("--connector", default="", help="Higgsfield TikTok connector_id")
     ac.add_argument("--notes", default="")
-    sub.add_parser("refresh-views", help="re-read every TikTok post's plays from its public page")
+    sub.add_parser("refresh-views", help="re-read TikTok + YouTube view counts from their public pages")
     bf = sub.add_parser("backfill", help="render platforms a campaign gained after its clips were made")
     bf.add_argument("--campaign", required=True)
     sub.add_parser("views-report")
