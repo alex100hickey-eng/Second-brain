@@ -548,7 +548,16 @@ def brief_sf_topup(sf: dict, need: int) -> str:
 
 def brief_sf_hunter(sf: dict) -> str:
     n = min(8, sf["hunter_left"], sf["hunter_targets_in_band"])
-    return (f"Hunter has {sf['hunter_left']} searches left this cycle and {sf['hunter_targets_in_band']} "
+    # Named person or no send (NAMED_ONLY): researched founders wait in Money/Named Contacts.csv
+    # because the tracker has one writer, this worker. Their guessed addresses cost a VERIFICATION
+    # each, not a search, so they go first and don't eat the search quota the list below needs.
+    return ("First run `python3 scripts/splitframe_queue.py named --verify --write`: it checks the "
+            "researched founder addresses in Money/Named Contacts.csv with Hunter's verifier and "
+            "writes names plus published or verified addresses into the tracker. For any queued "
+            "front-desk draft whose row now has a founder's address, run `splitframe_queue.py "
+            "revise --to <desk address> --new-to <founder address> --body-file <body greeting them "
+            "by first name>`. Then: "
+            f"Hunter has {sf['hunter_left']} searches left this cycle and {sf['hunter_targets_in_band']} "
             f"in-band qualified brands have no person's address. Run `python3 scripts/fill_contacts.py "
             f"--brands \"<up to {n} in-band brands from 'Next Hunter window' in splitframe_queue.py status>\" "
             f"--limit {n}`. Never re-search a brand that already has an email_checked date; shared inboxes "
