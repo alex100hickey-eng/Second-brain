@@ -22,6 +22,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
+import subprocess
 import sys
 import time
 import traceback
@@ -29,7 +31,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from . import config, hooks, notify, posting, transform
-from .ledger import Ledger
+from .ledger import Ledger, handle_from_url
 from .opus_api import OpusClient, estimate_credits, normalize_clips, project_id_from
 
 ET = ZoneInfo("America/New_York")
@@ -460,7 +462,11 @@ class Runner:
             used_here = set()
             made = 0
             for platform in camp_platforms:
-                recipe = config.VARIANTS.get(platform, config.VARIANTS["tiktok"])
+                # The recipe is per-PLATFORM; required_text is per-CAMPAIGN, so it has to be
+                # merged in here or a brief's mandatory on-screen text never reaches the renderer.
+                recipe = dict(config.VARIANTS.get(platform, config.VARIANTS["tiktok"]))
+                recipe["required_text"] = rules["required_text"]
+                recipe["required_logo"] = rules["required_logo"]
                 hook = hooks.pick(lib, uses, exclude=used_here) if (lib and rules["voice"]) else None
                 hook_len = hooks.hook_length(hook, self.cfg.hook_seconds_max) if hook else 0.0
                 text_hook = (c["title"] or (hook["text"] if hook else "Watch this")) if rules["text_hook"] else ""
@@ -519,8 +525,14 @@ class Runner:
         return counts
 
     # ---- Alex's two commands ----------------------------------------------------------------
-    def posted(self, variant_id: int, url: str) -> None:
-        self.ledger.mark_posted(variant_id, url)
+    def posted(self, variant_id: int, url: str, account: str = "") -> None:
+        acct = account or handle_from_url(url)
+        if acct and self.ledger.account(acct):
+            allowed, why = self.account_policy(acct)
+            if allowed <= 0:
+                # Recorded anyway — it is a fact now — but loudly, because this is how the first account died.
+                self.log(f"WARNING: {acct} was over its cadence when #{variant_id} went out ({why})")
+        self.ledger.mark_posted(variant_id, url, account=acct)
         v = self.ledger.variant(variant_id)
         for ext in (".mp4", ".txt"):
             p = (v["staged_path"] or "").replace(".mp4", ext)
@@ -568,6 +580,88 @@ class Runner:
             mins = int((MIN_POST_GAP_S - (_t.time() - last_post_ts)) / 60)
             return 0, f"last post was too recent — {mins} min before the next one"
         return cap - posts_today, f"day {int(account_age_days)}: {cap - posts_today} of {cap} left today"
+
+
+    def account_policy(self, handle: str) -> tuple:
+        """posting_policy() for one registered account, from its own age and its own posts today.
+        An unregistered or retired account may not post at all: the ramp can't be enforced on an
+        account nobody told the ledger about."""
+        a = self.ledger.account(handle)
+        if not a:
+            return 0, f"{handle} is not registered — `account add` first"
+        if a["status"] != "active":
+            return 0, f"{handle} is {a['status']}"
+        age_days = (time.time() - a["created_at"]) / 86400
+        today = datetime.now(ET).date()
+        mine = self.ledger.account_posts(handle)
+        posts_today = sum(1 for p in mine if p["posted_at"]
+                          and datetime.fromtimestamp(p["posted_at"], ET).date() == today)
+        last = max((p["posted_at"] or 0 for p in mine), default=0) or None
+        if age_days < 1:
+            opens = datetime.fromtimestamp(a["created_at"] + 86400, ET).strftime("%a %b %-d %-I:%M %p ET")
+            return 0, f"{handle} is {age_days * 24:.0f} h old — zero posts until {opens}"
+        return self.posting_policy(age_days, posts_today, last)
+
+    def account_campaigns(self, handle: str) -> list:
+        a = self.ledger.account(handle)
+        ids = [x for x in (a or {}).get("campaigns", "").split(",") if x]
+        return [c for c in (self.ledger.campaign(i) for i in ids) if c]
+
+    def next_for(self, handle: str) -> dict | None:
+        """The next staged clip this account should post: the top of POST ORDER, restricted to the
+        account's campaigns (one niche — Crazy Taxi is one campaign per credited streamer) and its
+        platform. None when nothing fits; an account with no campaigns set posts nothing."""
+        a = self.ledger.account(handle)
+        names = {c["name"] for c in self.account_campaigns(handle)}
+        if not a or not names:
+            return None
+        for r in posting.post_order(self.ledger):
+            if r["platform"] == a["platform"] and r["campaign"] in names:
+                return r
+        return None
+
+    def refresh_views(self, fetch=None, pause_s: float = 1.5) -> dict:
+        """Re-read every TikTok post's play count from its public page (no login) into the ledger.
+        A page with no readable stats (deleted, private, rate-limited) keeps its last number and is
+        counted as unread rather than written as 0 — a false zero is how a live lane got called dead."""
+        fetch = fetch or (lambda u: subprocess.run(
+            ["curl", "-sL", "--max-time", "20", "-A", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+             "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36", u],
+            capture_output=True, text=True).stdout)
+        read, unread = 0, []
+        for p in self.ledger.posts():
+            if "tiktok.com/" not in (p["url"] or ""):
+                continue
+            m = re.search(r'"stats":\{[^}]*"playCount":(\d+)', fetch(p["url"]) or "")
+            if m:
+                self.ledger.update_post(p["variant_id"], views=int(m.group(1)))
+                read += 1
+            else:
+                unread.append(p["variant_id"])
+            if pause_s:
+                time.sleep(pause_s)
+        est = self.ledger.payout_estimate()
+        views = sum(p["views"] or 0 for p in self.ledger.posts())
+        self.ledger.set_kv("last_views_refresh", time.time())
+        self.log(f"views refreshed: {read} read, {len(unread)} unread {unread or ''} · total {views:,} · "
+                 f"est ${est['usd_estimated']:.2f} ({est['posts_paying']} paying) · "
+                 f"${est['usd_if_all_paid']:.2f} if every view paid")
+        return {"read": read, "unread": unread, "views": views, **est}
+
+    def views_report(self) -> str:
+        """Per-account and per-campaign view totals plus the honest payout number."""
+        posts = self.ledger.posts()
+        est = self.ledger.payout_estimate()
+        by_acct, by_camp = {}, {}
+        for p in posts:
+            by_acct[p.get("account") or p["platform"]] = by_acct.get(p.get("account") or p["platform"], 0) + (p["views"] or 0)
+            by_camp[p["campaign"]] = by_camp.get(p["campaign"], 0) + (p["views"] or 0)
+        total = sum(by_acct.values())
+        lines = [f"views {total:,} across {len(posts)} posts · est. payout ${est['usd_estimated']:.2f} "
+                 f"({est['posts_paying']} posts submitted + past their floor) · ${est['usd_if_all_paid']:.2f} if every view paid"]
+        lines += [f"  {k}: {v:,}" for k, v in sorted(by_acct.items(), key=lambda kv: -kv[1])]
+        lines += [f"  [{k}] {v:,}" for k, v in sorted(by_camp.items(), key=lambda kv: -kv[1])]
+        return "\n".join(lines)
 
 
     def transformation_risk(self, campaign) -> str:
@@ -674,6 +768,12 @@ class Runner:
                 if now.hour == self.cfg.nudge_hour_et and last_nudge_day != day:
                     last_nudge_day = day
                     self.ready_nudge()
+                    try:
+                        r = self.refresh_views()
+                        notify.nudge(f"clips: {r['views']:,} views · est ${r['usd_estimated']:.2f}",
+                                     self.views_report(), key="clipbot-views", log=self.log)
+                    except Exception as exc:
+                        self.log(f"views refresh failed: {exc}")
                     with open(os.path.join(config.ROOT, "report-latest.txt"), "w") as f:
                         f.write(self.ledger.report() + "\n")
             except Exception as exc:
@@ -735,6 +835,19 @@ def main(argv=None):
     p = sub.add_parser("posted")
     p.add_argument("--variant", type=int, required=True)
     p.add_argument("--url", required=True)
+    p.add_argument("--account", default="", help="'@handle'; read from a TikTok URL when omitted")
+    sm = sub.add_parser("submitted", help="the post was accepted by its board (Vyro/Whop) — only then can it earn")
+    sm.add_argument("--variant", type=int, required=True)
+    ac = sub.add_parser("account", help="accounts that post, each held to its own posting_policy() ramp")
+    ac.add_argument("verb", choices=["add", "list", "retire", "check", "next"])
+    ac.add_argument("--handle", default="")
+    ac.add_argument("--platform", default="tiktok")
+    ac.add_argument("--created", default="", help="when the account was made, 'YYYY-MM-DD HH:MM' ET (default now)")
+    ac.add_argument("--campaign", default="", help="campaigns this account posts, comma-separated ids or names")
+    ac.add_argument("--connector", default="", help="Higgsfield TikTok connector_id")
+    ac.add_argument("--notes", default="")
+    sub.add_parser("refresh-views", help="re-read every TikTok post's plays from its public page")
+    sub.add_parser("views-report")
     b = sub.add_parser("blockers", help="what is stopping posting; carried in the stalled nudge")
     b.add_argument("--set", nargs="*", default=None, help="replace the list (no args clears it)")
     v = sub.add_parser("views")
@@ -789,7 +902,43 @@ def main(argv=None):
     elif a.cmd == "inbox":
         print(f"{r.ingest_inbox()} new source(s) from inbox")
     elif a.cmd == "posted":
-        r.posted(a.variant, a.url)
+        r.posted(a.variant, a.url, a.account)
+    elif a.cmd == "submitted":
+        r.ledger.mark_submitted(a.variant)
+        print(f"#{a.variant} marked submitted")
+    elif a.cmd == "account" and a.verb == "list":
+        for acct in r.ledger.accounts() + r.ledger.accounts("retired"):
+            camps = ", ".join(c["name"] for c in r.account_campaigns(acct["handle"])) or "none"
+            print(f"{acct['handle']} ({acct['platform']}, {acct['status']}) made "
+                  f"{datetime.fromtimestamp(acct['created_at'], ET):%Y-%m-%d %H:%M} ET · campaigns "
+                  f"{camps} · posts {len(r.ledger.account_posts(acct['handle']))} · "
+                  f"{r.account_policy(acct['handle'])[1]}")
+    elif a.cmd == "account":
+        if not a.handle:
+            sys.exit("--handle required")
+        if a.verb == "add":
+            created = (datetime.strptime(a.created, "%Y-%m-%d %H:%M").replace(tzinfo=ET).timestamp()
+                       if a.created else None)
+            camps = [r.ledger.campaign(x.strip()) for x in a.campaign.split(",") if x.strip()]
+            if not all(camps):
+                sys.exit(f"unknown campaign in {a.campaign!r}")
+            r.ledger.add_account(a.handle, a.platform, created, [c["id"] for c in camps], a.connector, a.notes)
+            print(r.account_policy(a.handle)[1])
+        elif a.verb == "retire":
+            r.ledger.set_account_status(a.handle, "retired")
+        elif a.verb == "check":
+            n, why = r.account_policy(a.handle)
+            print(f"{n} {why}")
+        elif a.verb == "next":
+            n, why = r.account_policy(a.handle)
+            nxt = r.next_for(a.handle)
+            print(f"allowed now: {n} ({why})")
+            print(f"next: v{nxt['variant']} {nxt['file']} · {nxt['line']!r}" if nxt else "next: nothing staged for this account")
+    elif a.cmd == "refresh-views":
+        r.refresh_views()
+        print(r.views_report())
+    elif a.cmd == "views-report":
+        print(r.views_report())
     elif a.cmd == "views":
         r.views(a.variant, a.views, a.qualified, a.approved, a.settled)
     elif a.cmd == "report":

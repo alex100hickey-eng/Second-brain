@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import time
 from datetime import datetime, timedelta, timezone
@@ -84,11 +85,31 @@ CREATE TABLE IF NOT EXISTS hook_uses (
     uses INTEGER DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT);
+CREATE TABLE IF NOT EXISTS accounts (
+    handle TEXT PRIMARY KEY,         -- '@name' as it appears in the post URL
+    platform TEXT NOT NULL,
+    created_at REAL NOT NULL,        -- when the platform account was made: posting_policy ages from this
+    registered_at REAL NOT NULL,
+    campaigns TEXT DEFAULT '',       -- comma-separated campaign ids: the one niche this account posts
+    connector_id TEXT DEFAULT '',    -- Higgsfield TikTok connector
+    status TEXT DEFAULT 'active',    -- active | retired (retired = never post from it)
+    notes TEXT DEFAULT ''
+);
 """
+
+# A post only earns once it is submitted to the board, and only past the board's per-post floor.
+# Vyro pays nothing under 5,000 views a post; Whop's minimum payout is one clip's rate (~1,000 views).
+PAYOUT_FLOOR_VIEWS = {"vyro": 5000, "whop": 1000}
 
 
 def _now() -> float:
     return time.time()
+
+
+def handle_from_url(url: str) -> str:
+    """'@name' from a TikTok post URL (tiktok.com/@name/video/<id>); '' for anything else."""
+    m = re.search(r"tiktok\.com/(@[A-Za-z0-9_.]+)/", url or "")
+    return m.group(1) if m else ""
 
 
 class Ledger:
@@ -99,6 +120,17 @@ class Ledger:
         cols = {r[1] for r in self.conn.execute("PRAGMA table_info(campaigns)")}
         if "rules" not in cols:                       # DBs created before per-campaign rules existed
             self.conn.execute("ALTER TABLE campaigns ADD COLUMN rules TEXT DEFAULT '{}'")
+            self.conn.commit()
+        pcols = {r[1] for r in self.conn.execute("PRAGMA table_info(posts)")}
+        if "account" not in pcols:                    # DBs from before a second account existed
+            self.conn.execute("ALTER TABLE posts ADD COLUMN account TEXT DEFAULT ''")
+            for r in self.conn.execute("SELECT variant_id, url FROM posts").fetchall():
+                h = handle_from_url(r[1])
+                if h:
+                    self.conn.execute("UPDATE posts SET account=? WHERE variant_id=?", (h, r[0]))
+            self.conn.commit()
+        if "submitted_at" not in pcols:
+            self.conn.execute("ALTER TABLE posts ADD COLUMN submitted_at REAL")
             self.conn.commit()
 
     def _rows(self, q, args=()):
@@ -210,14 +242,16 @@ class Ledger:
         self.conn.execute(f"UPDATE variants SET {sets} WHERE id=?", (*fields.values(), variant_id))
         self.conn.commit()
 
-    def mark_posted(self, variant_id, url="", posted_at=None) -> None:
+    def mark_posted(self, variant_id, url="", posted_at=None, account="") -> None:
         v = self.variant(variant_id)
         if not v:
             raise ValueError(f"no variant {variant_id}")
+        account = account or handle_from_url(url)
         self.conn.execute(
-            "INSERT INTO posts (variant_id, platform, url, posted_at, updated) VALUES (?,?,?,?,?)"
-            " ON CONFLICT(variant_id) DO UPDATE SET url=excluded.url, posted_at=excluded.posted_at, updated=excluded.updated",
-            (variant_id, v["platform"], url, posted_at or _now(), _now()))
+            "INSERT INTO posts (variant_id, platform, url, posted_at, updated, account) VALUES (?,?,?,?,?,?)"
+            " ON CONFLICT(variant_id) DO UPDATE SET url=excluded.url, posted_at=excluded.posted_at,"
+            " updated=excluded.updated, account=excluded.account",
+            (variant_id, v["platform"], url, posted_at or _now(), _now(), account))
         self.conn.execute("UPDATE variants SET status='posted' WHERE id=?", (variant_id,))
         self.conn.commit()
 
@@ -228,9 +262,37 @@ class Ledger:
         self.conn.commit()
 
     def posts(self):
-        return self._rows("""SELECT p.*, v.clip_id, c.title, s.campaign_id, k.name AS campaign, k.rate_per_1k
+        return self._rows("""SELECT p.*, v.clip_id, c.title, s.campaign_id, k.name AS campaign, k.rate_per_1k, k.marketplace
                              FROM posts p JOIN variants v ON v.id=p.variant_id JOIN clips c ON c.id=v.clip_id
                              JOIN sources s ON s.id=c.source_id JOIN campaigns k ON k.id=s.campaign_id ORDER BY p.posted_at""")
+
+    def mark_submitted(self, variant_id, ts=None) -> None:
+        self.update_post(variant_id, submitted_at=ts or _now())
+
+    # ---- accounts ------------------------------------------------------------------------
+    def add_account(self, handle, platform="tiktok", created_at=None, campaigns=(), connector_id="",
+                    notes="") -> None:
+        handle = "@" + handle.lstrip("@")
+        self.conn.execute(
+            "INSERT INTO accounts (handle, platform, created_at, registered_at, campaigns, connector_id, notes)"
+            " VALUES (?,?,?,?,?,?,?) ON CONFLICT(handle) DO UPDATE SET platform=excluded.platform,"
+            " created_at=excluded.created_at, campaigns=excluded.campaigns,"
+            " connector_id=excluded.connector_id, notes=excluded.notes",
+            (handle, platform, created_at or _now(), _now(), ",".join(str(c) for c in campaigns), connector_id, notes))
+        self.conn.commit()
+
+    def account(self, handle):
+        return self._one("SELECT * FROM accounts WHERE handle=?", ("@" + handle.lstrip("@"),))
+
+    def accounts(self, status="active"):
+        return self._rows("SELECT * FROM accounts WHERE status=? ORDER BY registered_at", (status,))
+
+    def set_account_status(self, handle, status) -> None:
+        self.conn.execute("UPDATE accounts SET status=? WHERE handle=?", (status, "@" + handle.lstrip("@")))
+        self.conn.commit()
+
+    def account_posts(self, handle):
+        return [p for p in self.posts() if p.get("account") == "@" + handle.lstrip("@")]
 
     # ---- credits / hooks / kv ------------------------------------------------------------
     def record_credits(self, amount: int, note: str = "") -> None:
@@ -281,6 +343,21 @@ class Ledger:
             "credits_week": self.credits_this_week(),
             "credits_total": self.credits_since(0),
         }
+
+    def payout_estimate(self) -> dict:
+        """What the posted clips are actually worth, not views x rate. A post counts only if it was
+        submitted to its board and is past that board's per-post floor. `if_all_paid` is the naive
+        views x rate number, kept beside it so the gap between the two is visible."""
+        paid, naive, counted = 0.0, 0.0, 0
+        for p in self.posts():
+            v = p["qualified_views"] or p["views"] or 0
+            rate = p["rate_per_1k"] or 0
+            naive += v / 1000.0 * rate
+            floor = PAYOUT_FLOOR_VIEWS.get((p.get("marketplace") or "").lower(), 0)
+            if p.get("submitted_at") and v >= floor:
+                paid += v / 1000.0 * rate
+                counted += 1
+        return {"usd_estimated": round(paid, 2), "usd_if_all_paid": round(naive, 2), "posts_paying": counted}
 
     def report(self) -> str:
         s = self.stats()

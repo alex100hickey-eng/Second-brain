@@ -171,6 +171,73 @@ def test_wrap_text_and_cmd():
     assert "overlay" not in bare and " -t " not in bare
 
 
+def test_required_on_screen_text_stays_up_for_the_whole_clip():
+    """Some briefs REQUIRE specific words on screen — Double Date Island asks for its own title.
+    That is a compliance element, not decoration: the hook card is enabled only for its first
+    couple of seconds, so a badge that borrowed the card's `enable` window would leave most of
+    the clip non-compliant and the clip is then rejected however well it performs."""
+    joined = " ".join(transform.build_cmd("in.mp4", "out.mp4", "card.png", "top", 0, 0, 1.0, 30.0,
+                                          None, 0.0, 2.8, "badge.png"))
+    assert "-i card.png -i badge.png" in joined
+    # the hook card is time-boxed ...
+    assert "[v0][1:v]overlay=(W-w)/2:H*0.12:enable='between(t,0,2.80)'[v1]" in joined
+    # ... the required text is not
+    assert "[v1][2:v]overlay=(W-w)/2:H*0.86[v2]" in joined
+    assert "enable" not in joined.split("[v1][2:v]")[1]
+
+
+def test_required_text_works_without_a_hook_card():
+    """A brief can forbid an added hook card and still require its own on-screen text."""
+    joined = " ".join(transform.build_cmd("in.mp4", "out.mp4", None, "top", 0, 0, 1.0, 30.0,
+                                          None, 0.0, 2.8, "badge.png"))
+    assert "[v0][1:v]overlay=(W-w)/2:H*0.86[v2]" in joined and "enable=" not in joined
+
+
+def test_a_campaign_without_required_text_renders_exactly_as_before():
+    """The badge is additive: every existing campaign must produce the same command it did."""
+    before = " ".join(transform.build_cmd("in.mp4", "out.mp4", "card.png", "top", 0, 0, 1.0, 30.0))
+    assert "badge" not in before
+    assert "[v0][1:v]overlay=(W-w)/2:H*0.12:enable='between(t,0,2.80)'[v1]" in before
+    assert "[v1]format=yuv420p[v]" in before
+
+
+def test_a_required_logo_watermark_stays_up_and_sits_clear_of_the_hook_card():
+    """Crazy Taxi: "Add the official logo as a watermark." Top-right and always on — the hook card
+    is centred and time-boxed, so sharing its position or its enable window would either cover the
+    logo or drop it for most of the clip."""
+    joined = " ".join(transform.build_cmd("in.mp4", "out.mp4", "card.png", "top", 0, 0, 1.0, 30.0,
+                                          None, 0.0, 2.8, None, "logo.png"))
+    assert "-i card.png -i logo.png" in joined
+    assert "[v1][2:v]overlay=W-w-40:60[v3]" in joined
+    assert "enable" not in joined.split("[v1][2:v]")[1]
+
+
+def test_a_required_text_and_a_required_logo_coexist():
+    """Nothing says a brief cannot demand both, and the two must not overwrite each other."""
+    joined = " ".join(transform.build_cmd("in.mp4", "out.mp4", "card.png", "top", 0, 0, 1.0, 30.0,
+                                          None, 0.0, 2.8, "badge.png", "logo.png"))
+    assert "-i card.png -i badge.png -i logo.png" in joined
+    assert "[v1][2:v]overlay=(W-w)/2:H*0.86[v2]" in joined     # required text
+    assert "[v2][3:v]overlay=W-w-40:60[v3]" in joined          # logo, layered on top of it
+    assert "[v3]format=yuv420p[v]" in joined
+
+
+def test_a_missing_logo_file_refuses_to_render(tmp_path):
+    """Shipping the clip anyway would mean a batch of confidently-rendered, unpayable videos."""
+    import pytest
+    src = tmp_path / "a.mp4"
+    src.write_bytes(b"0" * 10)
+    with pytest.raises(RuntimeError, match="required logo"):
+        transform.make_variant(str(src), str(tmp_path / "out.mp4"), "hook",
+                               {"required_logo": str(tmp_path / "nope.png")})
+
+
+def test_required_text_is_a_campaign_rule_that_defaults_off():
+    assert config.DEFAULT_RULES["required_text"] == ""
+    assert config.campaign_rules({"rules": '{"required_text": "Double Date Island"}'})["required_text"] \
+        == "Double Date Island"
+
+
 def test_caption_and_staging(tmp_path):
     camp = {"name": "Vyro MrBeast", "marketplace": "vyro", "rate_per_1k": 3.0, "cap_per_clip": 0, "hashtags": "#vyro beast"}
     clip = {"title": "He actually did it", "hashtags": ["#beast", "insane", "x", "y", "z", "w"], "score": 80, "duration_s": 28}
@@ -546,3 +613,110 @@ def test_posting_policy_earns_volume_with_account_age(tmp_path, monkeypatch):
     allowed, why = r.posting_policy(30, 0, last_post_ts=time.time() - 1200)
     assert allowed == 0 and "too recent" in why
     assert r.posting_policy(30, 0, last_post_ts=time.time() - 4 * 3600)[0] >= 2
+
+
+def _runner(tmp_path, monkeypatch, led=None):
+    monkeypatch.setattr(config, "HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(config, "READY_DIR", str(tmp_path / "ready"))
+    monkeypatch.setattr(config, "HOOKS_DIR", str(tmp_path / "hooks"))
+    monkeypatch.setattr(config, "INBOX_DIR", str(tmp_path / "inbox"))
+    return Runner(config.Config(), led or _ledger(), OpusClient(api_key=None), log=lambda *_: None)
+
+
+def _posted_variants(led, marketplace, rate, n, platform="tiktok"):
+    cid = led.add_campaign(f"c-{marketplace}", marketplace, rate)
+    sid = led.add_source(cid, f"u-{marketplace}", "t", 10, 10)
+    out = []
+    for i in range(n):
+        clip = led.add_clip(sid, {"clip_id": f"{marketplace}{i}", "title": f"t{i}"})
+        out.append(led.add_variant(clip, platform, f"/x/{marketplace}{i}.mp4"))
+    return cid, out
+
+
+def test_a_new_account_posts_nothing_for_24h_then_ramps(tmp_path, monkeypatch):
+    """The second TikTok account exists so the ramp can be done right this time: zero posts on
+    day one, then 1/day — enforced from the account's own age and its own posts, not the old one's."""
+    r = _runner(tmp_path, monkeypatch)
+    assert r.account_policy("@nobody")[0] == 0, "an unregistered account can't be held to a ramp"
+
+    cid, (v1, v2) = _posted_variants(r.ledger, "whop", 2.1, 2)
+    r.ledger.add_account("@fresh", "tiktok", created_at=time.time() - 3600, campaigns=[cid])
+    allowed, why = r.account_policy("@fresh")
+    assert allowed == 0 and "zero posts until" in why
+
+    r.ledger.add_account("@fresh", "tiktok", created_at=time.time() - 2 * 86400, campaigns=[cid])
+    assert r.account_policy("@fresh")[0] == 1
+    r.posted(v1, "https://www.tiktok.com/@fresh/video/1")
+    assert r.ledger.account_posts("@fresh")[0]["account"] == "@fresh", "account read off the URL"
+    assert r.account_policy("@fresh")[0] == 0, "week one is one a day"
+
+    # the old account's posts don't spend the new account's allowance
+    r.ledger.mark_posted(v2, "https://www.tiktok.com/@wildest_moments/video/2")
+    assert len(r.ledger.account_posts("@fresh")) == 1
+
+    r.ledger.set_account_status("@fresh", "retired")
+    assert r.account_policy("@fresh")[0] == 0
+
+
+def test_next_for_stays_inside_the_accounts_one_campaign(tmp_path, monkeypatch):
+    r = _runner(tmp_path, monkeypatch)
+    _, (vyro_v,) = _posted_variants(r.ledger, "vyro", 2.0, 1)
+    cid, (whop_v,) = _posted_variants(r.ledger, "whop", 2.1, 1)
+    for v in (vyro_v, whop_v):
+        r.ledger.update_variant(v, status="staged", staged_path=f"/x/{v}.mp4")
+    r.ledger.add_account("@ct", "tiktok", created_at=time.time() - 3 * 86400, campaigns=[cid])
+    assert r.next_for("@ct")["variant"] == whop_v
+    r.ledger.add_account("@none", "tiktok", created_at=time.time() - 3 * 86400)
+    assert r.next_for("@none") is None, "an account with no campaigns set posts nothing"
+
+
+def test_payout_estimate_counts_only_submitted_posts_past_the_floor(tmp_path, monkeypatch):
+    """Views x rate said the Vyro backlog was worth money. It wasn't: nothing pays under 5,000 views
+    a post there, and nothing pays anywhere until the board has the URL."""
+    r = _runner(tmp_path, monkeypatch)
+    _, (vy,) = _posted_variants(r.ledger, "vyro", 2.0, 1)
+    _, (w_small, w_big, w_unsub) = _posted_variants(r.ledger, "whop", 2.1, 3)
+    for v in (vy, w_small, w_big, w_unsub):
+        r.ledger.mark_posted(v, f"https://www.tiktok.com/@a/video/{v}")
+    r.ledger.update_post(vy, views=4000)
+    r.ledger.update_post(w_small, views=900)
+    r.ledger.update_post(w_big, views=2000)
+    r.ledger.update_post(w_unsub, views=5000)
+    for v in (vy, w_small, w_big):
+        r.ledger.mark_submitted(v)
+    est = r.ledger.payout_estimate()
+    assert est["posts_paying"] == 1 and est["usd_estimated"] == 4.2
+    assert est["usd_if_all_paid"] == round(8 + 1.89 + 4.2 + 10.5, 2)
+
+
+def test_refresh_views_never_writes_a_false_zero(tmp_path, monkeypatch):
+    r = _runner(tmp_path, monkeypatch)
+    _, (a, b, yt) = _posted_variants(r.ledger, "whop", 2.1, 3)
+    r.ledger.mark_posted(a, "https://www.tiktok.com/@x/video/1")
+    r.ledger.mark_posted(b, "https://www.tiktok.com/@x/video/2")
+    r.ledger.mark_posted(yt, "https://www.youtube.com/shorts/abc")
+    r.ledger.update_post(b, views=77)
+    pages = {"https://www.tiktok.com/@x/video/1": '{"stats":{"diggCount":3,"playCount":1234,"collectCount":"0"}}',
+             "https://www.tiktok.com/@x/video/2": "<html>Video currently unavailable</html>"}
+    out = r.refresh_views(fetch=pages.get, pause_s=0)
+    assert out["read"] == 1 and out["unread"] == [b]
+    views = {p["variant_id"]: p["views"] for p in r.ledger.posts()}
+    assert views[a] == 1234 and views[b] == 77, "an unreadable page keeps its last number"
+
+
+def test_old_posts_get_their_account_backfilled_from_the_url(tmp_path):
+    import sqlite3
+    path = str(tmp_path / "old.db")
+    led = Ledger(path)
+    _, (v,) = _posted_variants(led, "vyro", 2.0, 1)
+    led.mark_posted(v, "https://www.tiktok.com/@wildest_moments/video/9")
+    led.conn.execute("UPDATE posts SET account=''")
+    led.conn.commit()
+    # simulate a pre-migration DB: drop the column by rebuilding the table without it
+    led.conn.executescript("""CREATE TABLE p2 AS SELECT id, variant_id, platform, url, posted_at, views,
+        qualified_views, usd_approved, usd_settled, updated FROM posts; DROP TABLE posts; ALTER TABLE p2 RENAME TO posts;""")
+    led.conn.close()
+    led2 = Ledger(path)
+    assert led2.posts()[0]["account"] == "@wildest_moments"
+    assert "submitted_at" in {r[1] for r in led2.conn.execute("PRAGMA table_info(posts)")}
+    sqlite3.connect(path).close()
