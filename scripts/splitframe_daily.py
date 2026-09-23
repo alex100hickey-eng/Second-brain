@@ -506,13 +506,14 @@ def original_email(c, entity: str, address: str) -> dict:
 
 
 def write_followup(client, brand: str, contact: str, touch: int, original: str, days_since: int,
-                   voice: str = None) -> str:
+                   voice: str = None, extra: str = "") -> str:
     last = touch == MAX_TOUCHES
     ask = (f"Brand: {brand}\nContact first name: {contact or '(unknown — do not guess a name)'}\n"
            f"This is touch {touch} of {MAX_TOUCHES}. {days_since} days have passed since the first email.\n"
            f"{'This is the LAST touch: give the explicit easy out.' if last else ''}\n"
            f"{'That gap is long enough to acknowledge plainly in a few words, without apologising twice.' if days_since > 7 else ''}\n\n"
-           f"The email he already sent (do not repeat its points, build on them):\n---\n{original}\n---")
+           f"The email he already sent (do not repeat its points, build on them):\n---\n{original}\n---"
+           + (f"\n\n{extra}" if extra else ""))
     # The call comes back empty often enough to matter — one run in a handful returns no text
     # block at all (verified 2026-09-18 reproducing Gunner Kennels touch 3). Unretried, that is
     # a prospect's LAST touch dropped in silence: the caller's word-count check rejects it, the
@@ -909,6 +910,44 @@ def funnel_headline(rows, drafted) -> str:
         return f"funnel: unavailable ({type(exc).__name__}: {str(exc)[:80]})"
 
 
+def load_offer_statics():
+    """(module, approved, state) from scripts/offer_statics.py, or (None, {}, {}).
+
+    The offer arm promised a static "yours either way". Once Alex approves one in the QA folder's
+    INDEX.md, that brand's next follow-up is the written "here it is" email with the PNG attached,
+    instead of a generated one. Never raises: a missing QA folder or an unreadable state just
+    means every follow-up keeps its normal wording."""
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "offer_statics", os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                          "offer_statics.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        approved, skipped = mod.approved_statics()
+        for why in skipped:
+            log(f"static not used: {why}")
+        state = (_shared._load_state(mod.STATE_KEY) if _shared else {}) or {}
+        return mod, approved, state
+    except Exception as exc:                          # noqa: BLE001
+        log(f"offer statics unavailable ({type(exc).__name__}: {str(exc)[:80]}); follow-ups "
+            "keep their normal wording")
+        return None, {}, {}
+
+
+def arm_new_followup(outbox_mod, address: str, extra: dict = None) -> bool:
+    """Arm the outbox row create_email_draft (or _file_in_outbox) just filed for `address`."""
+    row = next((o for o in outbox_mod.open_items()
+                if (o.get("title") or "").strip().lower().endswith(address.lower())
+                and not o.get("auto_send_at")), None)
+    if not row:
+        return False
+    if extra:
+        outbox_mod._write(row["id"], extra)
+    outbox_mod.arm_auto_send(
+        row["id"], (datetime.now(LOCAL_TZ) + timedelta(hours=HOLD_HOURS)).isoformat())
+    return True
+
+
 def main() -> int:
     sys.path.insert(0, CHAT)
     import anthropic                                    # type: ignore
@@ -943,6 +982,8 @@ def main() -> int:
     waiting = already_waiting(outbox)
 
     made, rejected = [], []
+    statics_mod, approved_statics, statics_state = load_offer_statics()
+    delivered_statics = statics_state.get("delivered") or {}
     for row, touch in due:
         brand = (row.get("brand") or "").strip()
         address, _tier = target_address(row)
@@ -955,10 +996,40 @@ def main() -> int:
             log(f"{brand}: no sent message found for {address} — skipped (nothing to reply to)")
             continue
         sent_on = _d(row.get("sent_date", "")) or today
+        plan = (statics_mod.plan_for(address, delivered_statics, approved_statics)
+                if statics_mod else "")
+        if plan == "attach":
+            info = approved_statics[address.lower()]
+            subject = original["subject"]
+            subject = subject if subject.lower().startswith("re:") else f"Re: {subject}"
+            draft_id, problems = statics_mod.create_attach_draft(
+                c, entity, address, subject, info["body"], original["thread_id"], info["png"])
+            if problems:
+                log(f"{brand}: touch {touch} static NOT attached ({'; '.join(problems)}); "
+                    "writing the normal follow-up instead")
+            else:
+                mail_drafts._file_in_outbox("studio", address, subject, info["body"], draft_id)
+                drafted.setdefault(address.lower(), []).append(touch)
+                save_state(st)
+                delivered_statics[address.lower()] = {
+                    "brand": brand, "file": info["file"], "touch": touch, "draft": draft_id,
+                    "via": "drafter", "at": datetime.now(LOCAL_TZ).isoformat()}
+                try:
+                    _shared._save_state({**statics_state, "key": statics_mod.STATE_KEY,
+                                         "delivered": delivered_statics})
+                except Exception as exc:                  # noqa: BLE001
+                    log(f"statics state not saved ({str(exc)[:80]}); the next touch may re-offer it")
+                if not arm_new_followup(outbox, address, {"static_attached": info["file"]}):
+                    log(f"{brand}: static drafted but no outbox row to arm — it will wait for a tap")
+                made.append(f"{brand} (touch {touch}, static attached)")
+                log(f"{brand}: touch {touch} drafted WITH the static ({info['file']}) on thread "
+                    f"{original['thread_id']}")
+                continue
         try:
             body = write_followup(client, brand, (row.get("contact_name") or "").split(" ")[0],
                                   touch, original.get("body", ""), (today - sent_on).days,
-                                  voice_for(row))
+                                  voice_for(row),
+                                  extra=statics_mod.DELIVERED_NOTE if plan == "delivered" else "")
         except Exception as exc:
             log(f"{brand}: draft generation failed — {str(exc)[:160]}")
             continue
