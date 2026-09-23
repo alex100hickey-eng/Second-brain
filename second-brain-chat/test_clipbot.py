@@ -720,3 +720,41 @@ def test_old_posts_get_their_account_backfilled_from_the_url(tmp_path):
     assert led2.posts()[0]["account"] == "@wildest_moments"
     assert "submitted_at" in {r[1] for r in led2.conn.execute("PRAGMA table_info(posts)")}
     sqlite3.connect(path).close()
+
+
+def test_a_platform_caption_replaces_the_default_only_on_that_platform():
+    """Crazy Taxi: TikTok/IG credit 'Source: Torte De Lini' and tag @crazytaxi_game, but YouTube
+    wants @TorteDeLini and @SEGA_West. One caption line can't pass the brief on all three."""
+    camp = {"hashtags": "", "rules": json.dumps({
+        "caption": "Wishlist now\nSource: Torte De Lini @crazytaxi_game\n\n#Ad",
+        "captions": {"shorts": "Wishlist now\n@TorteDeLini @SEGA_West\n\n#Ad"}})}
+    _, tiktok = posting.build_caption("tiktok", {"title": "t"}, camp, "hook")
+    _, reels = posting.build_caption("reels", {"title": "t"}, camp, "hook")
+    _, shorts = posting.build_caption("shorts", {"title": "t"}, camp, "hook")
+    assert "@crazytaxi_game" in tiktok and tiktok == reels
+    assert "@SEGA_West" in shorts and "@crazytaxi_game" not in shorts
+    assert shorts.startswith("hook\n\n")
+
+
+def test_backfill_renders_only_the_missing_platforms_and_keeps_the_line(tmp_path, monkeypatch):
+    r = _runner(tmp_path, monkeypatch)
+    made = []
+    monkeypatch.setattr(transform, "make_variant", lambda s, d, text, *a, **k: made.append((d, text)) or d)
+    cid = r.ledger.add_campaign("ct", "whop", 2.1, platforms="tiktok",
+                                rules={"voice": False, "hook_lines": ["a", "b", "c"]})
+    sid = r.ledger.add_source(cid, "/x/src.mp4", "src", 10, 10)
+    hd = tmp_path / "hd.mp4"; hd.write_bytes(b"0")
+    clip = r.ledger.add_clip(sid, {"clip_id": "k1", "title": "b"})
+    r.ledger.update_clip(clip, status="transformed", local_path=str(hd))
+    r.ledger.add_variant(clip, "tiktok", "/x/v.mp4", "", "b")
+    gone = r.ledger.add_clip(sid, {"clip_id": "k2", "title": "c"})
+    r.ledger.update_clip(gone, status="transformed", local_path=str(tmp_path / "deleted.mp4"))
+
+    assert r.backfill_platforms(cid) == 0, "no new platform, nothing to render"
+    r.ledger.conn.execute("UPDATE campaigns SET platforms='tiktok,reels,shorts' WHERE id=?", (cid,))
+    r.ledger.conn.commit()
+    assert r.backfill_platforms(cid) == 2
+    plats = sorted(v["platform"] for v in r.ledger.variants(clip_id=clip))
+    assert plats == ["reels", "shorts", "tiktok"]
+    assert all(text == "b" for _, text in made), "the clip keeps the line it already went out with"
+    assert r.backfill_platforms(cid) == 0, "idempotent"

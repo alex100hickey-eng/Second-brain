@@ -458,36 +458,68 @@ class Runner:
                 self.log(f"  skipped clip #{c['id']}: {dur:.0f}s outside the brief's "
                          f"{rules['min_seconds'] or 0:.0f}–{rules['max_seconds'] or '∞'}s window")
                 continue
-            camp_platforms = self._platforms_for_clip(c)
-            used_here = set()
-            made = 0
-            for platform in camp_platforms:
-                # The recipe is per-PLATFORM; required_text is per-CAMPAIGN, so it has to be
-                # merged in here or a brief's mandatory on-screen text never reaches the renderer.
-                recipe = dict(config.VARIANTS.get(platform, config.VARIANTS["tiktok"]))
-                recipe["required_text"] = rules["required_text"]
-                recipe["required_logo"] = rules["required_logo"]
-                hook = hooks.pick(lib, uses, exclude=used_here) if (lib and rules["voice"]) else None
-                hook_len = hooks.hook_length(hook, self.cfg.hook_seconds_max) if hook else 0.0
-                text_hook = (c["title"] or (hook["text"] if hook else "Watch this")) if rules["text_hook"] else ""
-                if rules["text_hook"] and rules["hook_lines"]:     # brief-approved lines beat OpusClip's clickbait titles
-                    text_hook = rules["hook_lines"][(c["id"] + made) % len(rules["hook_lines"])]
-                    self.ledger.update_clip(c["id"], title=text_hook)
-                dst = os.path.join(config.HOME, "variants", f"{c['id']:05d}_{platform}.mp4")
-                try:
-                    transform.make_variant(src, dst, transform.plain_text(text_hook), recipe,
-                                           hook["file"] if hook else None, hook_len, self.cfg.text_hook_seconds)
-                except Exception as exc:
-                    self.log(f"  transform failed clip #{c['id']} {platform}: {exc}")
-                    continue
-                self.ledger.add_variant(c["id"], platform, dst, hook["name"] if hook else "", text_hook)
-                if hook:
-                    used_here.add(hook["name"])
-                    uses[hook["name"]] = uses.get(hook["name"], 0) + 1
-                    self.ledger.bump_hook(hook["name"])
-                made += 1
+            made = self._make_variants(c, src, rules, self._platforms_for_clip(c), lib, uses)
             self.ledger.update_clip(c["id"], status="transformed" if made else "failed")
             n += made
+        return n
+
+    def _make_variants(self, c, src, rules, platforms, lib, uses, text_hooks=None) -> int:
+        """Render one variant per platform for clip `c` from its HD file `src`. `text_hooks` pins the
+        hook line per platform (backfill keeps the line the clip already went out with)."""
+        used_here = set()
+        made = 0
+        for platform in platforms:
+            # The recipe is per-PLATFORM; required_text is per-CAMPAIGN, so it has to be
+            # merged in here or a brief's mandatory on-screen text never reaches the renderer.
+            recipe = dict(config.VARIANTS.get(platform, config.VARIANTS["tiktok"]))
+            recipe["required_text"] = rules["required_text"]
+            recipe["required_logo"] = rules["required_logo"]
+            hook = hooks.pick(lib, uses, exclude=used_here) if (lib and rules["voice"]) else None
+            hook_len = hooks.hook_length(hook, self.cfg.hook_seconds_max) if hook else 0.0
+            text_hook = (c["title"] or (hook["text"] if hook else "Watch this")) if rules["text_hook"] else ""
+            if text_hooks and platform in text_hooks:
+                text_hook = text_hooks[platform]
+            elif rules["text_hook"] and rules["hook_lines"]:     # brief-approved lines beat OpusClip's clickbait titles
+                text_hook = rules["hook_lines"][(c["id"] + made) % len(rules["hook_lines"])]
+                self.ledger.update_clip(c["id"], title=text_hook)
+            dst = os.path.join(config.HOME, "variants", f"{c['id']:05d}_{platform}.mp4")
+            try:
+                transform.make_variant(src, dst, transform.plain_text(text_hook), recipe,
+                                       hook["file"] if hook else None, hook_len, self.cfg.text_hook_seconds)
+            except Exception as exc:
+                self.log(f"  transform failed clip #{c['id']} {platform}: {exc}")
+                continue
+            self.ledger.add_variant(c["id"], platform, dst, hook["name"] if hook else "", text_hook)
+            if hook:
+                used_here.add(hook["name"])
+                uses[hook["name"]] = uses.get(hook["name"], 0) + 1
+                self.ledger.bump_hook(hook["name"])
+            made += 1
+        return made
+
+    def backfill_platforms(self, campaign_ref) -> int:
+        """A campaign gained a platform after its clips were rendered (Crazy Taxi pays on Reels and
+        Shorts too): render the missing platforms for every clip that already went through, keeping
+        the hook line each clip already carries so the same moment reads the same everywhere."""
+        camp = self.ledger.campaign(campaign_ref)
+        if not camp:
+            self.log(f"no campaign {campaign_ref!r}")
+            return 0
+        rules = self.ledger.rules(camp)
+        lib, uses = hooks.library(), self.ledger.hook_uses()
+        n = 0
+        for c in self.ledger.clips("transformed"):
+            if (self._campaign_for_clip(c) or {}).get("id") != camp["id"]:
+                continue
+            have = {v["platform"]: v for v in self.ledger.variants(clip_id=c["id"])}
+            missing = [p for p in self._platforms_for_clip(c) if p not in have]
+            src = (self.ledger.clip(c["id"]) or {}).get("local_path")
+            if not missing or not src or not os.path.exists(src):
+                continue
+            line = next((v["text_hook"] for v in have.values() if v["text_hook"]), None)
+            n += self._make_variants(c, src, rules, missing, lib, uses,
+                                     text_hooks={p: line for p in missing} if line is not None else None)
+        self.log(f"backfill {camp['name']}: {n} new variant(s)")
         return n
 
     def _platforms_for_clip(self, clip) -> list:
@@ -847,6 +879,8 @@ def main(argv=None):
     ac.add_argument("--connector", default="", help="Higgsfield TikTok connector_id")
     ac.add_argument("--notes", default="")
     sub.add_parser("refresh-views", help="re-read every TikTok post's plays from its public page")
+    bf = sub.add_parser("backfill", help="render platforms a campaign gained after its clips were made")
+    bf.add_argument("--campaign", required=True)
     sub.add_parser("views-report")
     b = sub.add_parser("blockers", help="what is stopping posting; carried in the stalled nudge")
     b.add_argument("--set", nargs="*", default=None, help="replace the list (no args clears it)")
@@ -934,6 +968,10 @@ def main(argv=None):
             nxt = r.next_for(a.handle)
             print(f"allowed now: {n} ({why})")
             print(f"next: v{nxt['variant']} {nxt['file']} · {nxt['line']!r}" if nxt else "next: nothing staged for this account")
+    elif a.cmd == "backfill":
+        r.backfill_platforms(a.campaign)
+        r.stage_made()
+        posting.write_post_order(r.ledger)
     elif a.cmd == "refresh-views":
         r.refresh_views()
         print(r.views_report())

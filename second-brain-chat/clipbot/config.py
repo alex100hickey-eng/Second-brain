@@ -66,6 +66,10 @@ DEFAULT_RULES = {
     # Path to a brand logo a brief REQUIRES watermarked on the clip (Crazy Taxi: "Add the official
     # Crazy Taxi: World Tour logo as a watermark"). Rendering refuses if the file is missing.
     "required_logo": "",
+    # Per-platform replacement for `caption`, e.g. {"shorts": "...@TorteDeLini @SEGA_West...", "reels": "..."}.
+    # Crazy Taxi tags a different official account and credits the streamer differently on YouTube
+    # than on TikTok/Instagram, so one caption line cannot satisfy the brief on all three.
+    "captions": {},
     "ends": "",             # campaign end date YYYY-MM-DD; the post-order list puts the soonest deadline first
     "per_day": 3,           # how many of this campaign's clips to post per day (a new account gets throttled past ~3)
 }

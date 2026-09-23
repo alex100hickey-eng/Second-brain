@@ -39,7 +39,8 @@ def build_caption(platform: str, clip: dict, campaign: dict, text_hook: str) -> 
             seen.add(t.lower())
             tags.append(t)
     tagline = " ".join(x for x in [(rules["tag"] or "").strip(), " ".join(tags)] if x)
-    parts = [(text_hook or "").strip(), (rules["caption"] or "").strip(), tagline]
+    caption = (rules["captions"] or {}).get(platform) or rules["caption"] or ""
+    parts = [(text_hook or "").strip(), caption.strip(), tagline]
     body = "\n\n".join(p for p in parts if p).strip()
     return title, body[: config.CAPTION_LIMITS.get(platform, 2000)]
 
