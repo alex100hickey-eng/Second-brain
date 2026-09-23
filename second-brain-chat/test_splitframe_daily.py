@@ -13,6 +13,13 @@ sfd = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(sfd)
 
 
+@pytest.fixture(autouse=True)
+def _front_desks_allowed(monkeypatch):
+    """These tests are about the cap, the queue, staleness and conflicts, not about who gets
+    written to. The named-person policy (NAMED_ONLY) is pinned in test_named_only.py."""
+    monkeypatch.setattr(sfd, "NAMED_ONLY", False)
+
+
 def _row(**kw):
     base = {"brand": "Acme", "email": "founder@acme.com", "sent_date": "2026-09-01",
             "followup1_date": "2026-09-14", "followup2_date": "2026-09-18",

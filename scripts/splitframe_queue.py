@@ -55,6 +55,12 @@ TRACKER = os.path.join(VAULT, "Money", "prospect-tracker.csv")
 DRAFT_DOC_DIR = os.path.join(VAULT, "Money", "Clients")
 CREATOR_PROSPECTS = os.path.join(VAULT, "Money", "Creator Lane — Prospects.md")
 CREATOR_OFFER = os.path.join(VAULT, "Money", "Creator Lane — Offer (approved).md")
+# Founders' names and addresses researched for front-desk brands, with evidence. A side file,
+# because the tracker has one writer. `named --write` is how it reaches the tracker.
+NAMED_CONTACTS = os.path.join(VAULT, "Money", "Named Contacts.csv")
+NAMED_FIELDS = ["brand", "domain", "contact_name", "contact_title", "name_source", "named_email",
+                "email_status", "email_evidence", "researched"]
+USABLE_EMAIL = ("published", "verified")   # the only statuses that may become a send address
 QUEUE_KEY = "splitframe:firsttouch_queue"
 # The release cadence is the daily job's to decide — it earns its way up from the delivery
 # record (splitframe_daily.daily_cap). Reading it here rather than keeping a second 5 means
@@ -193,6 +199,8 @@ def next_targets(rows: list, queue: list) -> list:
         email, tier = target_address(r)
         if _c(r.get("status")) != "qualified" or not email or is_creator_row(r):
             continue
+        if _sfd.NAMED_ONLY and tier != "person":
+            continue               # named person or no send: a front desk waits for a name
         if _c(r.get("sent_date")) or _c(r.get("replied")) or _c(r.get("outcome")):
             continue
         if email in queued:
@@ -496,6 +504,9 @@ def plan_add(rows: list, queue: list, to: str, subject: str, body: str,
     problems = []
     if not (is_person(to) or is_front_desk(to)):
         problems.append("ticket queue — a first touch about ad creative dies in a support inbox")
+    elif _sfd.NAMED_ONLY and not _sfd.is_named_address(row, to):
+        problems.append("front desk — named person or no send is on (NAMED_ONLY in "
+                        "splitframe_daily.py): find the founder's own address first")
     if _c(row.get("status")) != "qualified":
         problems.append(f"row status is {row.get('status')!r}, not qualified")
     if _c(row.get("sent_date")):
@@ -707,6 +718,26 @@ def update_studio_draft(draft_id: str, to: str, subject: str, body: str):
     return True, "draft updated in place"
 
 
+def plan_readdress(rows: list, queue: list, to: str, new_to: str) -> list:
+    """Problems with moving a queued draft from `to` to `new_to`. It is the SAME brand at a
+    better inbox, never a different prospect: new_to must be a named address on the same
+    tracker row, and not already queued."""
+    to, new_to = _c(to).lower(), _c(new_to).lower()
+    row = next((r for r in rows if to in {_c(r.get("email")).lower(),
+                                          _c(r.get("email_generic")).lower()}), None)
+    if row is None:
+        return [f"{to} is not on any tracker row"]
+    if new_to not in {_c(row.get("email")).lower(), _c(row.get("email_generic")).lower()}:
+        return [f"{new_to} is not on {row.get('brand')!r}'s tracker row: apply it with "
+                "`named --write` first (the send gate only sends to tracker addresses)"]
+    problems = []
+    if not _sfd.is_named_address(row, new_to):
+        problems.append(f"{new_to} is not a named person's address")
+    if any(_c(e.get("to")).lower() == new_to for e in queue):
+        problems.append(f"{new_to} is already in the queue")
+    return problems
+
+
 def plan_revise(queue: list, to: str, subject: str, body: str, offer_image: str, domain: str):
     """(entry, problems) for revising a queued first touch.
 
@@ -915,6 +946,17 @@ def tracked_addresses(rows: list) -> set:
     return {_c(r.get(c)).lower() for r in rows for c in ("email", "email_generic")} - {""}
 
 
+def untracked_queued_creators(rows: list, queue: list) -> list:
+    """[(address, name)] for creator entries still waiting in the queue with no tracker row.
+    `creator` adds the row at queue time, but only since 2026-09-23. Anything queued before
+    that would send with no follow-up clock and, at a Gmail address, no reply watch."""
+    tracked = tracked_addresses(rows)
+    return sorted({(_c(e.get("to")).lower(), _c(e.get("brand")))
+                   for e in queue
+                   if e.get("lane") == "creator" and not _released_date(e)
+                   and _c(e.get("to")) and _c(e.get("to")).lower() not in tracked})
+
+
 def untracked_creator_sends(list_text: str, rows: list, log_text: str) -> list:
     """[(address, first send date)] for creator-list addresses the sender has emailed that have
     no tracker row: the ones with no follow-up clock and no reply or bounce watch."""
@@ -925,6 +967,159 @@ def untracked_creator_sends(list_text: str, rows: list, log_text: str) -> list:
             first.setdefault(m.group(2).lower(), m.group(1))
     return sorted((a, d) for a, d in first.items()
                   if a not in tracked and creator_entry(list_text, a)["found"])
+
+
+# ---------------------------------------------------------------- named contacts (side file)
+#
+# NAMED_ONLY (splitframe_daily.py) holds every front-desk first touch until a founder's own
+# address is on the row. The free finders read brands' About pages and had nothing left to give
+# (0 of 51 on 2026-09-23). The names came from web research, recorded in Money/Named Contacts.csv
+# with a source for each one. An ADDRESS is a different claim from a name. Only one published
+# somewhere under the founder's name ("published"), or confirmed by Hunter's verifier
+# ("verified"), may become a send address. A first-name guess stays a "candidate" until
+# `named --verify` checks it, because a guessed address that bounces costs the domain the
+# reputation the whole cadence is gated on.
+
+def read_named(path: str = None) -> list:
+    try:
+        with open(path or NAMED_CONTACTS, newline="", encoding="utf-8") as f:
+            return list(csv.DictReader(f))
+    except OSError:
+        return []
+
+
+def write_named(proposals: list, path: str = None) -> None:
+    path = path or NAMED_CONTACTS
+    tmp = path + ".tmp"
+    with open(tmp, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=NAMED_FIELDS, extrasaction="ignore")
+        w.writeheader()
+        w.writerows(proposals)
+    os.replace(tmp, path)
+
+
+def _row_for(rows: list, proposal: dict):
+    brand, dom = _c(proposal.get("brand")).lower(), _c(proposal.get("domain")).lower()
+    return (next((r for r in rows if _c(r.get("brand")).lower() == brand and brand), None)
+            or next((r for r in rows if _c(r.get("domain")).lower() == dom and dom), None))
+
+
+def _row_domains(row: dict) -> set:
+    doms = {_c(row.get("domain")).lower().removeprefix("www.")}
+    for col in ("email", "email_generic"):
+        e = _c(row.get(col)).lower()
+        if "@" in e:
+            doms.add(e.split("@", 1)[1])
+    return doms - {""}
+
+
+def plan_named(rows: list, proposals: list) -> list:
+    """[(row, changes, notes)] the side file would make. Pure; nothing is written here.
+
+    A name only replaces an empty contact_name or a bare first name it extends ("Josh" ->
+    "Josh Allen"), never a different person. An address is applied only when USABLE, on the
+    brand's own mail domain, and not a ticket desk. The front desk it replaces is kept in
+    email_generic, so nothing is lost."""
+    out = []
+    for p in proposals:
+        row = _row_for(rows, p)
+        if row is None:
+            continue
+        changes, notes = {}, []
+        name, have = _c(p.get("contact_name")), _c(row.get("contact_name"))
+        if name and name != have:
+            first = (name.split() or [""])[0].lower()
+            if not have or have.lower() == first:
+                changes["contact_name"] = name
+                src = _c(p.get("name_source"))
+                changes["contact_name_source"] = (
+                    f"{src} (Named Contacts, researched {_c(p.get('researched'))})")
+                if _c(p.get("contact_title")) and not _c(row.get("contact_title")):
+                    changes["contact_title"] = _c(p.get("contact_title"))
+            else:
+                notes.append(f"name conflict: row says {have!r}, research says {name!r}; left alone")
+        email = _c(p.get("named_email")).lower()
+        status = _c(p.get("email_status")).lower()
+        if email and status in USABLE_EMAIL:
+            dom = email.split("@", 1)[1] if "@" in email else ""
+            if dom not in _row_domains(row):
+                notes.append(f"{email} is not on the brand's own mail domain; not applied")
+            elif _sfd.is_ticket_desk(email):
+                notes.append(f"{email} is a ticket desk; not applied")
+            elif _c(row.get("email")).lower() != email:
+                changes["email"] = email
+                changes["email_status"] = "deliverable" if status == "verified" else "published"
+                old = _c(row.get("email"))
+                if old and old.lower() != _c(row.get("email_generic")).lower():
+                    alts = [a for a in (_c(row.get("email_alternates")), old) if a]
+                    changes["email_alternates"] = "; ".join(alts)
+        elif email and status == "candidate":
+            notes.append(f"{email} is an unverified guess: `named --verify` checks it with Hunter")
+        if changes or notes:
+            out.append((row, changes, notes))
+    return out
+
+
+def verify_candidates(proposals: list, verify_fn, limit: int = 20) -> list:
+    """Check candidate addresses with Hunter's verifier (1 verification each). Returns the
+    [(email, new status)] it changed. Only a positive "deliverable" becomes verified. An
+    undeliverable one is rejected, and anything else (accept-all, unknown, an API failure) stays
+    a candidate: not good enough to send to, not bad enough to forget."""
+    changed = []
+    for p in proposals:
+        if len(changed) >= limit:
+            break
+        email = _c(p.get("named_email")).lower()
+        if not email or _c(p.get("email_status")).lower() != "candidate":
+            continue
+        status, score = verify_fn(email)
+        if status == "deliverable":
+            p["email_status"] = "verified"
+        elif status == "undeliverable":
+            p["email_status"] = "rejected"
+        else:
+            p["email_evidence"] = (_c(p.get("email_evidence")) +
+                                   f" | Hunter {today_local()}: {status} (score {score})").strip(" |")
+            continue
+        p["email_evidence"] = (_c(p.get("email_evidence")) +
+                               f" | Hunter {today_local()}: {status} (score {score})").strip(" |")
+        changed.append((email, p["email_status"]))
+    return changed
+
+
+def cmd_named(args) -> int:
+    proposals = read_named()
+    if not proposals:
+        print(f"no side file at {NAMED_CONTACTS}")
+        return 1
+    if args.verify:
+        sys.path.insert(0, CHAT)
+        import contact_finder                          # type: ignore
+        def _verify(email):
+            status, score = contact_finder.verify(email)
+            return {contact_finder.SENDABLE: "deliverable",
+                    contact_finder.UNDELIVERABLE: "undeliverable"}.get(status, "risky"), score
+        for email, status in verify_candidates(proposals, _verify, limit=args.limit):
+            print(f"verified: {email} -> {status}")
+        write_named(proposals)
+    rows, fields = tracker_rows()
+    plan = plan_named(rows, proposals)
+    for row, changes, notes in plan:
+        what = ", ".join(f"{k}={v!r}" for k, v in changes.items()) or "no change"
+        print(f"{'APPLY' if args.write else 'would apply'}: {row.get('brand')}: {what}")
+        for n in notes:
+            print(f"    note: {n}")
+    if args.write and any(c for _r, c, _n in plan):
+        for row, changes, _n in plan:
+            row.update(changes)
+        for extra in ("contact_name_source", "contact_title", "email_alternates", "email_status"):
+            if extra not in fields:
+                fields.append(extra)
+        bak = write_tracker(rows, fields, "named")
+        print(f"tracker written; backup at {os.path.basename(bak)}")
+    elif not args.write:
+        print("dry run; add --write to apply (the tracker's owner runs that)")
+    return 0
 
 
 def record_creator_doc(name: str, to: str, subject: str, body: str,
@@ -967,8 +1162,19 @@ def cmd_creator_backfill(args) -> int:
         print(f"{'ADD' if args.write else 'would add'}: {row['brand']} <{addr}> sent {first}, "
               f"FU1 {row['followup1_date']}, FU2 {row['followup2_date']}"
               + (f", outcome={row['outcome']!r} (no follow-ups)" if row["outcome"] else ""))
+    try:
+        _q, queue = load_queue()
+    except Exception as exc:                                   # noqa: BLE001
+        queue = []
+        print(f"(queue unreadable, {type(exc).__name__}: only sent creators are checked)")
+    for addr, name in untracked_queued_creators(rows + new, queue):
+        row = creator_tracker_row(list_text, addr, creator_entry(list_text, addr)["name"] or name,
+                                  today, fields)
+        new.append(row)
+        print(f"{'ADD' if args.write else 'would add'}: {row['brand']} <{addr}> queued, not sent "
+              "yet: the sender stamps its dates when it goes")
     if not new:
-        print("nothing to backfill: every creator the sender has emailed has a tracker row")
+        print("nothing to backfill: every creator emailed or queued has a tracker row")
         return 0
     if args.write:
         bak = write_tracker(rows + new, fields, "creator-backfill")
@@ -1187,6 +1393,9 @@ def cmd_revise(args) -> int:
                                            _c(r.get("email_generic")).lower()}), None)
     entry, problems = plan_revise(queue, args.to, args.subject, body,
                                   args.offer_image, _c(row.get("domain")) if row else "")
+    new_to = _c(getattr(args, "new_to", None)).lower()
+    if new_to:
+        problems = problems + plan_readdress(rows, queue, args.to, new_to)
     if problems:
         print("NOT revised:")
         for p in problems:
@@ -1197,12 +1406,15 @@ def cmd_revise(args) -> int:
     if args.dry_run:
         print(f"OK (dry run): {entry.get('brand')} <{args.to}> passes every guard; nothing written.")
         return 0
-    ok, msg = update_studio_draft(_c(entry.get("draft_id")), _c(args.to), new_subject, new_body)
+    ok, msg = update_studio_draft(_c(entry.get("draft_id")), new_to or _c(args.to),
+                                  new_subject, new_body)
     if not ok:
         print(f"NOT revised: {msg}")
         return 1
     was = _c(entry.get("subject"))
     entry["subject"], entry["body"] = new_subject, new_body
+    if new_to:
+        entry["readdressed_from"], entry["to"] = _c(entry.get("to")), new_to
     if args.offer_image is not None:
         entry["offer_image"] = _c(args.offer_image)
     entry["revised_at"] = datetime.now(LOCAL_TZ).isoformat()
@@ -1323,6 +1535,12 @@ def main(argv=None) -> int:
                     help="an address known to have bounced: gets outcome=bounced, no follow-ups")
     cb.add_argument("--write", action="store_true")
     cb.set_defaults(fn=cmd_creator_backfill)
+    nm = sub.add_parser("named", help="apply researched founder names/addresses (dry run)")
+    nm.add_argument("--verify", action="store_true",
+                    help="check candidate addresses with Hunter's verifier (1 credit each)")
+    nm.add_argument("--limit", type=int, default=20)
+    nm.add_argument("--write", action="store_true", help="write the tracker (its owner only)")
+    nm.set_defaults(fn=cmd_named)
     sw = sub.add_parser("sweep", help="close out brands worked to the last touch with no reply")
     sw.add_argument("--write", action="store_true")
     sw.set_defaults(fn=cmd_sweep)
@@ -1333,6 +1551,8 @@ def main(argv=None) -> int:
     rv.add_argument("--offer-image", default=None,
                     help="replace the photo the offer would be built from")
     rv.add_argument("--why", default="", help="one line: what was wrong")
+    rv.add_argument("--new-to", default=None,
+                    help="re-address to the founder's own address on the same tracker row")
     rv.add_argument("--dry-run", action="store_true")
     rv.set_defaults(fn=cmd_revise)
     n = sub.add_parser("note", help="stamp a live Ad Library count into the tracker")

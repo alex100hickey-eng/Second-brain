@@ -548,7 +548,16 @@ def brief_sf_topup(sf: dict, need: int) -> str:
 
 def brief_sf_hunter(sf: dict) -> str:
     n = min(8, sf["hunter_left"], sf["hunter_targets_in_band"])
-    return (f"Hunter has {sf['hunter_left']} searches left this cycle and {sf['hunter_targets_in_band']} "
+    # Named person or no send (NAMED_ONLY): researched founders wait in Money/Named Contacts.csv
+    # because the tracker has one writer, this worker. Their guessed addresses cost a VERIFICATION
+    # each, not a search, so they go first and don't eat the search quota the list below needs.
+    return ("First run `python3 scripts/splitframe_queue.py named --verify --write`: it checks the "
+            "researched founder addresses in Money/Named Contacts.csv with Hunter's verifier and "
+            "writes names plus published or verified addresses into the tracker. For any queued "
+            "front-desk draft whose row now has a founder's address, run `splitframe_queue.py "
+            "revise --to <desk address> --new-to <founder address> --body-file <body greeting them "
+            "by first name>`. Then: "
+            f"Hunter has {sf['hunter_left']} searches left this cycle and {sf['hunter_targets_in_band']} "
             f"in-band qualified brands have no person's address. Run `python3 scripts/fill_contacts.py "
             f"--brands \"<up to {n} in-band brands from 'Next Hunter window' in splitframe_queue.py status>\" "
             f"--limit {n}`. Never re-search a brand that already has an email_checked date; shared inboxes "
@@ -601,7 +610,13 @@ def brief_poly_review(poly: dict) -> str:
 
 
 def brief_creator_draft(cr: dict) -> str:
-    return (f"The creator retainer is approved at $400/mo for 3 clips a week and "
+    # A creator emailed or queued without a tracker row gets no follow-up clock, and at a Gmail
+    # address no reply watch. `creator` adds the row now; the backfill catches older entries and
+    # needs the tracker's writer, which is this worker.
+    return ("First run `python3 scripts/splitframe_queue.py creator-backfill --write` (it adds a "
+            "tracker row for any creator emailed or queued without one; it prints nothing to do "
+            "when there is none). Then: "
+            f"The creator retainer is approved at $400/mo for 3 clips a week and "
             f"{cr['available']} verified creator(s) on the list have never been written to. Write "
             "ONE first touch. Read \"<Money folder>/Creator Lane — Offer (approved).md\" for the "
             "terms and the sending rules, pick the top un-queued creator from \"Creator Lane — "

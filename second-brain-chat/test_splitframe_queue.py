@@ -12,6 +12,13 @@ SPEC = importlib.util.spec_from_file_location("splitframe_queue", PATH)
 sq = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(sq)
 
+
+@pytest.fixture(autouse=True)
+def _front_desks_allowed(monkeypatch):
+    """These tests are about ordering, guards and the queue, not about who gets written to. The
+    named-person policy (NAMED_ONLY) is pinned in test_named_only.py."""
+    monkeypatch.setattr(sq._sfd, "NAMED_ONLY", False)
+
 TODAY = "2026-09-16"
 
 GOOD_BODY = " ".join(["word"] * 118)     # 118 words, no tells
