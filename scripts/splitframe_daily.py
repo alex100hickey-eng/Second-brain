@@ -20,6 +20,7 @@ test_splitframe_daily.test_no_send_capability. Alex sends.
 from __future__ import annotations
 
 import csv
+import importlib.util
 import json
 import os
 import re
@@ -825,6 +826,25 @@ def waiting_for_first_touch(rows) -> list:
     return out
 
 
+def funnel_headline(rows, drafted) -> str:
+    """The one-line summary from scripts/funnel_report.py, for this run's output.
+
+    This runs on the server, which has no send log, so a follow-up counts as done here once
+    it's drafted. The full report file is written on the Mac only: two machines writing the
+    same vault path is a git conflict in vault sync. This never raises. A report isn't worth
+    losing a day's follow-ups over, and an unguarded logger already taught that once.
+    """
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "funnel_report", os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                          "funnel_report.py"))
+        fr = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(fr)
+        return fr.summary_line(fr.build(rows, datetime.now(LOCAL_TZ).date(), drafted=drafted))
+    except Exception as exc:                          # noqa: BLE001
+        return f"funnel: unavailable ({type(exc).__name__}: {str(exc)[:80]})"
+
+
 def main() -> int:
     sys.path.insert(0, CHAT)
     import anthropic                                    # type: ignore
@@ -916,6 +936,10 @@ def main() -> int:
     waiting = waiting_for_first_touch(rows)
     st["last_run"] = datetime.now(LOCAL_TZ).isoformat()
     st["waiting_first_touch"] = len(waiting)
+    # The funnel headline goes into this run's output and into shared state, where the rest of
+    # the system can read it without opening the vault.
+    st["funnel"] = funnel_headline(rows, drafted)
+    log(st["funnel"])
     save_state(st)
 
     if rejected:

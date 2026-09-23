@@ -191,7 +191,7 @@ def next_targets(rows: list, queue: list) -> list:
     out = []
     for r in rows:
         email, tier = target_address(r)
-        if _c(r.get("status")) != "qualified" or not email:
+        if _c(r.get("status")) != "qualified" or not email or is_creator_row(r):
             continue
         if _c(r.get("sent_date")) or _c(r.get("replied")) or _c(r.get("outcome")):
             continue
@@ -288,7 +288,7 @@ def hunter_targets(rows: list, queue: list = (), cycle_start: str = "") -> list:
     queued = {_c(e.get("to")).lower() for e in (queue or ())}
     out = []
     for r in rows:
-        if _c(r.get("status")) != "qualified":
+        if _c(r.get("status")) != "qualified" or is_creator_row(r):
             continue
         if _c(r.get("sent_date")) or _c(r.get("replied")) or _c(r.get("outcome")):
             continue
@@ -377,8 +377,8 @@ def close_report(rows: list, queue: list) -> dict:
             by_addr[addr] = _c(e.get("close_variant")) or "question"
     out = {v: {"sent": 0, "replied": 0} for v in CLOSE_VARIANTS}
     for r in rows:
-        if not _c(r.get("sent_date")):
-            continue
+        if not _c(r.get("sent_date")) or is_creator_row(r):
+            continue               # the creator offer is a different pitch, not an arm of this A/B
         addr = _c(r.get("email")).lower() or _c(r.get("email_generic")).lower()
         arm = _c(r.get("close_variant")) or by_addr.get(addr) or "question"
         if arm not in out:
@@ -855,6 +855,78 @@ def plan_creator(list_text: str, queue: list, to: str, subject: str, body: str,
     return entry, problems
 
 
+# ---------------------------------------------------------------- creator rows in the tracker
+#
+# The tracker is where everything downstream looks. The follow-up clock only starts on an existing
+# row (splitframe_send.stamp_tracker), and the reply watcher, the bounce watch and the funnel
+# report all read it. The creator lane lived only in its vault doc, so a creator first touch went
+# out and then nothing could follow it up, see a reply to it, or count a bounce from it. Guzu and
+# MISTERARTHER were backfilled by hand on 09-19. Dishsoap, Zerbs, masondota2 and Sequisha went out
+# on 09-22 with no row at all, and masondota2's bounce was never recorded.
+#
+# So `creator` now adds the row when it queues. Every DTC list skips creator rows (next_targets,
+# hunter_targets, close_report): a streamer must never be offered an ad-creative pitch, and the
+# creator offer isn't an arm of the close A/B.
+CREATOR_CATEGORY = "creator"
+PLATFORM_RE = re.compile(
+    r"\b((?:twitch\.tv|kick\.com)/[A-Za-z0-9_]+|youtube\.com/@[A-Za-z0-9_.-]+)", re.I)
+SEND_LOG = os.path.join(ROOT, "scripts", "splitframe_send.log")
+SENT_LINE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}) \S+ item \d+: SENT to (\S+)")
+
+
+def is_creator_row(row: dict) -> bool:
+    return _c(row.get("category")).lower() == CREATOR_CATEGORY
+
+
+def creator_section(text: str, email: str) -> str:
+    """The `### name` block of the prospect list that mentions this address."""
+    want, block, found = _c(email).lower(), [], False
+    for line in (text or "").splitlines():
+        if line.startswith("### "):
+            if found:
+                break
+            block = []
+        block.append(line)
+        if want and want in line.lower():
+            found = True
+    return "\n".join(block) if found else ""
+
+
+def creator_tracker_row(list_text: str, email: str, name: str, today: str, fields: list,
+                        sent_date: str = "") -> dict:
+    """A tracker row for a creator, in the same shape as the hand-made Guzu row."""
+    m = PLATFORM_RE.search(creator_section(list_text, email))
+    row = {f: "" for f in fields}
+    row.update({"brand": _c(name) or _c(email), "domain": m.group(1).lower() if m else "",
+                "category": CREATOR_CATEGORY, "email": _c(email).lower(), "status": "qualified",
+                "close_variant": "offer",
+                "notes": f"CREATOR LANE - clip retainer $400/mo, NOT ad creative. Row added {today} "
+                         "by splitframe_queue so the follow-ups, reply watch and bounce watch "
+                         "can see it."})
+    if sent_date:
+        d = datetime.fromisoformat(sent_date).date()
+        row.update({"sent_date": sent_date,
+                    "followup1_date": (d + timedelta(days=3)).isoformat(),
+                    "followup2_date": (d + timedelta(days=7)).isoformat()})
+    return row
+
+
+def tracked_addresses(rows: list) -> set:
+    return {_c(r.get(c)).lower() for r in rows for c in ("email", "email_generic")} - {""}
+
+
+def untracked_creator_sends(list_text: str, rows: list, log_text: str) -> list:
+    """[(address, first send date)] for creator-list addresses the sender has emailed that have
+    no tracker row: the ones with no follow-up clock and no reply or bounce watch."""
+    tracked, first = tracked_addresses(rows), {}
+    for line in (log_text or "").splitlines():
+        m = SENT_LINE_RE.match(line)
+        if m:
+            first.setdefault(m.group(2).lower(), m.group(1))
+    return sorted((a, d) for a, d in first.items()
+                  if a not in tracked and creator_entry(list_text, a)["found"])
+
+
 def record_creator_doc(name: str, to: str, subject: str, body: str,
                        evidence: str, today: str) -> str:
     os.makedirs(DRAFT_DOC_DIR, exist_ok=True)
@@ -868,6 +940,42 @@ def record_creator_doc(name: str, to: str, subject: str, body: str,
         f.write(f"\n## {name or to} — {to}\n**Watched {today}:** {_c(evidence)}\n\n"
                 f"**Subject:** {subject}\n\n{body.strip()}\n")
     return path
+
+
+def cmd_creator_backfill(args) -> int:
+    """Add tracker rows for creators who were already emailed without one. Dry run unless --write."""
+    list_text = ""
+    if os.path.exists(CREATOR_PROSPECTS):
+        with open(CREATOR_PROSPECTS, encoding="utf-8") as f:
+            list_text = f.read()
+    try:
+        with open(SEND_LOG, encoding="utf-8", errors="replace") as f:
+            log_text = f.read()
+    except OSError:
+        print(f"no send log at {SEND_LOG}; nothing to backfill from")
+        return 1
+    rows, fields = tracker_rows()
+    today = today_local()
+    bounced = {_c(a).lower() for a in (args.bounced or [])}
+    new = []
+    for addr, first in untracked_creator_sends(list_text, rows, log_text):
+        row = creator_tracker_row(list_text, addr, creator_entry(list_text, addr)["name"], today,
+                                  fields, sent_date=first)
+        if addr in bounced:
+            row["outcome"] = f"bounced (recorded {today})"
+        new.append(row)
+        print(f"{'ADD' if args.write else 'would add'}: {row['brand']} <{addr}> sent {first}, "
+              f"FU1 {row['followup1_date']}, FU2 {row['followup2_date']}"
+              + (f", outcome={row['outcome']!r} (no follow-ups)" if row["outcome"] else ""))
+    if not new:
+        print("nothing to backfill: every creator the sender has emailed has a tracker row")
+        return 0
+    if args.write:
+        bak = write_tracker(rows + new, fields, "creator-backfill")
+        print(f"wrote {len(new)} row(s); backup at {os.path.basename(bak)}")
+    else:
+        print("dry run; add --write to apply")
+    return 0
 
 
 def cmd_creator(args) -> int:
@@ -900,6 +1008,16 @@ def cmd_creator(args) -> int:
                   "queued_by": "money-shift"})
     save_queue(q, queue)
     doc = record_creator_doc(name, args.to, args.subject, body, args.evidence, today)
+    try:
+        rows, fields = tracker_rows()
+        if _c(args.to).lower() not in tracked_addresses(rows):
+            write_tracker(rows + [creator_tracker_row(list_text, args.to, name, today, fields)],
+                          fields, "creator")
+            print(f"tracker: added a creator row for {name}, so its follow-up clock starts "
+                  "the moment it sends")
+    except (OSError, csv.Error) as exc:
+        print(f"WARNING: queued, but the tracker row could not be added ({exc}). Without it "
+              "this creator gets no follow-ups and no reply watch; add the row by hand.")
     print(f"QUEUED (creator): {name} <{args.to}> draft {draft_id}; record "
           f"{os.path.basename(doc)}. It goes on the next morning release "
           f"({current_per_day()[0]}/day) with the 3 h hold.")
@@ -1199,6 +1317,12 @@ def main(argv=None) -> int:
                    help="which stream and which moment was watched, with the date")
     c.add_argument("--dry-run", action="store_true", help="run every guard, draft nothing")
     c.set_defaults(fn=cmd_creator)
+    cb = sub.add_parser("creator-backfill",
+                        help="tracker rows for creators already emailed without one (dry run)")
+    cb.add_argument("--bounced", action="append", metavar="ADDRESS",
+                    help="an address known to have bounced: gets outcome=bounced, no follow-ups")
+    cb.add_argument("--write", action="store_true")
+    cb.set_defaults(fn=cmd_creator_backfill)
     sw = sub.add_parser("sweep", help="close out brands worked to the last touch with no reply")
     sw.add_argument("--write", action="store_true")
     sw.set_defaults(fn=cmd_sweep)

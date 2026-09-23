@@ -203,6 +203,43 @@ def prospect_domains(rows) -> dict:
     return out
 
 
+def exact_addresses(rows) -> dict:
+    """Every tracked address -> brand. Checked before any domain match.
+
+    A domain can belong to more than one prospect. The creator lane writes to talent agencies,
+    and Dishsoap and Zerbs are both at evolved.gg. prospect_domains() keeps one brand per domain
+    (the last row wins), so a reply from dishsoap@evolved.gg would have stamped ZERBS replied.
+    That stops the follow-ups to the one who didn't answer and keeps chasing the one who did.
+    Matching the exact address first gives the right creator whenever they reply from the address
+    we wrote to, which is nearly always."""
+    out = {}
+    for r in rows:
+        for col in ("email", "email_generic"):
+            e = (r.get(col) or "").strip().lower()
+            if "@" in e:
+                out[e] = r.get("brand") or e
+    return out
+
+
+def domain_brands(rows) -> dict:
+    """domain -> every brand on it, for a reply from an address we never wrote to (a manager at
+    the agency, a colleague at the brand). When several prospects share the domain, every one of
+    them is stamped. Chasing someone who answered costs the relationship; pausing one who didn't
+    costs a follow-up."""
+    out = {}
+    for r in rows:
+        brand = r.get("brand") or ""
+        doms = {(r.get("domain") or "").strip().lower().removeprefix("www.")}
+        for col in ("email", "email_generic"):
+            e = (r.get(col) or "").strip().lower()
+            if "@" in e:
+                doms.add(e.split("@", 1)[1])
+        for d in doms - {""} - FREEMAIL:
+            if brand and brand not in out.setdefault(d, []):
+                out[d].append(brand)
+    return out
+
+
 def prospect_addresses(rows) -> dict:
     """exact address -> brand, for prospects reachable only at a shared mailbox.
 
@@ -228,7 +265,9 @@ def stamp_replied(brand: str, when: str) -> None:
             changed = True
     if not changed:
         return
-    shutil.copy2(TRACKER, TRACKER + f".bak-replywatch-{when}")
+    bak = TRACKER + f".bak-replywatch-{when}"
+    if not os.path.exists(bak):        # keep the pristine copy when one reply stamps several rows
+        shutil.copy2(TRACKER, bak)
     with open(TRACKER, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=fields)
         w.writeheader()
@@ -281,6 +320,24 @@ def _beat(note: str = "") -> None:
     except Exception:
         pass
 
+def _refresh_funnel() -> None:
+    """Keep Money/Funnel — <date>.md current: after a reply is stamped, the report already says
+    which close, which kind of inbox and which wave it answered. It never takes the scan down: a
+    stale report costs nothing, a dead reply watcher costs the reply."""
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "funnel_report", os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                          "funnel_report.py"))
+        fr = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(fr)
+        path = fr.refresh()
+        if path:
+            log(f"funnel report refreshed: {os.path.basename(path)}")
+    except Exception as exc:                          # noqa: BLE001
+        log(f"funnel report not refreshed ({type(exc).__name__}: {str(exc)[:80]})")
+
+
 def main() -> int:
     arm_watchdog()
     from composio import Composio  # type: ignore
@@ -289,6 +346,8 @@ def main() -> int:
     rows = tracker_rows()
     domains = prospect_domains(rows)
     addresses = prospect_addresses(rows)
+    exact = exact_addresses(rows)
+    shared = domain_brands(rows)
     st = load_state()
     seen = set(st.get("seen", []))
     res = c.tools.execute("GMAIL_FETCH_EMAILS", user_id=ent, dangerously_skip_version_check=True,
@@ -303,10 +362,13 @@ def main() -> int:
         dom = addr.split("@", 1)[1] if "@" in addr else ""
         if not mid or mid in seen or not dom:
             continue
-        # Exact address first: a prospect at a freemail mailbox is invisible to the domain map.
-        brand = addresses.get(addr) or (None if dom in OWN else domains.get(dom))
+        # Exact address first: a prospect at a freemail mailbox is invisible to the domain map, and
+        # a domain can belong to more than one prospect (see exact_addresses).
+        brand = exact.get(addr) or addresses.get(addr) or (None if dom in OWN else domains.get(dom))
         if not brand:
             continue
+        brands = [brand] if (addr in exact or addr in addresses) else (shared.get(dom) or [brand])
+        brand = " / ".join(brands)
         subject = str(m.get("subject") or "")[:80]
         preview = body_text(m)
         when = datetime.now().strftime("%Y-%m-%d")
@@ -319,8 +381,11 @@ def main() -> int:
             autos += 1
         else:
             log(f"REPLY from {brand} <{addr}>: {subject}")
-            stamp_replied(brand, when)
-            nudge(f"{brand} replied", f"{sender}: {subject}\n{preview[:180]}\nReply today. Call card: Money/call-card.md")
+            for b in brands:
+                stamp_replied(b, when)
+            which = (f"\n(Sent from a domain shared by {brand}; all of them are marked replied so "
+                     "nobody gets chased. Un-stamp the ones it isn't.)" if len(brands) > 1 else "")
+            nudge(f"{brand} replied", f"{sender}: {subject}\n{preview[:180]}\nReply today. Call card: Money/call-card.md{which}")
             hits += 1
         seen.add(mid)
     st["seen"] = sorted(seen)[-500:]
@@ -330,6 +395,7 @@ def main() -> int:
     if not hits:
         tail = f", {autos} auto-reply(s) ignored" if autos else ""
         log(f"no prospect replies ({len(msgs)} inbox messages scanned{tail})")
+    _refresh_funnel()
     try:
         signal.alarm(0)
     except (AttributeError, ValueError):
