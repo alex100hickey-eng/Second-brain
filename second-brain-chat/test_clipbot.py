@@ -19,6 +19,13 @@ def _no_live_kill_switch(monkeypatch):
     monkeypatch.setattr(config, "kill_switch_on", lambda: False)
 
 
+@pytest.fixture(autouse=True)
+def _no_live_opus_key(monkeypatch):
+    """OpusClient(api_key=None) falls back to OPUSCLIP_API_KEY, and run_tests.py loads .env into the
+    environment, so without this the "no key" tests quietly get the real key (and a real client)."""
+    monkeypatch.delenv("OPUSCLIP_API_KEY", raising=False)
+
+
 def _ledger():
     fd, path = tempfile.mkstemp(suffix=".db")
     os.close(fd)
