@@ -170,6 +170,7 @@ CATEGORY_RANK = {"politics": 0, "macro": 0, "geopolitics": 1, "culture": 2, "fin
 # Two venues pricing the same YES more than this far apart is a mismatched pair (a NO token, a
 # different threshold, a different race), not a lag worth trading: a real lag closes within minutes.
 MAX_PRICE_GAP = 0.25
+TIGHT_SPREAD = 0.04          # a US book this tight can pass leadlag's "gap outside the spread" test
 
 
 def match_events(us_events: list, off_events: list, max_gap: float = MAX_PRICE_GAP) -> tuple[list, dict]:
@@ -232,13 +233,21 @@ def match_events(us_events: list, off_events: list, max_gap: float = MAX_PRICE_G
                         "offshore_label": olabel,
                         "category": (ue_.get("category") or "other").lower(),
                         "volume24h": _f(oe.get("volume24hr")) or 0.0,
-                        "us_mid": umid, "offshore_mid": oprice})
+                        "us_mid": umid, "offshore_mid": oprice,
+                        "us_spread": None if umid is None else round(ask - bid, 4)})
     counts["pairs"] = len(out)
     # An event whose US book showed no two-sided quote at build time has nothing to record: the
-    # recorder's mid would be empty every tick. Those go last, whatever their category.
+    # recorder's mid would be empty every tick. Those go last, whatever their category. Within a
+    # category, events with more TIGHT US books go first: leadlag refuses any gap inside the US
+    # spread, so a 38c-wide book (Brazil's first round, 2026-09-23) can be recorded forever and never
+    # produce a signal, while it takes one of the recorder's 40 slots.
     quoted = {p["us_event"] for p in out if p["us_mid"] is not None}
-    out.sort(key=lambda p: (p["us_event"] not in quoted, CATEGORY_RANK.get(p["category"], 9), -p["volume24h"],
-                            p["us_event"] or "", p["us_slug"]))
+    tight: dict = {}
+    for p in out:
+        if p["us_spread"] is not None and p["us_spread"] <= TIGHT_SPREAD:
+            tight[p["us_event"]] = tight.get(p["us_event"], 0) + 1
+    out.sort(key=lambda p: (p["us_event"] not in quoted, CATEGORY_RANK.get(p["category"], 9),
+                            -tight.get(p["us_event"], 0), -p["volume24h"], p["us_event"] or "", p["us_slug"]))
     counts["quoted_events"] = len(quoted)
     return out, counts
 
