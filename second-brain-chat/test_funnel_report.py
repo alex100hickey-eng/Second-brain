@@ -227,6 +227,21 @@ def test_sends_with_no_tracker_row_are_named():
     assert "zerbs@evolved.gg" in fr.render(rep)
 
 
+def test_a_correction_counts_a_send_the_log_missed(tmp_path):
+    """Antler Farms' FU1 left at 01:56 on 09-23 and never reached the log. Without the
+    correction, its FU2 would later be counted as FU1 and the brand would read one touch behind."""
+    log = tmp_path / "send.log"
+    log.write_text("2026-09-10 08:00 item 1: SENT to dana@acme.com (draft r1)\n")
+    fix = tmp_path / "corrections.log"
+    assert fr.followup_states(_row(), TODAY, sends=fr.read_send_log(str(log), str(fix)))[0][2] \
+        == "overdue"
+    fix.write_text("2026-09-13 01:56 item 7: SENT to dana@acme.com (draft r7) — recorded late\n")
+    assert fr.followup_states(_row(), TODAY, sends=fr.read_send_log(str(log), str(fix)))[0][2] \
+        == "sent"
+    assert fr.read_send_log(str(tmp_path / "missing.log"), str(fix)) is None, \
+        "a correction alone is not a send log"
+
+
 def test_the_send_log_parser_only_counts_real_sends():
     sends = fr.parse_send_log(
         "2026-09-22 19:57 daily cap reached (10/10) — auto-sends deferred to tomorrow\n"

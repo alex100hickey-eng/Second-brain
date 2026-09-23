@@ -55,6 +55,11 @@ TRACKER = _sfd.TRACKER
 # Beside this file, for the same reason as splitframe_daily.LOG: it resolves to the checkout
 # that's running, on whichever machine it runs.
 SEND_LOG = os.path.join(HERE, "splitframe_send.log")
+# Sends that left but never reached the send log, in the same line format. They're read by this
+# report ONLY: the sender's daily cap counts its own log, so a correction written there would
+# change who sends today. First entry: Antler Farms' FU1 at 01:56 on 2026-09-23, which went (Gmail
+# Sent has it) during the run that then hung in outbox.close() before logging it.
+SEND_LOG_CORRECTIONS = os.path.join(HERE, "splitframe_send_corrections.log")
 SENT_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}) \S+ item \d+: SENT to (\S+)")
 
 # A reference rate, not a claim about this business. Cold outreach usually replies at 1-5%, and
@@ -102,14 +107,21 @@ def parse_send_log(text: str) -> dict:
     return out
 
 
-def read_send_log(path: str = None):
-    """The parsed log, or None when there is no log to read. None means unknown, and it must
-    never be treated as an empty log: that would turn every due follow-up into "overdue"."""
+def read_send_log(path: str = None, corrections: str = None):
+    """The parsed log plus any corrections, or None when there is no log to read. None means
+    unknown, and it must never be treated as an empty log: that would turn every due follow-up
+    into "overdue"."""
     try:
         with open(path or SEND_LOG, encoding="utf-8", errors="replace") as f:
-            return parse_send_log(f.read())
+            text = f.read()
     except OSError:
         return None
+    try:
+        with open(corrections or SEND_LOG_CORRECTIONS, encoding="utf-8", errors="replace") as f:
+            text += "\n" + f.read()
+    except OSError:
+        pass
+    return parse_send_log(text)
 
 
 # ------------------------------------------------------------------ classifying one row
