@@ -246,21 +246,79 @@ def check_nodes():
 #   2. the job's log has moved recently (catches loaded-but-erroring, or running stale code)
 # ---------------------------------------------------------------------------
 
-# label -> (log filename, how many hours of silence is abnormal)
+#   3. no single run has been alive longer than its budget  (catches HUNG)
+#
+# The third one is the 2026-09-23 lesson. The Splitframe sender is a 10-minute launchd job that
+# finishes in seconds; one run blocked in an SSL read at 01:56 and was still alive at 10:10.
+# launchd never starts a new instance while the old one lives, so nothing sent for eight hours —
+# and the two checks above both passed: the label was loaded, and its log's last line (01:56,
+# well inside the 24 h silence budget) read like a healthy send. A job's log can look fine for
+# a whole day while its process is a corpse. Process age is the signal the other two cannot see.
+
+# label -> (log filename, hours of silence that is abnormal, minutes one run may stay alive)
 MONEY_JOBS = {
-    "com.secondbrain.replywatch": ("reply_watch.log", 2),
-    "com.secondbrain.splitframesend": ("splitframe_send.log", 24),
-    "com.secondbrain.capabilitywatcher": ("capability_watcher.log", 2),
-    "com.secondbrain.kickscan": ("kick_scan.log", 26),
+    "com.secondbrain.replywatch": ("reply_watch.log", 2, 15),
+    "com.secondbrain.splitframesend": ("splitframe_send.log", 24, 15),
+    # the watcher runs a headless worker as a child for up to 50 min and waits for it
+    "com.secondbrain.capabilitywatcher": ("capability_watcher.log", 2, 90),
+    "com.secondbrain.kickscan": ("kick_scan.log", 26, 60),
 }
+DEFAULT_MAX_RUN_MIN = 15
 
 
-def _loaded_labels() -> set:
+def _launchctl_rows() -> list:
+    """[(pid or None, label)] from `launchctl list`."""
     try:
         out = subprocess.run(["launchctl", "list"], capture_output=True, text=True, timeout=15).stdout
     except Exception:
-        return set()
-    return {ln.split("\t")[-1].strip() for ln in out.splitlines()[1:] if ln.strip()}
+        return []
+    rows = []
+    for ln in out.splitlines()[1:]:
+        parts = ln.split("\t")
+        if len(parts) < 3 or not ln.strip():
+            continue
+        pid = parts[0].strip()
+        rows.append((int(pid) if pid.isdigit() else None, parts[-1].strip()))
+    return rows
+
+
+def _loaded_labels() -> set:
+    return {label for _pid, label in _launchctl_rows()}
+
+
+def _live_pids() -> dict:
+    """label -> pid for jobs with a process alive right now."""
+    return {label: pid for pid, label in _launchctl_rows() if pid}
+
+
+def parse_etime(text: str):
+    """Seconds from ps's elapsed-time column: [[dd-]hh:]mm:ss. None if unreadable."""
+    text = (text or "").strip()
+    if not text:
+        return None
+    days = 0
+    if "-" in text:
+        d, text = text.split("-", 1)
+        if not d.isdigit():
+            return None
+        days = int(d)
+    parts = text.split(":")
+    if not all(p.isdigit() for p in parts) or len(parts) not in (2, 3):
+        return None
+    parts = [int(p) for p in parts]
+    if len(parts) == 2:
+        parts = [0] + parts
+    h, m, sec = parts
+    return days * 86400 + h * 3600 + m * 60 + sec
+
+
+def _process_age_s(pid: int):
+    try:
+        out = subprocess.run(["ps", "-o", "etime=", "-p", str(pid)],
+                             capture_output=True, text=True, timeout=10).stdout
+    except Exception:
+        return None
+    return parse_etime(out)
 
 
 def check_jobs(now=None):
@@ -269,10 +327,20 @@ def check_jobs(now=None):
     if not loaded:
         warn("launchctl list returned nothing — cannot tell whether any money job is alive")
         return
-    for label, (logname, max_quiet_h) in sorted(MONEY_JOBS.items()):
+    live = _live_pids()
+    for label, spec in sorted(MONEY_JOBS.items()):
+        logname, max_quiet_h = spec[0], spec[1]
+        max_run_min = spec[2] if len(spec) > 2 else DEFAULT_MAX_RUN_MIN
         short = label.replace("com.secondbrain.", "")
         if label not in loaded:
             warn(f"{short}: NOT LOADED — launchctl has no such job (check for a .plist.disabled)")
+            continue
+        pid = live.get(label)
+        age_s = _process_age_s(pid) if pid else None
+        if age_s is not None and age_s > max_run_min * 60:
+            warn(f"{short}: HUNG — pid {pid} has been alive {age_s / 3600:.1f}h on a job budgeted "
+                 f"{max_run_min} min; launchd will not start another while it lives. "
+                 f"`kill {pid}` and it restarts on the next tick.")
             continue
         path = os.path.join(ROOT, "scripts", logname)
         try:

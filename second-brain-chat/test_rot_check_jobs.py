@@ -15,7 +15,8 @@ from datetime import datetime
 
 import pytest
 
-sys.path.insert(0, os.path.expanduser("~/second-brain/scripts"))
+# This checkout's scripts/, not ~/second-brain: a worktree must test its own copy.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts"))
 import rot_check as rc  # noqa: E402
 
 
@@ -38,8 +39,10 @@ def fake_job(tmp_path, monkeypatch):
     return logs / "faux.log"
 
 
-def _loaded(monkeypatch, labels):
+def _loaded(monkeypatch, labels, live=None, age_s=None):
     monkeypatch.setattr(rc, "_loaded_labels", lambda: set(labels))
+    monkeypatch.setattr(rc, "_live_pids", lambda: dict(live or {}))
+    monkeypatch.setattr(rc, "_process_age_s", lambda pid: age_s)
 
 
 def test_a_disabled_job_is_reported(fake_job, monkeypatch):
@@ -97,3 +100,57 @@ def test_the_real_money_jobs_are_all_watched():
     # The reply watcher is the one that was dark; it must be in the list, not just fixed once.
     assert "com.secondbrain.replywatch" in rc.MONEY_JOBS
     assert "com.secondbrain.splitframesend" in rc.MONEY_JOBS
+
+
+# ---- a job whose process never ends (2026-09-23) ----
+
+def test_a_run_alive_longer_than_its_budget_is_reported_even_with_a_fresh_log(fake_job, monkeypatch):
+    """The exact 2026-09-23 shape: sender loaded, log last written 01:56 (inside the 24 h silence
+    budget, and the line reads like a healthy send), and the 01:56 process still alive at 10:10.
+    Eight hours of nothing sent, and both older checks said fine."""
+    fake_job.write_text("item 19799: SENT to guzubusiness@hotmail.com\n")
+    os.utime(fake_job, None)
+    monkeypatch.setattr(rc, "MONEY_JOBS", {"com.secondbrain.faux": ("faux.log", 24, 15)})
+    _loaded(monkeypatch, {"com.secondbrain.faux"}, live={"com.secondbrain.faux": 4719}, age_s=8 * 3600 + 590)
+    rc.check_jobs()
+    assert any("HUNG" in w and "4719" in w for w in rc.WARN), rc.WARN
+    assert not rc.OK
+
+
+def test_a_run_inside_its_budget_is_not_a_hang(fake_job, monkeypatch):
+    fake_job.write_text("fine\n")
+    os.utime(fake_job, None)
+    _loaded(monkeypatch, {"com.secondbrain.faux"}, live={"com.secondbrain.faux": 77}, age_s=40)
+    rc.check_jobs()
+    assert not rc.WARN, rc.WARN
+
+
+def test_a_job_with_no_live_process_skips_the_age_check(fake_job, monkeypatch):
+    fake_job.write_text("fine\n")
+    os.utime(fake_job, None)
+    _loaded(monkeypatch, {"com.secondbrain.faux"}, live={}, age_s=None)
+    rc.check_jobs()
+    assert not rc.WARN
+
+
+def test_a_two_tuple_job_spec_still_works_with_the_default_budget(fake_job, monkeypatch):
+    _loaded(monkeypatch, {"com.secondbrain.faux"}, live={"com.secondbrain.faux": 5},
+            age_s=rc.DEFAULT_MAX_RUN_MIN * 60 + 1)
+    fake_job.write_text("x\n")
+    rc.check_jobs()
+    assert any("HUNG" in w for w in rc.WARN)
+
+
+def test_ps_elapsed_time_is_parsed_in_every_shape():
+    assert rc.parse_etime("08:09:50") == 8 * 3600 + 9 * 60 + 50
+    assert rc.parse_etime("05:30") == 330
+    assert rc.parse_etime("1-02:03:04") == 86400 + 2 * 3600 + 3 * 60 + 4
+    assert rc.parse_etime("   00:07\n") == 7
+    assert rc.parse_etime("") is None
+    assert rc.parse_etime("garbage") is None
+
+
+def test_the_sender_and_watcher_budgets_are_minutes_not_a_day():
+    """The sender finishes in seconds; a budget that would have let the 8 h hang pass is no budget."""
+    assert rc.MONEY_JOBS["com.secondbrain.splitframesend"][2] <= 15
+    assert rc.MONEY_JOBS["com.secondbrain.replywatch"][2] <= 15
