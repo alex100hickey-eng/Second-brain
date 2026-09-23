@@ -1093,11 +1093,64 @@ BOUNCE_SUBJECT = re.compile(
 _ADDRESS_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 
 
+def _creator_list_path():
+    if not vault_path:
+        return None
+    p = os.path.join(vault_path, "Money", "Creator Lane — Prospects.md")
+    return p if os.path.exists(p) else None
+
+
+def creator_addresses(text: str = None) -> dict:
+    """{address: creator name} for every address on the creator-lane prospect list.
+
+    Creator prospects never enter the tracker — the list in the vault is their only home — so
+    the bounce watcher could not see a creator bounce at all. On 2026-09-22 masondota2@
+    afkcreators.com came back 550 5.1.1 "address not found" and nothing recorded it: the DSN
+    named an address the tracker had never heard of, so it was discarded as someone else's
+    bounce, `splitframe:bounces` stayed empty, and the bounce-gated daily cap kept climbing on a
+    count it could not see. A DSN only exists for an address we actually wrote to, so listing
+    every address on the sheet is safe: an unsent one can never produce a bounce."""
+    if text is None:
+        path = _creator_list_path()
+        if not path:
+            return {}
+        try:
+            with open(path, encoding="utf-8") as f:
+                text = f.read()
+        except OSError:
+            return {}
+    out, name = {}, ""
+    for line in text.splitlines():
+        if line.startswith("### "):
+            name = line[4:].split("—")[0].strip()
+        for addr in _ADDRESS_RE.findall(line):
+            out[addr.lower()] = name or addr.lower()
+    return out
+
+
+def creator_sent_since(day: str, queue_state: dict, creators: dict = None) -> int:
+    """Creator-lane first touches released on or after `day`, from the shared first-touch queue
+    (the only record of them: no tracker row exists). The bounce-rate denominator without these
+    counts the Splitframe sends only, and a creator bounce over a Splitframe-only denominator
+    overstates the rate in the direction that trips the hold."""
+    creators = creator_addresses() if creators is None else creators
+    if not creators:
+        return 0
+    n = 0
+    for e in (queue_state or {}).get("queue") or []:
+        to = str(e.get("to") or "").strip().lower()
+        released = str(e.get("released") or "").strip()
+        if to in creators and released and released[:10] >= day:
+            n += 1
+    return n
+
+
 def sent_addresses() -> dict:
     """{address: brand} for every address an email actually went to. Unlike sent_domains this
-    keeps brands that already replied — a reply does not mean a later message reached them."""
+    keeps brands that already replied — a reply does not mean a later message reached them.
+    Includes the creator-lane list (see creator_addresses): those sends have no tracker row."""
     path = _tracker_path()
-    out = {}
+    out = dict(creator_addresses())
     if not path:
         return out
     try:

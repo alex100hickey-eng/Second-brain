@@ -18,16 +18,21 @@ So the capability lives here, on his Mac, and the design keeps the original thre
     or forged approval can only push an already-written email at an already-chosen prospect.
   * Nothing is ever sent twice: the outbox row is closed with a sent stamp first.
 
-Runs every 2 minutes under launchd (com.secondbrain.splitframesend).
+Runs under launchd (com.secondbrain.splitframesend): the repo plist says every 120 s, the copy
+installed on 2026-09-23 runs every 600 s. RUN_BUDGET_SECONDS stays below both.
 """
 from __future__ import annotations
 
 import csv
+import json
 import os
+import random
 import re
+import signal
+import socket
 import subprocess
 import sys
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 VAULT = os.path.expanduser("~/Library/Mobile Documents/com~apple~CloudDocs/Obsidian/Second brain")
 TRACKER = os.path.join(VAULT, "Money", "prospect-tracker.csv")
@@ -43,6 +48,124 @@ def log(msg: str) -> None:
     print(line)
     with open(LOG, "a") as f:
         f.write(line + "\n")
+
+
+# ---------------------------------------------------------------------------
+# Pacing, quiet hours and a watchdog — the three things the 2026-09-23 deliverability audit
+# found this script doing to the sending domain.
+#
+# BURSTS. This loop sent every expired-hold item in one run: 12 emails in one minute on 09-18,
+# 10 in one minute on 09-19 and 09-20, 10 in two minutes at 00:56 on 09-22. Ten identical-shape
+# cold emails leaving one mailbox inside a minute is the most spam-like thing a young domain can
+# do, and the warmup plan's one mechanical rule was "spaced across the day, never a burst".
+# Now: ONE send per run, and a 4-9 minute gap before the next one (launchd fires every 120 s per
+# the repo plist, every 600 s as installed on 2026-09-23 — one send per tick either way). Ten
+# emails take one to two hours.
+#
+# NIGHT SENDS. 16 of 79 sends went out between midnight and 03:00 — the 3-hour hold expired while
+# the Mac slept and everything fired the moment it woke. A cold email that lands at 01:00 is at
+# the bottom of the morning pile. Now: nothing sends between 22:00 and 07:30 local. An item Alex
+# approved by hand still goes at night (his tap means now), but keeps the gap.
+#
+# HANGS. On 2026-09-23 the run that started 01:56 sent three emails and then blocked forever in an
+# SSL read on the Supabase call that closes the row (the same failure that took the reply watcher
+# out for 34 hours on 09-21). launchd never starts a new instance while the old one lives, so one
+# hung run stopped ALL sending for eight hours with the process looking perfectly healthy. Now: a
+# SIGALRM watchdog kills the run well inside the launchd interval, and the process exits through
+# os._exit so no library's atexit hook can hang it either.
+RUN_BUDGET_SECONDS = 100       # below the launchd interval (120 s repo / 600 s installed)
+QUIET_START = (22, 0)          # local clock; from here...
+QUIET_END = (7, 30)            # ...until here, nothing auto-sends
+MIN_GAP_MIN, JITTER_MIN = 4, 5 # between two sends: 4 + [0, 5) minutes
+PACE_STATE = os.path.expanduser("~/second-brain/scripts/splitframe_send_state.json")
+socket.setdefaulttimeout(60)   # belt and braces; httpx keeps its own timeouts, SIGALRM is the net
+
+_armed_for = RUN_BUDGET_SECONDS
+
+
+def _watchdog(_sig, _frm):
+    log(f"ABORTED: run exceeded {_armed_for}s and was killed so the next one can start")
+    os._exit(1)
+
+
+def arm_watchdog(seconds: int = RUN_BUDGET_SECONDS) -> None:
+    global _armed_for
+    _armed_for = seconds
+    try:
+        signal.signal(signal.SIGALRM, _watchdog)
+        signal.alarm(seconds)
+    except (AttributeError, ValueError):
+        pass                   # not the main thread, or a platform without SIGALRM
+
+
+def in_quiet_hours(now: datetime) -> bool:
+    """True between QUIET_START and QUIET_END on the local clock (a window that crosses midnight)."""
+    t = (now.hour, now.minute)
+    return t >= QUIET_START or t < QUIET_END
+
+
+def load_pace_state() -> dict:
+    try:
+        with open(PACE_STATE) as f:
+            st = json.load(f)
+            return st if isinstance(st, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_pace_state(st: dict) -> None:
+    try:
+        with open(PACE_STATE, "w") as f:
+            json.dump(st, f)
+    except OSError as exc:
+        log(f"pace state not saved: {exc}")
+
+
+def may_send_now(state: dict, now: datetime) -> bool:
+    """False while the gap after the previous send is still running. Unparseable state reads as
+    'no gap' — a corrupt file must never stop sending for good."""
+    raw = (state or {}).get("not_before") or ""
+    try:
+        return now >= datetime.fromisoformat(raw)
+    except (TypeError, ValueError):
+        return True
+
+
+def after_send(state: dict, now: datetime, rng=random.random) -> dict:
+    """The gap the next send has to wait out."""
+    gap = MIN_GAP_MIN + rng() * JITTER_MIN
+    state = dict(state or {})
+    state["last_send"] = now.isoformat()
+    state["not_before"] = (now + timedelta(minutes=gap)).replace(microsecond=0).isoformat()
+    return state
+
+
+def not_snoozed(items: list, now: datetime) -> list:
+    """Drop rows whose snooze is still running. awaiting_send() already does this; due_to_auto_send()
+    does not, so a HELD auto-send row (bad address) was re-refused and re-nudged every two minutes
+    and, once the loop sends one per run, would have blocked everything behind it."""
+    out = []
+    for it in items:
+        raw = str(it.get("snooze_until") or "")
+        try:
+            if raw and datetime.fromisoformat(raw).replace(tzinfo=None) > now:
+                continue
+        except ValueError:
+            pass
+        out.append(it)
+    return out
+
+
+def choose(pending: list, state: dict, now: datetime) -> list:
+    """The at-most-one item this run may send, in the order `pending` already has (follow-ups
+    first). Quiet hours hold automatic sends; an item Alex approved by hand still goes, because
+    his tap means now. The gap after the previous send applies to everything."""
+    pending = not_snoozed(pending, now)
+    if in_quiet_hours(now):
+        pending = [it for it in pending if it.get("send_approved")]
+    if not pending or not may_send_now(state, now):
+        return []
+    return pending[:1]
 
 
 
@@ -227,6 +350,7 @@ def _beat(note: str = "") -> None:
         pass
 
 def main() -> int:
+    arm_watchdog()
     sys.path.insert(0, CHAT)
     import outbox                                   # type: ignore
     from composio import Composio                   # type: ignore
@@ -253,6 +377,19 @@ def main() -> int:
             pending.append(it)
     elif outbox.due_to_auto_send(datetime.now().isoformat()):
         log(f"daily cap reached ({sent_today}/{cap}) — auto-sends deferred to tomorrow")
+    if not pending:
+        return 0
+    now = datetime.now()
+    state = load_pace_state()
+    if in_quiet_hours(now) and not any(it.get("send_approved") for it in not_snoozed(pending, now)):
+        # Say it once a night, not every two minutes.
+        if state.get("quiet_noted") != now.date().isoformat():
+            log(f"quiet hours — {len(pending)} waiting, nothing auto-sends before "
+                f"{QUIET_END[0]:02d}:{QUIET_END[1]:02d}")
+            state["quiet_noted"] = now.date().isoformat()
+            save_pace_state(state)
+        return 0
+    pending = choose(pending, state, now)
     if not pending:
         return 0
 
@@ -306,9 +443,16 @@ def main() -> int:
         outbox.close(item["id"], outbox.DONE, note=f"sent from the Mac {route}")
         stamp_tracker(who)
         log(f"item {item['id']}: SENT to {who} (draft {draft_id}) — {route}")
+        save_pace_state(after_send(state, datetime.now()))
         nudge("Sent", f"Your email to {who} just went out.")
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    rc = main()
+    try:
+        signal.alarm(0)
+    except (AttributeError, ValueError):
+        pass
+    sys.stdout.flush()
+    os._exit(int(rc or 0))

@@ -6446,7 +6446,12 @@ def _prospect_bounce_pass() -> str:
     cutoff = now - timedelta(days=14)
     recent = [e for e in events
               if (e.get("at") or "") >= cutoff.isoformat()]
-    sent_recent = ad_creative_pipeline.sent_since(cutoff.date().isoformat())
+    since = cutoff.date().isoformat()
+    # Tracker first touches plus creator-lane releases: a creator bounce over a Splitframe-only
+    # denominator is a rate against the wrong sends.
+    sent_recent = (ad_creative_pipeline.sent_since(since)
+                   + ad_creative_pipeline.creator_sent_since(
+                       since, intake._load_state("splitframe:firsttouch_queue") or {}))
     rate = (len(recent) / sent_recent) if sent_recent else 0.0
     if len(recent) >= _BOUNCE_ALERT_MIN and rate >= _BOUNCE_ALERT_RATE:
         try:

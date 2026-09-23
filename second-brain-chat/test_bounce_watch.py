@@ -97,3 +97,69 @@ def test_fetch_failure_is_not_a_clean_bill_of_health_crash():
             raise RuntimeError("gmail down")
 
         assert acp.detect_bounces(boom) == []
+
+
+# ---- the creator lane has no tracker row (deliverability audit, 2026-09-23) ----
+
+CREATOR_LIST = """# Creator lane — prospect list
+
+### MISTERARTHER — the best fit found so far
+- **Email:** `contact@misterarther.com` — **VERIFIED 2026-09-17.**
+
+### Mason
+- **Email:** `masondota2@afkcreators.com` — read directly off his own Twitch About panel FAQ
+"""
+
+MASON_DSN = {"id": "dsn1", "sender": "Mail Delivery Subsystem <mailer-daemon@googlemail.com>",
+             "subject": "Delivery Status Notification (Failure)",
+             "messageText": "** Address not found **\n\nYour message wasn't delivered to "
+                            "masondota2@afkcreators.com because the address couldn't be found, "
+                            "or is unable to receive mail.\n\n550 5.1.1 The email account that "
+                            "you tried to reach does not exist."}
+
+
+def _creators(tmp, monkeypatch, text=CREATOR_LIST):
+    path = os.path.join(tmp, "Creator Lane — Prospects.md")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text)
+    monkeypatch.setattr(acp, "_creator_list_path", lambda: path)
+    return path
+
+
+def test_the_creator_list_is_parsed_into_addresses_with_names():
+    got = acp.creator_addresses(CREATOR_LIST)
+    assert got == {"contact@misterarther.com": "MISTERARTHER",
+                   "masondota2@afkcreators.com": "Mason"}
+
+
+def test_a_creator_bounce_is_found_with_the_real_dsn_text(monkeypatch):
+    """The 2026-09-22 bounce, verbatim. It was discarded because the tracker had never heard of
+    the address, and splitframe:bounces stayed empty while the cap ramp climbed."""
+    with tempfile.TemporaryDirectory() as tmp:
+        _tracker(tmp)
+        _creators(tmp, monkeypatch)
+        hits = acp.detect_bounces(lambda q: [MASON_DSN])
+        assert hits == [{"address": "masondota2@afkcreators.com", "brand": "Mason", "id": "dsn1",
+                         "subject": "Delivery Status Notification (Failure)"}]
+
+
+def test_no_creator_list_changes_nothing_for_the_tracker(monkeypatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        _tracker(tmp)
+        monkeypatch.setattr(acp, "_creator_list_path", lambda: None)
+        assert acp.detect_bounces(lambda q: [MASON_DSN]) == []
+        assert acp.detect_bounces(lambda q: [_bounce("ankit@myobvi.com")])[0]["brand"] == "Obvi"
+
+
+def test_creator_sends_count_in_the_rate_denominator():
+    creators = acp.creator_addresses(CREATOR_LIST)
+    queue = {"queue": [
+        {"to": "contact@misterarther.com", "released": "2026-09-19T12:30:00-04:00"},
+        {"to": "masondota2@afkcreators.com", "released": "2026-09-22T00:56:00-04:00"},
+        {"to": "info@antlerfarms.com", "released": "2026-09-19T12:30:00-04:00"},   # tracker lane
+        {"to": "zerbs@evolved.gg", "released": ""},                                  # still queued
+    ]}
+    assert acp.creator_sent_since("2026-09-19", queue, creators) == 2
+    assert acp.creator_sent_since("2026-09-20", queue, creators) == 1
+    assert acp.creator_sent_since("2026-09-19", {}, creators) == 0
+    assert acp.creator_sent_since("2026-09-19", queue, {}) == 0
