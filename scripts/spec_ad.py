@@ -213,6 +213,10 @@ def render(html_text: str, out_path: str, size: tuple) -> str:
             f.write(html_text)
         out_path = os.path.expanduser(out_path)
         os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+        # A leftover file from an earlier render reads as "stable" before Chrome has written
+        # anything, so a re-render would stop early and keep the stale ad.
+        if os.path.exists(out_path):
+            os.remove(out_path)
         # Chrome writes the screenshot and then does not exit — waiting on the process hangs
         # for as long as you let it, on a render that already finished. So watch for the file
         # instead of the exit code, and stop the process once the bytes have settled.
