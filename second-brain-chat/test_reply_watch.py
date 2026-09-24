@@ -344,3 +344,40 @@ def test_a_stranger_off_our_threads_costs_one_lookup_ever(watch):
     assert watch.stamped == [] and fake.thread_calls == ["T9"]
     fake2 = watch(inbox, {"T9": []})
     assert fake2.thread_calls == [], "the answer is cached in state"
+
+
+# ---------------------------------------------------------------------------
+# A dropped connection is retried, and a scan that never happened says so in reply_watch.log.
+# ---------------------------------------------------------------------------
+
+class _Flaky(_FakeComposio):
+    def __init__(self, fails, inbox=()):
+        super().__init__(list(inbox), {})
+        self.fails, self.fetches = fails, 0
+
+    def execute(self, slug, **kw):
+        if slug == "GMAIL_FETCH_EMAILS":
+            self.fetches += 1
+            if self.fetches <= self.fails:
+                raise ConnectionError("Connection error.")
+        return super().execute(slug, **kw)
+
+
+def _run_with(monkeypatch, watch, fake):
+    import types
+    monkeypatch.setattr(rw.time, "sleep", lambda s: None)
+    monkeypatch.setitem(sys.modules, "composio", types.SimpleNamespace(Composio=lambda api_key: fake))
+    return rw.main()
+
+
+def test_a_dropped_connection_is_retried(watch, monkeypatch):
+    fake = _Flaky(fails=2)
+    assert _run_with(monkeypatch, watch, fake) == 0
+    assert fake.fetches == 3 and any("no prospect replies" in l for l in watch.logged)
+
+
+def test_a_scan_that_never_happened_is_logged_not_silent(watch, monkeypatch):
+    fake = _Flaky(fails=99)
+    assert _run_with(monkeypatch, watch, fake) == 1
+    assert any("inbox read FAILED 3 times" in l for l in watch.logged)
+    assert not any("no prospect replies" in l for l in watch.logged), "a failed read is not a quiet inbox"

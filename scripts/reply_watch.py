@@ -206,6 +206,27 @@ def worth_a_thread_check(addr: str) -> bool:
     return bool(dom) and local not in BOUNCE_LOCALS and not noise
 
 
+def fetch_inbox(c, ent: str, waits=(5, 15)):
+    """The inbox + spam read, retried through a dropped connection. Returns None if it never
+    answered. A bare Composio APIConnectionError used to kill the run with a traceback that only
+    reached the launchd log: on 2026-09-24 about 1 scan in 5 died that way, and reply_watch.log,
+    the log anyone reads, showed nothing, so a failed scan looked like a quiet one."""
+    last = None
+    for wait in (0,) + tuple(waits):
+        if wait:
+            time.sleep(wait)
+        try:
+            # Spam too: a reply Gmail files there is still a reply, and the inbox-only read never saw it.
+            return c.tools.execute("GMAIL_FETCH_EMAILS", user_id=ent, dangerously_skip_version_check=True,
+                                   arguments={"query": "(in:inbox OR in:spam) newer_than:14d",
+                                              "max_results": 50, "include_spam_trash": True})
+        except Exception as exc:                                  # noqa: BLE001
+            last = exc
+    log(f"inbox read FAILED {1 + len(waits)} times ({type(last).__name__}): nothing scanned this "
+        "run, the next run tries again")
+    return None
+
+
 def fetch_thread(c, ent: str, thread_id: str) -> list:
     res = c.tools.execute("GMAIL_FETCH_MESSAGE_BY_THREAD_ID", user_id=ent,
                           dangerously_skip_version_check=True, arguments={"thread_id": thread_id})
@@ -390,10 +411,10 @@ def main() -> int:
     st = load_state()
     seen = set(st.get("seen", []))
     checked = set(st.get("checked", []))     # unknown senders whose thread was already looked at
-    # Spam too: a reply Gmail files there is still a reply, and the inbox-only read never saw it.
-    res = c.tools.execute("GMAIL_FETCH_EMAILS", user_id=ent, dangerously_skip_version_check=True,
-                          arguments={"query": "(in:inbox OR in:spam) newer_than:14d",
-                                     "max_results": 50, "include_spam_trash": True})
+    res = fetch_inbox(c, ent)
+    if res is None:
+        _beat("inbox read failed")
+        return 1
     msgs = (res.get("data") or {}).get("messages") or []
     hits = 0
     autos = 0
