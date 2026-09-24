@@ -36,6 +36,7 @@ def tracker(tmp_path, monkeypatch):
         c = tmp_path / "creators.md"
         c.write_text(creators, encoding="utf-8")
         monkeypatch.setattr(sfs, "CREATOR_LIST", str(c))
+        monkeypatch.setattr(sfs, "_mirror_text", lambda *a, **k: None)   # never the real mirror
         return sfs.approved_recipients()
     return write
 
@@ -74,10 +75,26 @@ def test_blank_cells_do_not_become_an_empty_allowed_address(tracker):
 
 
 def test_a_missing_tracker_denies_everything_rather_than_allowing_it(tmp_path, monkeypatch):
-    """Fail closed: an unreadable list must never read as 'no restrictions'."""
+    """Fail closed: an unreadable list must never read as 'no restrictions'. It reads as None,
+    "unknown", so the run can stand down instead of holding every email as unapproved."""
     monkeypatch.setattr(sfs, "TRACKER", str(tmp_path / "gone.csv"))
     monkeypatch.setattr(sfs, "CREATOR_LIST", str(tmp_path / "gone.md"))
-    assert sfs.approved_recipients() == set()
+    monkeypatch.setattr(sfs, "_mirror_text", lambda *a, **k: None)
+    assert sfs.approved_recipients() is None
+
+
+def test_an_evicted_tracker_is_read_from_the_vault_git_mirror(tmp_path, monkeypatch):
+    """2026-09-24 10:46: iCloud evicted the tracker, the read failed, and the next two runs held
+    thirteen written follow-ups as unapproved. The git mirror's copy is always on disk."""
+    monkeypatch.setattr(sfs, "TRACKER", str(tmp_path / "evicted.csv"))
+    monkeypatch.setattr(sfs, "CREATOR_LIST", str(tmp_path / "evicted.md"))
+    monkeypatch.setattr(sfs, "LOG", str(tmp_path / "send.log"))
+    mirror = {"Money/prospect-tracker.csv": HEADER + "Geode,,hello@geodeswimwear.com,qualified\n",
+              "Money/Creator Lane — Prospects.md": "- **Email:** `guzubusiness@hotmail.com`\n"}
+    monkeypatch.setattr(sfs, "_mirror_text", lambda path="Money/prospect-tracker.csv": mirror.get(path))
+    got = sfs.approved_recipients()
+    assert {"hello@geodeswimwear.com", "guzubusiness@hotmail.com"} <= got
+    assert "vault git mirror" in (tmp_path / "send.log").read_text()
 
 
 def test_an_address_on_no_list_is_still_refused(tracker):

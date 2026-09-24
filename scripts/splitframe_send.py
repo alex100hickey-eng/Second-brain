@@ -25,6 +25,7 @@ than hanging. Why each of those exists is written where it lives, below.
 from __future__ import annotations
 
 import csv
+import io
 import os
 import re
 import signal
@@ -197,10 +198,36 @@ def send_budget(counts: dict, cap: int, ceiling: int, share: bool) -> tuple:
 REFUSED_HOLD_HOURS = 6
 
 CREATOR_LIST = os.path.join(VAULT, "Money", "Creator Lane — Prospects.md")
+# The vault's git mirror (vaultsync commits to it). iCloud evicts vault files to "dataless"
+# placeholders, and reading one can fail outright (EDEADLK); the mirror's copy is always on disk.
+VAULT_GIT = os.path.expanduser("~/.second-brain-vault.git")
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 
 
-def approved_recipients() -> set:
+def _mirror_text(vault_path: str = "Money/prospect-tracker.csv") -> str | None:
+    """A vault file as the vault's git mirror last saw it."""
+    try:
+        r = subprocess.run(["git", "--git-dir", VAULT_GIT, "show", f"HEAD:{vault_path}"],
+                           capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return r.stdout if r.returncode == 0 and r.stdout.strip() else None
+
+
+def _tracker_text() -> str | None:
+    """The tracker's CSV: the iCloud file, else the git mirror's copy, else None."""
+    try:
+        with open(TRACKER, newline="") as f:
+            return f.read()
+    except OSError as exc:
+        text = _mirror_text()
+        if text is not None:
+            log(f"tracker unreadable in iCloud ({type(exc).__name__}, probably evicted); the "
+                "allow-list comes from the vault git mirror")
+        return text
+
+
+def approved_recipients() -> set | None:
     """Every curated address this script is allowed to reach.
 
     The point of the whitelist is that a replayed or forged approval can still only push an
@@ -217,23 +244,29 @@ def approved_recipients() -> set:
 
     Lesson worth keeping: when the drafter learns a new source of recipients, the SEND GATE is
     part of that change, not a separate concern.
+
+    Returns None when the tracker can't be read at all, which is different from "nobody is
+    allowed". On 2026-09-24 iCloud evicted the tracker at 10:46; the read failed, this returned
+    an empty set, and the 10:57 and 11:07 runs HELD thirteen written follow-ups as "not an
+    approved address", pushed each 6 hours back and sent Alex a nudge per email. Now the mirror's
+    copy stands in, and with neither readable the run sends nothing and holds nothing.
     """
+    text = _tracker_text()
+    if text is None:
+        return None
     out = set()
-    try:
-        with open(TRACKER, newline="") as f:
-            for r in csv.DictReader(f):
-                for col in ("email", "email_generic"):
-                    addr = (r.get(col) or "").strip().lower()
-                    if addr:
-                        out.add(addr)
-    except OSError:
-        pass
+    for r in csv.DictReader(io.StringIO(text)):
+        for col in ("email", "email_generic"):
+            addr = (r.get(col) or "").strip().lower()
+            if addr:
+                out.add(addr)
     # Creator-lane prospects are curated by hand in the vault and never enter the tracker.
     try:
         with open(CREATOR_LIST) as f:
-            out.update(a.lower() for a in _EMAIL_RE.findall(f.read()))
+            creators = f.read()
     except OSError:
-        pass
+        creators = _mirror_text("Money/Creator Lane — Prospects.md") or ""
+    out.update(a.lower() for a in _EMAIL_RE.findall(creators))
     return out
 
 
@@ -450,6 +483,10 @@ def main() -> int:
     c = Composio(api_key=os.environ["COMPOSIO_API_KEY"])
     entities = {"studio": os.environ.get("STUDIO_GMAIL_ENTITY")}
     allowed = approved_recipients()
+    if allowed is None:
+        log("tracker unreadable in iCloud and in the vault git mirror: nothing sent and nothing "
+            "held this run; the next run tries again")
+        return 0
 
     sent = 0
     for item in pending:

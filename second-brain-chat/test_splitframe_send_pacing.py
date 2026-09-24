@@ -93,7 +93,7 @@ def run(tmp_path, monkeypatch):
     calls = {"stamped": [], "nudged": [], "armed": []}
 
     def go(items, now=MORNING, allowed=None, fail_drafts=(), cap=10, sent_today=0,
-           close_raises=False, followups_sent_today=0, ceiling=20, share=False):
+           close_raises=False, followups_sent_today=0, ceiling=20, share=False, unreadable=False):
         box = FakeOutbox(items, close_raises=close_raises)
         sent = []
 
@@ -128,7 +128,7 @@ def run(tmp_path, monkeypatch):
         monkeypatch.setattr(sfs, "daily_cap", lambda: cap)
         monkeypatch.setattr(sfs, "total_ceiling", lambda: ceiling)
         monkeypatch.setattr(sfs, "followups_share_cap", lambda: share)
-        monkeypatch.setattr(sfs, "approved_recipients", lambda: set(
+        monkeypatch.setattr(sfs, "approved_recipients", (lambda: None) if unreadable else lambda: set(
             allowed if allowed is not None
             else [it["title"].split()[-1].lower() for it in items]))
         monkeypatch.setattr(sfs, "stamp_tracker", lambda who: calls["stamped"].append(who))
@@ -302,6 +302,17 @@ def test_the_watchdog_says_which_email_it_cut_off(tmp_path, monkeypatch, phase, 
 def test_the_logger_cannot_kill_the_run(monkeypatch):
     monkeypatch.setattr(sfs, "LOG", "/nonexistent-dir-for-tests/splitframe_send.log")
     sfs.log("this must not raise")
+
+
+def test_an_unreadable_tracker_stands_the_run_down_without_holding_anything(run):
+    """2026-09-24 10:57 and 11:07: an evicted tracker made every recipient read as unapproved, so
+    thirteen written follow-ups were held, pushed 6 hours back, and Alex got a nudge for each.
+    Unreadable is "don't know", not "no": send nothing, hold nothing, nudge nobody."""
+    items = [_draft(8, "fu@b.com"), _draft(7, "fu2@c.com")]
+    box, sent, log = run(items, unreadable=True)
+    assert sent == [] and box.snoozed == [] and box.armed == []
+    assert run.calls["nudged"] == []
+    assert "nothing sent and nothing held" in log
 
 
 if __name__ == "__main__":
