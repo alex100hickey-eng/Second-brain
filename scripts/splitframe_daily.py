@@ -714,7 +714,9 @@ STALE_DRAFT_DAYS = 3
 def _queued_age_days(entry, now=None) -> float:
     """How long this draft has been sitting. Unparseable or missing reads as 0 — an unknown age
     must not silently block a send; only a KNOWN old one does."""
-    raw = (entry.get("queued_at") or "").strip()
+    # A revise re-reads the facts (fresh clip, fresh ad-library read), which is what the stale
+    # rule guards against, so the clock restarts at revised_at when there is one.
+    raw = (entry.get("revised_at") or entry.get("queued_at") or "").strip()
     if not raw:
         return 0.0
     try:

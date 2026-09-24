@@ -885,3 +885,15 @@ def test_an_unreadable_tracker_does_not_silently_stop_first_touches(monkeypatch)
     monkeypatch.undo()
     monkeypatch.setattr(sfd, "TRACKER", "/nonexistent-dir-for-tests/tracker.csv")
     assert sfd.followups_due_today() == 0
+
+
+def test_revised_draft_is_not_stale():
+    """A revise re-reads the facts, so the stale clock restarts at revised_at."""
+    import sys, os
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
+    import splitframe_daily as sd
+    from datetime import datetime, timedelta
+    old = (datetime.now(sd.LOCAL_TZ) - timedelta(days=5)).isoformat()
+    fresh = datetime.now(sd.LOCAL_TZ).isoformat()
+    assert sd._queued_age_days({"queued_at": old}) > sd.STALE_DRAFT_DAYS
+    assert sd._queued_age_days({"queued_at": old, "revised_at": fresh}) < 1
