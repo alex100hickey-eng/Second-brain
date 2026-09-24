@@ -26,7 +26,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from . import backtest, calibration, config, notify, pairs
+from . import backtest, calibration, compounding, config, notify, pairs
 from .execution import Executor
 from .feeds import offshore
 from .feeds.usvenue import USVenue, buckets_from_markets
@@ -242,6 +242,8 @@ class Runner:
             bal = self.us.account_value_usd()
             if bal is not None:
                 self.cfg.bankroll_usd = bal
+        self.compounding = compounding.apply(self.cfg, self.ledger, persist=False) \
+            if getattr(self.cfg, "compounding", False) else {"on": False}
         self.weather_modules = {
             "weather_hold": WeatherHold(self.cfg),
             "weather_obs": WeatherObs(self.cfg),
@@ -982,7 +984,19 @@ class Runner:
             return False
         self._cfg_mtime = mtime
         before = dict(self.cfg.modes)
-        self.cfg = config.load()
+        old = self.cfg
+        self.cfg = config.load(config.CONFIG_PATH)
+        # The bankroll is read from the account, not the file, and every component holds its own
+        # reference to the config: re-point them all. Before this, a hot reload changed only the
+        # runner's copy — the risk manager kept the old arb_live_ok and caps, and bankroll fell back
+        # to config.json's 200 — so flipping a switch by editing the file did not really flip it.
+        self.cfg.bankroll_usd = old.bankroll_usd
+        for obj in [self.risk, self.executor, self.arb, *self.weather_modules.values(),
+                    *self.other_modules.values()]:
+            if hasattr(obj, "cfg"):
+                obj.cfg = self.cfg
+        if getattr(self.cfg, "compounding", False):
+            self.compounding = compounding.apply(self.cfg, self.ledger, persist=False)
         self.ledger.gate_since_ts = self.cfg.gate_since_ts
         self.ledger.min_us_signals = self.cfg.min_us_signals
         changed = {m: (before.get(m), v) for m, v in self.cfg.modes.items() if before.get(m) != v}
@@ -1199,7 +1213,9 @@ class Runner:
                         self._ran("hold_favorites_us")
                         self.log(f"  hold_favorites (US books): {n} signal(s)")
                     if now.hour == 7 and now.minute == 0:
+                        self.compounding = compounding.apply(self.cfg, self.ledger)
                         self.log(self.report(1))
+                        self.log("  " + compounding.describe(self.compounding, self.cfg))
                         promoted = self.promote() if self.cfg.auto_promote else []
                         line = self.ledger.summary(1)
                         if not promoted:

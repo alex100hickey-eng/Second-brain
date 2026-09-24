@@ -3683,3 +3683,56 @@ def test_the_recorder_samples_the_events_of_open_us_positions():
     rec = pairs.PairRecorder(led, US(), clock=lambda: 1000.0, offshore_prices=lambda toks: {})
     got = rec.record([], extra_events=["gov-shutdown-oct"])
     assert got.get("watched") == 1 and led.snapshots("us", "shut-oct1", 0)
+
+
+def test_compounding_is_off_by_default_and_moves_nothing_until_live_profit_is_banked(tmp_path):
+    from polybot import compounding as C
+    from polybot.strategies.base import Signal
+    cfg, led = config.Config(), _ledger()
+    path = str(tmp_path / "state.json")
+    assert C.apply(cfg, led, path=path) == {"on": False} and cfg.caps.max_exposure_usd == 180.0
+    cfg.compounding = True
+    now = time.time()
+    info = C.apply(cfg, led, now=now, path=path)
+    assert info["basis"] == 200.0
+    assert (cfg.caps.max_per_market_usd, cfg.caps.max_exposure_usd, cfg.caps.daily_loss_stop_usd,
+            cfg.caps.bankroll_floor_usd, cfg.arb_max_set_cost_usd, cfg.arb_max_risk_usd) == (20, 180, 20, 120, 120, 15)
+
+    def live_trade(ts, pnl):
+        sid = led.add_signal(Signal("bucket_sum", "us", f"m{ts}", "x", "BUY_YES", 0.5, 10, 1, "r"), "live")
+        led.conn.execute("UPDATE signals SET ts=? WHERE id=?", (ts, sid))
+        led.upsert_paper(sid, filled_ts=ts, fill_price=0.5, exit_ts=ts + 60, pnl_usd=pnl, status="closed")
+    # a loss shrinks the caps the same day
+    live_trade(now + 60, -10.0)
+    info = C.apply(cfg, led, now=now + 120, path=path)
+    assert info["basis"] == 190.0 and cfg.caps.max_exposure_usd == pytest.approx(171.0)
+    # 14 live days in profit with a small drawdown: the checkpoint banks the profit
+    for d in range(1, 15):
+        live_trade(now + d * 86400, 3.0)
+    info = C.apply(cfg, led, now=now + 15 * 86400, path=path)
+    assert info["stepped"] and info["banked"] == pytest.approx(232.0)          # 200 - 10 + 14 x 3
+    assert cfg.caps.max_exposure_usd == pytest.approx(180 * 232 / 200)
+    # a record that is not consistent (drawdown over 10% of the basis) banks nothing
+    rec = {"live_days": 20, "net": 5.0, "max_drawdown": 30.0, "fill_rate": 0.9}
+    assert C.consistent(rec, 232.0, cfg)[0] is False
+
+
+def test_a_config_hot_reload_reaches_every_component_and_keeps_the_account_bankroll(tmp_path, monkeypatch):
+    """A hot reload used to change only the runner's copy: the risk manager kept the old
+    arb_live_ok and caps, and the bankroll fell back to the file's 200."""
+    import json as _json
+    import polybot.config as cfgmod
+    from polybot.runner import Runner
+    path = str(tmp_path / "config.json")
+    cfgmod.save(cfgmod.Config(), path)
+    monkeypatch.setattr(cfgmod, "CONFIG_PATH", path)
+    r = Runner(cfg=cfgmod.load(path), ledger=_ledger(), log=lambda *_: None)
+    r.cfg.bankroll_usd = 208.06                 # as read from the account
+    raw = _json.load(open(path))
+    raw["arb_live_ok"] = True
+    with open(path, "w") as f:
+        _json.dump(raw, f)
+    os.utime(path, (time.time() + 5, time.time() + 5))
+    assert r.reload_config_if_changed()
+    assert r.risk.cfg is r.cfg and r.arb.cfg is r.cfg and r.other_modules["maker_rewards"].cfg is r.cfg
+    assert r.risk.cfg.arb_live_ok is True and r.cfg.bankroll_usd == 208.06
