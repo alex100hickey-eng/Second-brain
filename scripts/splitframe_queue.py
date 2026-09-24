@@ -1501,6 +1501,73 @@ def cmd_sweep(args) -> int:
     return 0
 
 
+def plan_recheck(rows: list, status: str, checked: str, why: str, today: str) -> list:
+    """[(row, changes)] that put a Hunter result back in line for another search. Pure.
+
+    A result recorded while Hunter was not really answering is not a result: on 2026-09-15 the
+    quota was at 49/50 and a failed domain search then read as none-found. fill_contacts skips any
+    row with an email_status, and hunter_targets skips a checked row with no address at all, so
+    such a brand was never searched again. Only unsent rows, only the exact status and date asked
+    for, and the reason goes into the notes."""
+    out = []
+    for r in rows:
+        if _c(r.get("email_status")) != status or not _c(r.get("email_checked")).startswith(checked):
+            continue
+        if _c(r.get("email")) or _c(r.get("sent_date")) or _c(r.get("replied")) or _c(r.get("outcome")):
+            continue
+        note = f"re-search: {why} ({today})"
+        notes = _c(r.get("notes"))
+        out.append((r, {"email_status": "", "email_checked": "",
+                        "notes": f"{notes} · {note}" if notes else note}))
+    return out
+
+
+def plan_annotate(rows: list, brand: str, text: str, today: str):
+    """(row, new notes) for a dated note on one brand's row, or (None, why). Pure."""
+    row = next((r for r in rows if _c(r.get("brand")).lower() == _c(brand).lower()), None)
+    if row is None:
+        return None, f"no tracker row for {brand!r}"
+    if not _c(text):
+        return None, "empty note"
+    notes = _c(row.get("notes"))
+    entry = f"{_c(text)} ({today})"
+    if entry in notes:
+        return None, "that note is already there"
+    return row, (f"{notes} · {entry}" if notes else entry)
+
+
+def cmd_recheck(args) -> int:
+    rows, fields = tracker_rows()
+    plan = plan_recheck(rows, args.status, args.checked, args.why, today_local())
+    for r, _c2 in plan:
+        print(f"{'RECHECK' if args.write else 'would recheck'}: {r.get('brand')} ({r.get('domain')})")
+    if not plan:
+        print("nothing matches")
+        return 0
+    if args.write:
+        for r, changes in plan:
+            r.update(changes)
+        bak = write_tracker(rows, fields, "recheck")
+        print(f"tracker written; backup at {os.path.basename(bak)}")
+    else:
+        print("dry run; add --write to apply")
+    return 0
+
+
+def cmd_annotate(args) -> int:
+    rows, fields = tracker_rows()
+    row, notes = plan_annotate(rows, args.brand, args.text, today_local())
+    if row is None:
+        print(f"NOT annotated: {notes}")
+        return 1
+    print(f"{'ANNOTATE' if args.write else 'would annotate'}: {row.get('brand')}: {notes[-160:]}")
+    if args.write:
+        row["notes"] = notes
+        bak = write_tracker(rows, fields, "annotate")
+        print(f"tracker written; backup at {os.path.basename(bak)}")
+    return 0
+
+
 def cmd_note(args) -> int:
     rows, fields = tracker_rows()
     row = next((r for r in rows if _c(r.get("brand")).lower() == _c(args.brand).lower()), None)
@@ -1588,6 +1655,17 @@ def main(argv=None) -> int:
     nm.add_argument("--limit", type=int, default=20)
     nm.add_argument("--write", action="store_true", help="write the tracker (its owner only)")
     nm.set_defaults(fn=cmd_named)
+    rc = sub.add_parser("recheck", help="put suspect Hunter results back in line for a new search")
+    rc.add_argument("--status", default="none-found")
+    rc.add_argument("--checked", required=True, help="the email_checked date to clear (YYYY-MM-DD)")
+    rc.add_argument("--why", required=True, help="one line: why that result is not trusted")
+    rc.add_argument("--write", action="store_true")
+    rc.set_defaults(fn=cmd_recheck)
+    an = sub.add_parser("annotate", help="add a dated note to one brand's tracker row")
+    an.add_argument("--brand", required=True)
+    an.add_argument("--text", required=True)
+    an.add_argument("--write", action="store_true")
+    an.set_defaults(fn=cmd_annotate)
     sw = sub.add_parser("sweep", help="close out brands worked to the last touch with no reply")
     sw.add_argument("--write", action="store_true")
     sw.set_defaults(fn=cmd_sweep)

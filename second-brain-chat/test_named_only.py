@@ -295,6 +295,35 @@ def test_named_to_apply_counts_only_addresses_not_yet_on_their_rows():
     assert sq.named_to_apply([_hm()], [_p(email_status="candidate")]) == 0, "a guess is never applied"
 
 
+def test_recheck_frees_suspect_none_found_rows_for_another_search():
+    rows = [_row(brand="SheFit", email_status="none-found", email_checked="2026-09-15",
+                 notes="adlib 30 active [read live 2026-09-15]"),
+            _row(brand="Brightland", email_status="none-found", email_checked="2026-09-15",
+                 sent_date="2026-09-19"),                                   # already emailed: left alone
+            _row(brand="Other day", email_status="none-found", email_checked="2026-09-10"),
+            _row(brand="Real hit", email_status="deliverable", email_checked="2026-09-15")]
+    plan = sq.plan_recheck(rows, "none-found", "2026-09-15", "quota at 49/50", "2026-09-24")
+    assert [r["brand"] for r, _c in plan] == ["SheFit"]
+    changes = plan[0][1]
+    assert changes["email_status"] == "" and changes["email_checked"] == ""
+    assert changes["notes"] == "adlib 30 active [read live 2026-09-15] · re-search: quota at 49/50 (2026-09-24)"
+    # contact_finder.fill_contacts skips any row with an email or an email_status: that is the lock
+    skipped = lambda r: bool((r.get("email") or "").strip() or (r.get("email_status") or "").strip())
+    assert skipped(rows[0]), "locked before the recheck"
+    rows[0].update(changes)
+    assert not skipped(rows[0]), "fill_contacts will search it again"
+    assert "SheFit" in [h["brand"] for h in sq.hunter_targets(rows)], "and it is still on the Hunter list"
+
+
+def test_annotate_adds_one_dated_note_and_refuses_a_duplicate():
+    rows = [_row(brand="Fable Pets", notes="sourced 09-01")]
+    row, notes = sq.plan_annotate(rows, "fable pets", "first touch sent twice 09-01", "2026-09-24")
+    assert notes == "sourced 09-01 · first touch sent twice 09-01 (2026-09-24)"
+    row["notes"] = notes
+    assert sq.plan_annotate(rows, "Fable Pets", "first touch sent twice 09-01", "2026-09-24")[0] is None
+    assert sq.plan_annotate(rows, "Nobody", "x", "2026-09-24")[0] is None
+
+
 def test_readdressing_stays_on_the_same_brand_and_needs_a_named_address():
     rows = [_hm(email="brock@highmesachile.co", contact_name="Brock Giles"),
             _row(brand="Other", email_generic="hi@other.com", domain="other.com")]
