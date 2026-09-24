@@ -207,7 +207,7 @@ GATE_RE = re.compile(r"^\s*gate (\w+)\s+(hold|PASS)\s*[—-]\s*(.*)$")
 
 
 def polybot_metrics() -> dict:
-    out = dict(alive=False, gates={}, passing=[], error="")
+    out = dict(alive=False, gates={}, passing=[], etas={}, accrual="", error="")
     try:
         age = time.time() - os.path.getmtime(POLYBOT_LOG)
         out["alive"] = age < 15 * 60
@@ -218,12 +218,22 @@ def polybot_metrics() -> dict:
         r = subprocess.run([sys.executable, "-m", "polybot.runner", "report", "--days", "1"],
                            capture_output=True, text=True, timeout=90,
                            cwd=os.path.join(ROOT, "second-brain-chat"))
+        out["etas"], out["accrual"] = {}, ""
+        last = None
         for line in r.stdout.splitlines():
             m = GATE_RE.match(line)
             if m:
-                out["gates"][m.group(1)] = m.group(3).strip()
+                last = m.group(1)
+                out["gates"][last] = m.group(3).strip()
                 if m.group(2) == "PASS":
-                    out["passing"].append(m.group(1))
+                    out["passing"].append(last)
+                continue
+            e = re.match(r"^\s*eta (.*)$", line)
+            if e and last:
+                out["etas"][last] = e.group(1).strip()
+                continue
+            if "incentive accrual" in line:
+                out["accrual"] = line.strip()
     except Exception as exc:                        # noqa: BLE001
         out["error"] = str(exc)[:80]
     return out
@@ -508,6 +518,11 @@ def main(argv) -> int:
     gates = ", ".join(f"{k} {v}" for k, v in pb["gates"].items()) or pb.get("error") or "no report"
     L.append(f"- **D Polybot:** loop {'alive' if pb['alive'] else 'NOT alive'}; gates: {gates}."
              + (f" PASSING: {', '.join(pb['passing'])}" if pb["passing"] else ""))
+    etas = [f"{k}: {v.split('->')[-1].strip()}" for k, v in pb.get("etas", {}).items() if "->" in v]
+    if etas:
+        L.append("  - days to gate: " + "; ".join(etas))
+    if pb.get("accrual"):
+        L.append("  - " + pb["accrual"])
     L.append("")
     L.append(f"## Blocked on Alex ({bl['dated'] + len(bl['numbered'])} items in NEEDS_ALEX)")
     for n in bl["numbered"][:8]:
@@ -545,7 +560,7 @@ def main(argv) -> int:
                    submitted_in_window=cl["submitted_in_window"], submitted_late=cl["submitted_late"],
                    unsubmitted=cl["unsubmitted"], usd_approved=round(cl["usd_approved"], 2),
                    usd_settled=round(cl["usd_settled"], 2)),
-            D=dict(alive=pb["alive"], gates=pb["gates"], passing=pb["passing"]),
+            D=dict(alive=pb["alive"], gates=pb["gates"], passing=pb["passing"], etas=pb.get("etas", {}), accrual=pb.get("accrual", "")),
         ),
         blockers=dict(count=bl["dated"] + len(bl["numbered"]), items=bl["numbered"][:8]),
         activity=feed,
