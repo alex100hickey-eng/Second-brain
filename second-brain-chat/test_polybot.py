@@ -3648,3 +3648,38 @@ def test_the_report_says_how_many_days_each_gate_is_away():
     assert "no ETA" in led.gate_eta("leadlag", now=now)
     text = led.report(1)
     assert "eta 14/30 decisions" in text and "leadlag closed positions since the reset: 0/20" in text
+
+
+def test_hold_favorites_scans_the_us_books_and_leaves_temperature_to_the_weather_modules():
+    """Offshore-only, hold_favorites could never reach the 10 US signals the gate asks for."""
+    end = datetime.fromtimestamp(time.time() + 2 * 86400, ZoneInfo("UTC")).strftime("%Y-%m-%dT%H:%M:%SZ")
+    q = lambda v: {"value": str(v)}
+    events = [
+        {"slug": "gov-shutdown-oct", "title": "Government Shutdown?", "category": "politics", "endDate": end,
+         "markets": [{"slug": "shut-oct1", "title": "By October 1", "status": "MARKET_STATUS_OPEN",
+                      "bestBidQuote": q(0.86), "bestAskQuote": q(0.88)}]},
+        {"slug": "temp-nychigh-2026-09-25", "title": "NYC high", "category": "climate", "endDate": end,
+         "markets": [{"slug": "tc-temp-a", "title": "80 to 81", "bestBidQuote": q(0.86), "bestAskQuote": q(0.88)}]},
+        {"slug": "closed-one", "title": "X?", "category": "politics", "endDate": end,
+         "markets": [{"slug": "c1", "title": "Yes", "status": "MARKET_STATUS_CLOSED",
+                      "bestBidQuote": q(0.86), "bestAskQuote": q(0.88)}]},
+    ]
+    table = {"all": {"0.85-0.90": {"n": 60, "yes": 59}}}
+    sigs = HoldFavorites(_cfg(), table).scan_us(events)
+    assert [(s.venue, s.market, s.price, s.meta["us_event"]) for s in sigs] == [("us", "shut-oct1", 0.87, "gov-shutdown-oct")]
+
+
+def test_the_recorder_samples_the_events_of_open_us_positions():
+    from polybot import pairs
+
+    class US:
+        available = True
+        def events_by_slug(self, slugs):
+            assert "gov-shutdown-oct" in slugs
+            return {"gov-shutdown-oct": {"slug": "gov-shutdown-oct", "markets": [
+                {"slug": "shut-oct1", "bestBidQuote": {"value": "0.86"}, "bestAskQuote": {"value": "0.88"}}]}}
+
+    led = _ledger()
+    rec = pairs.PairRecorder(led, US(), clock=lambda: 1000.0, offshore_prices=lambda toks: {})
+    got = rec.record([], extra_events=["gov-shutdown-oct"])
+    assert got.get("watched") == 1 and led.snapshots("us", "shut-oct1", 0)

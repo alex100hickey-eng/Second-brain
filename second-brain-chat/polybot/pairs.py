@@ -336,8 +336,9 @@ class PairRecorder:
             return None, None
         return hit[1], hit[2]
 
-    def record(self, pairs: list) -> dict:
-        """Sample both sides of the first `max_events` US events' worth of pairs."""
+    def record(self, pairs: list, extra_events=()) -> dict:
+        """Sample both sides of the first `max_events` US events' worth of pairs, plus `extra_events`
+        (US events with an open position elsewhere) on the US side only."""
         ts = self.clock()
         events, chosen = [], []
         for p in pairs:
@@ -349,13 +350,14 @@ class PairRecorder:
                     continue
                 events.append(ev)
             chosen.append(p)
+        extra = [e for e in (extra_events or ()) if e and e not in events][:20]
         got = {"events": len(events), "us": 0, "offshore": 0}
-        if not chosen:
+        if not chosen and not extra:
             return got
-        us_quotes = {}
+        us_quotes, market_event = {}, {}
         if self.us is not None and self.us.available:
             try:
-                got_events = self.us.events_by_slug(events) or {}
+                got_events = self.us.events_by_slug(events + extra) or {}
             except Exception as exc:            # a campus-wifi timeout costs this tick's US half, no more
                 self.log(f"  pairs: US quotes failed ({type(exc).__name__})")
                 got_events = {}
@@ -363,6 +365,7 @@ class PairRecorder:
                 for m in e.get("markets") or []:
                     if not m.get("slug"):
                         continue
+                    market_event[m["slug"]] = slug
                     if _market_closed(m):
                         # A US market that stops trading keeps publishing its last quotes. On
                         # 2026-09-23 "Trump Jr. for 2028 GOP VP" closed mid-day still showing 0.93/0.94,
@@ -372,6 +375,11 @@ class PairRecorder:
                         self.quotes.pop(m["slug"], None)
                         continue
                     us_quotes[m["slug"]] = _us_quote(m)
+        extra_set = set(extra)
+        for slug, (bid, ask) in us_quotes.items():      # the watched events: US books only
+            if market_event.get(slug) in extra_set and (bid is not None or ask is not None):
+                self._push("us", slug, bid, ask, ts)
+                got["watched"] = got.get("watched", 0) + 1
         try:
             off = self.offshore_prices([p["offshore_token"] for p in chosen]) or {}
         except Exception as exc:

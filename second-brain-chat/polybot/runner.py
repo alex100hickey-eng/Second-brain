@@ -868,15 +868,35 @@ class Runner:
     def record_pairs(self) -> int:
         """Sample both sides of every recorded pair, then run leadlag on the fresh paths."""
         rows = self.leadlag_pairs()
-        if not rows or not self.us.available:
+        if not (rows or self.watched_us_events()) or not self.us.available:
             return 0
-        got = self.pair_rec.record(rows)
+        got = self.pair_rec.record(rows, extra_events=self.watched_us_events())
         n = self.scan_other(modules=["leadlag"])
         if time.time() - getattr(self, "_pairs_logged", 0.0) >= 3600:
             self._pairs_logged = time.time()
             self.log(f"  pairs: recording {got['events']} US events every {pairs.RECORD_INTERVAL_S:.0f}s — "
                      f"{got['us']} US and {got['offshore']} offshore quotes this tick")
         return n
+
+    def scan_hold_favorites_us(self) -> int:
+        """hold_favorites on Polymarket US's own books, so it can earn the US evidence the gate needs."""
+        strat = self.other_modules["hold_favorites"]
+        events = list(self.us.events_by_category(PAIR_US_CATEGORIES).values())
+        n = 0
+        for sig in strat.scan_us(events):
+            if self.handle(sig) in ("paper", "signal", "live"):
+                n += 1
+        return n
+
+    def watched_us_events(self) -> list:
+        """US events holding an open position that nothing else samples (hold_favorites' US path):
+        paper needs their books to fill, mark and exit them."""
+        out = []
+        for r in self.ledger.open_signals(module="hold_favorites", venue="us"):
+            ev = json.loads(r["meta"] or "{}").get("us_event")
+            if ev and ev not in out:
+                out.append(ev)
+        return out
 
     def record_maker(self) -> int:
         """One maker_rewards tick: read the quoted and scouted books, book fills as paper signals,
@@ -1170,6 +1190,14 @@ class Runner:
                             n = self.scan_other(modules=["hold_favorites"])
                         self._ran("hold_favorites")
                         self.log(f"  hold_favorites: {n} signal(s)")
+                    # The US half of hold_favorites: ~20 catalogue calls, so outside the arb window.
+                    if (self.us.available and self.cfg.mode("hold_favorites") != "off"
+                            and self._due("hold_favorites_us", now, (8, 20), quiet_hours=ARB_HOURS)):
+                        self._attempt("hold_favorites_us")
+                        with self._long_job("hold_favorites_us", grace_s=600):
+                            n = self.scan_hold_favorites_us()
+                        self._ran("hold_favorites_us")
+                        self.log(f"  hold_favorites (US books): {n} signal(s)")
                     if now.hour == 7 and now.minute == 0:
                         self.log(self.report(1))
                         promoted = self.promote() if self.cfg.auto_promote else []
