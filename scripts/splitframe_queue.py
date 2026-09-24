@@ -1018,8 +1018,9 @@ def plan_named(rows: list, proposals: list) -> list:
 
     A name only replaces an empty contact_name or a bare first name it extends ("Josh" ->
     "Josh Allen"), never a different person. An address is applied only when USABLE, on the
-    brand's own mail domain, and not a ticket desk. The front desk it replaces is kept in
-    email_generic, so nothing is lost."""
+    brand's own mail domain, not a ticket desk, and the row hasn't been emailed yet (its
+    follow-ups find their thread by the address it was sent to). The front desk it replaces is
+    kept in email_generic, so nothing is lost."""
     out = []
     for p in proposals:
         row = _row_for(rows, p)
@@ -1046,6 +1047,13 @@ def plan_named(rows: list, proposals: list) -> list:
                 notes.append(f"{email} is not on the brand's own mail domain; not applied")
             elif _sfd.is_ticket_desk(email):
                 notes.append(f"{email} is a ticket desk; not applied")
+            elif _c(row.get("sent_date")) and _sfd.target_address(row)[0].lower() != email:
+                # Follow-ups reply on the thread of the message sent to the row's current
+                # address (splitframe_daily finds it by that address). Swap the address after
+                # the send and that search comes back empty, so every follow-up is skipped.
+                notes.append(f"{email}: already emailed at {_sfd.target_address(row)[0]} on "
+                             f"{_c(row.get('sent_date'))}, and its follow-ups reply on that "
+                             f"thread; not applied")
             elif _c(row.get("email")).lower() != email:
                 changes["email"] = email
                 changes["email_status"] = "deliverable" if status == "verified" else "published"

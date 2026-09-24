@@ -192,6 +192,16 @@ def test_a_name_never_replaces_a_different_person_but_extends_a_first_name():
     assert changes["contact_name"] == "Brock Giles"
 
 
+def test_an_already_emailed_desk_keeps_its_address_so_follow_ups_still_find_the_thread():
+    sent = _hm(email="info@highmesachile.co", sent_date="2026-09-20")
+    ((row, changes, notes),) = sq.plan_named([sent], [_p()])
+    assert "email" not in changes, "the follow-up drafter looks up the sent message by this address"
+    assert any("already emailed at info@highmesachile.co" in n for n in notes)
+    assert changes["contact_name"] == "Brock Giles", "the name still lands"
+    ((_r, changes, _n),) = sq.plan_named([_hm()], [_p()])
+    assert changes["email"] == "brock@highmesachile.co", "an unsent row still takes the founder"
+
+
 def test_an_address_off_the_brands_own_domain_is_refused():
     ((_r, changes, notes),) = sq.plan_named([_hm()], [_p(named_email="brock@gmail.com")])
     assert "email" not in changes and any("own mail domain" in n for n in notes)
