@@ -117,6 +117,27 @@ def _now():
     return datetime.now(LOCAL_TZ) if LOCAL_TZ else datetime.now()
 
 
+def money_line(today=None) -> str:
+    """The money scoreboard as one line: Money/progress-line.txt, which scripts/money_progress.py
+    writes on the Mac (07:30 and 21:30) and vault sync carries here. "" when it's missing. A line
+    more than a day old says so instead of passing for today's score."""
+    vault = os.environ.get("VAULT_PATH") or os.path.expanduser(
+        "~/Library/Mobile Documents/com~apple~CloudDocs/Obsidian/Second brain")
+    try:
+        with open(os.path.join(vault, "Money", "progress-line.txt"), encoding="utf-8") as f:
+            line = next((ln.strip() for ln in f if ln.strip()), "")
+    except OSError:
+        return ""
+    m = _re.match(r"Money (\d{4}-\d{2}-\d{2}):", line)
+    if line and m and today is not None:
+        try:
+            if (today - datetime.strptime(m.group(1), "%Y-%m-%d").date()).days > 1:
+                line = f"(stale since {m.group(1)}) {line}"
+        except ValueError:
+            pass
+    return line[:170]
+
+
 # ============================================================
 # Config + nudge ledger (Supabase-backed, cross-device)
 # ============================================================
@@ -958,6 +979,11 @@ def run_awareness_pass(force: bool = False) -> str:
                         f"{d['what'][:60]}")
         for t in picture["open_tasks"][:max(0, 3 - len(head))]:
             head.append(f"• open: {t[:60]}")
+        if cfg_key == "morning_brief":
+            # Last, so it never displaces an order or a deadline: the day's money score.
+            ml = money_line(now.date())
+            if ml:
+                head.append(f"• {ml}")
         if cfg_key == "morning_brief":
             n_wait = len(picture["waiting"]) + len(picture["approvals"])
             title = (f"{emoji} Today: {len(picture['due_soon'])} deadline(s), "
