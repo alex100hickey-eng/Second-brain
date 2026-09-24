@@ -3473,3 +3473,36 @@ def test_hold_favorites_reads_the_price_it_would_post_not_the_last_mark():
         ev(3, 0.04, 0.12, 0.14, "Will it happen by Friday?"),   # longshot read at its BID (0.12), not the 4c mark
     ])
     assert sorted((s.market, s.side, s.price) for s in sigs) == [("t2", "BUY_YES", 0.87), ("t3", "BUY_NO", 0.89)]
+
+
+def test_model_runs_are_compared_within_one_venue():
+    """US and offshore scans of one city-day alternated in model_runs, so last_model_run handed each
+    the other's run and only 29 of 260 US runs (09-12..18) were ever compared against a US run."""
+    led = _ledger()
+    led.add_model_run("nyc", "2026-09-24", "high", [0.1] * 6, ts=100, venue="us")
+    led.add_model_run("nyc", "2026-09-24", "high", [0.1] * 11, ts=200, venue="offshore")
+    assert len(led.last_model_run("nyc", "2026-09-24", "high", venue="us")["probs"]) == 6
+    assert len(led.last_model_run("nyc", "2026-09-24", "high", venue="offshore")["probs"]) == 11
+    assert len(led.last_model_run("nyc", "2026-09-24", "high")["probs"]) == 11      # no venue: newest, as before
+
+    # the module itself asks for its own venue and records under it
+    ctx = _ctx()
+    ctx.venue = "us"
+    mod = WeatherModelUpdate(_cfg(), led)
+    mod.scan(ctx)
+    row = led.conn.execute("SELECT venue FROM model_runs ORDER BY ts DESC LIMIT 1").fetchone()
+    assert row["venue"] == "us"
+
+
+def test_the_loop_keeps_recording_model_runs_while_model_update_is_off(monkeypatch):
+    from polybot import runner as runner_mod
+    cfg, led = _cfg(), _ledger()
+    cfg.modes["weather_model_update"] = "off"
+    r = runner_mod.Runner(cfg, led, log=lambda *_: None)
+    ctx = _ctx()
+    monkeypatch.setattr(runner_mod, "build_ctx", lambda *a, **k: ctx)
+    r._scan_one("nyc", "high", 0, ["weather_lock"], False, "offshore", None)
+    row = led.conn.execute("SELECT city, venue, probs FROM model_runs").fetchone()
+    assert row["city"] == "nyc" and row["venue"] == "offshore" and json.loads(row["probs"]) == ctx.model_probs
+    r._scan_one("nyc", "high", 0, ["bucket_sum"], True, "offshore", None)          # the light arb sweep writes none
+    assert led.conn.execute("SELECT COUNT(*) FROM model_runs").fetchone()[0] == 1

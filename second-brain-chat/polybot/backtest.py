@@ -305,7 +305,7 @@ class _PrevRuns:
     def __init__(self):
         self.prev = None
 
-    def last_model_run(self, city, date, kind):
+    def last_model_run(self, city, date, kind, venue=None):
         return self.prev
 
     def add_model_run(self, *a, **k):
@@ -316,10 +316,13 @@ def _stored_runs(db_path: str) -> dict:
     import sqlite3
     conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     groups: dict = {}
-    for ts, city, date, kind, probs in conn.execute(
-            "SELECT ts, city, date, kind, probs FROM model_runs ORDER BY ts"):
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(model_runs)")}
+    sel = "venue" if "venue" in cols else "NULL"
+    for ts, city, date, kind, probs, v in conn.execute(
+            f"SELECT ts, city, date, kind, probs, {sel} FROM model_runs ORDER BY ts"):
         p = json.loads(probs)
-        venue = "us" if len(p) == US_BUCKETS else "offshore"
+        # Runs written since the venue column exists say whose they are; older ones only by length.
+        venue = v or ("us" if len(p) == US_BUCKETS else "offshore")
         groups.setdefault((venue, city, date, kind), []).append((ts, p))
     conn.close()
     return groups

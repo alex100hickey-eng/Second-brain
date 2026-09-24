@@ -326,8 +326,8 @@ class WeatherModelUpdate(Strategy):
     def scan(self, ctx: WeatherCtx) -> list:
         out = []
         raw = ctx.model_probs or ctx.probs      # compare model runs, not observation-driven shifts
-        prev = self.ledger.last_model_run(ctx.city, ctx.date, ctx.kind)
-        self.ledger.add_model_run(ctx.city, ctx.date, ctx.kind, raw)
+        prev = self.ledger.last_model_run(ctx.city, ctx.date, ctx.kind, venue=ctx.venue)
+        self.ledger.add_model_run(ctx.city, ctx.date, ctx.kind, raw, venue=ctx.venue)
         if not prev or len(prev["probs"]) != len(raw):
             return out
         for b, p_now, p_prev in zip(ctx.event.buckets, raw, prev["probs"]):

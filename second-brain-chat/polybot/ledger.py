@@ -115,6 +115,9 @@ class Ledger:
         for col in ("bid_ladder", "ask_ladder"):
             if col not in have:
                 self.conn.execute(f"ALTER TABLE snapshots ADD COLUMN {col} TEXT")
+        # Both venues write model runs for the same city-day, so a run has to say whose it is (below).
+        if "venue" not in {r[1] for r in self.conn.execute("PRAGMA table_info(model_runs)")}:
+            self.conn.execute("ALTER TABLE model_runs ADD COLUMN venue TEXT")
         self.conn.commit()
         self.gate_since_ts = 0.0     # set by the runner from config: evidence before a rule change doesn't count
         self.min_us_signals = 10     # set by the runner from config: the gate's US-evidence floor
@@ -216,15 +219,27 @@ class Ledger:
         return [dict(r) for r in self.conn.execute(
             "SELECT * FROM snapshots WHERE venue=? AND market=? AND ts>=? ORDER BY ts", (venue, market, since_ts))]
 
-    def add_model_run(self, city, date, kind, probs: list, ts=None) -> None:
-        self.conn.execute("INSERT INTO model_runs (ts, city, date, kind, probs) VALUES (?,?,?,?,?)",
-                          (ts or _now(), city, date, kind, json.dumps(probs)))
+    def add_model_run(self, city, date, kind, probs: list, ts=None, venue: str | None = None) -> None:
+        self.conn.execute("INSERT INTO model_runs (ts, city, date, kind, probs, venue) VALUES (?,?,?,?,?,?)",
+                          (ts or _now(), city, date, kind, json.dumps(probs), venue))
         self.conn.commit()
 
-    def last_model_run(self, city, date, kind):
-        r = self.conn.execute(
-            "SELECT * FROM model_runs WHERE city=? AND date=? AND kind=? ORDER BY ts DESC LIMIT 1",
-            (city, date, kind)).fetchone()
+    def last_model_run(self, city, date, kind, venue: str | None = None):
+        """The previous run for this city-day — of the SAME venue when one is named.
+
+        Without the venue, the US scan and the offshore scan of one city-day alternated in this
+        table, so `last_model_run` handed each the other's run: an 11-bucket offshore run against a
+        6-bucket US event. The length check dropped those silently, and only 29 of 260 US runs
+        (2026-09-12..18) were ever compared against a US run — weather_model_update was never
+        really tested on the venue that matters."""
+        if venue is None:
+            r = self.conn.execute(
+                "SELECT * FROM model_runs WHERE city=? AND date=? AND kind=? ORDER BY ts DESC LIMIT 1",
+                (city, date, kind)).fetchone()
+        else:
+            r = self.conn.execute(
+                "SELECT * FROM model_runs WHERE city=? AND date=? AND kind=? AND venue=? ORDER BY ts DESC LIMIT 1",
+                (city, date, kind, venue)).fetchone()
         if not r:
             return None
         d = dict(r)

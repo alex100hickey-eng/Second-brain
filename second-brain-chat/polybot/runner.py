@@ -739,6 +739,11 @@ class Runner:
                         n += 1
             except Exception as exc:
                 self.log(f"  {name} error: {exc}\n{traceback.format_exc(limit=2)}")
+        if not light and ctx.model_probs and self.cfg.mode("weather_model_update") == "off":
+            # Keep the evidence while the module is off. It writes its own runs when it is on; off, the
+            # loop wrote none after 2026-09-18, so the one question left about it — does it work on
+            # the US venue? — could never be replayed. ~30 rows an hour.
+            self.ledger.add_model_run(ctx.city, ctx.date, ctx.kind, list(ctx.model_probs), venue=venue)
         if confirm is not None:
             # The book was read and nothing was booked. Say why — once, not every 20 s sweep.
             kind_, days_, held_ = confirm_arb
