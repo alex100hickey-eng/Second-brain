@@ -3631,3 +3631,20 @@ def test_maker_rewards_quotes_accrues_and_books_a_fill_as_a_paper_position(monke
     from polybot.paper import fill_from_history
     s = dict(led.conn.execute("SELECT * FROM signals").fetchone())
     assert fill_from_history(s, []) == (s["ts"], 0.40)
+
+
+def test_the_report_says_how_many_days_each_gate_is_away():
+    from polybot.strategies.base import Signal
+    led = _ledger()
+    now = time.time()
+    led.gate_since_ts = now - 10 * 86400
+    for i in range(14):                       # 14 decisions in the last 7 days = 2/day
+        sid = led.add_signal(Signal("bucket_sum", "us", f"m{i}", "x", "BUY_YES", 0.3, 3.0, 5.0, "r",
+                                    arb=True, taker=True, meta={"group": f"g{i}"}), "paper")
+        led.conn.execute("UPDATE signals SET ts=? WHERE id=?", (now - (i % 7) * 86400 - 60, sid))
+    led.conn.commit()
+    eta = led.gate_eta("bucket_sum", now=now)
+    assert "14/30 decisions at 2.0/day" in eta and "~8 day(s)" in eta
+    assert "no ETA" in led.gate_eta("leadlag", now=now)
+    text = led.report(1)
+    assert "eta 14/30 decisions" in text and "leadlag closed positions since the reset: 0/20" in text

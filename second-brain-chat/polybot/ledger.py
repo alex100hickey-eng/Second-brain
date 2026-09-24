@@ -123,6 +123,9 @@ def _now() -> float:
     return time.time()
 
 
+LEADLAG_REFERENCE_REVIEW_AT = 20      # closed leadlag positions before the reference (A vs C) is decided
+
+
 class Ledger:
     def __init__(self, path: str = config.DB_PATH):
         self.path = path
@@ -445,6 +448,45 @@ class Ledger:
         return True, (f"{n} signals, {closed} closed, mtm {mtm:+.2f}, fills {filled / rows:.0%}, "
                       f"US {us_n} signals {us_mtm:+.2f}")
 
+    def closed_count(self, module: str) -> int:
+        since = float(self.gate_since_ts or 0.0)
+        r = self.conn.execute("SELECT COUNT(*) FROM signals s JOIN paper_trades p ON p.signal_id=s.id "
+                              "WHERE s.module=? AND s.ts>=? AND s.status!='void' AND p.status='closed'",
+                              (module, since)).fetchone()
+        return int(r[0] or 0)
+
+    def gate_eta(self, module: str, min_signals: int = 30, pace_days: float = 7.0, now: float | None = None):
+        """'16/30 decisions at 2.1/day (7d) ... -> ~7 days' — the counting part of the gate only.
+
+        Counts move on a clock; fills, mark-to-market and the tail check are facts no pace can
+        forecast, so once the counts are met the line says it is waiting on those instead. Pace is
+        decisions since max(gate reset, 7 days ago) over the days elapsed in that window."""
+        now = _now() if now is None else now
+        gate = float(self.gate_since_ts or 0.0)
+        start = max(gate, now - pace_days * 86400)
+        span = max((now - start) / 86400, 1e-6)
+
+        def count_since(t, venue=None):
+            q = ("SELECT COUNT(DISTINCT COALESCE(json_extract(meta,'$.group'), 'row:' || id)) FROM signals "
+                 "WHERE module=? AND ts>=? AND status!='void'")
+            args = [module, t]
+            if venue:
+                q += " AND venue=?"
+                args.append(venue)
+            return int(self.conn.execute(q, args).fetchone()[0] or 0)
+
+        n, us_n = count_since(max(gate, now - 30 * 86400)), count_since(max(gate, now - 30 * 86400), "us")
+        pace, us_pace = count_since(start) / span, count_since(start, "us") / span
+        need, us_need = max(0, min_signals - n), max(0, self.min_us_signals - us_n)
+        head = f"{n}/{min_signals} decisions, US {us_n}/{self.min_us_signals}"
+        if need == 0 and us_need == 0:
+            return f"{head} — counts met; waiting on fills / mark-to-market / tail check"
+        if (need and pace <= 0) or (us_need and us_pace <= 0):
+            return f"{head} — no pace in the last {pace_days:.0f}d: no ETA"
+        days = max(need / pace if need else 0.0, us_need / us_pace if us_need else 0.0)
+        return (f"{n}/{min_signals} decisions at {pace:.1f}/day ({pace_days:.0f}d), US {us_n}/{self.min_us_signals} "
+                f"at {us_pace:.1f}/day -> {'<1 day' if days < 1 else f'~{days:.0f} day(s)'} to the counts")
+
     def tail_check(self, module: str, days: int = 30):
         """(ok, why) — is this record an edge, or one lucky trade and one unlucky one?
 
@@ -585,6 +627,12 @@ class Ledger:
         for m in config.MODULES:
             ok, why = self.promotion_check(m)
             lines.append(f"  gate {m:<22} {'PASS' if ok else 'hold'} — {why}")
+            eta = self.gate_eta(m) if not ok else None
+            if eta:
+                lines.append(f"       eta {eta}")
+        closed_ll = self.closed_count("leadlag")
+        lines.append(f"  leadlag closed positions since the reset: {closed_ll}/{LEADLAG_REFERENCE_REVIEW_AT} — at "
+                     f"{LEADLAG_REFERENCE_REVIEW_AT}, decide the reference (C = spread-limited mid, see the design doc)")
         if any(s["module"] == "weather_lock" for s in stats):
             # Answers "why does live show so few weather_lock signals against the backtest ROI" from
             # snapshots the loop already wrote — no live API calls, so it belongs in the fast daily
