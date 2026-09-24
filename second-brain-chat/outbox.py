@@ -111,19 +111,40 @@ def _rows(limit: int = 60) -> list:
     return out
 
 
+# How far back an open-item read may go. 1000 is PostgREST's default max rows per request, so a
+# bigger number would be silently truncated by the server anyway.
+SCAN_CEILING = 1000
+
+
 def open_items(limit: int = 60, include_snoozed: bool = True) -> list:
-    """Everything still waiting on Alex, newest first."""
+    """Everything still waiting on Alex, newest first: up to `limit` OPEN items.
+
+    `limit` counts open items, not rows read. It used to go straight to _rows(), which reads the
+    newest `limit` rows of ANY status and filters afterwards, so an open item became invisible
+    once `limit` newer rows existed. On 2026-09-24 Moon Juice's follow-up (static attached, due
+    09:17) sat behind 34 newer rows: the sender never saw it, and Alex tapping Send wouldn't have
+    helped, because awaiting_send read the same 30-row window. So the read now widens until it
+    has `limit` open items or has read every row, and it says so if it ever hits the ceiling."""
     now = _now()
-    out = []
-    for it in _rows(limit):
-        if it.get("status") != OPEN:
-            continue
-        if not include_snoozed:
-            until = _parse(it.get("snooze_until") or "")
-            if until and until > now:
+    scan = max(limit, 60)
+    while True:
+        rows = _rows(scan)
+        out = []
+        for it in rows:
+            if it.get("status") != OPEN:
                 continue
-        out.append(it)
-    return out
+            if not include_snoozed:
+                until = _parse(it.get("snooze_until") or "")
+                if until and until > now:
+                    continue
+            out.append(it)
+        if len(out) >= limit or len(rows) < scan:
+            return out[:limit]
+        if scan >= SCAN_CEILING:
+            print(f"outbox: read the newest {scan} rows and found {len(out)} open item(s); "
+                  "anything older is not visible. Close or archive old rows.")
+            return out[:limit]
+        scan = min(scan * 4, SCAN_CEILING)
 
 
 def nudgeable(limit: int = 60) -> list:
@@ -142,9 +163,24 @@ def nudgeable(limit: int = 60) -> list:
 
 
 def get(item_id: int) -> dict | None:
-    for it in _rows(120):
-        if it.get("id") == item_id:
-            return it
+    """One item by id, however old. Scanning the newest 120 rows made an older item read as
+    gone on its /do page."""
+    if not supabase:
+        return None
+    try:
+        res = (supabase.table("Agent Outputs").select("*").eq("id", item_id).execute())
+    except Exception as e:
+        print(f"outbox: read failed ({e})")
+        return None
+    for r in res.data or []:
+        if r.get("agent_name") != AGENT:
+            continue
+        try:
+            item = json.loads(r["output_text"])
+        except (json.JSONDecodeError, TypeError, KeyError):
+            return None
+        item["id"] = r["id"]
+        return item
     return None
 
 
@@ -230,7 +266,7 @@ def arm_auto_send(item_id: int, when_iso: str) -> dict | None:
     return _write(item_id, {"auto_send_at": when_iso})
 
 
-def due_to_auto_send(now_iso: str, limit: int = 30) -> list:
+def due_to_auto_send(now_iso: str, limit: int = 500) -> list:
     """Open email drafts whose hold window has expired and that nobody approved or killed."""
     out = []
     for it in open_items(limit=limit):
@@ -242,7 +278,7 @@ def due_to_auto_send(now_iso: str, limit: int = 30) -> list:
     return out
 
 
-def awaiting_send(limit: int = 30) -> list:
+def awaiting_send(limit: int = 500) -> list:
     """Open email_draft items Alex has approved and nobody has sent yet.
 
     Snoozed rows are excluded. open_items() includes them by default, which is right for "what
