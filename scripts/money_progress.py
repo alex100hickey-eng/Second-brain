@@ -44,6 +44,7 @@ SHIFT_LOG = os.path.join(MONEY, "Shift Log.md")
 PROGRESS_MD = os.path.join(MONEY, "PROGRESS.md")
 PROGRESS_CSV = os.path.join(MONEY, "progress.csv")
 PROGRESS_LINE = os.path.join(MONEY, "progress-line.txt")
+PROGRESS_JSON = os.path.join(MONEY, "progress.json")
 
 TARGETS = {
     "sf_first_touches": 10,     # named first touches a day (the cap)
@@ -262,6 +263,102 @@ def cash(today: date) -> dict:
     return dict(mtd=mtd, total=total)
 
 
+# ------------------------------------------------------------------ activity feed
+def _git_events(today: date) -> list:
+    try:
+        r = subprocess.run(["git", "log", "--since", today.isoformat() + " 00:00", "--format=%ct|%s"],
+                           capture_output=True, text=True, timeout=20, cwd=ROOT)
+    except Exception:                               # noqa: BLE001
+        return []
+    out = []
+    for line in r.stdout.splitlines():
+        ts, _, msg = line.partition("|")
+        if ts.isdigit():
+            out.append(dict(t=int(ts), lane="all", kind="code", text=msg[:120]))
+    return out
+
+
+def _send_events(sends: list, rows: list, today: date) -> list:
+    brand_by_addr = {}
+    for r in rows:
+        for a in row_addresses(r):
+            brand_by_addr[a] = _c(r.get("brand")) or a
+    out = []
+    for d, hm, addr, fu in sends:
+        if d != today:
+            continue
+        t = int(time.mktime(datetime.strptime(f"{d.isoformat()} {hm}", "%Y-%m-%d %H:%M").timetuple()))
+        who = brand_by_addr.get(addr, addr)
+        out.append(dict(t=t, lane="B" if is_creator(next((r for r in rows if addr in row_addresses(r)), {})) else "A",
+                        kind="send", text=f"{'follow-up' if fu else 'first touch'} sent to {who}"))
+    return out
+
+
+def _clip_events(today: date) -> list:
+    out = []
+    try:
+        con = sqlite3.connect(f"file:{CLIPBOT_DB}?mode=ro", uri=True, timeout=5)
+        start = time.mktime(datetime(today.year, today.month, today.day).timetuple())
+        for posted, submitted, platform, acct, url in con.execute(
+                "select posted_at, submitted_at, platform, account, url from posts where posted_at >= ? or submitted_at >= ?",
+                (start, start)):
+            if posted and posted >= start:
+                out.append(dict(t=int(posted), lane="C", kind="post", text=f"posted {platform} on {acct}", url=url))
+            if submitted and submitted >= start:
+                out.append(dict(t=int(submitted), lane="C", kind="submit", text=f"submitted {platform} ({acct}) to Whop", url=url))
+        con.close()
+    except sqlite3.Error:
+        pass
+    return out
+
+
+def _shift_events(today: date) -> list:
+    out = []
+    for m in re.finditer(rf"^## {today.isoformat()}\s*~?(\d{{1,2}}:\d{{2}})?[^\n]*?(?:—|-)\s*([^\n]+)$", _read(SHIFT_LOG), re.M):
+        hm = m.group(1) or "00:00"
+        try:
+            t = int(time.mktime(datetime.strptime(f"{today.isoformat()} {hm}", "%Y-%m-%d %H:%M").timetuple()))
+        except ValueError:
+            continue
+        out.append(dict(t=t, lane="all", kind="shift", text=m.group(2).strip()[:120]))
+    return out
+
+
+def _file_events(today: date) -> list:
+    out = []
+    start = time.mktime(datetime(today.year, today.month, today.day).timetuple())
+    for path, text in ((NEEDS_ALEX, "blockers list updated"),
+                       (os.path.join(ROOT, "scripts", "offer_statics.launchd.log"), "statics backstop ran"),
+                       (os.path.join(MONEY, "Named Contacts.csv"), "founder-name research updated")):
+        try:
+            mt = os.path.getmtime(path)
+        except OSError:
+            continue
+        if mt >= start:
+            out.append(dict(t=int(mt), lane="A" if "Named" in path or "statics" in path else "all", kind="file", text=text))
+    for name in os.listdir(MONEY) if os.path.isdir(MONEY) else []:
+        if name.startswith("prospect-tracker.csv.bak-"):
+            try:
+                mt = os.path.getmtime(os.path.join(MONEY, name))
+            except OSError:
+                continue
+            if mt >= start:
+                out.append(dict(t=int(mt), lane="A", kind="tracker", text="tracker written: " + name.split(".bak-", 1)[1][:40]))
+    return out
+
+
+def activity(sends: list, rows: list, today: date, prev_gates: str, gates: dict) -> list:
+    ev = _git_events(today) + _send_events(sends, rows, today) + _clip_events(today) + _shift_events(today) + _file_events(today)
+    if prev_gates:
+        prev = dict(p.split(":", 1) for p in prev_gates.split() if ":" in p)
+        for k, v in gates.items():
+            now = v.split(" ")[0]
+            if k in prev and prev[k] != now:
+                ev.append(dict(t=int(time.time()), lane="D", kind="gate", text=f"{k} gate {prev[k]} -> {now}"))
+    ev.sort(key=lambda e: e["t"], reverse=True)
+    return ev[:80]
+
+
 # ------------------------------------------------------------------ stages
 def stages(sf: dict, cr: dict, cl: dict, pb: dict, money: dict) -> dict:
     a = 0
@@ -363,8 +460,11 @@ def main(argv) -> int:
                cl_unsubmitted=cl["unsubmitted"], pb_stage=st["D"], pb_alive=int(pb["alive"]),
                pb_gates=" ".join(f"{k}:{v.split(' ')[0]}" for k, v in pb["gates"].items()),
                blockers=bl["dated"] + len(bl["numbered"]), shifts=sh, system_ok=int(system_ok))
+    prev = [r for r in history() if r.get("date") != today.isoformat()]
+    prev_gates = prev[-1].get("pb_gates", "") if prev else ""
     hist = write_csv(row)
     stk = streak(hist)
+    feed = activity(sends, rows, today, prev_gates, pb["gates"])
 
     def mark(ok):
         return "✓" if ok else "✗"
@@ -423,6 +523,40 @@ def main(argv) -> int:
             f"{pb['gates'].get('bucket_sum','?').split(' ')[0]} · streak {stk}")
     with open(PROGRESS_LINE, "w", encoding="utf-8") as f:
         f.write(line + "\n")
+    gate_text = {
+        "A": ["first human reply", "first $650 in the bank", "3 paying clients", "6 retainers", "the number"],
+        "B": ["first reply", "first $400 paid", "5 retainers", "10 retainers", "the number"],
+        "C": ["Whop link + first accepted submission", "first payout >= $50", "$300/month", "$1k/month", "the number"],
+        "D": ["bucket_sum 30 sets", "a live week in the black", "second module live", "$1-2k bankroll from profit", "the number"],
+    }
+    payload = dict(
+        date=today.isoformat(), generated_at=int(time.time()), line=line,
+        cash=dict(mtd=money["mtd"], total=money["total"]), streak=stk,
+        lanes=[dict(id=k, name=n, stage=st[k], next_gate=gate_text[k][min(st[k], 4)]) for k, n in
+               (("A", "Splitframe"), ("B", "Creators"), ("C", "Clipping"), ("D", "Polybot"))],
+        checks=[dict(name=n, value=str(v), target=t, ok=bool(ok)) for n, v, t, ok in checks],
+        detail=dict(
+            A=dict(sent_total=sf["sent_total"], named_sent=sf["named_sent"], replies=sf["replies"], calls=sf["calls"],
+                   closes=sf["closes"], first_today=sf["first_today"], fu_today=sf["fu_today"], sends_7d=sf["sends_7d"],
+                   overdue=[f"{b} {k[:9]} {d}" for b, k, d in sf["overdue"]], queue_qualified=sf["queue_qualified"]),
+            B=dict(prospects=cr["prospects"], sent_total=cr["sent_total"], sends_today=cr["sends_today"],
+                   replies=cr["replies"], bounced=cr["bounced"], closes=cr["closes"]),
+            C=dict(posts_total=cl["posts_total"], posts_today=cl["posts_today"], views=cl["views_total"],
+                   submitted_in_window=cl["submitted_in_window"], submitted_late=cl["submitted_late"],
+                   unsubmitted=cl["unsubmitted"], usd_approved=round(cl["usd_approved"], 2),
+                   usd_settled=round(cl["usd_settled"], 2)),
+            D=dict(alive=pb["alive"], gates=pb["gates"], passing=pb["passing"]),
+        ),
+        blockers=dict(count=bl["dated"] + len(bl["numbered"]), items=bl["numbered"][:8]),
+        activity=feed,
+        history=[dict(date=r.get("date"), cash_mtd=r.get("cash_mtd"), sf_first=r.get("sf_first_today"),
+                      sf_fu=r.get("sf_fu_today"), sf_replies=r.get("sf_replies"), cr_sends=r.get("cr_sends_today"),
+                      cl_posts=r.get("cl_posts_today"), cl_views=r.get("cl_views"), system_ok=r.get("system_ok"))
+                 for r in hist[-14:]],
+    )
+    import json
+    with open(PROGRESS_JSON, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=1)
     if "--print" in argv:
         print(md)
     else:

@@ -217,7 +217,7 @@ def require_login():
     # exactly one item and one op list (action_links.py) — strictly narrower
     # than a session, and a wrong token is a bare 404.
     if request.endpoint in ("login", "static", "api_version",
-                            "training_sync_endpoint", "api_widget",
+                            "training_sync_endpoint", "api_widget", "money_progress_endpoint",
                             "do_page", "do_act"):
         return None
     if session.get("authed"):
@@ -353,6 +353,48 @@ def training_sync_endpoint(token):
         return reply({"error": "stored in memory but not yet durable",
                       "detail": persist_err[:200]}, 503)
     return reply({"ok": True})
+
+
+def money_progress_token() -> str:
+    """Path token for the money-progress feed, derived like training_sync's so the
+    Mac (which writes the file) and the server (which serves it) agree without
+    sharing a new secret. Constant-time compared; a wrong token 404s."""
+    explicit = os.environ.get("MONEY_PROGRESS_TOKEN", "").strip()
+    if explicit:
+        return explicit
+    access_code = os.environ.get("ACCESS_CODE") or os.environ.get("JARVIS_PASSWORD") or ""
+    if not access_code:
+        return "local-dev"
+    return hmac.new(access_code.encode("utf-8"), b"money-progress-v1", hashlib.sha256).hexdigest()[:24]
+
+
+@app.route("/money-progress/<token>/progress.json", methods=["GET", "OPTIONS"])
+def money_progress_endpoint(token):
+    """Ungated (see require_login): read-only JSON for Alex's money-progress page.
+    Money/progress.json is written on the Mac by scripts/money_progress.py from
+    the ledgers and reaches VAULT_PATH through the vault git sync. CORS is open
+    because the page is a published artifact whose origin is not fixed; the
+    unguessable path token is the gate, and the payload holds no secrets."""
+    cors = {"Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type", "Access-Control-Max-Age": "86400",
+            "Cache-Control": "no-store"}
+    if request.method == "OPTIONS":
+        return Response("", status=204, headers=cors)
+    if not hmac.compare_digest(token, money_progress_token()):
+        return Response("Not found", status=404, mimetype="text/plain")
+    path = os.path.join(VAULT_PATH, "Money", "progress.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            raw = f.read()
+        json.loads(raw)
+    except (OSError, ValueError):
+        return Response(json.dumps({"error": "no progress.json on the server yet"}), status=503,
+                        mimetype="application/json", headers=cors)
+    try:
+        cors["X-Progress-Mtime"] = str(int(os.path.getmtime(path)))
+    except OSError:
+        pass
+    return Response(raw, status=200, mimetype="application/json", headers=cors)
 
 
 @app.route("/login", methods=["GET", "POST"])
