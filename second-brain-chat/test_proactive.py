@@ -658,6 +658,41 @@ def test_approval_needs_him():
     check("it opens the page where the action is visible", labels == ["Review it"])
 
 
+def test_money_line():
+    """The money scoreboard rides the morning brief as one line (Money/progress-line.txt)."""
+    print("\n=== money line in the morning brief ===")
+    import tempfile
+    from datetime import date
+    vault = tempfile.mkdtemp()
+    os.makedirs(os.path.join(vault, "Money"))
+    old = os.environ.get("VAULT_PATH")
+    os.environ["VAULT_PATH"] = vault
+    try:
+        check("no file → no line", proactive.money_line(date(2026, 9, 25)) == "")
+        with open(os.path.join(vault, "Money", "progress-line.txt"), "w") as f:
+            f.write("Money 2026-09-24: cash $0 mtd · A S0 0 sent/3 overdue/0 replies\n")
+        check("yesterday's 21:30 line is shown as is",
+              proactive.money_line(date(2026, 9, 25)).startswith("Money 2026-09-24:"))
+        check("an older line is marked stale, not passed off as today's",
+              proactive.money_line(date(2026, 9, 27)).startswith("(stale since 2026-09-24)"))
+
+        busy = FakeTracker()
+        busy.top_by_priority = lambda limit=10: [
+            {"id": 3, "title": "Ship the taste-pass pack", "status": "in_progress"}]
+        sb, spy = _reset(tracker=busy)
+        proactive.set_config(morning_brief=_hhmm(datetime.now()), evening_review="")
+        _quiet_config_now(active=False)
+        proactive.run_awareness_pass()
+        briefs = [s for s in spy.sent if "Today:" in s["title"]]
+        check("the brief carries the money line", briefs and "A S0 0 sent/3 overdue" in briefs[0]["body"])
+        check("…after the work, never instead of it",
+              briefs and briefs[0]["body"].index("taste-pass") < briefs[0]["body"].index("Money 2026"))
+    finally:
+        if old is None:
+            os.environ.pop("VAULT_PATH", None)
+        else:
+            os.environ["VAULT_PATH"] = old
+
 # ============================================================
 if __name__ == "__main__":
     test_config()
@@ -674,6 +709,7 @@ if __name__ == "__main__":
     test_waiting_on_alex()
     test_approval_needs_him()
     test_one_concern_and_away_days()
+    test_money_line()
     total, passed = len(_results), sum(_results)
     print("\n" + "=" * 48)
     print(f"{passed}/{total} checks passed")
