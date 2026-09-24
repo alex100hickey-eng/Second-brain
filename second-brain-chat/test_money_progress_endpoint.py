@@ -45,3 +45,24 @@ def test_options_preflight_needs_no_token(tmp_path, monkeypatch):
     m = _app(tmp_path, monkeypatch)
     r = m.app.test_client().options("/money-progress/anything/progress.json")
     assert r.status_code == 204
+
+
+def test_session_api_requires_login_then_serves(tmp_path, monkeypatch):
+    m = _app(tmp_path, monkeypatch)
+    c = m.app.test_client()
+    assert c.get("/api/money/progress").status_code == 401
+    (tmp_path / "Money").mkdir()
+    (tmp_path / "Money" / "progress.json").write_text(json.dumps({"date": "2026-09-24", "streak": 1}))
+    with c.session_transaction() as sess:
+        sess["authed"] = True
+    r = c.get("/api/money/progress")
+    assert r.status_code == 200 and r.get_json()["streak"] == 1
+    assert c.get("/money").status_code == 200
+
+
+def test_session_api_503_without_file(tmp_path, monkeypatch):
+    m = _app(tmp_path, monkeypatch)
+    c = m.app.test_client()
+    with c.session_transaction() as sess:
+        sess["authed"] = True
+    assert c.get("/api/money/progress").status_code == 503

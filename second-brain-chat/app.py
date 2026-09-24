@@ -6816,6 +6816,38 @@ def api_meals_casecash():
 # Expanded views behind the HUD widgets. One template serves them — it reads
 # the page key off the URL — and every one draws the same shell (floor, lettering,
 # core reactor), so the reactor is a consistent "back to the deck" control.
+@app.route("/money")
+def money_page():
+    """Alex's money-progress page: the four lanes against the roadmap, today's
+    checks, and a feed of what the ledgers say happened. Its own template (same
+    reasoning as /schedule and /d1: a phone-readable page can't live in the SVG
+    deck). Data comes from /api/money/progress."""
+    return render_template("money.html")
+
+
+@app.route("/api/money/progress")
+def api_money_progress():
+    """Money/progress.json from the vault copy, as scripts/money_progress.py wrote
+    it on the Mac (nine times a day, from the ledgers). Session-gated like every
+    /api/ route; 503 with a plain reason when the file has not synced yet."""
+    path = os.path.join(VAULT_PATH, "Money", "progress.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            raw = f.read()
+        payload = json.loads(raw)
+    except OSError:
+        return jsonify({"error": "no progress.json on the server yet — the vault sync brings it"}), 503
+    except ValueError:
+        return jsonify({"error": "progress.json is not valid JSON (mid-write?) — try again"}), 503
+    resp = Response(raw, mimetype="application/json")
+    resp.headers["Cache-Control"] = "no-store"
+    try:
+        resp.headers["X-Progress-Mtime"] = str(int(os.path.getmtime(path)))
+    except OSError:
+        pass
+    return resp
+
+
 @app.route("/school")
 @app.route("/revenue")
 def hud_expanded():

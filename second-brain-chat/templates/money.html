@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>CLARVIS — Money</title>
+<link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32.png">
+<link rel="manifest" href="/static/manifest.json">
+<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+<link rel="stylesheet" href="/static/hud/hud.css?v=18">
+<style>
+  /* Money progress page. Palette/fonts/glow per HUD_STYLE.md via hud.css.
+     Read from /api/money/progress, which serves Money/progress.json — the file
+     scripts/money_progress.py rebuilds from the ledgers nine times a day. */
+  html, body { margin: 0; min-height: 100%; }
+  body {
+    font-family: 'Share Tech Mono', ui-monospace, Menlo, monospace;
+    color: var(--hud-cyan);
+    background: radial-gradient(ellipse at 50% 0%, var(--hud-bg-center) 0%, #0a2450 42%, var(--hud-bg-edge) 100%);
+    background-attachment: fixed;
+    padding: 14px 16px calc(24px + env(safe-area-inset-bottom, 0px));
+    font-variant-numeric: tabular-nums;
+  }
+  .wrap { max-width: 720px; margin: 0 auto; display: grid; gap: 16px; }
+  header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  h1 { font-family: 'Orbitron', sans-serif; font-size: 27px; font-weight: 700; letter-spacing: 0.12em; margin: 0; color: var(--hud-accent); filter: var(--hud-glow); }
+  .sub { font-size: 12px; color: var(--hud-label); filter: var(--hud-glow); }
+  .back { margin-left: auto; font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; text-decoration: none; color: var(--hud-accent); border: 1px solid var(--hud-cyan-45); padding: 4px 8px; }
+  .rule { height: 1px; background: linear-gradient(90deg, var(--hud-cyan-70), transparent); }
+  .cap { font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--hud-label); filter: var(--hud-glow); margin-bottom: 6px; }
+  .tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .tile { border: 1px solid var(--hud-cyan-25); background: var(--hud-fill); padding: 10px 12px; }
+  .tile .big { font-family: 'Orbitron', sans-serif; font-size: 26px; font-weight: 700; color: var(--hud-white); filter: var(--hud-glow); line-height: 1.1; }
+  .tile .big.cash { color: var(--hud-accent); }
+  .tile .small { font-size: 11px; color: var(--hud-label); margin-top: 4px; }
+  .lane { display: grid; grid-template-columns: 1.2fr 1fr 2fr; gap: 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--hud-cyan-12); }
+  .lane:last-child { border-bottom: 0; }
+  .lane .name { color: var(--hud-white); font-size: 13px; }
+  .lane .name span { color: var(--hud-label); font-size: 11px; display: block; }
+  .track { display: flex; gap: 6px; align-items: center; }
+  .dot { width: 12px; height: 12px; border-radius: 50%; border: 1px solid var(--hud-cyan-70); box-sizing: border-box; }
+  .dot.on { background: var(--hud-accent); border-color: var(--hud-accent); box-shadow: 0 0 8px var(--hud-accent); }
+  .dot.now { background: var(--hud-white); border-color: var(--hud-white); box-shadow: 0 0 10px var(--hud-white); }
+  .gate { font-size: 11px; color: var(--hud-cyan); }
+  .gate b { color: var(--hud-label); font-weight: normal; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  td { padding: 6px 4px; border-bottom: 1px solid var(--hud-cyan-12); vertical-align: top; }
+  td.v { text-align: right; white-space: nowrap; color: var(--hud-white); }
+  td.t { text-align: right; white-space: nowrap; color: var(--hud-label); }
+  .pill { display: inline-block; min-width: 18px; text-align: center; padding: 1px 6px; border: 1px solid; font-size: 11px; }
+  .ok { color: #7CFFB2; border-color: #7CFFB2; }
+  .no { color: #FF8A80; border-color: #FF8A80; }
+  .feed { display: grid; gap: 0; }
+  .ev { display: grid; grid-template-columns: 46px 22px 1fr; gap: 8px; padding: 5px 0; border-bottom: 1px solid var(--hud-cyan-12); font-size: 12px; align-items: baseline; }
+  .ev .tm { color: var(--hud-label); }
+  .ev .ln { color: var(--hud-accent); font-size: 11px; }
+  .ev .tx { color: var(--hud-white); overflow-wrap: anywhere; }
+  .ev .tx.code { color: var(--hud-cyan); }
+  .ev .tx a { color: inherit; }
+  .hist { display: grid; grid-template-columns: repeat(14, 1fr); gap: 3px; align-items: end; height: 46px; }
+  .bar { background: var(--hud-cyan-45); min-height: 2px; position: relative; }
+  .bar.ok { background: var(--hud-accent); }
+  .hist-l { display: grid; grid-template-columns: repeat(14, 1fr); gap: 3px; font-size: 9px; color: var(--hud-label); margin-top: 3px; text-align: center; }
+  .stale { color: #FF8A80; }
+  .empty { color: var(--hud-label); font-size: 12px; padding: 8px 0; }
+  ul { margin: 0; padding-left: 18px; font-size: 12px; color: var(--hud-white); }
+  li { margin: 3px 0; }
+  @media (max-width: 480px) {
+    .tiles { grid-template-columns: repeat(3, 1fr); }
+    .tile .big { font-size: 20px; }
+    .lane { grid-template-columns: 1fr 1fr; }
+    .lane .gate { grid-column: 1 / -1; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>MONEY</h1>
+    <div class="sub" id="sub">loading the ledgers…</div>
+    <a class="back" href="/">deck</a>
+  </header>
+  <div class="rule"></div>
+
+  <section>
+    <div class="tiles">
+      <div class="tile"><div class="big cash" id="cash">$0</div><div class="small">cash this month · ever <span id="cashEver">$0</span></div></div>
+      <div class="tile"><div class="big" id="streak">0</div><div class="small">day streak — follow-ups on time, submissions in window, polybot alive, shift logged</div></div>
+      <div class="tile"><div class="big" id="lastMove">—</div><div class="small">last movement · <span id="evCount">0</span> events today</div></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="cap">Lanes — stage and next gate</div>
+    <div id="lanes"></div>
+  </section>
+
+  <section>
+    <div class="cap">Today against target</div>
+    <table id="checks"></table>
+  </section>
+
+  <section>
+    <div class="cap">What happened today (from the ledgers, newest first)</div>
+    <div class="feed" id="feed"></div>
+  </section>
+
+  <section>
+    <div class="cap">14 days — sends + posts per day (bright = system day clean)</div>
+    <div class="hist" id="hist"></div>
+    <div class="hist-l" id="histL"></div>
+  </section>
+
+  <section>
+    <div class="cap">Blocked on Alex (<span id="blockN">0</span>)</div>
+    <ul id="blocks"></ul>
+  </section>
+
+  <section>
+    <div class="cap">Lane detail</div>
+    <ul id="detail"></ul>
+  </section>
+</div>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  const money = (n) => '$' + Math.round(Number(n) || 0).toLocaleString();
+  const hm = (t) => { const d = new Date(t * 1000); return d.getHours().toString().padStart(2, '0') + ':' + d.getMinutes().toString().padStart(2, '0'); };
+  const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const GATES = { A: 'Splitframe', B: 'Creators', C: 'Clipping', D: 'Polybot' };
+
+  function render(d) {
+    const gen = new Date(d.generated_at * 1000);
+    const ageMin = Math.round((Date.now() - gen.getTime()) / 60000);
+    $('sub').textContent = d.date + ' · rebuilt ' + hm(d.generated_at) + (ageMin > 180 ? ' · STALE ' + Math.round(ageMin / 60) + 'h' : '');
+    $('sub').className = 'sub' + (ageMin > 180 ? ' stale' : '');
+    $('cash').textContent = money(d.cash.mtd);
+    $('cashEver').textContent = money(d.cash.total);
+    $('streak').textContent = d.streak;
+    const ev = d.activity || [];
+    $('evCount').textContent = ev.length;
+    $('lastMove').textContent = ev.length ? hm(ev[0].t) : '—';
+
+    $('lanes').innerHTML = (d.lanes || []).map((l) => {
+      const dots = [0, 1, 2, 3, 4].map((i) => '<span class="dot' + (i < l.stage ? ' on' : i === l.stage ? ' now' : '') + '"></span>').join('');
+      return '<div class="lane"><div class="name">' + esc(l.id) + ' ' + esc(l.name) + '<span>stage S' + l.stage + '</span></div>' +
+        '<div class="track">' + dots + '</div><div class="gate"><b>next gate</b> ' + esc(l.next_gate) + '</div></div>';
+    }).join('');
+
+    $('checks').innerHTML = (d.checks || []).map((c) =>
+      '<tr><td>' + esc(c.name) + '</td><td class="v">' + esc(c.value) + '</td><td class="t">' + esc(c.target) + '</td>' +
+      '<td class="v"><span class="pill ' + (c.ok ? 'ok' : 'no') + '">' + (c.ok ? '✓' : '✗') + '</span></td></tr>').join('');
+
+    $('feed').innerHTML = ev.length ? ev.map((e) => {
+      const txt = e.url ? '<a href="' + esc(e.url) + '" target="_blank" rel="noopener">' + esc(e.text) + '</a>' : esc(e.text);
+      return '<div class="ev"><span class="tm">' + hm(e.t) + '</span><span class="ln">' + esc(e.lane === 'all' ? '·' : e.lane) + '</span>' +
+        '<span class="tx' + (e.kind === 'code' ? ' code' : '') + '">' + txt + '</span></div>';
+    }).join('') : '<div class="empty">nothing in the ledgers yet today</div>';
+
+    const h = d.history || [];
+    const vals = h.map((r) => (Number(r.sf_first) || 0) + (Number(r.sf_fu) || 0) + (Number(r.cr_sends) || 0) + (Number(r.cl_posts) || 0));
+    const max = Math.max(1, ...vals);
+    const pad = 14 - h.length;
+    $('hist').innerHTML = Array(Math.max(0, pad)).fill('<div class="bar" style="height:2px;opacity:.3"></div>').join('') +
+      h.map((r, i) => '<div class="bar' + (String(r.system_ok) === '1' ? ' ok' : '') + '" style="height:' + Math.max(2, Math.round(44 * vals[i] / max)) + 'px" title="' + esc(r.date) + ': ' + vals[i] + '"></div>').join('');
+    $('histL').innerHTML = Array(Math.max(0, pad)).fill('<span></span>').join('') + h.map((r) => '<span>' + esc(String(r.date).slice(8)) + '</span>').join('');
+
+    const b = d.blockers || { count: 0, items: [] };
+    $('blockN').textContent = b.count;
+    $('blocks').innerHTML = (b.items || []).map((x) => '<li>' + esc(x) + '</li>').join('') || '<li>nothing — the system is not waiting on you</li>';
+
+    const A = d.detail.A, B = d.detail.B, C = d.detail.C, D = d.detail.D;
+    $('detail').innerHTML = [
+      'A Splitframe: ' + A.sent_total + ' first touches ever (' + A.named_sent + ' named), ' + A.replies + ' replies, ' + A.calls + ' calls, ' + A.closes + ' closes; today ' + A.first_today + ' first touches + ' + A.fu_today + ' follow-ups; ' + A.sends_7d + ' sends in 7 days; ' + A.queue_qualified + ' qualified unsent' + (A.overdue.length ? '; OVERDUE: ' + A.overdue.join(', ') : ''),
+      'B Creators: ' + B.prospects + ' prospects, ' + B.sent_total + ' contacted, ' + B.replies + ' replies, ' + B.bounced + ' bounced, ' + B.closes + ' closed; today ' + B.sends_today + ' sends',
+      'C Clipping: ' + C.posts_total + ' posts ever, ' + C.posts_today + ' today; ' + Number(C.views).toLocaleString() + ' views; submitted in window ' + C.submitted_in_window + ', late ' + C.submitted_late + ', unsubmitted ' + C.unsubmitted + '; approved $' + C.usd_approved + ', settled $' + C.usd_settled,
+      'D Polybot: loop ' + (D.alive ? 'alive' : 'NOT ALIVE') + '; ' + Object.entries(D.gates || {}).map(([k, v]) => k + ' ' + v).join(' · ') + (D.passing && D.passing.length ? ' · PASSING: ' + D.passing.join(', ') : ''),
+    ].map((s) => '<li>' + esc(s) + '</li>').join('');
+  }
+
+  async function load() {
+    try {
+      const r = await fetch('/api/money/progress', { cache: 'no-store' });
+      if (r.status === 401) { location.href = '/login'; return; }
+      const d = await r.json();
+      if (d.error) { $('sub').textContent = d.error; $('sub').className = 'sub stale'; return; }
+      render(d);
+    } catch (e) {
+      $('sub').textContent = 'could not load: ' + (e && e.message ? e.message : e);
+      $('sub').className = 'sub stale';
+    }
+  }
+  load();
+  setInterval(load, 5 * 60 * 1000);
+</script>
+</body>
+</html>
