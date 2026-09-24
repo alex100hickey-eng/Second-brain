@@ -226,6 +226,50 @@ def test_verify_promotes_only_a_positive_result():
     assert calls == ["a@x.co", "b@x.co", "c@x.co"], "a published address costs no verification"
 
 
+def test_a_failed_check_stops_the_run_and_records_nothing():
+    # 2026-09-24: an exhausted quota made every call fail, each failure read as "risky (score 0)",
+    # and 53 candidates were stamped with a result nobody had got.
+    props = [_p(named_email=f"{c}@x.co", email_status="candidate") for c in "abc"]
+    calls = []
+
+    def fake(email):
+        calls.append(email)
+        return ("deliverable", 97) if email == "a@x.co" else ("error", 0)
+    changed = sq.verify_candidates(props, fake)
+    assert changed == [("a@x.co", "verified")]
+    assert calls == ["a@x.co", "b@x.co"], "stops at the first failure, no credit burned after it"
+    assert [p["email_status"] for p in props] == ["verified", "candidate", "candidate"]
+    assert "Hunter" not in props[1]["email_evidence"] + props[2]["email_evidence"]
+
+
+def test_the_named_command_reads_an_unanswered_call_as_a_failure_not_risky(monkeypatch):
+    # The wrapper is where 09-24 went wrong: contact_finder.verify() turns "no answer" into RISKY.
+    import types
+    props = [_p(named_email="a@x.co", email_status="candidate", email_evidence="guess")]
+    written = []
+    fake_cf = types.SimpleNamespace(_call=lambda path, **kw: {}, SENDABLE="sendable",
+                                    UNDELIVERABLE="undeliverable")
+    monkeypatch.setitem(sys.modules, "contact_finder", fake_cf)
+    monkeypatch.setattr(sq, "read_named", lambda: props)
+    monkeypatch.setattr(sq, "write_named", lambda ps: written.append([dict(p) for p in ps]))
+    monkeypatch.setattr(sq, "tracker_rows", lambda: ([], []))
+    args = types.SimpleNamespace(verify=True, write=False, limit=20)
+    assert sq.cmd_named(args) == 0
+    assert written and written[-1][0]["email_evidence"] == "guess", "nothing recorded for a non-answer"
+    assert written[-1][0]["email_status"] == "candidate"
+
+
+def test_the_limit_counts_every_check_not_only_the_ones_that_changed():
+    props = [_p(named_email=f"{i}@x.co", email_status="candidate") for i in range(30)]
+    calls = []
+
+    def fake(email):
+        calls.append(email)
+        return "risky", 40                 # accept-all everywhere: nothing changes status
+    sq.verify_candidates(props, fake, limit=20)
+    assert len(calls) == 20, "every check costs a credit, so every check counts"
+
+
 def test_readdressing_stays_on_the_same_brand_and_needs_a_named_address():
     rows = [_hm(email="brock@highmesachile.co", contact_name="Brock Giles"),
             _row(brand="Other", email_generic="hi@other.com", domain="other.com")]
