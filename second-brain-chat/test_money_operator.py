@@ -137,6 +137,40 @@ def test_topping_up_the_queue_comes_first():
     assert any("nothing in band" in r for r in s["idle_reasons"])
 
 
+def test_founder_addresses_on_hand_are_applied_without_waiting_for_hunter():
+    """2026-09-24: Hunter's quota was dry, so the Hunter shift (the only place re-addressing
+    lived) never ran, and two published founders sat behind desk drafts going stale."""
+    pair = {"brand": "High Mesa Chile Co.", "desk": "info@highmesachile.co",
+            "founder": "brock@highmesachile.co", "contact": "Brock Giles", "stale": False}
+    s = snap(splitframe={"readdress": [pair], "hunter_left": 0, "pending": 6, "draftable_in_band": 3})
+    t = mo.next_task(s, T(12), {})
+    assert t["kind"] == "sf_readdress", "before topping up: these drafts are already written"
+    assert "info@highmesachile.co -> brock@highmesachile.co" in t["brief"] and "greet Brock" in t["brief"]
+    s = snap(splitframe={"named_to_apply": 2, "hunter_left": 0})
+    assert mo.next_task(s, T(12), {})["kind"] == "sf_readdress", "unapplied addresses alone are enough"
+
+
+def test_readdress_respects_quiet_hours_and_its_daily_cap():
+    s = snap(splitframe={"named_to_apply": 1})
+    mo.next_task(s, T(3), {})
+    assert any("sf_readdress" in r for r in s["idle_reasons"])
+    s = snap(splitframe={"named_to_apply": 1})
+    t = mo.next_task(s, T(12), {"sf_readdress": mo.per_kind_daily(T(12))["sf_readdress"]})
+    assert (t or {}).get("kind") != "sf_readdress"
+
+
+def test_nothing_on_hand_means_no_readdress_task():
+    s = snap(splitframe={"readdress": [], "named_to_apply": 0})
+    assert (mo.next_task(s, T(12), {}) or {}).get("kind") != "sf_readdress"
+
+
+def test_the_readdress_brief_spends_nothing_and_flags_stale_drafts():
+    b = mo.brief_sf_readdress({"readdress": [{"brand": "BadkneesTs", "desk": "hello@badkneests.com",
+                                              "founder": "jim@badkneests.com", "contact": "Jim", "stale": True}]})
+    assert "named --write" in b and "no --verify" in b and "revise --to" in b and "--new-to" in b
+    assert "re-read the ads first" in b and "Hunter credit" in b
+
+
 def test_posting_only_in_the_window_under_the_cap_and_three_hours_apart():
     s = snap(clip={"staged": 50, "cap": 1, "posted_today": 0})
     assert mo.next_task(s, T(20), {})["kind"] == "clip_post"

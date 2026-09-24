@@ -97,9 +97,9 @@ PICKUP_TIMEOUT_MIN = 120                   # nobody picked the task up (Mac asle
 # revenue, so it is the only lane raised: clip_post, poly_review and whop_board stay exactly
 # where they were. The cost of this is Alex's Claude subscription usage, which is the honest
 # trade and is why the other lanes do not move.
-PER_KIND_NORMAL = {"sf_topup": 6, "clip_post": 3, "sf_hunter": 1, "sf_source": 5,
+PER_KIND_NORMAL = {"sf_topup": 6, "clip_post": 3, "sf_hunter": 1, "sf_readdress": 2, "sf_source": 5,
                    "poly_review": 1, "creator_list": 1, "whop_board": 1, "creator_draft": 2}
-PER_KIND_BURST = {"sf_topup": 8, "clip_post": 3, "sf_hunter": 1, "sf_source": 8,
+PER_KIND_BURST = {"sf_topup": 8, "clip_post": 3, "sf_hunter": 1, "sf_readdress": 2, "sf_source": 8,
                   "poly_review": 3, "creator_list": 2, "whop_board": 2, "creator_draft": 2}
 
 
@@ -342,7 +342,12 @@ def splitframe_inputs(today: date) -> dict:
                                           and sq.IN_BAND[0] <= h["known_count"] <= sq.IN_BAND[1]),
             "hunter_left": max(0, HUNTER_PER_CYCLE - used),
             "candidates_unread": len(sq.candidates_to_qualify(rows, today.isoformat(), limit=99)),
+            "readdress": sq.readdress_targets(rows, queue),
         })
+        try:
+            out["named_to_apply"] = sq.named_to_apply(rows, sq.read_named())
+        except Exception:                                    # noqa: BLE001
+            out["named_to_apply"] = 0                        # no side file on this node: nothing to apply
         out["creator"] = creator_inputs(sq, queue)
     except Exception as e:                                   # noqa: BLE001
         out["reason"] = f"tracker/queue unreadable: {str(e)[:120]}"
@@ -439,6 +444,18 @@ def next_task(snap: dict, now: datetime, counts: dict) -> dict | None:
             and cr.get("queued_pending", 0) < creator_reserve() and can("creator_draft"):
         return _task("creator_draft", "creator", "Write one creator-retainer first touch",
                      brief_creator_draft(cr))
+
+    # 1b. founder addresses already on hand: put them on their rows and re-address the desk drafts
+    # waiting behind them. No Hunter credit is spent, so this must not sit behind the Hunter rung,
+    # which only runs while searches are left: on 2026-09-24 the quota was dry and two published
+    # founders waited behind desk drafts that were going stale.
+    if sf.get("ok") and (sf.get("readdress") or sf.get("named_to_apply", 0)):
+        if quiet:
+            reasons.append("sf_readdress: quiet hours")
+        elif can("sf_readdress"):
+            n = len(sf.get("readdress") or []) or sf.get("named_to_apply", 0)
+            return _task("sf_readdress", "splitframe", f"Put founder addresses on held first touches ({n})",
+                         brief_sf_readdress(sf))
 
     # 2. keep the funnel stocked
     if sf.get("ok"):
@@ -544,6 +561,25 @@ def brief_sf_topup(sf: dict, need: int) -> str:
             f"Targets marked 'front desk' have no named "
             f"person: open with the observation, never with an invented greeting, and write to the company "
             f"('your ads', not 'your team's ads'). Report facts drafts_queued=<n>.")
+
+
+def brief_sf_readdress(sf: dict) -> str:
+    pairs = sf.get("readdress") or []
+    listed = "; ".join(
+        f"{p['brand']}: {p['desk']} -> {p['founder']}"
+        + (f" (greet {p['contact'].split()[0]})" if p.get("contact") else "")
+        + (" [queued over 3 days ago: re-read the ads first]" if p.get("stale") else "")
+        for p in pairs[:10])
+    return ("Founder addresses are on hand and none of this spends a Hunter credit. First run "
+            "`python3 scripts/splitframe_queue.py named --write` (no --verify) so every published or "
+            "verified address in Money/Named Contacts.csv reaches its tracker row. Then re-address each "
+            "queued front-desk draft whose row now has a founder: `python3 scripts/splitframe_queue.py "
+            "revise --to <desk address> --new-to <founder address> --body-file <file>`, where the file is "
+            "the queued body with the founder's first name as its greeting line. A draft queued more than "
+            "3 days ago needs a fresh `adlib_read.py --page-id` read first: fix any number that changed, "
+            "because revise restarts the stale clock. "
+            f"Waiting now: {listed or 'none listed yet; run `named --write`, then `status`'}. "
+            "Report facts readdressed=<n>.")
 
 
 def brief_sf_hunter(sf: dict) -> str:

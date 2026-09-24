@@ -1068,6 +1068,33 @@ def plan_named(rows: list, proposals: list) -> list:
     return out
 
 
+def readdress_targets(rows: list, queue: list) -> list:
+    """Queued first touches still addressed to a front desk whose tracker row now carries a
+    founder's own address: [{brand, desk, founder, contact, stale}]. Re-addressing spends no
+    Hunter credit, so it must not wait for a Hunter shift: on 2026-09-24 the quota was dry, the
+    Hunter shift never ran, and two published founders sat behind desk drafts going stale."""
+    by_brand = {_c(r.get("brand")).lower(): r for r in rows}
+    out = []
+    for e in pending_entries(queue):
+        if _c(e.get("lane")) == "creator":
+            continue
+        to = _c(e.get("to")).lower()
+        row = by_brand.get(_c(e.get("brand")).lower())
+        if not row or _sfd.is_named_address(row, to):
+            continue
+        founder, tier = _sfd.target_address(row)
+        if tier == "person" and founder and founder != to:
+            out.append({"brand": _c(e.get("brand")), "desk": to, "founder": founder,
+                        "contact": _c(row.get("contact_name")),
+                        "stale": _sfd._queued_age_days(e) > _sfd.STALE_DRAFT_DAYS})
+    return out
+
+
+def named_to_apply(rows: list, proposals: list) -> int:
+    """How many researched founder addresses (published or verified) are not on their rows yet."""
+    return sum(1 for _r, changes, _n in plan_named(rows, proposals) if "email" in changes)
+
+
 def verify_candidates(proposals: list, verify_fn, limit: int = 20) -> list:
     """Check candidate addresses with Hunter's verifier (1 verification each). Returns the
     [(email, new status)] it changed. Only a positive "deliverable" becomes verified. An

@@ -275,6 +275,26 @@ def test_the_limit_counts_every_check_not_only_the_ones_that_changed():
     assert len(calls) == 20, "every check costs a credit, so every check counts"
 
 
+def test_readdress_targets_lists_desk_drafts_whose_row_now_has_a_founder():
+    rows = [_hm(email="brock@highmesachile.co", contact_name="Brock Giles"),
+            _row(brand="Loudcup", email_generic="hello@theloudcup.com", domain="theloudcup.com"),
+            _row(brand="Gracie", email="gracie@gracies.com", domain="gracies.com")]
+    queue = [_entry("info@highmesachile.co", "High Mesa Chile Co."),   # desk, founder on row: yes
+             _entry("hello@theloudcup.com", "Loudcup"),                # desk, no founder: no
+             _entry("gracie@gracies.com", "Gracie"),                   # already the founder: no
+             _entry("info@highmesachile.co", "High Mesa Chile Co.", released="2026-09-24T07:50")]
+    got = sq.readdress_targets(rows, queue)
+    assert [(g["brand"], g["desk"], g["founder"]) for g in got] == [
+        ("High Mesa Chile Co.", "info@highmesachile.co", "brock@highmesachile.co")]
+    assert got[0]["contact"] == "Brock Giles" and got[0]["stale"] is False
+
+
+def test_named_to_apply_counts_only_addresses_not_yet_on_their_rows():
+    assert sq.named_to_apply([_hm()], [_p()]) == 1
+    assert sq.named_to_apply([_hm(email="brock@highmesachile.co")], [_p()]) == 0
+    assert sq.named_to_apply([_hm()], [_p(email_status="candidate")]) == 0, "a guess is never applied"
+
+
 def test_readdressing_stays_on_the_same_brand_and_needs_a_named_address():
     rows = [_hm(email="brock@highmesachile.co", contact_name="Brock Giles"),
             _row(brand="Other", email_generic="hi@other.com", domain="other.com")]
