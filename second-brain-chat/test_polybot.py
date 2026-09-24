@@ -3742,3 +3742,28 @@ def test_the_report_carries_the_compounding_state():
     from polybot import runner as runner_mod
     r = runner_mod.Runner(_cfg(), _ledger(), log=lambda *_: None)
     assert "compounding: off — caps are the fixed dollars in config.json" in r.report(1)
+
+
+def test_us_fills_are_recorded_every_settle_but_resolutions_only_when_due(monkeypatch):
+    from polybot import runner as runner_mod
+    from polybot.strategies.base import Signal
+    cfg, led = _cfg(), _ledger()
+    r = runner_mod.Runner(cfg, led, log=lambda *_: None)
+    asked = []
+
+    class US:
+        available, why_unavailable = True, ""
+        def resolution(self, slug):
+            asked.append(slug)
+            return None
+
+    r.us = US()
+    sid = led.add_signal(Signal("leadlag", "us", "m1", "x", "BUY_YES", 0.40, 10, 5, "r", exit="reference",
+                                horizon_hours=6, category="politics"), "paper")
+    led.add_snapshot("us", "m1", 0.38, 0.40, ts=time.time() + 5)            # mid 0.39 <= 0.40: filled
+    monkeypatch.setattr(r, "_us_settle_due", lambda now=None: False)
+    r.settle()
+    assert led.paper_row(sid)["status"] == "filled" and asked == []          # recorded, zero calls
+    monkeypatch.setattr(r, "_us_settle_due", lambda now=None: True)
+    r.settle()
+    assert asked == ["m1"]                                                   # resolutions when due

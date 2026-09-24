@@ -783,11 +783,17 @@ class Runner:
 
     def settle(self) -> dict:
         counts = self.paper.settle_open("offshore", self.log)
-        if self.us.available and self._us_settle_due():
+        # US fills, marks and timeout exits are read from our own snapshots: no calls. Only asking
+        # the venue whether a market SETTLED costs calls, and that is what _us_settle_due rations.
+        # Until 2026-09-24 the whole US pass was rationed, so inside 09:00-17:00 a fill waited up to
+        # three hours to be recorded (and the clock restarts at every loop restart): leadlag read
+        # 30/30 decisions but "fill rate 13%" when its own rules had filled far more of them.
+        full = self.us.available and self._us_settle_due()
+        if full:
             self._last_us_settle = time.time()
-            us_counts = self.paper.settle_open("us", self.log)
-            for k, v in us_counts.items():
-                counts[k] = counts.get(k, 0) + v
+        us_counts = self.paper.settle_open("us", self.log, resolve=full)
+        for k, v in us_counts.items():
+            counts[k] = counts.get(k, 0) + v
         self.log(f"settle: {counts}")
         return counts
 

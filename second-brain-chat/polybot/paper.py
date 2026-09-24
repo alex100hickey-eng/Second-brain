@@ -138,7 +138,10 @@ class PaperEngine:
         self.resolve = resolution_fn or (lambda sig: offshore.market_resolution(json.loads(sig["meta"] or "{}").get("market_id", "")))
         self.now = now_fn or time.time
 
-    def settle_open(self, venue: str = "offshore", log=print) -> dict:
+    def settle_open(self, venue: str = "offshore", log=print, resolve: bool = True) -> dict:
+        """Fill, mark, exit and settle every open signal on `venue`. `resolve=False` does everything
+        except ask the venue whether a market has settled — fills, marks and timeout exits are read
+        from the price history, which costs no calls."""
         counts = {"filled": 0, "closed": 0, "expired": 0, "open": 0}
         # One resolution per MARKET, not per signal. A market's outcome is a property of the
         # market, and the same market appears once per set that touched it — on 2026-09-19 that
@@ -186,7 +189,7 @@ class PaperEngine:
             outcome = None
             if exit_ts is None:
                 try:
-                    outcome = resolve_once(sig)
+                    outcome = resolve_once(sig) if resolve else None
                 except Exception as exc:
                     log(f"  resolution error signal {sig['id']}: {exc}")
                 if outcome is None:
