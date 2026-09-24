@@ -1,0 +1,649 @@
+{
+  "_readme": "Defaults for every item Intention builds from the training app. `kinds` = defaults by kind; `items` = per-item id (see README for how ids are formed). Per-item edits made in the app live in Netlify Blobs and win over this file. `draft: true` = written by Claude, not yet approved by Alex. `source` names the training-app page the how/why came from. `guide` = the in-depth sheet for an item: {title, intro, steps:[{title, do, intention}], whole, remember, source}; a string value names an entry in `guides` so two items can share one sheet. Every item should get one (his standard, 2026-09-24): the exact steps, the intention of each, and how it helps him as a whole.",
+  "kinds": {
+    "routine-am": {
+      "goal": "HEALTH",
+      "notify": true,
+      "lead": 0
+    },
+    "routine-pm": {
+      "goal": "HEALTH",
+      "notify": true,
+      "lead": 0
+    },
+    "step": {
+      "goal": "HEALTH",
+      "notify": true,
+      "lead": 0
+    },
+    "gym-warmup": {
+      "goal": "BASKETBALL",
+      "notify": true,
+      "lead": 0,
+      "tool": "checklist"
+    },
+    "gym-morning": {
+      "goal": "BASKETBALL",
+      "notify": true,
+      "lead": 0,
+      "tool": "checklist"
+    },
+    "gym-main": {
+      "goal": "BASKETBALL",
+      "notify": true,
+      "lead": 0,
+      "tool": "checklist"
+    },
+    "drill": {
+      "goal": "BASKETBALL",
+      "notify": false,
+      "lead": 0,
+      "tool": "page"
+    },
+    "fifty": {
+      "goal": "BASKETBALL",
+      "notify": true,
+      "lead": 0,
+      "tool": "fifty"
+    },
+    "class": {
+      "goal": "CLASSROOM",
+      "notify": false,
+      "lead": 10,
+      "how": "",
+      "why": "Near-perfect grades at CWRU. Every class attended and worked is a grade defended.",
+      "draft": true
+    },
+    "meal": {
+      "goal": "HEALTH",
+      "notify": false,
+      "lead": 0,
+      "why": "Fuel is recovery. Eat like the next session depends on it — it does.",
+      "draft": true
+    },
+    "study": {
+      "goal": "CLASSROOM",
+      "notify": false,
+      "lead": 0,
+      "how": "Today's notes first, then the next thing due.",
+      "why": "Review inside 24 hours is where the grade is actually made.",
+      "draft": true
+    },
+    "transition": {
+      "goal": "HEALTH",
+      "notify": false,
+      "lead": 0
+    },
+    "sleep": {
+      "goal": "HEALTH",
+      "notify": true,
+      "lead": 0
+    },
+    "gameday": {
+      "goal": "BASKETBALL",
+      "notify": true,
+      "lead": 20,
+      "tool": "page"
+    },
+    "calendar": {
+      "goal": "CLASSROOM",
+      "notify": false,
+      "lead": 0
+    },
+    "weekly": {
+      "goal": "BASKETBALL",
+      "notify": true,
+      "lead": 0
+    },
+    "alarm": {
+      "goal": "BASKETBALL",
+      "notify": true,
+      "lead": 0,
+      "tool": "belief"
+    },
+    "sixr": {
+      "goal": "BASKETBALL",
+      "notify": true,
+      "lead": 0,
+      "tool": "sixr",
+      "title": "6 R's",
+      "how": "Where is your mind right now? Catch it. Recognize · release · relax · re-smile · rebreathe · return. Then back to what is in front of you.",
+      "why": "Catching it and coming back IS the rep. It is the same rep as catching doubt mid-game.",
+      "draft": false,
+      "source": "DAILY BASE · MEDITATE",
+      "guide": "sixr"
+    },
+    "gd": {
+      "goal": "BASKETBALL",
+      "notify": false,
+      "lead": 0,
+      "tool": "page"
+    },
+    "other": {
+      "goal": "HEALTH",
+      "notify": false,
+      "lead": 0
+    }
+  },
+  "items": {
+    "block:wake-morning-routine": {
+      "goal": "HEALTH",
+      "how": "Phone stays down until the base is done. Sunlight → pray → water → Qi Gong → CARS → crawls → meditate → Vortex → journal → eat.",
+      "why": "Same wake time every day is one of the biggest levers on how reactive your nervous system is.",
+      "draft": false,
+      "source": "DAILY BASE · SLEEP"
+    },
+    "am:go-get-sunlight": {
+      "goal": "HEALTH",
+      "duration": 3,
+      "how": "Outside or at the window, eyes open, a few minutes.",
+      "why": "Morning light anchors the clock that lets a 9:45 bedtime actually happen.",
+      "draft": true
+    },
+    "am:pray": {
+      "goal": "HEALTH",
+      "duration": 3,
+      "how": "",
+      "why": "Faith is on your Health list. Start anchored, before the day asks anything of you.",
+      "draft": true
+    },
+    "am:water": {
+      "goal": "HEALTH",
+      "duration": 1,
+      "how": "A full glass before anything else.",
+      "why": "You wake dehydrated and the gym is under an hour away.",
+      "draft": true
+    },
+    "am:qi-gong": {
+      "goal": "HEALTH",
+      "duration": 4,
+      "how": "",
+      "why": "Slow movement wakes the body before CARS and the gym load it.",
+      "draft": true
+    },
+    "am:cars": {
+      "goal": "BASKETBALL",
+      "duration": 5,
+      "how": "Every joint, full slow circles, both directions.",
+      "why": "Your rule: CARS, not stretching. Joints get their range before they get loaded.",
+      "draft": true
+    },
+    "am:crawls": {
+      "goal": "BASKETBALL",
+      "duration": 3,
+      "how": "",
+      "why": "Crawl patterns wake shoulders, hips and trunk together before the gym.",
+      "draft": true
+    },
+    "am:meditate-5-minutes": {
+      "goal": "BASKETBALL",
+      "duration": 5,
+      "tool": "timer",
+      "how": "Sit. Every time your mind wanders and you catch it, run the 6 R's: recognize, release, relax, re-smile, rebreathe, return.",
+      "why": "Job: return reps. Wandering is not failure. Catching it and coming back IS the rep — the same rep as catching doubt mid-game.",
+      "draft": false,
+      "source": "DAILY BASE · MEDITATE",
+      "guide": "meditate"
+    },
+    "am:vortex": {
+      "goal": "BASKETBALL",
+      "duration": 8,
+      "tool": "coherence",
+      "how": "Open Coherence and run Vortex. Lying down, or sitting on the floor or bed. End each hold at the first real urge. Never standing, walking, in water or driving.",
+      "why": "Job: shift gears, and stay calm while your body sounds the alarm. The exhale holds are command training — that is what pressure feels like in your body.",
+      "draft": false,
+      "source": "DAILY BASE · VORTEX"
+    },
+    "am:journal-the-day-out": {
+      "goal": "BASKETBALL",
+      "duration": 4,
+      "tool": "journal-am",
+      "how": "Three lines, then out loud: TODAY I HUNT — one thing. BEING SEEN — today's rep off your list. I AM — three lines, chest up. Then your ethos, once.",
+      "why": "TELL IT. Program yourself before the day programs you.",
+      "draft": false,
+      "source": "DAILY BASE · JOURNAL THE DAY OUT"
+    },
+    "am:eggs-orange-creatine": {
+      "goal": "HEALTH",
+      "duration": 10,
+      "how": "",
+      "why": "Fuel before a 65-minute session. Creatine every day, not just lift days.",
+      "draft": true
+    },
+    "am:brush-teeth": {
+      "goal": "HEALTH",
+      "duration": 2,
+      "how": "",
+      "why": "Part of the base. No thinking.",
+      "draft": true
+    },
+    "am:get-teeth-gum-in": {
+      "goal": "HEALTH",
+      "duration": 1,
+      "how": "",
+      "why": "Your line — tell me what this is and I'll write the why.",
+      "draft": true
+    },
+    "am:make-bed-room-tidy": {
+      "goal": "HEALTH",
+      "duration": 2,
+      "how": "",
+      "why": "Leave the room the way you want to find it at 9 tonight.",
+      "draft": true
+    },
+    "block:breakfast-to-gym": {
+      "goal": "HEALTH",
+      "how": "Eat, out the door, on the floor at the time on the block.",
+      "why": "Fuel in, then be on the floor on time. The session starts at its time, not when you arrive.",
+      "draft": true
+    },
+    "block:gym-cars-crawls-warmup": {
+      "goal": "BASKETBALL",
+      "how": "CARS → Crawls → Vitamins. Same order every day so you never think about it.",
+      "why": "The floor you never drop below. Not a workout — the thing that makes the workout possible.",
+      "draft": false,
+      "source": "Everyday warmup · VITAMINS"
+    },
+    "drill:vitamins": {
+      "goal": "BASKETBALL",
+      "why": "No standards, no scoring, no skipping. If you are in the gym, this happened.",
+      "draft": false,
+      "source": "Everyday warmup · VITAMINS"
+    },
+    "drill:cars": {
+      "goal": "BASKETBALL",
+      "how": "Every joint, full slow circles, both directions.",
+      "why": "Range before load.",
+      "draft": true
+    },
+    "drill:crawls": {
+      "goal": "BASKETBALL",
+      "how": "",
+      "why": "Shoulders, hips and trunk switched on together before you touch a ball.",
+      "draft": true
+    },
+    "block:gym-good-drills": {
+      "goal": "BASKETBALL",
+      "how": "Movement → Good Handles → today's Good drill. Beat the level, move the NOW line.",
+      "why": "The daily push: skill under constraint — perception, balance, pace. No make standards; a make count on an awkward rep pays you to make it less awkward.",
+      "draft": true,
+      "source": "your model (Good drills), not on a page"
+    },
+    "drill:movement": {
+      "goal": "BASKETBALL",
+      "why": "Low, stable and fast are one thing. This is where the strength from the lift gets used low.",
+      "draft": true,
+      "source": "your words, 9/19"
+    },
+    "drill:good-handles": {
+      "goal": "BASKETBALL",
+      "why": "Skill under constraint. Beat the level, move the NOW line.",
+      "draft": true
+    },
+    "drill:good-shooting": {
+      "goal": "BASKETBALL",
+      "why": "Skill under constraint. If a drill takes more than 6 attempts, next drill. Move the NOW line.",
+      "draft": true
+    },
+    "drill:good-finishing": {
+      "goal": "BASKETBALL",
+      "why": "Skill under constraint — off balance, glass height, no perception time, one rep.",
+      "draft": true
+    },
+    "drill:passing": {
+      "goal": "BASKETBALL",
+      "why": "Accuracy + decision, off balance and moving fast. Three targets, called.",
+      "draft": true
+    },
+    "drill:dribble-bag-half-a": {
+      "goal": "BASKETBALL",
+      "why": "Reps — grooving game movements. Make standards stay here.",
+      "draft": true
+    },
+    "drill:dribble-bag-half-b": {
+      "goal": "BASKETBALL",
+      "why": "Reps — grooving game movements. Make standards stay here.",
+      "draft": true
+    },
+    "drill:on-the-move-half-a": {
+      "goal": "BASKETBALL",
+      "why": "The shooting block. Eight movements, six shots, the bar ratchets.",
+      "draft": true
+    },
+    "drill:on-the-move-half-b": {
+      "goal": "BASKETBALL",
+      "why": "The shooting block. Eight movements, six shots, the bar ratchets.",
+      "draft": true
+    },
+    "drill:reads": {
+      "goal": "BASKETBALL",
+      "why": "Daily. Every action scored. 11+ of 15 to move on.",
+      "draft": true
+    },
+    "drill:defense": {
+      "goal": "BASKETBALL",
+      "why": "Move faster, stronger and more stable in a lower stance. Change direction on a dime. Navigate screens.",
+      "draft": true,
+      "source": "your words, 9/19"
+    },
+    "drill:upper-strength": {
+      "goal": "BASKETBALL",
+      "why": "Strength and injury prevention only. Same lift every week, scale by weight.",
+      "draft": true,
+      "source": "your philosophy"
+    },
+    "drill:upper-rotation": {
+      "goal": "BASKETBALL",
+      "why": "Strength and injury prevention only. Same lift every week, scale by weight.",
+      "draft": true,
+      "source": "your philosophy"
+    },
+    "drill:lower-heavy": {
+      "goal": "BASKETBALL",
+      "why": "The one real heavy leg day. Same lift every week, scale by weight only.",
+      "draft": true,
+      "source": "your philosophy"
+    },
+    "drill:lower-lengthened-strength": {
+      "goal": "BASKETBALL",
+      "why": "Strength at length — the positions that end seasons get loaded on purpose.",
+      "draft": true
+    },
+    "drill:dunks-sprints": {
+      "goal": "BASKETBALL",
+      "why": "Dunks and sprints replace plyos — your rule. Field, not hill.",
+      "draft": true,
+      "source": "your philosophy"
+    },
+    "drill:mobility": {
+      "goal": "BASKETBALL",
+      "why": "Full CARS + PAILs/RAILs every Saturday. Range you can load.",
+      "draft": true
+    },
+    "drill:recording": {
+      "goal": "BASKETBALL",
+      "why": "Does it sell. Film the reps that become the audition tape.",
+      "draft": true
+    },
+    "drill:stakes-set": {
+      "goal": "BASKETBALL",
+      "how": "The last shooting set carries stakes — at least one kind: consequence, fatigue, judgment (your main one). Free-throw routine on every free throw. End on a make.",
+      "why": "Skills trained calm do not show up when your heart is pounding and people are watching. They have to be trained there.",
+      "draft": false,
+      "source": "PRESSURE · EVERY SHOOTING WORKOUT"
+    },
+    "block:back-to-dorm-get-ready-for-class": {
+      "goal": "CLASSROOM",
+      "how": "",
+      "why": "In your seat at the start with the reading open.",
+      "draft": true
+    },
+    "block:to-gym": {
+      "goal": "BASKETBALL",
+      "how": "",
+      "why": "On the floor at the time on the block. The session starts on time or it shrinks.",
+      "draft": true
+    },
+    "block:gym": {
+      "goal": "BASKETBALL",
+      "how": "The card, in order. The last shooting set carries stakes.",
+      "why": "This season is the audition. Every session is a D1 rep or it isn't.",
+      "draft": true
+    },
+    "block:gym-afternoon-session": {
+      "goal": "BASKETBALL",
+      "how": "The card, in order. The last shooting set carries stakes.",
+      "why": "This season is the audition. Every session is a D1 rep or it isn't.",
+      "draft": true
+    },
+    "block:50-50": {
+      "goal": "BASKETBALL",
+      "tool": "fifty",
+      "how": "5 racks of 10 threes — right corner, right wing, top, left wing, left corner — then 5 sets of 10 free throws. Tap each make; a rack logs the second it ends.",
+      "why": "The one number you already produce every day, made real. Ten days of rows and your line gets set from your own numbers, not a guess.",
+      "draft": false,
+      "source": "50/50 - The Standard"
+    },
+    "block:night-routine": {
+      "goal": "HEALTH",
+      "how": "Plan tomorrow → banded work → neck → shower → CARS → sleeves → read → journal → tape → slow breathe. Phone down 30 minutes before bed.",
+      "why": "Program yourself or be programmed — the last stretch of the day decides how the first one goes.",
+      "draft": false,
+      "source": "DAILY BASE"
+    },
+    "am:plan-tomorrow": {
+      "goal": "CLASSROOM",
+      "duration": 5
+    },
+    "pm:plan-tomorrow": {
+      "goal": "CLASSROOM",
+      "duration": 5,
+      "how": "Open the training app: tomorrow's column, the workout card, the calendar. Anything due? Move it now, not in the morning.",
+      "why": "The morning runs itself when tomorrow was decided tonight.",
+      "draft": true
+    },
+    "pm:banded-stuff-10-per-side": {
+      "goal": "BASKETBALL",
+      "duration": 10,
+      "tool": "checklist",
+      "how": "10 per side, every line.",
+      "why": "Ankles, tibs, hamstrings, quads, hips, elbows, shoulders — the joints that end seasons get their insurance every night.",
+      "draft": true
+    },
+    "pm:neck-isos-15s-each-flexion-extension-left-side-right-side": {
+      "goal": "BASKETBALL",
+      "duration": 2,
+      "tool": "timer",
+      "how": "15 s each: flexion, extension, left, right.",
+      "why": "A strong neck is contact insurance.",
+      "draft": true
+    },
+    "pm:shower-teeth-brush-white-strips-pimple-patches": {
+      "goal": "HEALTH",
+      "duration": 15,
+      "how": "",
+      "why": "Clean, done, no decisions left tonight.",
+      "draft": true
+    },
+    "pm:cars": {
+      "goal": "HEALTH",
+      "duration": 5,
+      "how": "Every joint, slow, both directions.",
+      "why": "Unwind the day's positions before sleep.",
+      "draft": true
+    },
+    "pm:leg-sleeves": {
+      "goal": "HEALTH",
+      "duration": 1,
+      "how": "",
+      "why": "Recovery while you sleep.",
+      "draft": true
+    },
+    "pm:read-5-pages": {
+      "goal": "HEALTH",
+      "duration": 10,
+      "how": "Book, not phone.",
+      "why": "Phone down 30 minutes before bed. Five pages is the off-ramp.",
+      "draft": true,
+      "source": "DAILY BASE (phone rule)"
+    },
+    "pm:journal-how-the-day-went-what-energy-to-bring-into-tomorrow": {
+      "goal": "BASKETBALL",
+      "duration": 5,
+      "tool": "journal-pm",
+      "how": "RED — one line: a moment you played small, and what you do instead next time. Close it. BLUE — three wins, at least one from a moment you were nervous or watched. NEXT — the energy you bring into tomorrow.",
+      "why": "PROVE IT. The best blue goes on the BLUE LIST — that list is what your brain goes looking for under pressure.",
+      "draft": false,
+      "source": "DAILY BASE · NIGHT"
+    },
+    "pm:mouth-tape": {
+      "goal": "HEALTH",
+      "duration": 1,
+      "how": "",
+      "why": "Nose breathing all night — better sleep, better BOLT.",
+      "draft": true
+    },
+    "pm:slow-breathe": {
+      "goal": "HEALTH",
+      "duration": 5,
+      "tool": "breath-478",
+      "how": "4-7-8, or 4 in and 6 out, lying down. Longer out than in is the only rule.",
+      "why": "Job: shift down for sleep.",
+      "draft": false,
+      "source": "DAILY BASE · SLOW BREATHE"
+    },
+    "pm:get-good-sleep": {
+      "goal": "HEALTH",
+      "duration": 1,
+      "how": "Same wake time every day, weekends within an hour. 8+ hours in bed.",
+      "why": "One sleepless night raised anxiety up to 30%. Stanford players who slept more shot about 9 points better from the line and from three.",
+      "draft": false,
+      "source": "DAILY BASE · SLEEP"
+    },
+    "block:sleep-wake": {
+      "goal": "HEALTH",
+      "how": "Lights out at the time on the block. Phone away.",
+      "why": "One of the biggest levers on how reactive your nervous system is. Believe the Fitbit over your guess.",
+      "draft": false,
+      "source": "DAILY BASE · SLEEP"
+    },
+    "weekly:pressure-test": {
+      "goal": "BASKETBALL",
+      "tool": "pressure-test",
+      "how": "Round A, normal: 10 pairs of free throws, one down-and-back before each pair. Rest 3 min. Round B, stakes: same, phone filming, number called out loud, anyone in the gym counts, every miss is 10 push-ups after.",
+      "why": "The number that matters most: your free throws with something on the line vs without. Judge the gap over 4 weeks, not one.",
+      "draft": false,
+      "source": "PRESSURE · THE PRESSURE TEST"
+    },
+    "weekly:hpv": {
+      "goal": "BASKETBALL",
+      "tool": "visualization",
+      "how": "Right after Vortex. One scene, five steps: build it, the mistake, the reset, the next play, lock it. 10 minutes.",
+      "why": "SHOW IT. It rehearses the part that actually goes wrong — the mistake and what you do next. The rep is the recovery.",
+      "draft": false,
+      "source": "HIGH PRESSURE VISUALIZATION"
+    },
+    "weekly:bolt": {
+      "goal": "BASKETBALL",
+      "tool": "bolt",
+      "how": "Sit. Breathe out normally through your nose. Pinch your nose and time it until the first definite urge. Not a max hold. Same time, same position every week.",
+      "why": "Nick's breath number. The SCOREBOARD tracks it week to week.",
+      "draft": false,
+      "source": "DAILY BASE · ONCE A WEEK - BOLT"
+    },
+    "weekly:belief-alarm-1": {
+      "goal": "BASKETBALL",
+      "tool": "belief",
+      "how": "What am I thinking right now? Name the feeling in one word. Then the 6 R's.",
+      "why": "Naming it takes the charge out.",
+      "draft": false,
+      "source": "DAILY BASE · belief alarms"
+    },
+    "weekly:belief-alarm-2": {
+      "goal": "BASKETBALL",
+      "tool": "belief",
+      "how": "Why am I the hardest guard in the gym to stop? Answer it with real reasons.",
+      "why": "TELL IT, with receipts.",
+      "draft": false,
+      "source": "DAILY BASE · belief alarms"
+    },
+    "weekly:belief-alarm-3": {
+      "goal": "BASKETBALL",
+      "tool": "belief",
+      "how": "What did I do today that proves it? If the answer is nothing yet, go make one.",
+      "why": "PROVE IT, today.",
+      "draft": false,
+      "source": "DAILY BASE · belief alarms"
+    }
+  },
+  "guides": {
+    "sixr": {
+      "title": "THE 6 R's",
+      "intro": "A way back. The 6 R's are a framework for returning to stillness, space and awareness, in a five-minute sit and in the middle of a day. Run them in meditation so they are there in a game. The whole skill is remembering to use them; that is what the four random pings are for.",
+      "steps": [
+        {
+          "title": "Recognize",
+          "do": "Notice what just grabbed you: a thought, a feeling, a sensation, a replay of a mistake, a story about what someone thinks. Name it in one plain word if you can (doubt, tight, replaying, judged). No arguing with it, no judging yourself for having it. In a sit: notice the mind has left the breath. In life: notice you are caught in the machine (a stressor, a trigger, a sour mood) while it is happening, not an hour later.",
+          "intention": "Awareness first. You cannot put down what you have not noticed you are holding. Accurate naming already takes some of the charge out. This is the step the pings exist to force."
+        },
+        {
+          "title": "Release",
+          "do": "Let the thought go without following it, feeding it or finishing it. Picture cutting a kite string. Drop the tension it built along with it: jaw, shoulders, chest, hands. In life: let the negative thought or feeling pass instead of dwelling in it or building a case for it.",
+          "intention": "Stop feeding the engine. Every second you follow the thought is a rep for the thought. Releasing is choosing not to identify with it: it is not you, not your program, not your story."
+        },
+        {
+          "title": "Relax",
+          "do": "Soften the body on purpose: one longer exhale, drop the shoulders, unclench the face and the hands, sink into the seat or the floor. In life: the same three-second soften wherever you are, on the bench, at the line, in a lecture.",
+          "intention": "A thought creates tension, and tension creates the next thought. Relaxing breaks the loop from the body side and teaches the body it is safe: what someone thinks of you is not life or death."
+        },
+        {
+          "title": "Re-smile",
+          "do": "Bring a gentle smile to your face and keep it. Make it real enough to feel. In a sit you can make the smile itself the thing you rest on. In life: smile hardest exactly when you least want to, after a miss, when someone is dismissing you.",
+          "intention": "The face is a remote control for the nervous system. If you have lost your smile you have lost your mindfulness. The smile signals ease to the body and turns the outlook even inside a hard moment."
+        },
+        {
+          "title": "Rebreathe",
+          "do": "One full breath you actually feel: in through the nose, a beat, long out through the mouth. The fuller version when there is time: in, hold 3, out, hold 3.",
+          "intention": "Nothing pulls you into the present faster than the breath. Anything that is not here and now is imaginary."
+        },
+        {
+          "title": "Return",
+          "do": "Bring attention back to the object. In a sit: the breath, or the smile. In life: the task in front of you, the ball, your man's chest, the page, the person talking.",
+          "intention": "This is the rep. Wandering is not failure; the return is the skill, and it is the same move as catching doubt mid-game and coming back to the next play."
+        },
+        {
+          "title": "Repeat",
+          "do": "Run all six again every time you notice you have drifted, a hundred times in a sit if that is what happens. Five good minutes a day, plus any moment it is needed.",
+          "intention": "Consistency builds the reflex. Roughly eight hours of total reps make it muscle memory, a little less for an athlete who is in tune with his body. Five minutes a day is seven and a half hours in three months."
+        }
+      ],
+      "whole": "In games your confidence goes from 7-8 to 4-5 when the pressure is on: a thought shows up (don't mess up, he's watching) and it starts running the body. The 6 R's are the trained reflex for that exact moment: notice it, cut it, soften, smile, breathe, back to the job, all inside one breath. Every rep at rest (the five-minute sit) and every random rep during the day (the pings) is the same rep you need at the line with the student section behind the basket. Over weeks the body learns that a thought is not an emergency, the mind gets quieter and sharper, and the reset becomes faster than the doubt. That is what unwavering means in practice: not no doubt, but back within one breath. This is the AT REST layer of your CONFIDENCE AND CONTROL system; the same tool then gets used UNDER LOAD (after a miss in 50/50, in a pressure set) and LIVE (the reset on GAME DAY).",
+      "remember": "The key is remembering. Pings, sticky notes where you spend your day, and the meditate slot every morning.",
+      "source": "Written from Nick Sweeney's 6R's sheet (Polaris) and his Six R's video, plus your DAILY BASE page. Not pasted; paste his text into this item if you want it word for word."
+    },
+    "meditate": {
+      "title": "MEDITATE 5 MINUTES - the 6 R's sit",
+      "intro": "Five minutes. Sit, attention on the breath, or on a gentle smile. Every time you notice you have wandered, run the 6 R's and come back. The score is the number of returns, not how still you were.",
+      "steps": [
+        {
+          "title": "Recognize",
+          "do": "Notice what just grabbed you: a thought, a feeling, a sensation, a replay of a mistake, a story about what someone thinks. Name it in one plain word if you can (doubt, tight, replaying, judged). No arguing with it, no judging yourself for having it. In a sit: notice the mind has left the breath. In life: notice you are caught in the machine (a stressor, a trigger, a sour mood) while it is happening, not an hour later.",
+          "intention": "Awareness first. You cannot put down what you have not noticed you are holding. Accurate naming already takes some of the charge out. This is the step the pings exist to force."
+        },
+        {
+          "title": "Release",
+          "do": "Let the thought go without following it, feeding it or finishing it. Picture cutting a kite string. Drop the tension it built along with it: jaw, shoulders, chest, hands. In life: let the negative thought or feeling pass instead of dwelling in it or building a case for it.",
+          "intention": "Stop feeding the engine. Every second you follow the thought is a rep for the thought. Releasing is choosing not to identify with it: it is not you, not your program, not your story."
+        },
+        {
+          "title": "Relax",
+          "do": "Soften the body on purpose: one longer exhale, drop the shoulders, unclench the face and the hands, sink into the seat or the floor. In life: the same three-second soften wherever you are, on the bench, at the line, in a lecture.",
+          "intention": "A thought creates tension, and tension creates the next thought. Relaxing breaks the loop from the body side and teaches the body it is safe: what someone thinks of you is not life or death."
+        },
+        {
+          "title": "Re-smile",
+          "do": "Bring a gentle smile to your face and keep it. Make it real enough to feel. In a sit you can make the smile itself the thing you rest on. In life: smile hardest exactly when you least want to, after a miss, when someone is dismissing you.",
+          "intention": "The face is a remote control for the nervous system. If you have lost your smile you have lost your mindfulness. The smile signals ease to the body and turns the outlook even inside a hard moment."
+        },
+        {
+          "title": "Rebreathe",
+          "do": "One full breath you actually feel: in through the nose, a beat, long out through the mouth. The fuller version when there is time: in, hold 3, out, hold 3.",
+          "intention": "Nothing pulls you into the present faster than the breath. Anything that is not here and now is imaginary."
+        },
+        {
+          "title": "Return",
+          "do": "Bring attention back to the object. In a sit: the breath, or the smile. In life: the task in front of you, the ball, your man's chest, the page, the person talking.",
+          "intention": "This is the rep. Wandering is not failure; the return is the skill, and it is the same move as catching doubt mid-game and coming back to the next play."
+        },
+        {
+          "title": "Repeat",
+          "do": "Run all six again every time you notice you have drifted, a hundred times in a sit if that is what happens. Five good minutes a day, plus any moment it is needed.",
+          "intention": "Consistency builds the reflex. Roughly eight hours of total reps make it muscle memory, a little less for an athlete who is in tune with his body. Five minutes a day is seven and a half hours in three months."
+        }
+      ],
+      "whole": "In games your confidence goes from 7-8 to 4-5 when the pressure is on: a thought shows up (don't mess up, he's watching) and it starts running the body. The 6 R's are the trained reflex for that exact moment: notice it, cut it, soften, smile, breathe, back to the job, all inside one breath. Every rep at rest (the five-minute sit) and every random rep during the day (the pings) is the same rep you need at the line with the student section behind the basket. Over weeks the body learns that a thought is not an emergency, the mind gets quieter and sharper, and the reset becomes faster than the doubt. That is what unwavering means in practice: not no doubt, but back within one breath. This is the AT REST layer of your CONFIDENCE AND CONTROL system; the same tool then gets used UNDER LOAD (after a miss in 50/50, in a pressure set) and LIVE (the reset on GAME DAY).",
+      "remember": "Same time every morning, right after crawls. Timer runs in the app; the 6 R's are listed under it.",
+      "source": "Written from Nick Sweeney's 6R's sheet (Polaris) and his Six R's video, plus your DAILY BASE page. Not pasted; paste his text into this item if you want it word for word."
+    }
+  }
+}

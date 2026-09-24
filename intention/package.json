@@ -1,0 +1,20 @@
+{
+  "name": "intention",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Intention — runs Alex's day from the training app's live schedule. What / how / why, Done → next.",
+  "scripts": {
+    "show": "node scripts/show-day.mjs",
+    "test": "node --test test/*.test.mjs",
+    "deploy": "netlify deploy --prod --dir public --site $NETLIFY_SITE_ID"
+  },
+  "dependencies": {
+    "@netlify/blobs": "^11.1.0",
+    "@netlify/functions": "^6.0.0",
+    "web-push": "^3.6.7"
+  },
+  "devDependencies": {
+    "qrcode": "^1.5.4"
+  }
+}
