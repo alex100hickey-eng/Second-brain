@@ -51,8 +51,11 @@
     title: 'School mail', href: '/school', linkTitle: 'Open school' }, 1338, 176);
   const wWork = widget({ width: 216, height: 100, shape: 'layered', role: 'w-r3',
     title: 'Assignments', href: '/school', linkTitle: 'Open school' }, 1304, 322);
+  // MONEY — the four lanes against the roadmap gates; cash only from Revenue.csv.
+  // Replaced the idea-scouting Revenue tile 2026-09-24: the number Alex checks
+  // is cash landed and whether the system moved today, not an estimate.
   const wRev = widget({ width: 216, height: 102, shape: 'cutbr', role: 'w-br',
-    title: 'Revenue', href: '/revenue', linkTitle: 'Open revenue' }, 1288, 630);
+    title: 'Money', href: '/money', linkTitle: 'Open money progress' }, 1288, 630);
   // AUGUST — the money plan. Its own tile and its own tab, deliberately separate
   // from Revenue (which is the idea-scouting pipeline): this is one project with a
   // deadline, and burying it inside a general revenue view is how it stops being
@@ -212,22 +215,31 @@
     }));
 
     // revenue — estimated monthly from approved ideas
-    const r = (d && d.revenue) || {};
-    HUD.fill(wRev._content, [
-      HUD.bigStat({ value: gone ? '—' : money(r.est_monthly),
-        sub: gone || `${r.approved || 0} approved · ${r.ideas || 0} ideas` }),
-      (() => {
-        const vals = (r.streams || []).slice(0, 8).map(s => Math.max(1, s.profit || 1));
-        const sp = HUD.miniSpark({ values: vals.length ? vals : [1, 1, 1, 1],
-          width: 150, height: 22 });
-        sp.style.marginTop = '6px';
-        return sp;
-      })()
-    ]);
   }
 
   render(null, null);                       // paint the empty state immediately
   HUD.bindLive({ url: '/api/hud', every: 60000, render });
+
+  // Money tile: its own feed (progress.json rebuilt from the ledgers every 2 h),
+  // polled every 5 min like the /money page itself.
+  function renderMoney(d, err) {
+    const gone = err ? 'Data unavailable' : (d && d.error) ? d.error : null;
+    const hm = t => { const x = new Date((t || 0) * 1000); return x.getHours().toString().padStart(2, '0') + ':' + x.getMinutes().toString().padStart(2, '0'); };
+    const lanes = ((d && d.lanes) || []).map(l => l.id + l.stage).join(' ');
+    const checks = (d && d.checks) || [];
+    const okN = checks.filter(c => c.ok).length;
+    const last = d && d.activity && d.activity.length ? hm(d.activity[0].t) : '—';
+    HUD.fill(wRev._content, [
+      HUD.bigStat({ value: gone ? '—' : money(d.cash && d.cash.mtd),
+        sub: gone || `streak ${d.streak || 0} · moved ${last}` }),
+      HUD.listRows({
+        empty: gone || '',
+        rows: gone ? [] : [[`lanes ${lanes || '—'}`, `${okN}/${checks.length} ✓`, okN === checks.length && checks.length > 0]]
+      })
+    ]);
+  }
+  renderMoney(null, null);
+  HUD.bindLive({ url: '/api/money/progress', every: 300000, render: renderMoney });
 
   // Daily learnings live on their own endpoint and only change once a day,
   // so fetch once (every: 0) rather than polling — the card is model-generated
