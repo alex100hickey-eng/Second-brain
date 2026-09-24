@@ -287,7 +287,7 @@ def watch(monkeypatch):
     rows = [{"brand": "Moon Juice", "domain": "moonjuice.com", "email": "",
              "email_generic": "press@moonjuice.com", "sent_date": "2026-09-19"}]
     state, logged, stamped, nudged = {"seen": []}, [], [], []
-    monkeypatch.setattr(rw, "tracker_rows", lambda: rows)
+    monkeypatch.setattr(rw, "tracker_rows", lambda allow_mirror=False: rows)
     monkeypatch.setattr(rw, "load_state", lambda: json.loads(json.dumps(state)))
     monkeypatch.setattr(rw, "save_state", lambda st: state.update(st))
     monkeypatch.setattr(rw, "log", logged.append)
@@ -381,3 +381,32 @@ def test_a_scan_that_never_happened_is_logged_not_silent(watch, monkeypatch):
     assert _run_with(monkeypatch, watch, fake) == 1
     assert any("inbox read FAILED 3 times" in l for l in watch.logged)
     assert not any("no prospect replies" in l for l in watch.logged), "a failed read is not a quiet inbox"
+
+
+# ---------------------------------------------------------------------------
+# An evicted tracker (iCloud "dataless") must not cost a reply.
+# ---------------------------------------------------------------------------
+
+def test_matching_reads_the_git_mirror_when_icloud_has_evicted_the_tracker(monkeypatch, tmp_path):
+    import subprocess, types
+    monkeypatch.setattr(rw, "TRACKER", str(tmp_path / "evicted.csv"))
+    monkeypatch.setattr(rw, "log", lambda m: None)
+    csv_text = "brand,domain,email,email_generic\nMoon Juice,moonjuice.com,,press@moonjuice.com\n"
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: types.SimpleNamespace(returncode=0, stdout=csv_text))
+    assert rw.tracker_rows(allow_mirror=True)[0]["brand"] == "Moon Juice"
+
+
+def test_writing_never_uses_the_mirror(monkeypatch, tmp_path):
+    monkeypatch.setattr(rw, "TRACKER", str(tmp_path / "evicted.csv"))
+    with pytest.raises(OSError):
+        rw.tracker_rows()          # stamp_replied's read: the live file or nothing
+
+
+def test_a_reply_is_still_announced_when_the_stamp_fails(watch, monkeypatch):
+    def evicted(brand, when):
+        raise OSError(11, "Resource deadlock avoided")
+    monkeypatch.setattr(rw, "stamp_replied", evicted)
+    inbox = [_inbound("m1", "Amanda <amanda@moonjuice.com>", "T1", body="yes, let's talk")]
+    watch(inbox, {})
+    assert watch.nudged == ["Moon Juice replied"], "the nudge is what matters"
+    assert any("could not stamp Moon Juice" in l for l in watch.logged)

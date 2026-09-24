@@ -169,9 +169,28 @@ def save_state(st: dict) -> None:
         json.dump(st, f)
 
 
-def tracker_rows() -> list:
-    with open(TRACKER, newline="") as f:
-        return list(csv.DictReader(f))
+VAULT_GIT = os.path.expanduser("~/.second-brain-vault.git")
+
+
+def tracker_rows(allow_mirror: bool = False) -> list:
+    """The tracker's rows. iCloud evicts vault files to dataless placeholders and reading one can
+    fail (04:20 on 2026-09-24: "Resource deadlock avoided"). For MATCHING, the vault git mirror's
+    copy stands in. Never for writing back: a stale copy written over the live file would undo
+    whatever changed since the last sync, so stamp_replied reads the real file only."""
+    try:
+        with open(TRACKER, newline="") as f:
+            return list(csv.DictReader(f))
+    except OSError:
+        if not allow_mirror:
+            raise
+        import io
+        import subprocess
+        r = subprocess.run(["git", "--git-dir", VAULT_GIT, "show", "HEAD:Money/prospect-tracker.csv"],
+                           capture_output=True, text=True, timeout=20)
+        if r.returncode != 0 or not r.stdout.strip():
+            raise
+        log("tracker unreadable in iCloud (probably evicted); matching against the vault git mirror")
+        return list(csv.DictReader(io.StringIO(r.stdout)))
 
 
 # ---------------------------------------------------------------------------
@@ -403,7 +422,7 @@ def main() -> int:
     from composio import Composio  # type: ignore
     c = Composio(api_key=os.environ["COMPOSIO_API_KEY"])
     ent = os.environ.get("STUDIO_GMAIL_ENTITY")
-    rows = tracker_rows()
+    rows = tracker_rows(allow_mirror=True)
     domains = prospect_domains(rows)
     addresses = prospect_addresses(rows)
     exact = exact_addresses(rows)
@@ -461,7 +480,12 @@ def main() -> int:
         else:
             log(f"REPLY from {brand} <{addr}>{via}: {subject}")
             for b in brands:
-                stamp_replied(b, when)
+                try:
+                    stamp_replied(b, when)
+                except OSError as exc:
+                    # The nudge below matters more than the stamp: never let an evicted tracker
+                    # swallow a reply. The follow-ups for this brand stay armed until it's stamped.
+                    log(f"  could not stamp {b} as replied ({type(exc).__name__}): stamp it by hand")
             which = (f"\n(Sent from a domain shared by {brand}; all of them are marked replied so "
                      "nobody gets chased. Un-stamp the ones it isn't.)" if len(brands) > 1 else "")
             nudge(f"{brand} replied", f"{sender}: {subject}\n{preview[:180]}\nReply today. Call card: Money/call-card.md{which}")
