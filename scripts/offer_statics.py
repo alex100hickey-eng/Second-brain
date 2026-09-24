@@ -325,7 +325,16 @@ def cmd_swap_first(args) -> int:
     intake, _outbox, composio, entity = _env()
     sq = _queue_module()
     q, queue = sq.load_queue()
+    # Record the delivery where the follow-up drafter looks (plan_for reads STATE_KEY): an
+    # offer-arm first touch that already carries its static must not get "made the one I said I
+    # would" attached again on FU1.
+    state = intake._load_state(STATE_KEY) or {}
+    delivered = state.get("delivered") or {}
     for address, info in ok.items():
+        if address in delivered:
+            print(f"{info['brand']}: static already delivered ({delivered[address].get('via', '')}, "
+                  f"{delivered[address].get('at', '')[:16]})")
+            continue
         entry, why = pending_first_touch(queue, info["brand"], address)
         if not entry:
             print(f"{info['brand']}: {why}")
@@ -342,6 +351,11 @@ def cmd_swap_first(args) -> int:
         entry.update({"replaced_draft": entry.get("draft_id"), "draft_id": new_id,
                       "body": info["body"], "static_attached": info["file"]})
         sq.save_queue(q, queue)
+        delivered[address] = {"brand": info["brand"], "file": info["file"], "draft": new_id,
+                              "replaced": entry.get("replaced_draft"), "via": "first-touch",
+                              "at": datetime.now().isoformat()}
+        state.update({"key": STATE_KEY, "delivered": delivered})
+        intake._save_state(state)
         print(f"ATTACHED: {info['brand']} first touch now carries {info['file']} (draft {new_id}; "
               f"the old draft stays in Drafts, unreferenced)")
     return 0

@@ -99,10 +99,23 @@ def test_the_new_first_touch_is_verified_before_use():
     assert any("founder" in p for p in problems)
 
 
+class _State:
+    """intake's _load_state/_save_state over one dict."""
+    def __init__(self, data=None):
+        self.data = data or {}
+
+    def _load_state(self, key):
+        return dict(self.data.get(key) or {})
+
+    def _save_state(self, state):
+        self.data[state["key"]] = dict(state)
+
+
 def test_with_both_locks_open_the_queue_entry_is_repointed(qa, monkeypatch):
     monkeypatch.setattr(ofs, "STATIC_FIRST", True)
     comp = _Composio()
-    monkeypatch.setattr(ofs, "_env", lambda: (None, None, comp, "studio"))
+    store = _State()
+    monkeypatch.setattr(ofs, "_env", lambda: (store, None, comp, "studio"))
     monkeypatch.setattr(ofs, "create_first_touch_draft",
                         lambda c, e, to, s, b, png: ("r-new", []))
     queue = [{"brand": "High Mesa Chile Co.", "to": "brock@highmesachile.co", "draft_id": "r-old",
@@ -116,6 +129,26 @@ def test_with_both_locks_open_the_queue_entry_is_repointed(qa, monkeypatch):
     e = saved[-1][0]
     assert (e["draft_id"], e["replaced_draft"], e["static_attached"]) == ("r-new", "r-old", "hm.png")
     assert e["body"].startswith("Brock,")
+    # the follow-up drafter must see it as delivered, or FU1 attaches the same static again
+    d = store.data[ofs.STATE_KEY]["delivered"]["brock@highmesachile.co"]
+    assert d["via"] == "first-touch" and d["file"] == "hm.png"
+    assert ofs.plan_for("brock@highmesachile.co", store.data[ofs.STATE_KEY]["delivered"],
+                        {"brock@highmesachile.co": {}}) == "delivered"
+
+
+def test_an_already_delivered_static_is_never_swapped_in_twice(qa, monkeypatch, capsys):
+    monkeypatch.setattr(ofs, "STATIC_FIRST", True)
+    store = _State({ofs.STATE_KEY: {"delivered": {"brock@highmesachile.co": {
+        "via": "swap", "at": "2026-09-24T09:10"}}}})
+    monkeypatch.setattr(ofs, "_env", lambda: (store, None, _Composio(), "studio"))
+    created = []
+    monkeypatch.setattr(ofs, "create_first_touch_draft", lambda *a: created.append(a) or ("r-x", []))
+    queue = [{"brand": "High Mesa Chile Co.", "to": "brock@highmesachile.co", "draft_id": "r-old",
+              "subject": "s", "body": "old"}]
+    monkeypatch.setattr(ofs, "_queue_module", lambda: types.SimpleNamespace(
+        load_queue=lambda: ({}, queue), save_queue=lambda q, qq: None))
+    assert ofs.main(["swap-first", "--apply", "--dir", str(qa)]) == 0
+    assert created == [] and "already delivered" in capsys.readouterr().out
 
 def test_the_0730_backstop_swaps_from_the_git_mirror_before_the_release():
     """The server releases first touches at 07:50. The Mac backstop must run before that, read the
