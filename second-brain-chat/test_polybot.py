@@ -3736,3 +3736,9 @@ def test_a_config_hot_reload_reaches_every_component_and_keeps_the_account_bankr
     assert r.reload_config_if_changed()
     assert r.risk.cfg is r.cfg and r.arb.cfg is r.cfg and r.other_modules["maker_rewards"].cfg is r.cfg
     assert r.risk.cfg.arb_live_ok is True and r.cfg.bankroll_usd == 208.06
+
+
+def test_the_report_carries_the_compounding_state():
+    from polybot import runner as runner_mod
+    r = runner_mod.Runner(_cfg(), _ledger(), log=lambda *_: None)
+    assert "compounding: off — caps are the fixed dollars in config.json" in r.report(1)

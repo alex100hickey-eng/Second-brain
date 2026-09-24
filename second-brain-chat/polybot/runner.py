@@ -1005,7 +1005,7 @@ class Runner:
         return True
 
     def report(self, days: int = 1) -> str:
-        text = self.ledger.report(days)
+        text = self.ledger.report(days) + "\n  " + compounding.describe(self.compounding, self.cfg)
         with open(config.REPORT_PATH, "w") as f:
             f.write(text + "\n")
         return text
@@ -1215,7 +1215,6 @@ class Runner:
                     if now.hour == 7 and now.minute == 0:
                         self.compounding = compounding.apply(self.cfg, self.ledger)
                         self.log(self.report(1))
-                        self.log("  " + compounding.describe(self.compounding, self.cfg))
                         promoted = self.promote() if self.cfg.auto_promote else []
                         line = self.ledger.summary(1)
                         if not promoted:
