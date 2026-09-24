@@ -60,6 +60,12 @@ SENDABLE = "deliverable"
 RISKY = "risky"            # catch-all or low confidence — stored, never auto-sendable
 UNDELIVERABLE = "undeliverable"
 NONE_FOUND = "none-found"
+# Hunter never answered: an exhausted quota, a network drop. That is no verdict at all, so it is
+# never written down as one. On 2026-09-24 an exhausted quota made every verify call fail, each
+# failure read as RISKY, and 53 candidates were stamped with a result nobody had got. The same
+# failure in a domain search read as NONE_FOUND, and a brand stamped none-found with a checked
+# date is never searched again.
+NOT_CHECKED = "not-checked"
 
 # Titles that mean "this person can say yes to ad creative". Ranked: a founder at
 # a 9-ad brand reads their own mail; at a 39-ad brand the growth lead is the buyer.
@@ -180,8 +186,11 @@ def rank_candidates(emails: list) -> list:
 
 def verify(email: str) -> tuple:
     """(status, score). Anything we can't positively confirm is RISKY, never
-    SENDABLE — the failure mode we're insuring against is a bounce."""
-    data = (_call("email-verifier", email=email) or {}).get("data") or {}
+    SENDABLE — the failure mode we're insuring against is a bounce. A call Hunter
+    never answered is NOT_CHECKED, which is not a verdict."""
+    data = (_call("email-verifier", email=email) or {}).get("data")
+    if not data:
+        return NOT_CHECKED, 0
     result = (data.get("result") or "").lower()
     score = int(data.get("score") or 0)
     if result == "deliverable":
@@ -200,13 +209,18 @@ def find_for_domain(domain: str) -> dict:
     miss = {"email": "", "name": "", "title": "", "status": NONE_FOUND, "score": 0}
     if not domain:
         return miss
-    data = (_call("domain-search", domain=domain, limit=10) or {}).get("data") or {}
+    resp = _call("domain-search", domain=domain, limit=10)
+    if not resp or "data" not in resp:
+        return dict(miss, status=NOT_CHECKED)      # no answer is not "nobody there"
+    data = resp.get("data") or {}
     candidates = rank_candidates(data.get("emails") or [])
     if not candidates:
         return miss
     first_risky = None
     for c in candidates:
         status, score = verify(c["email"])
+        if status == NOT_CHECKED:
+            return dict(miss, status=NOT_CHECKED)  # can't judge the rest either; record nothing
         if status == UNDELIVERABLE:
             continue                      # never store an address we know bounces
         record = {"email": c["email"], "name": c["name"], "title": c["title"],
@@ -275,7 +289,7 @@ def fill_contacts(wave: str = "", brands=None, limit: int = 6) -> str:
         if c not in cols:
             cols.append(c)
 
-    done, skipped, found = [], 0, 0
+    done, skipped, found, stopped = [], 0, 0, ""
     for row in _targets(rows, wave, brands):
         if (row.get("email") or "").strip() or (row.get("email_status") or "").strip():
             skipped += 1
@@ -284,6 +298,12 @@ def fill_contacts(wave: str = "", brands=None, limit: int = 6) -> str:
             break
         brand = (row.get("brand") or "").strip()
         hit = find_for_domain((row.get("domain") or "").strip())
+        if hit["status"] == NOT_CHECKED:
+            # Nothing written for this row, so it is searched again next time. Stop here: when
+            # Hunter stops answering it is almost always the quota, and every call after this
+            # one would fail the same way.
+            stopped = brand
+            break
         row["email"] = hit["email"]
         row["email_status"] = hit["status"]
         row["contact_name"] = hit["name"]
@@ -293,13 +313,19 @@ def fill_contacts(wave: str = "", brands=None, limit: int = 6) -> str:
             found += 1
         done.append(f"{brand}: " + (f"{hit['email']} ({hit['status']})"
                                     if hit["email"] else "nothing found"))
+    halt = (f"Hunter gave no answer at {stopped} (quota or network), so the run stopped there and "
+            f"nothing was recorded for it or anything after it." if stopped else "")
     if not done:
+        if halt:
+            return halt
         return (f"Nothing to look up — {skipped} row(s) already checked."
                 if skipped else "No matching rows in the tracker.")
     _write_tracker(path, cols, rows)
     lines = [f"Checked {len(done)}, {found} verified sendable:"] + [f"- {d}" for d in done]
     if skipped:
         lines.append(f"({skipped} already had a result, not re-searched.)")
+    if halt:
+        lines.append(halt)
     return "\n".join(lines)
 
 

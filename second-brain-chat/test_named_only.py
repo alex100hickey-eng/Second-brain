@@ -252,8 +252,8 @@ def test_the_named_command_reads_an_unanswered_call_as_a_failure_not_risky(monke
     import types
     props = [_p(named_email="a@x.co", email_status="candidate", email_evidence="guess")]
     written = []
-    fake_cf = types.SimpleNamespace(_call=lambda path, **kw: {}, SENDABLE="sendable",
-                                    UNDELIVERABLE="undeliverable")
+    fake_cf = types.SimpleNamespace(verify=lambda email: ("not-checked", 0), NOT_CHECKED="not-checked",
+                                    SENDABLE="deliverable", UNDELIVERABLE="undeliverable")
     monkeypatch.setitem(sys.modules, "contact_finder", fake_cf)
     monkeypatch.setattr(sq, "read_named", lambda: props)
     monkeypatch.setattr(sq, "write_named", lambda ps: written.append([dict(p) for p in ps]))

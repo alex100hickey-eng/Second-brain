@@ -1114,14 +1114,11 @@ def cmd_named(args) -> int:
         sys.path.insert(0, CHAT)
         import contact_finder                          # type: ignore
         def _verify(email):
-            # contact_finder.verify() reads a failed call as RISKY. Here the difference matters:
-            # a failed call is not a result and must not be written down as one.
-            data = (contact_finder._call("email-verifier", email=email) or {}).get("data")
-            if not data:
-                return "error", 0
-            result, score = (data.get("result") or "").lower(), int(data.get("score") or 0)
-            return {"deliverable": "deliverable",
-                    "undeliverable": "undeliverable"}.get(result, "risky"), score
+            status, score = contact_finder.verify(email)
+            if status == getattr(contact_finder, "NOT_CHECKED", "not-checked"):
+                return "error", 0            # no answer from Hunter: not a result
+            return {contact_finder.SENDABLE: "deliverable",
+                    contact_finder.UNDELIVERABLE: "undeliverable"}.get(status, "risky"), score
         for email, status in verify_candidates(proposals, _verify, limit=args.limit):
             print(f"verified: {email} -> {status}")
         write_named(proposals)
