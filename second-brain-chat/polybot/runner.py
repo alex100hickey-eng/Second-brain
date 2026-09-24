@@ -83,6 +83,7 @@ from .strategies.bucket_sum import (consume_levels, BucketSum, arb_check, arb_po
                                     worth_confirming)
 from .strategies.hold_favorites import HoldFavorites
 from .strategies.leadlag import LeadLag
+from .strategies import maker_rewards as maker_mod
 from .strategies.maker_rewards import MakerRewards
 from .strategies.weather import WeatherHold, WeatherLock, WeatherModelUpdate, WeatherObs, build_ctx
 
@@ -252,7 +253,7 @@ class Runner:
             "hold_favorites": HoldFavorites(self.cfg),
             "leadlag": LeadLag(self.cfg, self.us, self.pair_rec, quote_fn=self.pair_rec.quote,
                                pairs_fn=self.leadlag_pairs),
-            "maker_rewards": MakerRewards(self.cfg, self.us),
+            "maker_rewards": MakerRewards(self.cfg, self.us, self.ledger),
         }
 
     # ---- paper price paths per venue ------------------------------------------------------
@@ -877,6 +878,22 @@ class Runner:
                      f"{got['us']} US and {got['offshore']} offshore quotes this tick")
         return n
 
+    def record_maker(self) -> int:
+        """One maker_rewards tick: read the quoted and scouted books, book fills as paper signals,
+        accrue the incentive share, re-quote. ~8 book calls every 5 minutes."""
+        strat = self.other_modules["maker_rewards"]
+        got = strat.tick(log=self.log)
+        n = 0
+        for sig in got["signals"]:
+            if self.handle(sig) in ("paper", "signal", "live"):
+                n += 1
+        if got["fills"] or time.time() - getattr(self, "_maker_logged", 0.0) >= 3600:
+            self._maker_logged = time.time()
+            self.log(f"  maker_rewards: {got['quoted']} quoted, {got['scouted']} scouted, {got['fills']} fill(s), "
+                     f"est ${got['reward_usd']:.2f} this tick · ${self.ledger.maker_rewards_usd(time.time() - 86400):.2f} "
+                     f"in 24 h (estimate; the real number comes from /v1/incentives/earnings once live)")
+        return n
+
     def _quiet_log(self, key, lines, every_s: float = QUIET_REPEAT_S) -> bool:
         """Log `lines` unless this key logged exactly the same lines within `every_s`.
 
@@ -1079,6 +1096,7 @@ class Runner:
         done = set()
         next_arb = 0.0        # sweep immediately on start, then on its own seconds clock
         next_pairs = 0.0
+        next_maker = 0.0
         self._heartbeat = time.time()
         # Start the catch-up clock at boot, not at zero: a restart should not fire a 25-call
         # settle burst into the same cold cache that is already re-pricing every leg.
@@ -1130,9 +1148,7 @@ class Runner:
                         with self._long_job("scan_universe", grace_s=300):
                             self.scan_universe()
                     if now.minute % 5 == 0:
-                        # leadlag runs on the recorder's own clock below: a 5-minute tick cannot
-                        # see a move inside its 2-minute window.
-                        self.scan_other(modules=["maker_rewards"])
+                        # leadlag and maker_rewards run on their own clocks below.
                         if self.us.available:
                             with self._long_job("sync", grace_s=300):
                                 self.executor.sync()
@@ -1231,6 +1247,13 @@ class Runner:
                     self.record_pairs()
                 except Exception as exc:
                     self.log(f"  pairs record error: {exc}\n{traceback.format_exc(limit=2)}")
+            if (self.us.available and self.cfg.mode("maker_rewards") != "off"
+                    and time.time() >= next_maker):
+                next_maker = time.time() + maker_mod.INTERVAL_S
+                try:
+                    self.record_maker()
+                except Exception as exc:
+                    self.log(f"  maker_rewards error: {exc}\n{traceback.format_exc(limit=2)}")
             _beat("polybot", 3 * 3600, f"{self.cfg.mode('weather_lock')} lock")
             try:
                 ready = [m for m in config.MODULES

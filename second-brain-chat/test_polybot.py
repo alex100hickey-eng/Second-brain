@@ -3556,3 +3556,78 @@ def test_universe_catchup_only_runs_when_armed_at_a_gate_reset(monkeypatch):
     # the weekly slot: Sunday 05:30
     sun = runner_mod._last_slot(datetime(2026, 9, 24, 12, 0, tzinfo=et), ((5, 30),), weekday=6)
     assert (sun.weekday(), sun.hour, sun.minute, sun.day) == (6, 5, 30, 20)
+
+
+# ---- maker_rewards (paper) -----------------------------------------------------------------------
+def test_incentive_scoring_follows_the_published_rules():
+    """docs.polymarket.us/incentives/liquidity: score = DF ** ticks-from-best x size; walk out from the
+    best price until target size; the whole level that reaches it scores, deeper ones don't; a side
+    that never reaches target scores nothing."""
+    from polybot import incentives as I
+    # target reached inside the best level: the second level scores zero (the docs' own example)
+    total, mine, ok = I.side_score([(0.40, 25000), (0.39, 5000)], 20000, 0.3, 0.01, ours=(0.40, 100))
+    assert ok and total == pytest.approx(25100) and mine == pytest.approx(100)
+    # target reached two levels out: the second level counts at DF ** 1
+    total, mine, ok = I.side_score([(0.40, 100), (0.39, 1000)], 1000, 0.3, 0.01, ours=(0.40, 100))
+    assert ok and total == pytest.approx(200 + 1000 * 0.3) and mine == pytest.approx(100)
+    # never reaches target: nothing
+    assert I.side_score([(0.40, 100)], 1000, 0.3, 0.01, ours=(0.40, 100))[2] is False
+    # 0.1c books count 0.1c ticks
+    assert I.tick_of([(0.365, 1)], [(0.366, 1)]) == 0.001
+    total, mine, ok = I.side_score([(0.366, 1000), (0.369, 1000)], 1500, 0.3, 0.001, ours=None, bid_side=False)
+    assert total == pytest.approx(1000 + 1000 * 0.3 ** 3)
+    # a day's pool is split half per side, pro rata
+    book = {"bids": [(0.40, 900)], "asks": [(0.42, 900)]}
+    r = I.quote_rate(book, {"rewardPool": 100, "discountFactor": 0.3, "targetSize": 500}, (0.40, 100), (0.42, 100))
+    assert r["bid"] == pytest.approx(0.1) and r["usd_per_day"] == pytest.approx(10.0)
+    assert I.size_for(0.40, 10, "bid") == 25 and I.size_for(0.40, 10, "ask") == 16
+
+
+def test_maker_rewards_quotes_accrues_and_books_a_fill_as_a_paper_position(monkeypatch):
+    from polybot import runner as runner_mod
+    from polybot.strategies import maker_rewards as M
+    cfg, led = _cfg(), _ledger()
+    cfg.modes["maker_rewards"] = "paper"
+    now = [time.time()]
+
+    class US:
+        available, why_unavailable = True, ""
+        def __init__(self):
+            self.books = {"m1": {"bids": [(0.40, 900)], "asks": [(0.42, 900)], "last": 0.41}}
+        def book(self, slug, **k):
+            return self.books.get(slug)
+
+    us = US()
+    progs = [{"marketSlug": "m1", "category": "POL", "timePeriods": [
+        {"programId": "politics_mid_x", "programType": "liquidityProgram", "status": "active",
+         "start": "2026-01-01T00:00:00Z", "rewardPool": 100, "discountFactor": 0.3, "targetSize": 500}]}]
+    r = runner_mod.Runner(cfg, led, log=lambda *_: None)
+    r.us = us
+    r.other_modules["maker_rewards"] = M.MakerRewards(cfg, us, led, clock=lambda: now[0], programs_fn=lambda: progs)
+    monkeypatch.setattr(runner_mod.time, "time", lambda: now[0])
+    r.record_maker()                                  # scout m1, start quoting it
+    assert {q["side"] for q in led.maker_quotes("m1")} == {"bid", "ask"}
+    now[0] += M.INTERVAL_S
+    r.record_maker()                                  # join best on both sides
+    q = {x["side"]: x for x in led.maker_quotes("m1")}
+    assert q["bid"]["px"] == 0.40 and q["bid"]["qty"] == 25 and q["ask"]["px"] == 0.42
+    now[0] += M.INTERVAL_S
+    r.record_maker()                                  # a full interval resting at best: rewards accrue
+    assert led.maker_rewards_usd(0) > 0
+    # the market drops through our bid: a fill, recorded as a filled paper position
+    us.books["m1"] = {"bids": [(0.37, 900)], "asks": [(0.39, 900)], "last": 0.38}
+    now[0] += M.INTERVAL_S
+    r.record_maker()
+    sig = led.conn.execute("SELECT module, venue, side, price, exit_rule, meta FROM signals").fetchone()
+    assert (sig["module"], sig["venue"], sig["side"], sig["price"], sig["exit_rule"]) == \
+        ("maker_rewards", "us", "BUY_YES", 0.40, "timeout:24h")
+    assert json.loads(sig["meta"])["filled_at_signal"] is True
+    assert led.maker_position_open("m1", "bid")
+    q = {x["side"]: x for x in led.maker_quotes("m1")}
+    assert q["bid"]["qty"] == 0                       # that side sits out while the position is open
+    # the gate reads the accrual for maker_rewards only
+    assert led.extra_mtm("maker_rewards") > 0 and led.extra_mtm("bucket_sum") == 0.0
+    # and paper fills it at the signal, as a maker (rebate, not a taker fee)
+    from polybot.paper import fill_from_history
+    s = dict(led.conn.execute("SELECT * FROM signals").fetchone())
+    assert fill_from_history(s, []) == (s["ts"], 0.40)
