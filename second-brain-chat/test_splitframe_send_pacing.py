@@ -20,7 +20,7 @@ import plistlib
 import socket
 import sys
 import types
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import pytest
 
@@ -100,6 +100,8 @@ def run(tmp_path, monkeypatch):
         class Tools:
             def execute(self, slug, user_id=None, dangerously_skip_version_check=None,
                         arguments=None):
+                if slug == "GMAIL_GET_DRAFT":        # an interrupted send's draft is still there
+                    return {"successful": True, "data": {"message": {"labelIds": ["DRAFT"]}}}
                 assert slug == sfs.SEND_SLUG
                 if arguments["draft_id"] in fail_drafts:
                     return {"successful": False, "error": "draft not found"}
@@ -313,6 +315,77 @@ def test_an_unreadable_tracker_stands_the_run_down_without_holding_anything(run)
     assert sent == [] and box.snoozed == [] and box.armed == []
     assert run.calls["nudged"] == []
     assert "nothing sent and nothing held" in log
+
+# ---- a send interrupted mid-flight is settled by the next run ----
+
+class _Gmail:
+    def __init__(self, draft_there=True, in_sent=False, boom=False):
+        self.draft_there, self.in_sent, self.boom = draft_there, in_sent, boom
+        self.tools = self
+
+    def execute(self, slug, user_id=None, dangerously_skip_version_check=None, arguments=None):
+        if self.boom:
+            raise ConnectionError("Connection error.")
+        if slug == "GMAIL_GET_DRAFT":
+            if self.draft_there:
+                return {"successful": True, "data": {"message": {"labelIds": ["DRAFT"]}}}
+            return {"successful": False, "error": "Requested entity was not found."}
+        if slug == "GMAIL_FETCH_EMAILS":
+            return {"successful": True, "data": {"messages": [{"id": "m1"}] if self.in_sent else []}}
+        raise AssertionError(slug)
+
+
+def _interrupted(minutes_ago, i=8):
+    now = datetime(2026, 9, 24, 18, 40)
+    return now, _draft(i, "hello@finalbosssour.com",
+                       sent_at=(now - timedelta(minutes=minutes_ago)).isoformat())
+
+
+def test_only_a_stale_sent_at_on_an_open_row_counts_as_interrupted():
+    now, old = _interrupted(76)
+    _n, fresh = _interrupted(3, i=9)
+    rows = [old, fresh, _draft(10, "x@y.com")]
+    assert [r["id"] for r in sfs.interrupted_rows(rows, now)] == [8]
+
+
+def test_a_draft_still_in_drafts_goes_back_in_line(tmp_path, monkeypatch):
+    monkeypatch.setattr(sfs, "LOG", str(tmp_path / "send.log"))
+    now, row = _interrupted(76)
+    box = FakeOutbox([row])
+    assert sfs.recover_interrupted(box, _Gmail(draft_there=True), "studio", now) == [(8, "requeued")]
+    assert box.items[8]["sent_at"] == "" and box.items[8]["status"] == "open"
+    assert "back in line" in (tmp_path / "send.log").read_text()
+
+
+def test_a_draft_that_left_and_is_in_sent_is_closed_and_logged_once(tmp_path, monkeypatch):
+    log = tmp_path / "send.log"
+    monkeypatch.setattr(sfs, "LOG", str(log))
+    now, row = _interrupted(76)
+    box = FakeOutbox([row])
+    assert sfs.recover_interrupted(box, _Gmail(draft_there=False, in_sent=True), "studio", now) == [(8, "closed")]
+    assert box.items[8]["status"] == "done" and log.read_text().count("item 8: SENT to") == 1
+    # a row whose SENT line was already written (killed during its bookkeeping) is not logged twice
+    now, row = _interrupted(76)
+    box = FakeOutbox([row])
+    sfs.recover_interrupted(box, _Gmail(draft_there=False, in_sent=True), "studio", now)
+    assert log.read_text().count("item 8: SENT to") == 1
+
+
+def test_unclear_or_erroring_checks_leave_the_row_alone(tmp_path, monkeypatch):
+    monkeypatch.setattr(sfs, "LOG", str(tmp_path / "send.log"))
+    for gmail, what in ((_Gmail(draft_there=False, in_sent=False), "unclear"), (_Gmail(boom=True), "error")):
+        now, row = _interrupted(76)
+        box = FakeOutbox([row])
+        assert sfs.recover_interrupted(box, gmail, "studio", now) == [(8, what)]
+        assert box.items[8]["sent_at"] and box.items[8]["status"] == "open", "never a guess that could double-send"
+
+
+def test_the_next_run_requeues_and_sends_the_interrupted_email(run):
+    """2026-09-24: Final Boss's follow-up sat marked sent for 67 minutes with its draft unsent."""
+    stale = (MORNING - timedelta(minutes=76)).replace(tzinfo=None).isoformat()
+    items = [_draft(8, "hello@finalbosssour.com", sent_at=stale)]
+    box, sent, log = run(items)
+    assert sent == ["r8"] and "back in line" in log
 
 
 if __name__ == "__main__":

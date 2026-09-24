@@ -85,7 +85,7 @@ def _watchdog(_sig, _frm):
         item_id, who, phase = _in_flight
         if phase == "sending":
             where = (f" — item {item_id} to {who} was mid-send. Its outbox row already carries "
-                     "sent_at, so it will NOT be retried: check studio Sent to see whether it went")
+                     "sent_at, so it is settled by the next run: requeued if its draft is still in Drafts, closed if Gmail Sent has it")
         else:
             where = (f" — item {item_id} to {who} WAS sent; only its bookkeeping ({phase}) "
                      "was cut off")
@@ -438,6 +438,84 @@ def _beat(note: str = "") -> None:
     except Exception:
         pass
 
+# A send interrupted mid-flight leaves its row open with sent_at set, and nothing retried it: the
+# watchdog only said "check studio Sent". The Mac is a laptop, so this is routine: 2026-09-23 01:56
+# and 2026-09-24 17:24 (Final Boss's static follow-up, marked sent for 67 minutes while its draft
+# sat unsent). A live send takes seconds and the watchdog fires at RUN_BUDGET_SECONDS, so a row
+# still open with sent_at older than this was interrupted.
+INTERRUPTED_AFTER_MINUTES = 15
+
+
+def interrupted_rows(open_items: list, now: datetime) -> list:
+    """Open email drafts that carry sent_at from a run that never finished. Pure."""
+    out = []
+    for it in open_items or []:
+        stamp = (it.get("sent_at") or "").strip()
+        if it.get("kind") != "email_draft" or not stamp:
+            continue
+        try:
+            when = datetime.fromisoformat(stamp)
+        except ValueError:
+            continue
+        if when.tzinfo is not None:
+            when = when.astimezone(SEND_TZ).replace(tzinfo=None)
+        if now.replace(tzinfo=None) - when >= timedelta(minutes=INTERRUPTED_AFTER_MINUTES):
+            out.append(it)
+    return out
+
+
+def _already_logged(item_id) -> bool:
+    try:
+        with open(LOG, encoding="utf-8", errors="replace") as f:
+            return any(f"item {item_id}: SENT to " in line for line in f)
+    except OSError:
+        return False
+
+
+def recover_interrupted(outbox, composio, entity: str, now: datetime) -> list:
+    """Settle every interrupted send by asking Gmail. Returns [(item id, what happened)].
+
+    Draft still in Drafts: it never went, so sent_at is cleared and it waits its turn again.
+    Draft gone and the email in Sent: it went, so the row is closed and the send is logged
+    (unless the log already has it). Anything unclear or erroring is left exactly as it was and
+    said once in the log, so a wrong guess can never send an email twice."""
+    done = []
+    for it in interrupted_rows(outbox.open_items(), now):
+        _acct, draft_id = parse_ref(it.get("ref", ""))
+        who = recipient_of(it)
+        try:
+            got = composio.tools.execute("GMAIL_GET_DRAFT", user_id=entity,
+                                         dangerously_skip_version_check=True,
+                                         arguments={"draft_id": draft_id, "format": "metadata"})
+            msg = (got.get("data") or {}).get("message") or {}
+            if got.get("successful") and "DRAFT" in (msg.get("labelIds") or []):
+                outbox._write(it["id"], {"sent_at": ""})
+                log(f"item {it['id']}: interrupted send to {who} recovered. Its draft is still in "
+                    f"Drafts, so it never went; it is back in line")
+                done.append((it["id"], "requeued"))
+                continue
+            sent = composio.tools.execute("GMAIL_FETCH_EMAILS", user_id=entity,
+                                          dangerously_skip_version_check=True,
+                                          arguments={"query": f"in:sent to:{who} newer_than:2d",
+                                                     "max_results": 5})
+            if (sent.get("data") or {}).get("messages"):
+                if not _already_logged(it["id"]):
+                    kind = "follow-up" if is_follow_up(it) else "first touch"
+                    log(f"item {it['id']}: SENT to {who} (draft {draft_id}) — recorded after an "
+                        f"interrupted run: its draft is gone and Gmail Sent has it [{kind}]")
+                outbox.close(it["id"], outbox.DONE, note="sent; recorded after an interrupted run")
+                done.append((it["id"], "closed"))
+            else:
+                log(f"item {it['id']}: interrupted send to {who} is unclear (draft gone, nothing in "
+                    f"Sent). Left as it is; check studio Sent")
+                done.append((it["id"], "unclear"))
+        except Exception as exc:                            # noqa: BLE001
+            log(f"item {it['id']}: could not check an interrupted send ({type(exc).__name__}); "
+                f"left as it is")
+            done.append((it["id"], "error"))
+    return done
+
+
 def main() -> int:
     global _in_flight
     arm_watchdog()
@@ -452,6 +530,14 @@ def main() -> int:
         return 0
 
     _beat("alive")
+    # Settle sends a previous run was killed in the middle of, before anything new goes out.
+    try:
+        if interrupted_rows(outbox.open_items(), _now()):
+            from composio import Composio               # type: ignore
+            recover_interrupted(outbox, Composio(api_key=os.environ["COMPOSIO_API_KEY"]),
+                                os.environ.get("STUDIO_GMAIL_ENTITY"), _now())
+    except Exception as exc:                            # noqa: BLE001
+        log(f"interrupted-send check skipped ({type(exc).__name__})")
     # Sends Alex tapped himself go first and aren't held by quiet hours: he chose the moment.
     pending = list(outbox.awaiting_send())
     approved_ids = {it["id"] for it in pending}
