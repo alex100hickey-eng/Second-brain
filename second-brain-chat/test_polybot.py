@@ -3767,3 +3767,31 @@ def test_us_fills_are_recorded_every_settle_but_resolutions_only_when_due(monkey
     monkeypatch.setattr(r, "_us_settle_due", lambda now=None: True)
     r.settle()
     assert asked == ["m1"]                                                   # resolutions when due
+
+
+def test_a_fill_does_not_get_its_market_swapped_out(monkeypatch):
+    """12:19 09-24: AK-rep's bid filled and the same tick swapped AK-rep out — rated on its one
+    remaining side it looked worst, and the fill's position was not in the ledger yet."""
+    from polybot.strategies import maker_rewards as M
+    cfg, led = _cfg(), _ledger()
+    now = [time.time()]
+    books = {f"m{i}": {"bids": [(0.40, 900)], "asks": [(0.42, 900)], "last": 0.41} for i in range(M.MAX_MARKETS + 1)}
+
+    class US:
+        available, why_unavailable = True, ""
+        def book(self, slug, **k):
+            return books.get(slug)
+
+    progs = [{"marketSlug": m, "category": "POL", "timePeriods": [
+        {"programId": "p", "programType": "liquidityProgram", "status": "active", "start": "2026-01-01T00:00:00Z",
+         "rewardPool": 100 + i, "discountFactor": 0.3, "targetSize": 500}]} for i, m in enumerate(books)]
+    mk = M.MakerRewards(cfg, US(), led, clock=lambda: now[0], programs_fn=lambda: progs)
+    for _ in range(6):                               # fill the book to MAX_MARKETS and quote them
+        mk.tick()
+        now[0] += M.INTERVAL_S
+    quoted = {q["market"] for q in led.maker_quotes()}
+    victim = sorted(quoted)[0]
+    books[victim] = {"bids": [(0.37, 900)], "asks": [(0.39, 900)], "last": 0.38}   # its bid trades through
+    out = mk.tick()
+    assert any(s.market == victim for s in out["signals"])
+    assert victim in {q["market"] for q in led.maker_quotes()}

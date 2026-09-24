@@ -115,11 +115,9 @@ class MakerRewards(Strategy):
                 out["signals"].extend(got["signals"])
             else:
                 out["scouted"] += 1
-                bb, ba = book["bids"][0][0], book["asks"][0][0]
-                r = incentives.quote_rate(book, per, (bb, incentives.size_for(bb, SIDE_USD, "bid")),
-                                          (ba, incentives.size_for(ba, SIDE_USD, "ask")))
-                self._scouted[m] = (r["usd_per_day"] / (2 * SIDE_USD), now)
-        self._rotate(quoted, progs, now, log)
+                self._scouted[m] = (self._two_sided_rate(book, per), now)
+        # a market that filled this tick holds a position the ledger does not show yet: keep it
+        self._rotate(quoted, progs, now, log, protect={s.market for s in out["signals"]})
         return out
 
     def _service(self, m, per, book, now, category, log) -> dict:
@@ -163,8 +161,18 @@ class MakerRewards(Strategy):
                 self.ledger.maker_set(m, side, px, 0.0, now, last, filled_ts=q["filled_ts"])
                 continue
             self.ledger.maker_set(m, side, px, incentives.size_for(px, SIDE_USD, side), now, last)
-        self._scouted[m] = ((r["usd_per_day"]) / (2 * SIDE_USD), now)
+        # Rate the market on what a full two-sided quote would earn here, as scouts are rated. Rating
+        # it on our current quotes made a market look worst right after a fill (the filled side
+        # sits out), and on 2026-09-24 12:19 that swapped AK-rep out the minute its bid filled.
+        self._scouted[m] = (self._two_sided_rate(book, per), now)
         return res
+
+    @staticmethod
+    def _two_sided_rate(book, per) -> float:
+        bb, ba = book["bids"][0][0], book["asks"][0][0]
+        r = incentives.quote_rate(book, per, (bb, incentives.size_for(bb, SIDE_USD, "bid")),
+                                  (ba, incentives.size_for(ba, SIDE_USD, "ask")))
+        return r["usd_per_day"] / (2 * SIDE_USD)
 
     def _fill_signal(self, m, side, px, qty, category, per) -> Signal:
         """A filled quote is a position: bid filled = long YES at px; ask filled = long NO at 1 - px."""
@@ -177,7 +185,7 @@ class MakerRewards(Strategy):
                       exit=EXIT, horizon_hours=24, category=category or "other",
                       meta={"filled_at_signal": True, "maker_side": side, "program": per.get("programId")})
 
-    def _rotate(self, quoted, progs, now, log):
+    def _rotate(self, quoted, progs, now, log, protect=()):
         rate = lambda m: self._scouted.get(m, (0.0, 0))[0]
         pool = sorted((m for m in self._scouted if m not in quoted and m in progs), key=rate, reverse=True)
         quoted = list(quoted)
@@ -189,7 +197,10 @@ class MakerRewards(Strategy):
                 self.ledger.maker_start(cand, now)
                 log(f"  maker_rewards: quoting {cand} (est ${rate(cand) * 2 * SIDE_USD:.2f}/day on ${2 * SIDE_USD:.0f})")
                 continue
-            worst = min(quoted, key=rate)
+            swappable = [q for q in quoted if q not in protect]
+            if not swappable:
+                break
+            worst = min(swappable, key=rate)
             if rate(cand) > SWAP_MARGIN * rate(worst) and not self.ledger.maker_positions_open(worst):
                 self.ledger.maker_drop(worst)
                 quoted.remove(worst)
