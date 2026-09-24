@@ -206,6 +206,14 @@ class Config:
     # ONLY while this equals gate_since_ts: they change what bucket_sum trades, so they may start
     # changing it only at a gate reset. Set both to the same new epoch to turn it on.
     universe_catchup_gate_ts: float = 0.0
+    # Caps as fractions of a profit-only basis (see compounding.py). OFF: every cap is its dollars here.
+    # ON: fraction = those dollars / compounding_base_usd, so nothing moves until live profit is banked.
+    compounding: bool = False
+    compounding_base_usd: float = 200.0
+    scale_step_days: int = 14              # at most one scale-up per this many days
+    scale_min_live_days: int = 14          # "consistent live profit": this many live days in the window,
+    scale_max_drawdown_frac: float = 0.10  #   max drawdown under this fraction of the basis,
+    scale_min_fill_rate: float = 0.5       #   fills at least this, and net > 0 after fees
     min_us_signals: int = 10               # a module cannot go live on offshore evidence alone (see the gate)
     auto_promote: bool = False             # True: the 07:00 report flips PASS modules paper -> live by itself
     snapshot_keep_days: int = 30           # book snapshots older than this are pruned at 03:00

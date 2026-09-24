@@ -12,3 +12,4 @@ backtest-run.log
 calibration-samples.json
 jobs-state.json
 *.tmp
+compounding-state.json

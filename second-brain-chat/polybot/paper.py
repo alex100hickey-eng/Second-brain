@@ -21,6 +21,14 @@ def _yes_entry(sig) -> float:
     return sig["price"] if sig["side"] == "BUY_YES" else round(1 - sig["price"], 2)
 
 
+def _meta(sig) -> dict:
+    try:
+        m = sig.get("meta") if isinstance(sig, dict) else None
+        return json.loads(m) if isinstance(m, str) else (m or {})
+    except (TypeError, ValueError):
+        return {}
+
+
 def is_taker(sig) -> bool:
     try:
         return bool(json.loads(sig.get("meta") or "{}").get("taker", False))
@@ -39,7 +47,9 @@ def fill_from_history(sig, history):
     only evidence bucket_sum is being judged on. (weather_lock's taker entries filled anyway, by
     accident: the mid always sits below the ask we bought at.)
     """
-    if is_taker(sig):
+    if is_taker(sig) or _meta(sig).get("filled_at_signal"):
+        # A taker's fill IS the order; a maker quote recorded after the book traded through it
+        # (maker_rewards) was filled before the signal existed.
         return sig["ts"], _yes_entry(sig)
     lvl = _yes_entry(sig)
     for t, p in history:

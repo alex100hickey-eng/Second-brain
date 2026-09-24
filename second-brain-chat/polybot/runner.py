@@ -26,7 +26,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from . import backtest, calibration, config, notify, pairs
+from . import backtest, calibration, compounding, config, notify, pairs
 from .execution import Executor
 from .feeds import offshore
 from .feeds.usvenue import USVenue, buckets_from_markets
@@ -83,6 +83,7 @@ from .strategies.bucket_sum import (consume_levels, BucketSum, arb_check, arb_po
                                     worth_confirming)
 from .strategies.hold_favorites import HoldFavorites
 from .strategies.leadlag import LeadLag
+from .strategies import maker_rewards as maker_mod
 from .strategies.maker_rewards import MakerRewards
 from .strategies.weather import WeatherHold, WeatherLock, WeatherModelUpdate, WeatherObs, build_ctx
 
@@ -241,6 +242,8 @@ class Runner:
             bal = self.us.account_value_usd()
             if bal is not None:
                 self.cfg.bankroll_usd = bal
+        self.compounding = compounding.apply(self.cfg, self.ledger, persist=False) \
+            if getattr(self.cfg, "compounding", False) else {"on": False}
         self.weather_modules = {
             "weather_hold": WeatherHold(self.cfg),
             "weather_obs": WeatherObs(self.cfg),
@@ -252,7 +255,7 @@ class Runner:
             "hold_favorites": HoldFavorites(self.cfg),
             "leadlag": LeadLag(self.cfg, self.us, self.pair_rec, quote_fn=self.pair_rec.quote,
                                pairs_fn=self.leadlag_pairs),
-            "maker_rewards": MakerRewards(self.cfg, self.us),
+            "maker_rewards": MakerRewards(self.cfg, self.us, self.ledger),
         }
 
     # ---- paper price paths per venue ------------------------------------------------------
@@ -867,14 +870,50 @@ class Runner:
     def record_pairs(self) -> int:
         """Sample both sides of every recorded pair, then run leadlag on the fresh paths."""
         rows = self.leadlag_pairs()
-        if not rows or not self.us.available:
+        if not (rows or self.watched_us_events()) or not self.us.available:
             return 0
-        got = self.pair_rec.record(rows)
+        got = self.pair_rec.record(rows, extra_events=self.watched_us_events())
         n = self.scan_other(modules=["leadlag"])
         if time.time() - getattr(self, "_pairs_logged", 0.0) >= 3600:
             self._pairs_logged = time.time()
             self.log(f"  pairs: recording {got['events']} US events every {pairs.RECORD_INTERVAL_S:.0f}s — "
                      f"{got['us']} US and {got['offshore']} offshore quotes this tick")
+        return n
+
+    def scan_hold_favorites_us(self) -> int:
+        """hold_favorites on Polymarket US's own books, so it can earn the US evidence the gate needs."""
+        strat = self.other_modules["hold_favorites"]
+        events = list(self.us.events_by_category(PAIR_US_CATEGORIES).values())
+        n = 0
+        for sig in strat.scan_us(events):
+            if self.handle(sig) in ("paper", "signal", "live"):
+                n += 1
+        return n
+
+    def watched_us_events(self) -> list:
+        """US events holding an open position that nothing else samples (hold_favorites' US path):
+        paper needs their books to fill, mark and exit them."""
+        out = []
+        for r in self.ledger.open_signals(module="hold_favorites", venue="us"):
+            ev = json.loads(r["meta"] or "{}").get("us_event")
+            if ev and ev not in out:
+                out.append(ev)
+        return out
+
+    def record_maker(self) -> int:
+        """One maker_rewards tick: read the quoted and scouted books, book fills as paper signals,
+        accrue the incentive share, re-quote. ~8 book calls every 5 minutes."""
+        strat = self.other_modules["maker_rewards"]
+        got = strat.tick(log=self.log)
+        n = 0
+        for sig in got["signals"]:
+            if self.handle(sig) in ("paper", "signal", "live"):
+                n += 1
+        if got["fills"] or time.time() - getattr(self, "_maker_logged", 0.0) >= 3600:
+            self._maker_logged = time.time()
+            self.log(f"  maker_rewards: {got['quoted']} quoted, {got['scouted']} scouted, {got['fills']} fill(s), "
+                     f"est ${got['reward_usd']:.2f} this tick · ${self.ledger.maker_rewards_usd(time.time() - 86400):.2f} "
+                     f"in 24 h (estimate; the real number comes from /v1/incentives/earnings once live)")
         return n
 
     def _quiet_log(self, key, lines, every_s: float = QUIET_REPEAT_S) -> bool:
@@ -945,7 +984,19 @@ class Runner:
             return False
         self._cfg_mtime = mtime
         before = dict(self.cfg.modes)
-        self.cfg = config.load()
+        old = self.cfg
+        self.cfg = config.load(config.CONFIG_PATH)
+        # The bankroll is read from the account, not the file, and every component holds its own
+        # reference to the config: re-point them all. Before this, a hot reload changed only the
+        # runner's copy — the risk manager kept the old arb_live_ok and caps, and bankroll fell back
+        # to config.json's 200 — so flipping a switch by editing the file did not really flip it.
+        self.cfg.bankroll_usd = old.bankroll_usd
+        for obj in [self.risk, self.executor, self.arb, *self.weather_modules.values(),
+                    *self.other_modules.values()]:
+            if hasattr(obj, "cfg"):
+                obj.cfg = self.cfg
+        if getattr(self.cfg, "compounding", False):
+            self.compounding = compounding.apply(self.cfg, self.ledger, persist=False)
         self.ledger.gate_since_ts = self.cfg.gate_since_ts
         self.ledger.min_us_signals = self.cfg.min_us_signals
         changed = {m: (before.get(m), v) for m, v in self.cfg.modes.items() if before.get(m) != v}
@@ -1079,6 +1130,7 @@ class Runner:
         done = set()
         next_arb = 0.0        # sweep immediately on start, then on its own seconds clock
         next_pairs = 0.0
+        next_maker = 0.0
         self._heartbeat = time.time()
         # Start the catch-up clock at boot, not at zero: a restart should not fire a 25-call
         # settle burst into the same cold cache that is already re-pricing every leg.
@@ -1130,9 +1182,7 @@ class Runner:
                         with self._long_job("scan_universe", grace_s=300):
                             self.scan_universe()
                     if now.minute % 5 == 0:
-                        # leadlag runs on the recorder's own clock below: a 5-minute tick cannot
-                        # see a move inside its 2-minute window.
-                        self.scan_other(modules=["maker_rewards"])
+                        # leadlag and maker_rewards run on their own clocks below.
                         if self.us.available:
                             with self._long_job("sync", grace_s=300):
                                 self.executor.sync()
@@ -1154,8 +1204,18 @@ class Runner:
                             n = self.scan_other(modules=["hold_favorites"])
                         self._ran("hold_favorites")
                         self.log(f"  hold_favorites: {n} signal(s)")
+                    # The US half of hold_favorites: ~20 catalogue calls, so outside the arb window.
+                    if (self.us.available and self.cfg.mode("hold_favorites") != "off"
+                            and self._due("hold_favorites_us", now, (8, 20), quiet_hours=ARB_HOURS)):
+                        self._attempt("hold_favorites_us")
+                        with self._long_job("hold_favorites_us", grace_s=600):
+                            n = self.scan_hold_favorites_us()
+                        self._ran("hold_favorites_us")
+                        self.log(f"  hold_favorites (US books): {n} signal(s)")
                     if now.hour == 7 and now.minute == 0:
+                        self.compounding = compounding.apply(self.cfg, self.ledger)
                         self.log(self.report(1))
+                        self.log("  " + compounding.describe(self.compounding, self.cfg))
                         promoted = self.promote() if self.cfg.auto_promote else []
                         line = self.ledger.summary(1)
                         if not promoted:
@@ -1231,6 +1291,13 @@ class Runner:
                     self.record_pairs()
                 except Exception as exc:
                     self.log(f"  pairs record error: {exc}\n{traceback.format_exc(limit=2)}")
+            if (self.us.available and self.cfg.mode("maker_rewards") != "off"
+                    and time.time() >= next_maker):
+                next_maker = time.time() + maker_mod.INTERVAL_S
+                try:
+                    self.record_maker()
+                except Exception as exc:
+                    self.log(f"  maker_rewards error: {exc}\n{traceback.format_exc(limit=2)}")
             _beat("polybot", 3 * 3600, f"{self.cfg.mode('weather_lock')} lock")
             try:
                 ready = [m for m in config.MODULES

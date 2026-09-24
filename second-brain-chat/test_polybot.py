@@ -3556,3 +3556,183 @@ def test_universe_catchup_only_runs_when_armed_at_a_gate_reset(monkeypatch):
     # the weekly slot: Sunday 05:30
     sun = runner_mod._last_slot(datetime(2026, 9, 24, 12, 0, tzinfo=et), ((5, 30),), weekday=6)
     assert (sun.weekday(), sun.hour, sun.minute, sun.day) == (6, 5, 30, 20)
+
+
+# ---- maker_rewards (paper) -----------------------------------------------------------------------
+def test_incentive_scoring_follows_the_published_rules():
+    """docs.polymarket.us/incentives/liquidity: score = DF ** ticks-from-best x size; walk out from the
+    best price until target size; the whole level that reaches it scores, deeper ones don't; a side
+    that never reaches target scores nothing."""
+    from polybot import incentives as I
+    # target reached inside the best level: the second level scores zero (the docs' own example)
+    total, mine, ok = I.side_score([(0.40, 25000), (0.39, 5000)], 20000, 0.3, 0.01, ours=(0.40, 100))
+    assert ok and total == pytest.approx(25100) and mine == pytest.approx(100)
+    # target reached two levels out: the second level counts at DF ** 1
+    total, mine, ok = I.side_score([(0.40, 100), (0.39, 1000)], 1000, 0.3, 0.01, ours=(0.40, 100))
+    assert ok and total == pytest.approx(200 + 1000 * 0.3) and mine == pytest.approx(100)
+    # never reaches target: nothing
+    assert I.side_score([(0.40, 100)], 1000, 0.3, 0.01, ours=(0.40, 100))[2] is False
+    # 0.1c books count 0.1c ticks
+    assert I.tick_of([(0.365, 1)], [(0.366, 1)]) == 0.001
+    total, mine, ok = I.side_score([(0.366, 1000), (0.369, 1000)], 1500, 0.3, 0.001, ours=None, bid_side=False)
+    assert total == pytest.approx(1000 + 1000 * 0.3 ** 3)
+    # a day's pool is split half per side, pro rata
+    book = {"bids": [(0.40, 900)], "asks": [(0.42, 900)]}
+    r = I.quote_rate(book, {"rewardPool": 100, "discountFactor": 0.3, "targetSize": 500}, (0.40, 100), (0.42, 100))
+    assert r["bid"] == pytest.approx(0.1) and r["usd_per_day"] == pytest.approx(10.0)
+    assert I.size_for(0.40, 10, "bid") == 25 and I.size_for(0.40, 10, "ask") == 16
+
+
+def test_maker_rewards_quotes_accrues_and_books_a_fill_as_a_paper_position(monkeypatch):
+    from polybot import runner as runner_mod
+    from polybot.strategies import maker_rewards as M
+    cfg, led = _cfg(), _ledger()
+    cfg.modes["maker_rewards"] = "paper"
+    now = [time.time()]
+
+    class US:
+        available, why_unavailable = True, ""
+        def __init__(self):
+            self.books = {"m1": {"bids": [(0.40, 900)], "asks": [(0.42, 900)], "last": 0.41}}
+        def book(self, slug, **k):
+            return self.books.get(slug)
+
+    us = US()
+    progs = [{"marketSlug": "m1", "category": "POL", "timePeriods": [
+        {"programId": "politics_mid_x", "programType": "liquidityProgram", "status": "active",
+         "start": "2026-01-01T00:00:00Z", "rewardPool": 100, "discountFactor": 0.3, "targetSize": 500}]}]
+    r = runner_mod.Runner(cfg, led, log=lambda *_: None)
+    r.us = us
+    r.other_modules["maker_rewards"] = M.MakerRewards(cfg, us, led, clock=lambda: now[0], programs_fn=lambda: progs)
+    monkeypatch.setattr(runner_mod.time, "time", lambda: now[0])
+    r.record_maker()                                  # scout m1, start quoting it
+    assert {q["side"] for q in led.maker_quotes("m1")} == {"bid", "ask"}
+    now[0] += M.INTERVAL_S
+    r.record_maker()                                  # join best on both sides
+    q = {x["side"]: x for x in led.maker_quotes("m1")}
+    assert q["bid"]["px"] == 0.40 and q["bid"]["qty"] == 25 and q["ask"]["px"] == 0.42
+    now[0] += M.INTERVAL_S
+    r.record_maker()                                  # a full interval resting at best: rewards accrue
+    assert led.maker_rewards_usd(0) > 0
+    # the market drops through our bid: a fill, recorded as a filled paper position
+    us.books["m1"] = {"bids": [(0.37, 900)], "asks": [(0.39, 900)], "last": 0.38}
+    now[0] += M.INTERVAL_S
+    r.record_maker()
+    sig = led.conn.execute("SELECT module, venue, side, price, exit_rule, meta FROM signals").fetchone()
+    assert (sig["module"], sig["venue"], sig["side"], sig["price"], sig["exit_rule"]) == \
+        ("maker_rewards", "us", "BUY_YES", 0.40, "timeout:24h")
+    assert json.loads(sig["meta"])["filled_at_signal"] is True
+    assert led.maker_position_open("m1", "bid")
+    q = {x["side"]: x for x in led.maker_quotes("m1")}
+    assert q["bid"]["qty"] == 0                       # that side sits out while the position is open
+    # the gate reads the accrual for maker_rewards only
+    assert led.extra_mtm("maker_rewards") > 0 and led.extra_mtm("bucket_sum") == 0.0
+    # and paper fills it at the signal, as a maker (rebate, not a taker fee)
+    from polybot.paper import fill_from_history
+    s = dict(led.conn.execute("SELECT * FROM signals").fetchone())
+    assert fill_from_history(s, []) == (s["ts"], 0.40)
+
+
+def test_the_report_says_how_many_days_each_gate_is_away():
+    from polybot.strategies.base import Signal
+    led = _ledger()
+    now = time.time()
+    led.gate_since_ts = now - 10 * 86400
+    for i in range(14):                       # 14 decisions in the last 7 days = 2/day
+        sid = led.add_signal(Signal("bucket_sum", "us", f"m{i}", "x", "BUY_YES", 0.3, 3.0, 5.0, "r",
+                                    arb=True, taker=True, meta={"group": f"g{i}"}), "paper")
+        led.conn.execute("UPDATE signals SET ts=? WHERE id=?", (now - (i % 7) * 86400 - 60, sid))
+    led.conn.commit()
+    eta = led.gate_eta("bucket_sum", now=now)
+    assert "14/30 decisions at 2.0/day" in eta and "~8 day(s)" in eta
+    assert "no ETA" in led.gate_eta("leadlag", now=now)
+    text = led.report(1)
+    assert "eta 14/30 decisions" in text and "leadlag closed positions since the reset: 0/20" in text
+
+
+def test_hold_favorites_scans_the_us_books_and_leaves_temperature_to_the_weather_modules():
+    """Offshore-only, hold_favorites could never reach the 10 US signals the gate asks for."""
+    end = datetime.fromtimestamp(time.time() + 2 * 86400, ZoneInfo("UTC")).strftime("%Y-%m-%dT%H:%M:%SZ")
+    q = lambda v: {"value": str(v)}
+    events = [
+        {"slug": "gov-shutdown-oct", "title": "Government Shutdown?", "category": "politics", "endDate": end,
+         "markets": [{"slug": "shut-oct1", "title": "By October 1", "status": "MARKET_STATUS_OPEN",
+                      "bestBidQuote": q(0.86), "bestAskQuote": q(0.88)}]},
+        {"slug": "temp-nychigh-2026-09-25", "title": "NYC high", "category": "climate", "endDate": end,
+         "markets": [{"slug": "tc-temp-a", "title": "80 to 81", "bestBidQuote": q(0.86), "bestAskQuote": q(0.88)}]},
+        {"slug": "closed-one", "title": "X?", "category": "politics", "endDate": end,
+         "markets": [{"slug": "c1", "title": "Yes", "status": "MARKET_STATUS_CLOSED",
+                      "bestBidQuote": q(0.86), "bestAskQuote": q(0.88)}]},
+    ]
+    table = {"all": {"0.85-0.90": {"n": 60, "yes": 59}}}
+    sigs = HoldFavorites(_cfg(), table).scan_us(events)
+    assert [(s.venue, s.market, s.price, s.meta["us_event"]) for s in sigs] == [("us", "shut-oct1", 0.87, "gov-shutdown-oct")]
+
+
+def test_the_recorder_samples_the_events_of_open_us_positions():
+    from polybot import pairs
+
+    class US:
+        available = True
+        def events_by_slug(self, slugs):
+            assert "gov-shutdown-oct" in slugs
+            return {"gov-shutdown-oct": {"slug": "gov-shutdown-oct", "markets": [
+                {"slug": "shut-oct1", "bestBidQuote": {"value": "0.86"}, "bestAskQuote": {"value": "0.88"}}]}}
+
+    led = _ledger()
+    rec = pairs.PairRecorder(led, US(), clock=lambda: 1000.0, offshore_prices=lambda toks: {})
+    got = rec.record([], extra_events=["gov-shutdown-oct"])
+    assert got.get("watched") == 1 and led.snapshots("us", "shut-oct1", 0)
+
+
+def test_compounding_is_off_by_default_and_moves_nothing_until_live_profit_is_banked(tmp_path):
+    from polybot import compounding as C
+    from polybot.strategies.base import Signal
+    cfg, led = config.Config(), _ledger()
+    path = str(tmp_path / "state.json")
+    assert C.apply(cfg, led, path=path) == {"on": False} and cfg.caps.max_exposure_usd == 180.0
+    cfg.compounding = True
+    now = time.time()
+    info = C.apply(cfg, led, now=now, path=path)
+    assert info["basis"] == 200.0
+    assert (cfg.caps.max_per_market_usd, cfg.caps.max_exposure_usd, cfg.caps.daily_loss_stop_usd,
+            cfg.caps.bankroll_floor_usd, cfg.arb_max_set_cost_usd, cfg.arb_max_risk_usd) == (20, 180, 20, 120, 120, 15)
+
+    def live_trade(ts, pnl):
+        sid = led.add_signal(Signal("bucket_sum", "us", f"m{ts}", "x", "BUY_YES", 0.5, 10, 1, "r"), "live")
+        led.conn.execute("UPDATE signals SET ts=? WHERE id=?", (ts, sid))
+        led.upsert_paper(sid, filled_ts=ts, fill_price=0.5, exit_ts=ts + 60, pnl_usd=pnl, status="closed")
+    # a loss shrinks the caps the same day
+    live_trade(now + 60, -10.0)
+    info = C.apply(cfg, led, now=now + 120, path=path)
+    assert info["basis"] == 190.0 and cfg.caps.max_exposure_usd == pytest.approx(171.0)
+    # 14 live days in profit with a small drawdown: the checkpoint banks the profit
+    for d in range(1, 15):
+        live_trade(now + d * 86400, 3.0)
+    info = C.apply(cfg, led, now=now + 15 * 86400, path=path)
+    assert info["stepped"] and info["banked"] == pytest.approx(232.0)          # 200 - 10 + 14 x 3
+    assert cfg.caps.max_exposure_usd == pytest.approx(180 * 232 / 200)
+    # a record that is not consistent (drawdown over 10% of the basis) banks nothing
+    rec = {"live_days": 20, "net": 5.0, "max_drawdown": 30.0, "fill_rate": 0.9}
+    assert C.consistent(rec, 232.0, cfg)[0] is False
+
+
+def test_a_config_hot_reload_reaches_every_component_and_keeps_the_account_bankroll(tmp_path, monkeypatch):
+    """A hot reload used to change only the runner's copy: the risk manager kept the old
+    arb_live_ok and caps, and the bankroll fell back to the file's 200."""
+    import json as _json
+    import polybot.config as cfgmod
+    from polybot.runner import Runner
+    path = str(tmp_path / "config.json")
+    cfgmod.save(cfgmod.Config(), path)
+    monkeypatch.setattr(cfgmod, "CONFIG_PATH", path)
+    r = Runner(cfg=cfgmod.load(path), ledger=_ledger(), log=lambda *_: None)
+    r.cfg.bankroll_usd = 208.06                 # as read from the account
+    raw = _json.load(open(path))
+    raw["arb_live_ok"] = True
+    with open(path, "w") as f:
+        _json.dump(raw, f)
+    os.utime(path, (time.time() + 5, time.time() + 5))
+    assert r.reload_config_if_changed()
+    assert r.risk.cfg is r.cfg and r.arb.cfg is r.cfg and r.other_modules["maker_rewards"].cfg is r.cfg
+    assert r.risk.cfg.arb_live_ok is True and r.cfg.bankroll_usd == 208.06

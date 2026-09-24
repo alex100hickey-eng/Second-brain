@@ -87,6 +87,29 @@ CREATE TABLE IF NOT EXISTS model_runs (
     kind TEXT NOT NULL,
     probs TEXT NOT NULL
 );
+-- maker_rewards: the paper book's resting quotes (one row per market+side) and what they earned.
+CREATE TABLE IF NOT EXISTS maker_quotes (
+    market TEXT NOT NULL,
+    side TEXT NOT NULL,             -- 'bid' | 'ask'
+    px REAL,
+    qty REAL,
+    last_ts REAL,                   -- when this quote was last looked at (accrual runs from here)
+    last_trade REAL,                -- the book's last print when we looked (a new print = a trade)
+    filled_ts REAL,
+    PRIMARY KEY (market, side)
+);
+CREATE TABLE IF NOT EXISTS maker_accrual (
+    ts REAL NOT NULL,
+    market TEXT NOT NULL,
+    side TEXT NOT NULL,
+    qty REAL,
+    share REAL,                     -- our share of the side's qualified score on the book we read
+    reward_usd REAL,                -- share x pool/2 x interval / day  (an ESTIMATE until live)
+    qualified INTEGER,              -- did the side reach target size at all
+    pool REAL,
+    program TEXT
+);
+CREATE INDEX IF NOT EXISTS maker_accrual_idx ON maker_accrual (ts);
 CREATE TABLE IF NOT EXISTS daily (
     date TEXT PRIMARY KEY,
     realized_usd REAL DEFAULT 0,
@@ -98,6 +121,9 @@ CREATE TABLE IF NOT EXISTS daily (
 
 def _now() -> float:
     return time.time()
+
+
+LEADLAG_REFERENCE_REVIEW_AT = 20      # closed leadlag positions before the reference (A vs C) is decided
 
 
 class Ledger:
@@ -162,6 +188,56 @@ class Ledger:
             q += " AND venue=?"
             args.append(venue)
         return [dict(r) for r in self.conn.execute(q + " ORDER BY ts", args)]
+
+    # ---- maker_rewards ----------------------------------------------------------------------
+    def maker_quotes(self, market: str | None = None) -> list:
+        q, args = "SELECT * FROM maker_quotes", []
+        if market:
+            q, args = q + " WHERE market=?", [market]
+        return [dict(r) for r in self.conn.execute(q + " ORDER BY market, side", args)]
+
+    def maker_set(self, market, side, px, qty, ts, last_trade, filled_ts=None) -> None:
+        self.conn.execute(
+            "INSERT INTO maker_quotes (market, side, px, qty, last_ts, last_trade, filled_ts) VALUES (?,?,?,?,?,?,?) "
+            "ON CONFLICT(market, side) DO UPDATE SET px=excluded.px, qty=excluded.qty, last_ts=excluded.last_ts, "
+            "last_trade=excluded.last_trade, filled_ts=excluded.filled_ts",
+            (market, side, px, qty, ts, last_trade, filled_ts))
+        self.conn.commit()
+
+    def maker_start(self, market, ts) -> None:
+        for side in ("bid", "ask"):
+            self.maker_set(market, side, None, 0.0, ts, None)
+
+    def maker_drop(self, market) -> None:
+        self.conn.execute("DELETE FROM maker_quotes WHERE market=?", (market,))
+        self.conn.commit()
+
+    def maker_accrue(self, ts, market, side, qty, share, reward_usd, qualified, pool, program) -> None:
+        self.conn.execute(
+            "INSERT INTO maker_accrual (ts, market, side, qty, share, reward_usd, qualified, pool, program) "
+            "VALUES (?,?,?,?,?,?,?,?,?)", (ts, market, side, qty, share, reward_usd, int(bool(qualified)), pool, program))
+        self.conn.commit()
+
+    def maker_position_open(self, market, side) -> bool:
+        for r in self.open_signals(module="maker_rewards", venue="us"):
+            if r["market"] == market and (json.loads(r["meta"] or "{}").get("maker_side") == side):
+                return True
+        return False
+
+    def maker_positions_open(self, market) -> bool:
+        return any(r["market"] == market for r in self.open_signals(module="maker_rewards", venue="us"))
+
+    def maker_rewards_usd(self, since_ts: float) -> float:
+        """Estimated incentive rewards accrued by the paper book since `since_ts`."""
+        r = self.conn.execute("SELECT COALESCE(SUM(reward_usd), 0) FROM maker_accrual WHERE ts>=?", (since_ts,)).fetchone()
+        return float(r[0] or 0.0)
+
+    def extra_mtm(self, module: str, days: int = 30) -> float:
+        """Income a module earns that is not a position: maker_rewards' incentive accrual. Zero for
+        every other module, so no other gate reads differently."""
+        if module != "maker_rewards":
+            return 0.0
+        return self.maker_rewards_usd(max(_now() - days * 86400, float(self.gate_since_ts or 0.0)))
 
     def set_signal_status(self, signal_id: int, status: str) -> None:
         self.conn.execute("UPDATE signals SET status=? WHERE id=?", (status, signal_id))
@@ -347,7 +423,7 @@ class Ledger:
         rows = sum(s["n"] for s in stats)
         closed = sum(s["closed"] or 0 for s in stats)
         filled = sum(s["filled"] or 0 for s in stats)
-        mtm = sum(s["mtm"] for s in stats)
+        mtm = sum(s["mtm"] for s in stats) + self.extra_mtm(module, days)
         if n < min_signals:
             return False, f"{n}/{min_signals} signals"
         if closed == 0:
@@ -359,7 +435,7 @@ class Ledger:
         us = [s for s in self.module_stats(days, venue="us") if s["module"] == module]
         us_n = self.decision_count(module, days, venue="us")
         us_closed = sum(s["closed"] or 0 for s in us)
-        us_mtm = sum(s["mtm"] for s in us)
+        us_mtm = sum(s["mtm"] for s in us) + self.extra_mtm(module, days)   # maker rewards are US-only
         if us_n < min_us_signals:
             return False, f"{us_n}/{min_us_signals} US signals (offshore evidence does not count for live)"
         if us_closed == 0:
@@ -371,6 +447,45 @@ class Ledger:
             return False, why
         return True, (f"{n} signals, {closed} closed, mtm {mtm:+.2f}, fills {filled / rows:.0%}, "
                       f"US {us_n} signals {us_mtm:+.2f}")
+
+    def closed_count(self, module: str) -> int:
+        since = float(self.gate_since_ts or 0.0)
+        r = self.conn.execute("SELECT COUNT(*) FROM signals s JOIN paper_trades p ON p.signal_id=s.id "
+                              "WHERE s.module=? AND s.ts>=? AND s.status!='void' AND p.status='closed'",
+                              (module, since)).fetchone()
+        return int(r[0] or 0)
+
+    def gate_eta(self, module: str, min_signals: int = 30, pace_days: float = 7.0, now: float | None = None):
+        """'16/30 decisions at 2.1/day (7d) ... -> ~7 days' — the counting part of the gate only.
+
+        Counts move on a clock; fills, mark-to-market and the tail check are facts no pace can
+        forecast, so once the counts are met the line says it is waiting on those instead. Pace is
+        decisions since max(gate reset, 7 days ago) over the days elapsed in that window."""
+        now = _now() if now is None else now
+        gate = float(self.gate_since_ts or 0.0)
+        start = max(gate, now - pace_days * 86400)
+        span = max((now - start) / 86400, 1e-6)
+
+        def count_since(t, venue=None):
+            q = ("SELECT COUNT(DISTINCT COALESCE(json_extract(meta,'$.group'), 'row:' || id)) FROM signals "
+                 "WHERE module=? AND ts>=? AND status!='void'")
+            args = [module, t]
+            if venue:
+                q += " AND venue=?"
+                args.append(venue)
+            return int(self.conn.execute(q, args).fetchone()[0] or 0)
+
+        n, us_n = count_since(max(gate, now - 30 * 86400)), count_since(max(gate, now - 30 * 86400), "us")
+        pace, us_pace = count_since(start) / span, count_since(start, "us") / span
+        need, us_need = max(0, min_signals - n), max(0, self.min_us_signals - us_n)
+        head = f"{n}/{min_signals} decisions, US {us_n}/{self.min_us_signals}"
+        if need == 0 and us_need == 0:
+            return f"{head} — counts met; waiting on fills / mark-to-market / tail check"
+        if (need and pace <= 0) or (us_need and us_pace <= 0):
+            return f"{head} — no pace in the last {pace_days:.0f}d: no ETA"
+        days = max(need / pace if need else 0.0, us_need / us_pace if us_need else 0.0)
+        return (f"{n}/{min_signals} decisions at {pace:.1f}/day ({pace_days:.0f}d), US {us_n}/{self.min_us_signals} "
+                f"at {us_pace:.1f}/day -> {'<1 day' if days < 1 else f'~{days:.0f} day(s)'} to the counts")
 
     def tail_check(self, module: str, days: int = 30):
         """(ok, why) — is this record an edge, or one lucky trade and one unlucky one?
@@ -503,9 +618,21 @@ class Ledger:
             for s in us:
                 lines.append(f"    {s['module']:<22} {s['mode']:<6} signals={s['n']:<3} filled={s['filled'] or 0:<3} "
                              f"closed={s['closed'] or 0:<3} mtm=${s['mtm']:+.2f}")
+        mk = self.maker_rewards_usd(max(_now() - days * 86400, float(self.gate_since_ts or 0.0)))
+        mk_all = self.maker_rewards_usd(float(self.gate_since_ts or 0.0))
+        if mk_all:
+            quoted = self.conn.execute("SELECT COUNT(DISTINCT market) FROM maker_quotes").fetchone()[0]
+            lines.append(f"  maker_rewards incentive accrual (ESTIMATE, paper): ${mk:.2f} in {days}d, "
+                         f"${mk_all:.2f} since the gate reset, {quoted} market(s) quoted")
         for m in config.MODULES:
             ok, why = self.promotion_check(m)
             lines.append(f"  gate {m:<22} {'PASS' if ok else 'hold'} — {why}")
+            eta = self.gate_eta(m) if not ok else None
+            if eta:
+                lines.append(f"       eta {eta}")
+        closed_ll = self.closed_count("leadlag")
+        lines.append(f"  leadlag closed positions since the reset: {closed_ll}/{LEADLAG_REFERENCE_REVIEW_AT} — at "
+                     f"{LEADLAG_REFERENCE_REVIEW_AT}, decide the reference (C = spread-limited mid, see the design doc)")
         if any(s["module"] == "weather_lock" for s in stats):
             # Answers "why does live show so few weather_lock signals against the backtest ROI" from
             # snapshots the loop already wrote — no live API calls, so it belongs in the fast daily
