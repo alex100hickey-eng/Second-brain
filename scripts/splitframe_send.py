@@ -261,9 +261,15 @@ def follow_ups_first(items: list) -> list:
     complete machine. A cold email deferred a day costs a day. A follow-up deferred past its
     window is a sequence that never finishes.
 
-    Stable within each group, so the existing newest-first order is preserved otherwise.
+    Inside each group the OLDEST due goes first. The queue reads newest-id-first, and keeping
+    that order meant every newly due draft jumped the line: on 2026-09-24 Moon Juice's follow-up
+    (static attached, due 09:17) was still waiting at 10:00 while drafts due at 09:29 and 09:53
+    went ahead of it, and ten more due at 10:23 were about to do the same. With one send per run
+    and a daily ceiling, last-in-first-out means the oldest drafts are the ones that never go,
+    and an old first touch is also the one closest to being held as stale.
     """
-    return sorted(items, key=lambda it: 0 if is_follow_up(it) else 1)
+    return sorted(items, key=lambda it: (0 if is_follow_up(it) else 1,
+                                         str(it.get("auto_send_at") or ""), it.get("id") or 0))
 
 
 # ---------------------------------------------------------------------------

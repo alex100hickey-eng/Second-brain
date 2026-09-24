@@ -154,7 +154,7 @@ def test_one_email_per_run_and_the_follow_up_goes_first(run):
     items = [_draft(9, "cold@a.com", follow_up=False), _draft(8, "fu1@b.com"),
              _draft(7, "fu2@c.com")]
     box, sent, log = run(items)
-    assert sent == ["r8"], "newest follow-up first, and only one email this run"
+    assert sent == ["r7"], "a follow-up before the cold email, the oldest one first, and only one email this run"
     assert log.count(": SENT to ") == 1
     box2, sent2, _ = run([it for it in items if it["id"] != 8])
     assert sent2 == ["r7"]
@@ -224,9 +224,10 @@ def test_send_budget_arithmetic():
 def test_pick_keeps_first_touches_inside_their_own_cap():
     due = [_draft(9, "cold@a.com", follow_up=False), _draft(8, "fu@b.com"),
            _draft(7, "cold2@c.com", follow_up=False)]
-    assert [i["id"] for i in sfs.pick_auto_sends(due, 1, 5, 0, limit=5)] == [8, 9]
+    # same due time, so the older first touch (7) comes before the newer one (9)
+    assert [i["id"] for i in sfs.pick_auto_sends(due, 1, 5, 0, limit=5)] == [8, 7]
     assert [i["id"] for i in sfs.pick_auto_sends(due, 0, 5, 0, limit=5)] == [8]
-    assert [i["id"] for i in sfs.pick_auto_sends(due, 2, 5, 3, limit=5)] == [8, 9]   # 5-1 > 3, 5-2 <= 3
+    assert [i["id"] for i in sfs.pick_auto_sends(due, 2, 5, 3, limit=5)] == [8, 7]   # 5-1 > 3, 5-2 <= 3
 
 
 def test_the_reserve_only_counts_follow_ups_that_are_written_and_unsent():
@@ -239,9 +240,10 @@ def test_the_reserve_only_counts_follow_ups_that_are_written_and_unsent():
 def test_a_failing_draft_does_not_take_the_runs_only_slot(run):
     """The per-run limit counts sends that WENT. Otherwise one broken draft would be retried
     first every ten minutes and nothing behind it would ever go."""
-    items = [_draft(8, "broken@b.com"), _draft(7, "fine@c.com")]
-    _box, sent, log = run(items, fail_drafts={"r8"})
-    assert sent == ["r7"]
+    # the broken draft is the older row, so it is first in line
+    items = [_draft(8, "fine@c.com"), _draft(7, "broken@b.com")]
+    _box, sent, log = run(items, fail_drafts={"r7"})
+    assert sent == ["r8"]
     assert "SEND FAILED to broken@b.com" in log
 
 

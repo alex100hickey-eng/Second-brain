@@ -211,16 +211,26 @@ def test_follow_ups_take_the_cap_before_cold_first_touches():
              {"id": 8, "detail": "Subject: Re: Your crate ads skip new rescues\n\nb"},
              {"id": 7, "detail": "Subject: Forty eight ads, all from June 12\n\nb"},
              {"id": 6, "detail": "Subject: RE: your ad library has a gap\n\nb"}]
-    assert [i["id"] for i in sfs.follow_ups_first(items)] == [8, 6, 9, 7]
+    # Follow-ups (8, 6) before first touches (9, 7); with no due times the older row goes first
+    # inside each group (see test_the_oldest_due_goes_first_inside_each_group).
+    assert [i["id"] for i in sfs.follow_ups_first(items)] == [6, 8, 7, 9]
 
 
-def test_ordering_is_stable_inside_each_group():
-    """Newest-first is preserved within follow-ups and within first touches; only the two groups
-    move relative to each other."""
-    items = [{"id": 5, "detail": "Subject: Re: a\n\nb"},
-             {"id": 4, "detail": "Subject: Re: b\n\nb"},
-             {"id": 3, "detail": "Subject: cold\n\nb"}]
-    assert [i["id"] for i in sfs.follow_ups_first(items)] == [5, 4, 3]
+def test_the_oldest_due_goes_first_inside_each_group():
+    """2026-09-24: the queue reads newest-id-first, so each newly due draft jumped the line and
+    Moon Juice's follow-up (due 09:17, static attached) waited while 09:29 and 09:53 went."""
+    items = [{"id": 5, "detail": "Subject: Re: a\n\nb", "auto_send_at": "2026-09-24T09:53:00"},
+             {"id": 4, "detail": "Subject: Re: b\n\nb", "auto_send_at": "2026-09-24T09:17:00"},
+             {"id": 3, "detail": "Subject: cold\n\nb", "auto_send_at": "2026-09-24T08:00:00"},
+             {"id": 2, "detail": "Subject: Re: c\n\nb", "auto_send_at": "2026-09-24T09:29:00"}]
+    assert [i["id"] for i in sfs.follow_ups_first(items)] == [4, 2, 5, 3], \
+        "follow-ups still before first touches; oldest due first inside each group"
+
+
+def test_same_due_time_falls_back_to_the_older_row():
+    items = [{"id": 9, "detail": "Subject: Re: a\n\nb", "auto_send_at": "2026-09-24T10:23:00"},
+             {"id": 7, "detail": "Subject: Re: b\n\nb", "auto_send_at": "2026-09-24T10:23:00"}]
+    assert [i["id"] for i in sfs.follow_ups_first(items)] == [7, 9]
 
 
 def test_a_reply_is_recognised_whatever_the_case():
