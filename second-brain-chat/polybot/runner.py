@@ -114,6 +114,7 @@ def _arm_hard_watchdog(seconds: float) -> None:
 ARB_HOURS = range(9, 17)
 QUIET_REPEAT_S = 600.0
 JOB_RETRY_S = 3600.0
+UNIVERSE_SLOTS = ((6, 30), (18, 30))
 JOBS_PATH = os.path.join(config.ROOT, "jobs-state.json")
 # Where the leadlag universe comes from. US: every non-sports category events.list honours.
 # Offshore: the gamma tags those questions live under (checked 2026-09-23).
@@ -125,13 +126,17 @@ PAIR_OFFSHORE_TAGS = ("politics", "elections", "midterms", "us-politics", "trump
                       "finance", "tech", "science", "climate", "crypto-prices", "bitcoin")
 
 
-def _last_slot(now, hours):
-    """The latest datetime at one of `hours` (ET, on the hour) that is not after `now`."""
+def _last_slot(now, hours, weekday=None):
+    """The latest datetime at one of `hours` (ET) that is not after `now`. An hour is an int (on the
+    hour) or (hour, minute); `weekday` (0 = Monday) makes the slot weekly."""
     best = None
-    for back in (0, 1):
+    for back in range(8 if weekday is not None else 2):
         day = (now - timedelta(days=back)).date()
+        if weekday is not None and day.weekday() != weekday:
+            continue
         for h in hours:
-            t = datetime(day.year, day.month, day.day, h, tzinfo=ET)
+            hh, mm = h if isinstance(h, tuple) else (h, 0)
+            t = datetime(day.year, day.month, day.day, hh, mm, tzinfo=ET)
             if t <= now and (best is None or t > best):
                 best = t
     return best
@@ -895,7 +900,7 @@ class Runner:
             self.log(line)
         return True
 
-    def _due(self, name: str, now, hours, quiet_hours=()) -> bool:
+    def _due(self, name: str, now, hours, quiet_hours=(), weekday=None) -> bool:
         """Has the most recent scheduled slot for `name` passed without a run?
 
         Every daily job used to fire on one exact minute, and this loop is on a laptop: asleep at
@@ -909,7 +914,17 @@ class Runner:
         # build alone is ~20 calls on the US quota the arb sweep needs.
         if time.time() - self._attempts.get(name, 0.0) < JOB_RETRY_S:
             return False
-        return self._jobs.get(name, 0.0) < _last_slot(now, hours).timestamp()
+        return self._jobs.get(name, 0.0) < _last_slot(now, hours, weekday).timestamp()
+
+    def universe_catchup_active(self) -> bool:
+        """The universe jobs catch up only when the switch was thrown AT a gate reset.
+
+        Re-discovering the catalogue and proving new series changes what bucket_sum trades, and
+        bucket_sum is 15/30 decisions into its evidence. So the switch is not a bool: it is the
+        gate_since_ts it was enabled with, and it is live only while that is still THE gate reset.
+        Turning it on means setting both fields to the same new timestamp — one edit, one reset."""
+        armed = float(getattr(self.cfg, "universe_catchup_gate_ts", 0.0) or 0.0)
+        return armed > 0 and abs(armed - float(self.cfg.gate_since_ts or 0.0)) < 1e-6
 
     def _attempt(self, name: str) -> None:
         self._attempts[name] = time.time()
@@ -1151,15 +1166,27 @@ class Runner:
                     # Re-discover the catalogue twice a day (~20 search calls) and promote any
                     # series a settled instance has now proved. The registry compounds: every
                     # proof is permanent and every future instance of that series is tradable.
-                    if now.hour in (6, 18) and now.minute == 30:
+                    #
+                    # Both of these change which markets bucket_sum may trade, so their catch-up is
+                    # behind `universe_catchup_active()`: off, they keep their exact minutes (which
+                    # the laptop misses — the refresh last ran 2026-09-19 18:32); on, a missed slot
+                    # runs at the next tick outside the arb window. See config.universe_catchup_gate_ts.
+                    catchup = self.universe_catchup_active()
+                    if (self._due("refresh_universe", now, UNIVERSE_SLOTS, quiet_hours=ARB_HOURS) if catchup
+                            else now.hour in (6, 18) and now.minute == 30):
+                        self._attempt("refresh_universe")
                         with self._long_job("refresh_universe"):
                             self.log(self.refresh_universe())
+                        self._ran("refresh_universe")
                     # Weekly: try to prove recurring series from their own past instances instead
                     # of waiting for the next one to settle. banxico meets every six weeks;
                     # usfed-fomc eight times a year. Both became tradable this way on 2026-09-18.
-                    if now.weekday() == 6 and now.hour == 5 and now.minute == 30:
+                    if (self._due("date_sweep", now, ((5, 30),), quiet_hours=ARB_HOURS, weekday=6) if catchup
+                            else now.weekday() == 6 and now.hour == 5 and now.minute == 30):
+                        self._attempt("date_sweep")
                         with self._long_job("date_sweep"):
                             n = self.prove_by_date_sweep()
+                        self._ran("date_sweep")
                         self.log(f"universe: date sweep proved {n} series")
                     if self._due("calibration", now, (3,), quiet_hours=ARB_HOURS):
                         self._attempt("calibration")

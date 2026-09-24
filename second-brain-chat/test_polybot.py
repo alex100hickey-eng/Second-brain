@@ -3506,3 +3506,28 @@ def test_the_loop_keeps_recording_model_runs_while_model_update_is_off(monkeypat
     assert row["city"] == "nyc" and row["venue"] == "offshore" and json.loads(row["probs"]) == ctx.model_probs
     r._scan_one("nyc", "high", 0, ["bucket_sum"], True, "offshore", None)          # the light arb sweep writes none
     assert led.conn.execute("SELECT COUNT(*) FROM model_runs").fetchone()[0] == 1
+
+
+def test_universe_catchup_only_runs_when_armed_at_a_gate_reset(monkeypatch):
+    """The arb universe refresh is pinned to 06:30/18:30 and the laptop misses it (stale since
+    09-19). A catch-up changes bucket_sum's universe, so it may only switch on at a gate reset."""
+    from polybot import runner as runner_mod
+    monkeypatch.setattr(runner_mod, "_save_jobs", lambda jobs, path=None: None)
+    cfg = _cfg()
+    cfg.gate_since_ts = 1789739626.0
+    r = runner_mod.Runner(cfg, _ledger(), log=lambda *_: None)
+    assert not r.universe_catchup_active()                      # default: off
+    cfg.universe_catchup_gate_ts = 1789739626.0 - 86400          # armed at an OLD reset: stays off
+    assert not r.universe_catchup_active()
+    cfg.universe_catchup_gate_ts = cfg.gate_since_ts             # armed at THIS reset
+    assert r.universe_catchup_active()
+    et = runner_mod.ET
+    r._jobs = {}
+    assert r._due("refresh_universe", datetime(2026, 9, 24, 8, 0, tzinfo=et), runner_mod.UNIVERSE_SLOTS,
+                  quiet_hours=runner_mod.ARB_HOURS)             # 06:30 missed -> runs at 08:00
+    r._jobs["refresh_universe"] = datetime(2026, 9, 24, 8, 1, tzinfo=et).timestamp()
+    assert not r._due("refresh_universe", datetime(2026, 9, 24, 17, 0, tzinfo=et), runner_mod.UNIVERSE_SLOTS)
+    assert r._due("refresh_universe", datetime(2026, 9, 24, 18, 45, tzinfo=et), runner_mod.UNIVERSE_SLOTS)
+    # the weekly slot: Sunday 05:30
+    sun = runner_mod._last_slot(datetime(2026, 9, 24, 12, 0, tzinfo=et), ((5, 30),), weekday=6)
+    assert (sun.weekday(), sun.hour, sun.minute, sun.day) == (6, 5, 30, 20)

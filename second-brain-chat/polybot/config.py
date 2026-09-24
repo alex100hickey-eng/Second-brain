@@ -202,6 +202,10 @@ class Config:
                                            # 95-99c carry information the model can't have (2026-09-12 paper: -$412 there)
     hold_edge_max_cents: float = 30.0      # a bigger model-vs-market gap is a model or venue-rule error, not an edge
     gate_since_ts: float = 0.0             # signals before this epoch don't count toward the report or the gate
+    # The arb universe refresh (06:30/18:30) and the weekly date sweep catch up after a missed slot
+    # ONLY while this equals gate_since_ts: they change what bucket_sum trades, so they may start
+    # changing it only at a gate reset. Set both to the same new epoch to turn it on.
+    universe_catchup_gate_ts: float = 0.0
     min_us_signals: int = 10               # a module cannot go live on offshore evidence alone (see the gate)
     auto_promote: bool = False             # True: the 07:00 report flips PASS modules paper -> live by itself
     snapshot_keep_days: int = 30           # book snapshots older than this are pruned at 03:00
