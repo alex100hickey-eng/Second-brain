@@ -52,6 +52,11 @@ def _entry(to, brand="Loudcup", **kw):
     (_row(), "hello@theloudcup.com", False),
     (_row(), "support@x.com", False),
     (None, "", False),
+    # a bare initial is the named contact's own inbox (Farmers Juice prints j@ for Junaid)...
+    (_row(contact_name="Junaid Kalmadi"), "j@thefarmersjuice.com", True),
+    # ...but only for that contact, and never without one
+    (_row(contact_name="Mark Reyes"), "j@thefarmersjuice.com", False),
+    (_row(), "j@thefarmersjuice.com", False),
 ])
 def test_what_counts_as_a_named_address(row, addr, named):
     assert sfd.is_named_address(row, addr) is named

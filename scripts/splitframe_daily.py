@@ -152,7 +152,9 @@ def _letters(value: str) -> str:
 
 
 def matches_contact(email: str, contact_name: str) -> bool:
-    """The local part is the tracker's named contact: becca, maxx.appelman, pveksler, klee."""
+    """The local part is the tracker's named contact: becca, maxx.appelman, pveksler, klee, or a
+    bare first initial (j@ for Junaid Kalmadi at Farmers Juice, printed on their own site). The
+    initial only counts against the row's own named contact, never on its own."""
     parts = [t.lower() for t in re.split(r"[^A-Za-z]+", contact_name or "") if len(t) > 1]
     if not parts:
         return False
@@ -160,7 +162,8 @@ def matches_contact(email: str, contact_name: str) -> bool:
     local = _letters(_local(email))
     if not local:
         return False
-    return local in {first, last, first + last, last + first, first[0] + last, first + last[0]}
+    return local in {first, last, first + last, last + first, first[0] + last, first + last[0],
+                     first[0]}
 
 
 def is_ticket_desk(email: str) -> bool:
