@@ -168,8 +168,10 @@ DEFAULT_TOTAL_CEILING = 20
 
 
 def total_ceiling() -> int:
+    """Today's bound on everything the mailbox sends: splitframe_daily.effective_ceiling(), which
+    holds at 20 for 48 h after any bounce and whenever the bounce record can't be read."""
     try:
-        return max(DAILY_CAP, int(_daily_module().TOTAL_DAILY_CEILING))
+        return max(DAILY_CAP, int(_daily_module().effective_ceiling()[0]))
     except Exception:
         return DEFAULT_TOTAL_CEILING
 

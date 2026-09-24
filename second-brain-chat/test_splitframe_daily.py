@@ -846,6 +846,7 @@ def test_the_ceiling_still_bounds_first_touches_after_the_days_follow_ups(monkey
     releasing more would queue drafts the sender cannot send today and they would go stale."""
     queue = [_entry(n) for n in range(1, 9)]
     monkeypatch.setattr(sfd, "_shared", _FakeShared(queue))
+    monkeypatch.setattr(sfd, "effective_ceiling", lambda now=None: (20, "pinned"))
     monkeypatch.setattr(sfd, "current_cap", lambda: (10, "pinned"))
     monkeypatch.setattr(sfd, "followups_due_today", lambda *a, **k: 14)
     assert len(sfd.release_first_touches(_FakeOutbox(), "https://mail")) == 6
@@ -854,10 +855,45 @@ def test_the_ceiling_still_bounds_first_touches_after_the_days_follow_ups(monkey
 def test_follow_ups_can_still_take_the_whole_day_at_the_ceiling(monkeypatch, quiet_log):
     """22 due (the real 2026-09-23 number) is past the ceiling: no first touch today, said so."""
     monkeypatch.setattr(sfd, "_shared", _FakeShared([_entry(1)]))
+    monkeypatch.setattr(sfd, "effective_ceiling", lambda now=None: (20, "pinned"))
     monkeypatch.setattr(sfd, "current_cap", lambda: (10, "pinned"))
     monkeypatch.setattr(sfd, "followups_due_today", lambda *a, **k: 22)
     assert sfd.release_first_touches(_FakeOutbox(), "https://mail") == []
     assert any("reach the daily ceiling" in line for line in quiet_log)
+
+
+def test_the_raised_ceiling_leaves_room_for_more_first_touches(monkeypatch, quiet_log):
+    """2026-09-24: 17 follow-ups due. At 20 that left 3 first touches; at 25 it leaves 8."""
+    monkeypatch.setattr(sfd, "_shared", _FakeShared([_entry(n) for n in range(1, 12)]))
+    monkeypatch.setattr(sfd, "current_cap", lambda: (10, "pinned"))
+    monkeypatch.setattr(sfd, "effective_ceiling", lambda now=None: (25, "no bounce in 48 h"))
+    monkeypatch.setattr(sfd, "followups_due_today", lambda *a, **k: 17)
+    assert len(sfd.release_first_touches(_FakeOutbox(), "https://mail")) == 8
+    assert any("ceiling of 25 (no bounce in 48 h)" in line for line in quiet_log)
+
+
+def _bounce(hours_ago):
+    return {"at": (datetime.now(sfd.LOCAL_TZ) - timedelta(hours=hours_ago)).isoformat(), "to": "x@y.com"}
+
+
+def test_a_bounce_holds_the_ceiling_at_20_for_48_hours():
+    now = datetime.now(sfd.LOCAL_TZ)
+    assert sfd.TOTAL_DAILY_CEILING == 25 and sfd.CEILING_AFTER_BOUNCE == 20
+    assert sfd.ceiling_for([], now)[0] == 25
+    assert sfd.ceiling_for([_bounce(1)], now)[0] == 20
+    assert sfd.ceiling_for([_bounce(47)], now)[0] == 20, "one day clean is not enough"
+    assert sfd.ceiling_for([_bounce(49)], now)[0] == 25, "48 h clean brings it back"
+    assert sfd.ceiling_for([_bounce(49), _bounce(2)], now)[0] == 20
+    naive = {"at": (datetime.now() - timedelta(hours=3)).replace(tzinfo=None).isoformat()}
+    assert sfd.ceiling_for([naive], now)[0] == 20, "a naive local timestamp still counts"
+
+
+def test_an_unreadable_bounce_record_never_reads_as_the_raised_ceiling(monkeypatch):
+    def boom():
+        raise RuntimeError("supabase down")
+    monkeypatch.setattr(sfd, "_bounce_events", boom)
+    ceiling, why = sfd.effective_ceiling()
+    assert ceiling == 20 and "unreadable" in why
 
 
 def test_the_switch_restores_the_shared_cap(monkeypatch, quiet_log):
