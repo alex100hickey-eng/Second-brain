@@ -538,6 +538,31 @@ def test_paper_engine_fills_exits_and_pnl():
     assert "weather_lock" in led.report(1) and "mtm=" in led.report(1)
 
 
+def test_report_explains_weather_lock_signal_scarcity_from_snapshots():
+    """The daily report answers "why so few weather_lock signals vs. the backtest" from the
+    snapshots the loop already wrote — the same evidence `backtest.liquidity_reality` uses — so a
+    reviewer does not have to re-run a slow, live-API backtest to get the answer every time."""
+    led = _ledger()
+    sig = Signal("weather_lock", "offshore", "tokL", "lock", "BUY_YES", 0.90, 18, 8, "r",
+                 exit="settle", meta={"market_id": "mL"})
+    led.add_signal(sig, "paper")
+    now = time.time()
+    rows = [(now - 3600, "offshore", f"t{i}", 0.03, 0.95, None, None) for i in range(9)]  # empty books
+    rows += [(now - 3600, "offshore", f"u{i}", 0.88, 0.92, None, None) for i in range(1)]  # one real one
+    led.conn.executemany("INSERT INTO snapshots (ts, venue, market, bid, ask, mid, last) VALUES (?,?,?,?,?,?,?)", rows)
+    led.conn.commit()
+    text = led.report(1)
+    assert "weather_lock offshore book reality" in text
+    assert "median spread 92c" in text and "10% clear the 10c filter" in text
+    assert "bounds live signal count regardless of backtest ROI" in text
+
+
+def test_report_omits_liquidity_line_without_weather_lock_signals():
+    led = _ledger()
+    led.add_signal(Signal("bucket_sum", "us", "tok", "r", "BUY_YES", 0.5, 10, 20, "r", exit="settle"), "paper")
+    assert "weather_lock offshore book reality" not in led.report(1)
+
+
 def test_hold_band_and_edge_cap():
     cfg = _cfg()
     # production cap 30c: the 80-81 bucket at post 0.09 with a 60c+ edge is a model error, not a trade

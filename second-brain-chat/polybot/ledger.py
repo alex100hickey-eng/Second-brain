@@ -506,6 +506,18 @@ class Ledger:
         for m in config.MODULES:
             ok, why = self.promotion_check(m)
             lines.append(f"  gate {m:<22} {'PASS' if ok else 'hold'} — {why}")
+        if any(s["module"] == "weather_lock" for s in stats):
+            # Answers "why does live show so few weather_lock signals against the backtest ROI" from
+            # snapshots the loop already wrote — no live API calls, so it belongs in the fast daily
+            # report, not only in the slow `backtest` command that has to re-fetch every book.
+            from . import backtest
+            liq = backtest.liquidity_reality(db_path=self.path)
+            if liq:
+                lines.append(f"  weather_lock offshore book reality ({liq['days']}d, ask "
+                             f"{liq['band'][0]:.2f}-{liq['band'][1]:.2f}, n={liq['n']}): median spread "
+                             f"{liq['median_spread_cents']:.0f}c · {liq['tradable_share']:.0%} clear the "
+                             f"{liq['max_spread_cents']:.0f}c filter — this bounds live signal count "
+                             "regardless of backtest ROI")
         return "\n".join(lines)
 
     def summary(self, days: int = 1) -> str:
