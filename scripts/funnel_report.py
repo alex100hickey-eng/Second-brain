@@ -34,6 +34,7 @@ from __future__ import annotations
 import argparse
 import csv
 import importlib.util
+import io
 import os
 import re
 import sys
@@ -87,9 +88,39 @@ def _d(value):
 
 # ------------------------------------------------------------------ reading (never writing)
 
+VAULT_GIT = os.path.expanduser("~/.second-brain-vault.git")
+MIRROR_NOTE = ""        # set when the last tracker read came from the git mirror
+
+
+def _mirror_text() -> str | None:
+    """The tracker as the vault's git mirror last saw it (read-only)."""
+    import subprocess
+    try:
+        r = subprocess.run(["git", "--git-dir", VAULT_GIT, "show", "HEAD:Money/prospect-tracker.csv"],
+                           capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return r.stdout if r.returncode == 0 and r.stdout.strip() else None
+
+
 def tracker_rows(path: str = None) -> list:
-    with open(path or TRACKER, newline="", encoding="utf-8-sig") as f:
-        return list(csv.DictReader(f))
+    """The tracker's rows. When iCloud has evicted the live tracker (a dataless placeholder whose
+    read fails: 04:20 on 2026-09-24 was "Resource deadlock avoided"), the vault git mirror's copy
+    stands in and the report says so. An explicit `path` never gets a substitute."""
+    global MIRROR_NOTE
+    MIRROR_NOTE = ""
+    try:
+        with open(path or TRACKER, newline="", encoding="utf-8-sig") as f:
+            return list(csv.DictReader(f))
+    except OSError:
+        if path:
+            raise
+        text = _mirror_text()
+        if text is None:
+            raise
+        MIRROR_NOTE = ("Built from the vault git mirror: the iCloud tracker was unreadable "
+                       "(evicted), so the newest few minutes of changes may be missing.")
+        return list(csv.DictReader(io.StringIO(text.lstrip("\ufeff"))))
 
 
 def parse_send_log(text: str) -> dict:
@@ -378,6 +409,8 @@ def render(rep: dict) -> str:
     out = [f"# Funnel — {today}", "",
            f"*Generated {datetime.now(LOCAL_TZ).strftime('%Y-%m-%d %H:%M')} by "
            "`scripts/funnel_report.py`. Read-only on the tracker. Regenerate any time.*", ""]
+    if MIRROR_NOTE:
+        out += [f"*{MIRROR_NOTE}*", ""]
     out += headline(rep) + [""]
 
     out += ["## Replies and calls", ""]

@@ -328,6 +328,35 @@ def test_the_real_tracker_reads_cleanly_and_every_send_is_sliced():
         assert sum(s["sent"] for _, s in groups) == rep["splitframe"]["sent"]
     assert os.stat(fr.TRACKER).st_mtime_ns == before
 
+# ---- an evicted tracker (iCloud "dataless") ----
+
+def test_an_evicted_tracker_is_read_from_the_git_mirror_and_the_report_says_so(tmp_path, monkeypatch):
+    monkeypatch.setattr(fr, "TRACKER", str(tmp_path / "evicted.csv"))
+    monkeypatch.setattr(fr, "_mirror_text", lambda: "brand,domain,sent_date\nMoon Juice,moonjuice.com,2026-09-19\n")
+    rows = fr.tracker_rows()
+    assert rows[0]["brand"] == "Moon Juice"
+    assert "vault git mirror" in fr.MIRROR_NOTE
+    text = fr.render(fr.build(rows, date(2026, 9, 24), sends=None))
+    assert "Built from the vault git mirror" in text
+
+
+def test_a_readable_tracker_carries_no_mirror_note(tmp_path, monkeypatch):
+    t = tmp_path / "t.csv"
+    t.write_text("brand,domain,sent_date\nA,a.com,\n", encoding="utf-8")
+    monkeypatch.setattr(fr, "TRACKER", str(t))
+    fr.tracker_rows()
+    assert fr.MIRROR_NOTE == ""
+
+
+def test_an_explicit_path_and_a_missing_mirror_both_still_fail_loudly(tmp_path, monkeypatch):
+    monkeypatch.setattr(fr, "_mirror_text", lambda: "brand\nX\n")
+    with pytest.raises(OSError):
+        fr.tracker_rows(str(tmp_path / "gone.csv"))
+    monkeypatch.setattr(fr, "TRACKER", str(tmp_path / "evicted.csv"))
+    monkeypatch.setattr(fr, "_mirror_text", lambda: None)
+    with pytest.raises(OSError):
+        fr.tracker_rows()
+
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q", "-p", "no:cacheprovider"]))
