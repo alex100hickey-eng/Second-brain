@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Splitframe reply watcher — the one thing that must never sit unseen.
 
-Every run: read the studio inbox for mail from any prospect domain or address in the tracker,
+Every run: read the studio inbox and spam for mail from any prospect domain or address in the
+tracker, or from anyone answering on a thread we sent into,
 and for each new one:
   - decide whether it is a HUMAN reply or an autoresponder (see auto_reply_reason)
   - human: nudge Alex's phone, stamp `replied` in `Money/prospect-tracker.csv` (backup first)
@@ -168,9 +169,87 @@ def save_state(st: dict) -> None:
         json.dump(st, f)
 
 
-def tracker_rows() -> list:
-    with open(TRACKER, newline="") as f:
-        return list(csv.DictReader(f))
+VAULT_GIT = os.path.expanduser("~/.second-brain-vault.git")
+
+
+def tracker_rows(allow_mirror: bool = False) -> list:
+    """The tracker's rows. iCloud evicts vault files to dataless placeholders and reading one can
+    fail (04:20 on 2026-09-24: "Resource deadlock avoided"). For MATCHING, the vault git mirror's
+    copy stands in. Never for writing back: a stale copy written over the live file would undo
+    whatever changed since the last sync, so stamp_replied reads the real file only."""
+    try:
+        with open(TRACKER, newline="") as f:
+            return list(csv.DictReader(f))
+    except OSError:
+        if not allow_mirror:
+            raise
+        import io
+        import subprocess
+        r = subprocess.run(["git", "--git-dir", VAULT_GIT, "show", "HEAD:Money/prospect-tracker.csv"],
+                           capture_output=True, text=True, timeout=20)
+        if r.returncode != 0 or not r.stdout.strip():
+            raise
+        log("tracker unreadable in iCloud (probably evicted); matching against the vault git mirror")
+        return list(csv.DictReader(io.StringIO(r.stdout)))
+
+
+# ---------------------------------------------------------------------------
+# Replies from an address the tracker doesn't know.
+#
+# Matching by sender domain misses a real reply whenever the person answering isn't at the address
+# we wrote to: a press@ or info@ desk forwards to an agency or to the founder's own gmail, and they
+# answer on our thread from there. The thread is the one thing they can't change, so an unknown
+# sender is checked once: if the thread holds a message we SENT, the reply belongs to that
+# message's recipient. Bounces thread the same way and are not replies. Senders we know are noise
+# (our own domain, Google, Hunter, Stripe) are never checked.
+# ---------------------------------------------------------------------------
+BOUNCE_LOCALS = ("mailer-daemon", "postmaster")
+NEVER_A_PROSPECT = {"splitframestudio.com", "google.com", "hunter.io", "stripe.com"}
+
+
+def thread_recipient(thread_msgs: list) -> str:
+    """The address we wrote to in this thread, or "" if we never sent into it."""
+    for m in thread_msgs or []:
+        if "SENT" not in (m.get("labelIds") or []):
+            continue
+        to = str(m.get("to") or headers_of(m).get("to", ""))
+        to = to.split(",")[0].split("<")[-1].rstrip(">").strip().lower()
+        if "@" in to:
+            return to
+    return ""
+
+
+def worth_a_thread_check(addr: str) -> bool:
+    local, _, dom = addr.partition("@")
+    noise = any(dom == d or dom.endswith("." + d) for d in NEVER_A_PROSPECT)
+    return bool(dom) and local not in BOUNCE_LOCALS and not noise
+
+
+def fetch_inbox(c, ent: str, waits=(5, 15)):
+    """The inbox + spam read, retried through a dropped connection. Returns None if it never
+    answered. A bare Composio APIConnectionError used to kill the run with a traceback that only
+    reached the launchd log: on 2026-09-24 about 1 scan in 5 died that way, and reply_watch.log,
+    the log anyone reads, showed nothing, so a failed scan looked like a quiet one."""
+    last = None
+    for wait in (0,) + tuple(waits):
+        if wait:
+            time.sleep(wait)
+        try:
+            # Spam too: a reply Gmail files there is still a reply, and the inbox-only read never saw it.
+            return c.tools.execute("GMAIL_FETCH_EMAILS", user_id=ent, dangerously_skip_version_check=True,
+                                   arguments={"query": "(in:inbox OR in:spam) newer_than:14d",
+                                              "max_results": 50, "include_spam_trash": True})
+        except Exception as exc:                                  # noqa: BLE001
+            last = exc
+    log(f"inbox read FAILED {1 + len(waits)} times ({type(last).__name__}): nothing scanned this "
+        "run, the next run tries again")
+    return None
+
+
+def fetch_thread(c, ent: str, thread_id: str) -> list:
+    res = c.tools.execute("GMAIL_FETCH_MESSAGE_BY_THREAD_ID", user_id=ent,
+                          dangerously_skip_version_check=True, arguments={"thread_id": thread_id})
+    return (res.get("data") or {}).get("messages") or []
 
 
 # Shared mailboxes we must never treat as "this whole domain belongs to one prospect". A brand
@@ -343,15 +422,18 @@ def main() -> int:
     from composio import Composio  # type: ignore
     c = Composio(api_key=os.environ["COMPOSIO_API_KEY"])
     ent = os.environ.get("STUDIO_GMAIL_ENTITY")
-    rows = tracker_rows()
+    rows = tracker_rows(allow_mirror=True)
     domains = prospect_domains(rows)
     addresses = prospect_addresses(rows)
     exact = exact_addresses(rows)
     shared = domain_brands(rows)
     st = load_state()
     seen = set(st.get("seen", []))
-    res = c.tools.execute("GMAIL_FETCH_EMAILS", user_id=ent, dangerously_skip_version_check=True,
-                          arguments={"query": "in:inbox newer_than:14d", "max_results": 30})
+    checked = set(st.get("checked", []))     # unknown senders whose thread was already looked at
+    res = fetch_inbox(c, ent)
+    if res is None:
+        _beat("inbox read failed")
+        return 1
     msgs = (res.get("data") or {}).get("messages") or []
     hits = 0
     autos = 0
@@ -365,9 +447,25 @@ def main() -> int:
         # Exact address first: a prospect at a freemail mailbox is invisible to the domain map, and
         # a domain can belong to more than one prospect (see exact_addresses).
         brand = exact.get(addr) or addresses.get(addr) or (None if dom in OWN else domains.get(dom))
+        via = ""
+        if not brand and mid not in checked and m.get("threadId") and worth_a_thread_check(addr):
+            checked.add(mid)
+            try:
+                to = thread_recipient(fetch_thread(c, ent, m["threadId"]))
+            except Exception as exc:                         # noqa: BLE001
+                checked.discard(mid)                         # look again next run
+                log(f"thread check failed for {addr} ({type(exc).__name__}); will retry")
+                to = ""
+            if to:
+                tdom = to.split("@", 1)[1]
+                brand = exact.get(to) or addresses.get(to) or (None if tdom in OWN else domains.get(tdom))
+                via = f" (on our thread to {to})" if brand else ""
         if not brand:
             continue
-        brands = [brand] if (addr in exact or addr in addresses) else (shared.get(dom) or [brand])
+        if via or addr in exact or addr in addresses:
+            brands = [brand]
+        else:
+            brands = shared.get(dom) or [brand]
         brand = " / ".join(brands)
         subject = str(m.get("subject") or "")[:80]
         preview = body_text(m)
@@ -377,24 +475,30 @@ def main() -> int:
             # Not a reply. Do NOT stamp `replied` — that would retire a live prospect after one
             # touch. Still worth saying out loud: it proves the address is real and monitored,
             # which is the deliverability signal the lane otherwise has no way to observe.
-            log(f"AUTO-REPLY from {brand} <{addr}>: {subject} [{auto}] — follow-ups left open")
+            log(f"AUTO-REPLY from {brand} <{addr}>{via}: {subject} [{auto}] — follow-ups left open")
             autos += 1
         else:
-            log(f"REPLY from {brand} <{addr}>: {subject}")
+            log(f"REPLY from {brand} <{addr}>{via}: {subject}")
             for b in brands:
-                stamp_replied(b, when)
+                try:
+                    stamp_replied(b, when)
+                except OSError as exc:
+                    # The nudge below matters more than the stamp: never let an evicted tracker
+                    # swallow a reply. The follow-ups for this brand stay armed until it's stamped.
+                    log(f"  could not stamp {b} as replied ({type(exc).__name__}): stamp it by hand")
             which = (f"\n(Sent from a domain shared by {brand}; all of them are marked replied so "
                      "nobody gets chased. Un-stamp the ones it isn't.)" if len(brands) > 1 else "")
             nudge(f"{brand} replied", f"{sender}: {subject}\n{preview[:180]}\nReply today. Call card: Money/call-card.md{which}")
             hits += 1
         seen.add(mid)
     st["seen"] = sorted(seen)[-500:]
+    st["checked"] = sorted(checked)[-500:]
     st["last_run"] = datetime.now().isoformat()
     save_state(st)
     _beat(f"{len(msgs)} scanned")
     if not hits:
         tail = f", {autos} auto-reply(s) ignored" if autos else ""
-        log(f"no prospect replies ({len(msgs)} inbox messages scanned{tail})")
+        log(f"no prospect replies ({len(msgs)} inbox + spam messages scanned{tail})")
     _refresh_funnel()
     try:
         signal.alarm(0)

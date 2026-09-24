@@ -6,6 +6,7 @@ ticket" silently retired a qualified, live prospect after a single touch — no 
 be drafted again, and nothing in any log said so. The email had announced itself with a standard
 `Auto-Submitted: auto-replied` header the watcher never read.
 """
+import json
 import os
 import sys
 
@@ -225,3 +226,187 @@ def test_main_arms_the_watchdog_before_doing_any_work():
     body = inspect.getsource(rw.main)
     first = [ln.strip() for ln in body.splitlines() if ln.strip() and not ln.strip().startswith(("def", '"""'))][0]
     assert first == "arm_watchdog()", first
+
+
+# ---------------------------------------------------------------------------
+# Replies from an address the tracker doesn't know, on a thread we sent into.
+#
+# A press@ or info@ desk forwards to an agency or to the founder's own gmail, and they answer on
+# our thread from there. Matching by sender domain never saw those. The thread is the one thing
+# they can't change.
+# ---------------------------------------------------------------------------
+
+def _sent(to, labels=("SENT",)):
+    return {"labelIds": list(labels), "to": to, "sender": "alexhickey@splitframestudio.com"}
+
+
+def test_the_thread_names_who_we_wrote_to():
+    assert rw.thread_recipient([_sent("press@moonjuice.com")]) == "press@moonjuice.com"
+    assert rw.thread_recipient([_sent("Jo <jo@x.com>, cc@y.com")]) == "jo@x.com"
+
+
+def test_an_unsent_draft_in_the_thread_does_not_count():
+    assert rw.thread_recipient([_sent("press@moonjuice.com", labels=("DRAFT",))]) == ""
+    assert rw.thread_recipient([]) == ""
+
+
+@pytest.mark.parametrize("addr,worth", [
+    ("jane@agency.com", True), ("founder@gmail.com", True),
+    ("mailer-daemon@googlemail.com", False), ("postmaster@outlook.com", False),
+    ("alexhickey@splitframestudio.com", False), ("noreply-dmarc-support@google.com", False),
+    ("contact@mail.hunter.io", False), ("noreply@accounts.google.com", False),
+    ("james@hunter.io", False), ("", False)])
+def test_who_is_worth_a_thread_check(addr, worth):
+    assert rw.worth_a_thread_check(addr) is worth
+
+
+class _FakeComposio:
+    def __init__(self, inbox, threads):
+        self.inbox, self.threads, self.thread_calls = inbox, threads, []
+        self.tools = self
+
+    def execute(self, slug, user_id=None, dangerously_skip_version_check=None, arguments=None):
+        if slug == "GMAIL_FETCH_EMAILS":
+            assert arguments.get("include_spam_trash"), "spam must be read too"
+            return {"successful": True, "data": {"messages": self.inbox}}
+        if slug == "GMAIL_FETCH_MESSAGE_BY_THREAD_ID":
+            self.thread_calls.append(arguments["thread_id"])
+            return {"successful": True, "data": {"messages": self.threads.get(arguments["thread_id"], [])}}
+        raise AssertionError(slug)
+
+
+def _inbound(mid, sender, thread, subject="Re: Half your account is one ad", body="", headers=None, labels=("INBOX",)):
+    m = msg(subject=subject, body=body, headers=headers)
+    m.update({"messageId": mid, "threadId": thread, "sender": sender, "labelIds": list(labels)})
+    return m
+
+
+@pytest.fixture
+def watch(monkeypatch):
+    import types
+    rows = [{"brand": "Moon Juice", "domain": "moonjuice.com", "email": "",
+             "email_generic": "press@moonjuice.com", "sent_date": "2026-09-19"}]
+    state, logged, stamped, nudged = {"seen": []}, [], [], []
+    monkeypatch.setattr(rw, "tracker_rows", lambda allow_mirror=False: rows)
+    monkeypatch.setattr(rw, "load_state", lambda: json.loads(json.dumps(state)))
+    monkeypatch.setattr(rw, "save_state", lambda st: state.update(st))
+    monkeypatch.setattr(rw, "log", logged.append)
+    monkeypatch.setattr(rw, "stamp_replied", lambda b, w: stamped.append(b))
+    monkeypatch.setattr(rw, "nudge", lambda *a, **k: nudged.append(a[0]))
+    monkeypatch.setattr(rw, "_refresh_funnel", lambda: None)
+    monkeypatch.setattr(rw, "_beat", lambda note="": None)
+    monkeypatch.setattr(rw, "arm_watchdog", lambda seconds=None: None)
+    monkeypatch.setenv("COMPOSIO_API_KEY", "test")
+
+    def go(inbox, threads):
+        fake = _FakeComposio(inbox, threads)
+        monkeypatch.setitem(sys.modules, "composio", types.SimpleNamespace(Composio=lambda api_key: fake))
+        assert rw.main() == 0
+        return fake
+    go.logged, go.stamped, go.nudged, go.state = logged, stamped, nudged, state
+    return go
+
+
+def test_an_agency_reply_on_our_thread_is_a_reply(watch):
+    inbox = [_inbound("m1", "Jane Doe <jane@pr-agency.com>", "T1",
+                      body="Hi Alex, Amanda forwarded this. Can you send rates?")]
+    fake = watch(inbox, {"T1": [_sent("press@moonjuice.com")]})
+    assert watch.stamped == ["Moon Juice"] and watch.nudged == ["Moon Juice replied"]
+    assert any("REPLY from Moon Juice <jane@pr-agency.com> (on our thread to press@moonjuice.com)" in l
+               for l in watch.logged)
+    assert fake.thread_calls == ["T1"]
+
+
+def test_a_reply_filed_in_spam_is_still_a_reply(watch):
+    inbox = [_inbound("m1", "Amanda <amanda@moonjuice.com>", "T1", body="yes, let's talk", labels=("SPAM",))]
+    watch(inbox, {})
+    assert watch.stamped == ["Moon Juice"]
+
+
+def test_a_bounce_on_our_thread_is_not_a_reply(watch):
+    inbox = [_inbound("m1", "Mail Delivery Subsystem <mailer-daemon@googlemail.com>", "T1",
+                      subject="Delivery Status Notification (Failure)")]
+    fake = watch(inbox, {"T1": [_sent("press@moonjuice.com")]})
+    assert watch.stamped == [] and fake.thread_calls == [], "bounces are never even looked up"
+
+
+def test_an_agency_autoresponder_on_our_thread_leaves_follow_ups_alive(watch):
+    inbox = [_inbound("m1", "Desk <desk@pr-agency.com>", "T1", subject="Automatic reply: Re: Half your account",
+                      headers={"Auto-Submitted": "auto-replied"})]
+    watch(inbox, {"T1": [_sent("press@moonjuice.com")]})
+    assert watch.stamped == []
+    assert any("AUTO-REPLY from Moon Juice" in l for l in watch.logged)
+
+
+def test_a_stranger_off_our_threads_costs_one_lookup_ever(watch):
+    inbox = [_inbound("m9", "Someone <someone@elsewhere.com>", "T9", subject="partnership?")]
+    fake = watch(inbox, {"T9": []})
+    assert watch.stamped == [] and fake.thread_calls == ["T9"]
+    fake2 = watch(inbox, {"T9": []})
+    assert fake2.thread_calls == [], "the answer is cached in state"
+
+
+# ---------------------------------------------------------------------------
+# A dropped connection is retried, and a scan that never happened says so in reply_watch.log.
+# ---------------------------------------------------------------------------
+
+class _Flaky(_FakeComposio):
+    def __init__(self, fails, inbox=()):
+        super().__init__(list(inbox), {})
+        self.fails, self.fetches = fails, 0
+
+    def execute(self, slug, **kw):
+        if slug == "GMAIL_FETCH_EMAILS":
+            self.fetches += 1
+            if self.fetches <= self.fails:
+                raise ConnectionError("Connection error.")
+        return super().execute(slug, **kw)
+
+
+def _run_with(monkeypatch, watch, fake):
+    import types
+    monkeypatch.setattr(rw.time, "sleep", lambda s: None)
+    monkeypatch.setitem(sys.modules, "composio", types.SimpleNamespace(Composio=lambda api_key: fake))
+    return rw.main()
+
+
+def test_a_dropped_connection_is_retried(watch, monkeypatch):
+    fake = _Flaky(fails=2)
+    assert _run_with(monkeypatch, watch, fake) == 0
+    assert fake.fetches == 3 and any("no prospect replies" in l for l in watch.logged)
+
+
+def test_a_scan_that_never_happened_is_logged_not_silent(watch, monkeypatch):
+    fake = _Flaky(fails=99)
+    assert _run_with(monkeypatch, watch, fake) == 1
+    assert any("inbox read FAILED 3 times" in l for l in watch.logged)
+    assert not any("no prospect replies" in l for l in watch.logged), "a failed read is not a quiet inbox"
+
+
+# ---------------------------------------------------------------------------
+# An evicted tracker (iCloud "dataless") must not cost a reply.
+# ---------------------------------------------------------------------------
+
+def test_matching_reads_the_git_mirror_when_icloud_has_evicted_the_tracker(monkeypatch, tmp_path):
+    import subprocess, types
+    monkeypatch.setattr(rw, "TRACKER", str(tmp_path / "evicted.csv"))
+    monkeypatch.setattr(rw, "log", lambda m: None)
+    csv_text = "brand,domain,email,email_generic\nMoon Juice,moonjuice.com,,press@moonjuice.com\n"
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: types.SimpleNamespace(returncode=0, stdout=csv_text))
+    assert rw.tracker_rows(allow_mirror=True)[0]["brand"] == "Moon Juice"
+
+
+def test_writing_never_uses_the_mirror(monkeypatch, tmp_path):
+    monkeypatch.setattr(rw, "TRACKER", str(tmp_path / "evicted.csv"))
+    with pytest.raises(OSError):
+        rw.tracker_rows()          # stamp_replied's read: the live file or nothing
+
+
+def test_a_reply_is_still_announced_when_the_stamp_fails(watch, monkeypatch):
+    def evicted(brand, when):
+        raise OSError(11, "Resource deadlock avoided")
+    monkeypatch.setattr(rw, "stamp_replied", evicted)
+    inbox = [_inbound("m1", "Amanda <amanda@moonjuice.com>", "T1", body="yes, let's talk")]
+    watch(inbox, {})
+    assert watch.nudged == ["Moon Juice replied"], "the nudge is what matters"
+    assert any("could not stamp Moon Juice" in l for l in watch.logged)
