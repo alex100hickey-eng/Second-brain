@@ -50,6 +50,13 @@ SPEC_DIR = os.path.join(_sfd.VAULT, "Money", "Clients", "spec-ads")
 STATE_KEY = "splitframe:statics"       # address -> {brand, file, touch/row, draft, at, via}
 APPROVE = ("approve", "approved", "yes", "ok", "send", "go", "✅")
 MIN_WORDS, MAX_WORDS = 30, 160
+FIRST_TOUCH_MAX_WORDS = 190     # a first touch carries the observation too; the queue allows 180
+
+# The static-first arm: a NAMED first touch carries the static in the first email, not just a
+# follow-up. Two locks, both required: this switch, and Alex's `approve` in the first-touch QA
+# folder's INDEX.md. With either missing, every first touch goes out as plain text, as before.
+STATIC_FIRST = False
+FIRST_TOUCH_PREFIX = "first-touch-qa-"
 
 # The note the drafter adds once a static has gone. Without it the model reads the first touch,
 # sees "I'll build that static", and offers it again after it was already delivered.
@@ -62,10 +69,10 @@ def _c(v) -> str:
     return (v or "").strip() if isinstance(v, str) else ""
 
 
-def latest_qa_dir(spec_dir: str = None) -> str:
+def latest_qa_dir(spec_dir: str = None, prefix: str = "qa-") -> str:
     spec_dir = spec_dir or SPEC_DIR
     try:
-        dirs = sorted(d for d in os.listdir(spec_dir) if d.startswith("qa-"))
+        dirs = sorted(d for d in os.listdir(spec_dir) if d.startswith(prefix))
     except OSError:
         return ""
     return os.path.join(spec_dir, dirs[-1]) if dirs else ""
@@ -113,12 +120,12 @@ def parse_followups(text: str) -> dict:
     return out
 
 
-def body_problems(body: str) -> list:
+def body_problems(body: str, max_words: int = MAX_WORDS) -> list:
     """Why a variant must not go out. The same fabrication guard as every other email."""
     problems = []
     words = len((body or "").split())
-    if not MIN_WORDS <= words <= MAX_WORDS:
-        problems.append(f"{words} words (a follow-up is {MIN_WORDS}-{MAX_WORDS})")
+    if not MIN_WORDS <= words <= max_words:
+        problems.append(f"{words} words (this email is {MIN_WORDS}-{max_words})")
     if re.search(r"\bAI\b", body or ""):
         problems.append('says "AI"')
     if re.search(r"[{}<>]|TODO|\.\.\.$", body or ""):
@@ -129,7 +136,8 @@ def body_problems(body: str) -> list:
     return problems
 
 
-def approved_statics(qa_dir: str = None) -> tuple:
+def approved_statics(qa_dir: str = None, variants_file: str = "FOLLOWUPS.md",
+                     max_words: int = MAX_WORDS) -> tuple:
     """({address: {brand, file, png, body}}, [skipped reasons]) for brands Alex approved."""
     qa_dir = qa_dir if qa_dir is not None else latest_qa_dir()
     if not qa_dir:
@@ -137,7 +145,7 @@ def approved_statics(qa_dir: str = None) -> tuple:
     try:
         with open(os.path.join(qa_dir, "INDEX.md"), encoding="utf-8") as f:
             index = parse_index(f.read())
-        with open(os.path.join(qa_dir, "FOLLOWUPS.md"), encoding="utf-8") as f:
+        with open(os.path.join(qa_dir, variants_file), encoding="utf-8") as f:
             variants = parse_followups(f.read())
     except OSError as exc:
         return {}, [f"cannot read the QA folder ({exc})"]
@@ -148,11 +156,11 @@ def approved_statics(qa_dir: str = None) -> tuple:
         v = variants.get(key)
         png = os.path.join(qa_dir, entry["file"])
         if not v or not v["to"] or not v["body"]:
-            skipped.append(f"{entry['brand']}: approved, but FOLLOWUPS.md has no email for it")
+            skipped.append(f"{entry['brand']}: approved, but {variants_file} has no email for it")
         elif not os.path.exists(png):
             skipped.append(f"{entry['brand']}: approved, but {entry['file']} is missing")
-        elif body_problems(v["body"]):
-            skipped.append(f"{entry['brand']}: " + "; ".join(body_problems(v["body"])))
+        elif body_problems(v["body"], max_words):
+            skipped.append(f"{entry['brand']}: " + "; ".join(body_problems(v["body"], max_words)))
         else:
             ok[v["to"]] = {"brand": entry["brand"], "file": entry["file"], "png": png,
                            "body": v["body"]}
@@ -230,6 +238,113 @@ def create_attach_draft(composio, entity: str, to: str, subject: str, body: str,
     if os.path.basename(png) not in names:
         problems.append("the static is not attached")
     return draft_id, problems
+
+
+# ---------------------------------------------------------------- the first-touch door
+
+def approved_first_touch(qa_dir: str = None) -> tuple:
+    """Same as approved_statics, from the first-touch QA folder and its FIRST_TOUCH.md."""
+    qa_dir = qa_dir if qa_dir is not None else latest_qa_dir(prefix=FIRST_TOUCH_PREFIX)
+    return approved_statics(qa_dir, "FIRST_TOUCH.md", FIRST_TOUCH_MAX_WORDS)
+
+
+def pending_first_touch(queue: list, brand: str, address: str) -> tuple:
+    """(entry, why_not). The brand's not-yet-released first touch, if it's addressed to the
+    founder the variant was written for. A draft still pointing at the front desk has to be
+    re-addressed first (`splitframe_queue.py revise --new-to`)."""
+    b, a = _c(brand).lower(), _c(address).lower()
+    for e in queue or []:
+        if _c(e.get("brand")).lower() != b or e.get("released") or e.get("static_attached"):
+            continue
+        if _c(e.get("to")).lower() != a:
+            return None, (f"queued to {e.get('to')}, not {a}: re-address it first "
+                          "(splitframe_queue.py revise --new-to)")
+        return e, ""
+    return None, "no unreleased first touch in the queue"
+
+
+def create_first_touch_draft(composio, entity: str, to: str, subject: str, body: str, png: str,
+                             upload=None) -> tuple:
+    """(draft_id, problems). A NEW email (no thread) with the PNG attached, read back."""
+    if upload is None:
+        from composio.core.models._files import FileUploadable     # type: ignore
+
+        def upload(path):
+            up = FileUploadable.from_path(client=composio.client, file=path,
+                                          tool="GMAIL_CREATE_EMAIL_DRAFT", toolkit="gmail")
+            return up.model_dump() if hasattr(up, "model_dump") else dict(up)
+    try:
+        res = composio.tools.execute(
+            "GMAIL_CREATE_EMAIL_DRAFT", user_id=entity, dangerously_skip_version_check=True,
+            arguments={"recipient_email": to, "subject": subject, "body": body, "is_html": False,
+                       "attachment": upload(png)})
+    except Exception as exc:                                   # noqa: BLE001
+        return "", [f"create failed: {str(exc)[:160]}"]
+    if isinstance(res, dict) and res.get("successful") is False:
+        return "", [f"create failed: {str(res.get('error'))[:160]}"]
+    d = res.get("data", res) if isinstance(res, dict) else {}
+    draft_id = d.get("id") or (d.get("response_data") or {}).get("id") or ""
+    if not draft_id:
+        return "", ["no draft id came back"]
+    try:
+        got = composio.tools.execute("GMAIL_GET_DRAFT", user_id=entity,
+                                     dangerously_skip_version_check=True,
+                                     arguments={"draft_id": draft_id, "format": "full"})
+        m = (got.get("data") or {}).get("message") or {}
+    except Exception as exc:                                   # noqa: BLE001
+        return draft_id, [f"read-back failed: {str(exc)[:160]}"]
+    headers = {h.get("name", "").lower(): h.get("value", "")
+               for h in ((m.get("payload") or {}).get("headers") or [])}
+    problems = []
+    if to.lower() not in headers.get("to", "").lower():
+        problems.append("the draft is not addressed to the founder")
+    if os.path.basename(png) not in [a.get("filename") for a in (m.get("attachmentList") or [])]:
+        problems.append("the static is not attached")
+    return draft_id, problems
+
+
+def _queue_module():
+    spec = importlib.util.spec_from_file_location("splitframe_queue", os.path.join(HERE, "splitframe_queue.py"))
+    sq = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(sq)
+    return sq
+
+
+def cmd_swap_first(args) -> int:
+    if not STATIC_FIRST:
+        print("STATIC_FIRST is off: every first touch goes out as plain text. Switch it on in "
+              "scripts/offer_statics.py once Alex approves a first-touch static.")
+        return 0
+    qa = args.dir or latest_qa_dir(prefix=FIRST_TOUCH_PREFIX)
+    ok, skipped = approved_first_touch(qa)
+    for s in skipped:
+        print(f"skipped: {s}")
+    if not ok:
+        print("no first-touch static is approved and rendered yet")
+        return 0
+    intake, _outbox, composio, entity = _env()
+    sq = _queue_module()
+    q, queue = sq.load_queue()
+    for address, info in ok.items():
+        entry, why = pending_first_touch(queue, info["brand"], address)
+        if not entry:
+            print(f"{info['brand']}: {why}")
+            continue
+        if not args.apply:
+            print(f"would attach: {info['brand']} <{address}> -> {info['file']}")
+            continue
+        new_id, problems = create_first_touch_draft(composio, entity, address,
+                                                    _c(entry.get("subject")), info["body"],
+                                                    info["png"])
+        if problems:
+            print(f"NOT attached: {info['brand']}: {'; '.join(problems)} (stray draft {new_id or 'none'})")
+            continue
+        entry.update({"replaced_draft": entry.get("draft_id"), "draft_id": new_id,
+                      "body": info["body"], "static_attached": info["file"]})
+        sq.save_queue(q, queue)
+        print(f"ATTACHED: {info['brand']} first touch now carries {info['file']} (draft {new_id}; "
+              f"the old draft stays in Drafts, unreferenced)")
+    return 0
 
 
 # ---------------------------------------------------------------- the Mac door: swap
@@ -322,6 +437,10 @@ def main(argv=None) -> int:
     sw.add_argument("--dir", default=None)
     sw.add_argument("--apply", action="store_true")
     sw.set_defaults(fn=cmd_swap)
+    sf = sub.add_parser("swap-first", help="attach approved statics to queued first touches")
+    sf.add_argument("--dir", default=None)
+    sf.add_argument("--apply", action="store_true")
+    sf.set_defaults(fn=cmd_swap_first)
     args = ap.parse_args(argv)
     return args.fn(args)
 
