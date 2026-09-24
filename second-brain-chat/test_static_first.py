@@ -117,6 +117,20 @@ def test_with_both_locks_open_the_queue_entry_is_repointed(qa, monkeypatch):
     assert (e["draft_id"], e["replaced_draft"], e["static_attached"]) == ("r-new", "r-old", "hm.png")
     assert e["body"].startswith("Brock,")
 
+def test_the_0730_backstop_swaps_from_the_git_mirror_before_the_release():
+    """The server releases first touches at 07:50. The Mac backstop must run before that, read the
+    QA folder from the vault's git mirror (iCloud evicts it), and only ever call swap-first,
+    which is a no-op until STATIC_FIRST is on and Alex has marked a brand approve."""
+    import plistlib
+    script = open(os.path.join(ROOT, "scripts", "static_first_backstop.sh"), encoding="utf-8").read()
+    assert ".second-brain-vault.git" in script and "first-touch-qa-" in script
+    assert "offer_statics.py swap-first --apply --dir" in script
+    with open(os.path.join(ROOT, "scripts", "com.secondbrain.staticfirst.plist"), "rb") as f:
+        plist = plistlib.load(f)
+    when = plist["StartCalendarInterval"]
+    assert (when["Hour"], when["Minute"]) < (7, 50)
+    assert plist["ProgramArguments"][-1].endswith("scripts/static_first_backstop.sh")
+
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q", "-p", "no:cacheprovider"]))
