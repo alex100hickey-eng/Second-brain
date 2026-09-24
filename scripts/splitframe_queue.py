@@ -1071,27 +1071,37 @@ def plan_named(rows: list, proposals: list) -> list:
 def verify_candidates(proposals: list, verify_fn, limit: int = 20) -> list:
     """Check candidate addresses with Hunter's verifier (1 verification each). Returns the
     [(email, new status)] it changed. Only a positive "deliverable" becomes verified. An
-    undeliverable one is rejected, and anything else (accept-all, unknown, an API failure) stays
-    a candidate: not good enough to send to, not bad enough to forget."""
-    changed = []
+    undeliverable one is rejected, and anything else (accept-all, unknown) stays a candidate:
+    not good enough to send to, not bad enough to forget.
+
+    `limit` counts every check made, since every check costs a credit. It used to count only the
+    ones that changed a status, so a run of risky results walked the whole list.
+
+    A check that FAILED (verify_fn returns "error": no answer from Hunter, e.g. an exhausted
+    quota) stops the run and writes nothing. On 2026-09-24 every call failed on an exhausted
+    quota, each failure read as "risky (score 0)", and all 53 candidates were stamped with a
+    result nobody had actually got."""
+    changed, checked = [], 0
     for p in proposals:
-        if len(changed) >= limit:
+        if checked >= limit:
             break
         email = _c(p.get("named_email")).lower()
         if not email or _c(p.get("email_status")).lower() != "candidate":
             continue
         status, score = verify_fn(email)
+        if status == "error":
+            print(f"Hunter gave no answer for {email}, so the run stopped there. Nothing was "
+                  f"recorded for it or the rest ({checked} checked before it).")
+            break
+        checked += 1
         if status == "deliverable":
             p["email_status"] = "verified"
         elif status == "undeliverable":
             p["email_status"] = "rejected"
-        else:
-            p["email_evidence"] = (_c(p.get("email_evidence")) +
-                                   f" | Hunter {today_local()}: {status} (score {score})").strip(" |")
-            continue
         p["email_evidence"] = (_c(p.get("email_evidence")) +
                                f" | Hunter {today_local()}: {status} (score {score})").strip(" |")
-        changed.append((email, p["email_status"]))
+        if p["email_status"] != "candidate":
+            changed.append((email, p["email_status"]))
     return changed
 
 
@@ -1104,9 +1114,14 @@ def cmd_named(args) -> int:
         sys.path.insert(0, CHAT)
         import contact_finder                          # type: ignore
         def _verify(email):
-            status, score = contact_finder.verify(email)
-            return {contact_finder.SENDABLE: "deliverable",
-                    contact_finder.UNDELIVERABLE: "undeliverable"}.get(status, "risky"), score
+            # contact_finder.verify() reads a failed call as RISKY. Here the difference matters:
+            # a failed call is not a result and must not be written down as one.
+            data = (contact_finder._call("email-verifier", email=email) or {}).get("data")
+            if not data:
+                return "error", 0
+            result, score = (data.get("result") or "").lower(), int(data.get("score") or 0)
+            return {"deliverable": "deliverable",
+                    "undeliverable": "undeliverable"}.get(result, "risky"), score
         for email, status in verify_candidates(proposals, _verify, limit=args.limit):
             print(f"verified: {email} -> {status}")
         write_named(proposals)
