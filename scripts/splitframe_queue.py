@@ -1566,6 +1566,101 @@ def cmd_revise(args) -> int:
     return 0
 
 
+def _reply_module():
+    spec = importlib.util.spec_from_file_location(
+        "splitframe_reply", os.path.join(ROOT, "scripts", "splitframe_reply.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def reply_row(rows: list, address: str):
+    """The tracker row a reply belongs to: its exact address first, then its domain."""
+    a = _c(address).lower()
+    for r in rows:
+        if a and a in {_c(r.get("email")).lower(), _c(r.get("email_generic")).lower()}:
+            return r
+    dom = a.split("@")[-1] if "@" in a else ""
+    if dom and dom not in _sfd_freemail():
+        for r in rows:
+            d = _c(r.get("domain")).lower().removeprefix("www.")
+            if d and (dom == d or dom.endswith("." + d)):
+                return r
+    return None
+
+
+def _sfd_freemail() -> set:
+    return {"gmail.com", "yahoo.com", "hotmail.com", "outlook.com", "icloud.com", "aol.com",
+            "me.com", "live.com", "msn.com", "proton.me", "protonmail.com", "gmx.com"}
+
+
+def cmd_reply(args) -> int:
+    """Draft Alex's answer to a founder's reply on the same thread, with an outbox row so it is
+    one Send on his phone. Never sends, never arms a send (see scripts/splitframe_reply.py)."""
+    r = _reply_module()
+    from composio import Composio                   # type: ignore
+    c = Composio(api_key=os.environ["COMPOSIO_API_KEY"])
+    ent = os.environ.get("STUDIO_GMAIL_ENTITY", "")
+    thread_id = _c(args.thread)
+    if not thread_id:
+        res = c.tools.execute("GMAIL_FETCH_EMAILS", user_id=ent, dangerously_skip_version_check=True,
+                              arguments={"query": f"from:{_c(args.from_addr)} newer_than:30d",
+                                         "max_results": 5, "include_spam_trash": True})
+        found = (res.get("data") or {}).get("messages") or []
+        if not found:
+            print(f"NOT drafted: no message from {args.from_addr} in the studio inbox in 30 days")
+            return 1
+        thread_id = max(found, key=lambda m: str(m.get("messageTimestamp") or "")).get("threadId")
+    res = c.tools.execute("GMAIL_FETCH_MESSAGE_BY_THREAD_ID", user_id=ent,
+                          dangerously_skip_version_check=True, arguments={"thread_id": thread_id})
+    msgs = (res.get("data") or {}).get("messages") or []
+    them = r.their_latest(msgs)
+    if not them:
+        print(f"NOT drafted: thread {thread_id} has no message from anyone but the studio")
+        return 1
+    to = r.sender_address(them)
+    rows, _fields = tracker_rows()
+    row = reply_row(rows, to)
+    brand = _c(args.brand) or (_c(row.get("brand")) if row else "") or to.split("@")[-1]
+    contact = _c(row.get("contact_name")).split(" ")[0] if row and _c(row.get("contact_name")) else ""
+    precall_path, brief = r.find_precall(DRAFT_DOC_DIR, brand)
+    now = datetime.now(LOCAL_TZ)
+    slots = ([s.strip() for s in _c(args.slots).split(";") if s.strip()] if _c(args.slots)
+             else r.schedule_slots(now))
+    import anthropic                                # type: ignore
+    client = anthropic.Anthropic(api_key=os.environ.get("CLAUDE_API_KEY")
+                                 or os.environ["ANTHROPIC_API_KEY"])
+    ask = r.build_ask(brand, contact, r.body_text(them), r.body_text(r.our_latest(msgs)), brief, slots,
+                      r.row_facts(row))
+    kind, body, problems = r.write_reply(client, ask, slots)
+    print(f"{brand} <{to}> [{kind or '?'}]  brief: {os.path.basename(os.path.dirname(precall_path)) or 'none'}"
+          f"  times: {'; '.join(slots) or 'none (pass --slots)'}\n\n{body}\n")
+    if problems:
+        print("NOT drafted:")
+        for p in problems:
+            print(f"  - {p}")
+        return 1
+    if args.dry_run:
+        print("OK (dry run): passes every check; no draft made.")
+        return 0
+    subject = _c(them.get("subject")) or "Re:"
+    if not subject.lower().startswith("re:"):
+        subject = f"Re: {subject}"
+    sys.path.insert(0, os.path.join(ROOT, "second-brain-chat"))
+    import mail_drafts                              # type: ignore
+    import outbox                                   # type: ignore
+    outbox.init(_intake().supabase)                 # the outbox row is what puts Send on his phone
+    mail_drafts.init(c, os.environ.get("PERSONAL_GMAIL_ENTITY", "alex"),
+                     os.environ.get("SCHOOL_GMAIL_ENTITY", "alex-school"), ent)
+    result = mail_drafts.create_email_draft("studio", to, subject, body, thread_id=thread_id)
+    doc = r.record(DRAFT_DOC_DIR, precall_path, brand, to, kind, body, slots, result)
+    print(f"DRAFTED on the thread for Alex to send: {result[:160]}\nrecord: {doc}")
+    if row is not None and _c(row.get("close_variant")) == "arm-B" and kind in ("interested", "not_now"):
+        print("ARM B: the reply says the ad is attached. Attach the brand's static to the Gmail draft "
+              "before Alex sends (the draft is text only).")
+    return 0
+
+
 def cmd_sweep(args) -> int:
     """Close out brands that were worked all three touches and never answered.
 
@@ -1766,6 +1861,16 @@ def main(argv=None) -> int:
     an.add_argument("--text", required=True)
     an.add_argument("--write", action="store_true")
     an.set_defaults(fn=cmd_annotate)
+    rp = sub.add_parser("reply", help="draft Alex's answer to a founder's reply (he sends it)")
+    who = rp.add_mutually_exclusive_group(required=True)
+    who.add_argument("--from", dest="from_addr", default="", help="the address that replied")
+    who.add_argument("--thread", default="", help="the Gmail thread id")
+    rp.add_argument("--brand", default="", help="only if the tracker can't match the address")
+    rp.add_argument("--slots", default="",
+                    help='override the two call times: "Tue 9/29 at 7:30 PM ET; Wed 9/30 at 8 PM ET"')
+    rp.add_argument("--dry-run", action="store_true", help="print the draft, make nothing")
+    rp.set_defaults(fn=cmd_reply)
+
     sw = sub.add_parser("sweep", help="close out brands worked to the last touch with no reply")
     sw.add_argument("--write", action="store_true")
     sw.set_defaults(fn=cmd_sweep)
