@@ -19,6 +19,12 @@ HOME = os.environ.get("CLIPBOT_HOME", os.path.expanduser("~/Movies/clipbot"))
 READY_DIR = os.environ.get("CLIPBOT_READY_DIR", os.path.join(ICLOUD, "ClipBot", "ready"))
 HOOKS_DIR = os.environ.get("CLIPBOT_HOOKS_DIR", os.path.join(ICLOUD, "ClipBot", "hooks"))
 INBOX_DIR = os.environ.get("CLIPBOT_INBOX_DIR", os.path.join(ICLOUD, "ClipBot", "inbox"))
+# Raw source videos (VOD sections, campaign originals) live here, NOT in iCloud.
+SOURCES_DIR = os.environ.get("CLIPBOT_SOURCES_DIR", os.path.expanduser("~/ClipBot-sources"))
+# Disk floor. Below this much free space macOS starts evicting iCloud files, and on 2026-09-24 it evicted the
+# whole vault three times (523 files, 13 held follow-ups). No new source download starts under it, and a
+# source whose clips are all rendered is deleted (its re-fetch recipe is kept in the ledger).
+MIN_FREE_GB = float(os.environ.get("CLIPBOT_MIN_FREE_GB", "15"))
 DB_PATH = os.environ.get("CLIPBOT_DB", os.path.join(ROOT, "clipbot.db"))
 CONFIG_PATH = os.environ.get("CLIPBOT_CONFIG", os.path.join(ROOT, "config.json"))
 KILL_PATH = os.path.join(ROOT, "KILL")

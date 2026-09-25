@@ -107,6 +107,20 @@ def write_hook_script(hooks_dir: str | None = None) -> str | None:
     return None
 
 
+def free_gb(path: str | None = None) -> float:
+    import shutil
+    return shutil.disk_usage(path or os.path.expanduser("~")).free / 1e9
+
+
+def disk_ok(need_gb: float = 0.0) -> tuple:
+    """(ok, message): may a new source download start? Floor = config.MIN_FREE_GB plus what it will take."""
+    free = free_gb()
+    floor = config.MIN_FREE_GB + need_gb
+    if free < floor:
+        return False, f"{free:.1f} GB free, floor {floor:.0f} GB: no new source downloads (iCloud evicts the vault below this)"
+    return True, f"{free:.1f} GB free, floor {floor:.0f} GB"
+
+
 def can_spend(ledger: Ledger, cfg: config.Config, credits: int, usage: dict | None) -> tuple:
     """(ok, reason) for spending `credits` now."""
     if config.kill_switch_on():
@@ -498,6 +512,26 @@ class Runner:
             made += 1
         return made
 
+    def prune_sources(self) -> list:
+        """Delete raw source files whose clips are all rendered, when the ledger holds a re-fetch recipe
+        for them (kv `refetch:<source id>`). Sources without a recipe are left alone: they may be the only
+        copy, or someone else's download. Returns the paths removed."""
+        removed = []
+        for src in self.ledger.sources("clipped"):
+            path = src["locator"] or ""
+            how = self.ledger.get_kv(f"refetch:{src['id']}", "")
+            if not how or not path.startswith(config.SOURCES_DIR) or not os.path.isfile(path):
+                continue
+            clips = self.ledger.clips(source_id=src["id"])
+            if not clips or any(c["status"] in ("new", "downloaded") for c in clips):
+                continue                                   # keep the source until every clip is rendered
+            size = os.path.getsize(path) / 1e9
+            os.remove(path)
+            self.ledger.update_source(src["id"], error=f"source pruned {datetime.now(ET):%Y-%m-%d} ({size:.1f} GB); refetch: {how}")
+            self.log(f"pruned source #{src['id']} {os.path.basename(path)} ({size:.1f} GB): clips rendered, re-fetchable")
+            removed.append(path)
+        return removed
+
     def backfill_platforms(self, campaign_ref) -> int:
         """A campaign gained a platform after its clips were rendered (Crazy Taxi pays on Reels and
         Shorts too): render the missing platforms for every clip that already went through, keeping
@@ -576,6 +610,10 @@ class Runner:
                   "staged": self.stage_made()}
         if counts["staged"]:
             posting.write_post_order(self.ledger)
+        try:
+            self.prune_sources()
+        except Exception as exc:
+            self.log(f"prune_sources failed: {exc}")
         self.log(f"process: {counts}")
         return counts
 
@@ -927,6 +965,9 @@ def main(argv=None):
     i.add_argument("--minutes", type=float, default=0.0)
     i.add_argument("--title", default="")
     i.add_argument("--direct", action="store_true", help="pre-cut clip: skip OpusClip, transform + stage as-is")
+    i.add_argument("--refetch", default="", help="how to get this source again (command/URL + section); lets the loop delete it once clipped")
+    dk = sub.add_parser("disk-check", help="exit 1 when free space is under the floor (config.MIN_FREE_GB)")
+    dk.add_argument("--need-gb", type=float, default=0.0)
     p = sub.add_parser("posted")
     p.add_argument("--variant", type=int, required=True)
     p.add_argument("--url", required=True)
@@ -960,6 +1001,10 @@ def main(argv=None):
     v.add_argument("--approved", type=float)
     v.add_argument("--settled", type=float)
     a = ap.parse_args(argv)
+    if a.cmd == "disk-check":                      # no Runner: checking the disk must not open (or create) a ledger
+        ok, msg = disk_ok(a.need_gb)
+        print(msg)
+        sys.exit(0 if ok else 1)
     r = Runner()
     if a.cmd == "status":
         print(r.status())
@@ -998,8 +1043,11 @@ def main(argv=None):
             print(f"#{k['id']} {k['name']} ({k['marketplace']}) ${k['rate_per_1k']}/1k cap ${k['cap_per_clip']} "
                   f"tags '{k['hashtags']}' platforms '{k['platforms'] or 'default'}'" + (f" rules {rl}" if rl else ""))
     elif a.cmd == "ingest":
-        r.ingest(a.campaign, url=a.url, path=os.path.expanduser(a.file) if a.file else "", minutes=a.minutes,
-                 title=a.title, direct=a.direct)
+        sid = r.ingest(a.campaign, url=a.url, path=os.path.expanduser(a.file) if a.file else "", minutes=a.minutes,
+                       title=a.title, direct=a.direct)
+        if sid and a.refetch:
+            r.ledger.set_kv(f"refetch:{sid}", a.refetch)
+
     elif a.cmd == "process":
         r.process()
     elif a.cmd == "inbox":

@@ -865,3 +865,38 @@ def test_payout_by_campaign_counts_views_after_submission_and_names_the_block(tm
     line = r.ledger.payout_lines()[0]
     assert "2,300 views since submission" in line and "est $4.20" in line and "not linked on whop" in line
     assert "payout (live campaigns):" in r.ledger.report()
+
+
+def test_disk_floor_blocks_downloads_and_prunes_only_refetchable_sources(tmp_path, monkeypatch):
+    """2026-09-24: free space fell to 5.3 GB and macOS evicted the vault three times. Below the floor no
+    source download starts; a clipped source is deleted only when the ledger knows how to get it again."""
+    from clipbot import runner as runner_mod
+    r = _runner(tmp_path, monkeypatch)
+    monkeypatch.setattr(config, "SOURCES_DIR", str(tmp_path / "src"))
+    monkeypatch.setattr(config, "MIN_FREE_GB", 15.0)
+    monkeypatch.setattr(runner_mod, "free_gb", lambda path=None: 9.0)
+    ok, msg = runner_mod.disk_ok()
+    assert not ok and "floor 15" in msg
+    monkeypatch.setattr(runner_mod, "free_gb", lambda path=None: 40.0)
+    assert runner_mod.disk_ok(need_gb=5)[0]
+
+    (tmp_path / "src").mkdir()
+    cid = r.ledger.add_campaign("ct", "whop", 2.1)
+    paths = {}
+    for name, refetch, clip_status in (("done", "yt-dlp twitch v1 0-7200", "transformed"),
+                                       ("norecipe", "", "transformed"),
+                                       ("rendering", "yt-dlp twitch v2", "downloaded")):
+        p = tmp_path / "src" / f"{name}.mp4"
+        p.write_bytes(b"0" * 10)
+        sid = r.ledger.add_source(cid, str(p), name, 10, 10)
+        r.ledger.update_source(sid, status="clipped")
+        c = r.ledger.add_clip(sid, {"clip_id": name, "title": name})
+        r.ledger.update_clip(c, status=clip_status)
+        if refetch:
+            r.ledger.set_kv(f"refetch:{sid}", refetch)
+        paths[name] = p
+    removed = r.prune_sources()
+    assert removed == [str(paths["done"])]
+    assert not paths["done"].exists() and paths["norecipe"].exists() and paths["rendering"].exists()
+    src = next(s for s in r.ledger.sources() if s["title"] == "done")
+    assert "refetch: yt-dlp twitch v1 0-7200" in src["error"]
