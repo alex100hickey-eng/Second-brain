@@ -839,3 +839,29 @@ def test_no_default_argument_pins_a_live_path(tmp_path, monkeypatch):
     from clipbot.runner import write_hook_script
     written = write_hook_script()
     assert written is None or written.startswith(str(tmp_path))
+
+
+def test_payout_by_campaign_counts_views_after_submission_and_names_the_block(tmp_path, monkeypatch):
+    """Alex reads views-to-dollars. A board pays on views after it has the URL, past its per-post
+    floor, and nothing at all from an account it hasn't verified."""
+    r = _runner(tmp_path, monkeypatch)
+    cid, (a, b, c) = _posted_variants(r.ledger, "whop", 2.1, 3)
+    r.ledger.add_account("@ig", "reels", created_at=time.time() - 20 * 86400)
+    r.ledger.link_account("@ig", "whop")
+    r.ledger.add_account("@yt", "shorts", created_at=time.time() - 20 * 86400)
+    for v in (a, b):
+        r.ledger.mark_posted(v, f"https://www.instagram.com/reel/{v}/", account="@ig")
+    r.ledger.mark_posted(c, "https://www.youtube.com/shorts/x", account="@yt")
+    r.ledger.update_post(a, views=500)
+    r.ledger.mark_submitted(a)                       # baseline 500
+    r.ledger.update_post(a, views=2500)              # 2,000 since submission
+    r.ledger.mark_submitted(b, views_at_submit=0)
+    r.ledger.update_post(b, views=300)               # under the 1,000 floor: pays nothing yet
+    r.ledger.update_post(c, views=4000)              # unlinked account: blocked
+    row = r.ledger.payout_by_campaign()[0]
+    assert row["submitted"] == 2 and row["views_since_submit"] == 2300
+    assert row["usd_est"] == 4.2
+    assert row["blocked_unlinked"] == 1 and row["blocked_views"] == 4000
+    line = r.ledger.payout_lines()[0]
+    assert "2,300 views since submission" in line and "est $4.20" in line and "not linked on whop" in line
+    assert "payout (live campaigns):" in r.ledger.report()
