@@ -69,6 +69,11 @@ QUEUE_KEY = "splitframe:firsttouch_queue"
 PER_DAY = 5                            # floor only; see current_per_day()
 RUNWAY_TARGET = 2 * PER_DAY            # floor only; see current_runway_target()
 MIN_WORDS, MAX_WORDS = 80, 180         # the skill targets 110-150; past 170 is padding
+# The 2026-09-25 A/B (Money/Research — first-touch audit): arm A leads with the attached static in
+# about 65 words, arm B asks permission in about 40. `--short` lowers the floor for those, and only
+# for a named founder's own address; everything else keeps MIN_WORDS.
+SHORT_MIN_WORDS = 35
+ARMS = {"A": "arm-A", "B": "arm-B"}     # stored as close_variant, so the funnel slices replies by arm
 IN_BAND = (5, 50)                      # the sweet spot: enough ads to have a problem, no in-house team
 TOO_BIG = 100                          # 100+ active ads means an in-house team — out of band
 QUALIFY_BATCH = 8
@@ -397,13 +402,15 @@ def close_report(rows: list, queue: list) -> dict:
     return out
 
 
-def guard_body(body: str) -> list:
+def guard_body(body: str, min_words: int = None) -> list:
     """Every reason a first-touch body must not go out. The whole pitch rests on the email
     reading as a person who actually opened the account, and on every claim being true."""
     problems = []
     words = len((body or "").split())
-    if words < MIN_WORDS:
-        problems.append(f"too short ({words} words; a first touch is 110-150)")
+    floor = min_words or MIN_WORDS
+    if words < floor:
+        problems.append(f"too short ({words} words; a first touch is 110-150)" if floor == MIN_WORDS
+                        else f"too short ({words} words; even a --short first touch is {floor}+)")
     if words > MAX_WORDS:
         problems.append(f"too long ({words} words; past 170 is padding)")
     risky = fabrication_risk(body or "")
@@ -491,8 +498,29 @@ def subject_problem(subject: str) -> str:
     return ""
 
 
+def hold_until_problem(value) -> str:
+    """'' when `value` is empty or a YYYY-MM-DD date, else why not."""
+    v = _c(value)
+    if not v:
+        return ""
+    try:
+        datetime.strptime(v, "%Y-%m-%d")
+    except ValueError:
+        return f"--hold-until {v!r} is not a YYYY-MM-DD date"
+    return ""
+
+
+def short_problem(row, to: str) -> str:
+    """--short is for a named founder's own inbox only: a 40-word note to a front desk reads as
+    spam, and the audit's case for short rests on it reaching the person who wrote the ads."""
+    if not _sfd.is_named_address(row, to):
+        return f"--short is only for a named founder's own address, and {to} is not one"
+    return ""
+
+
 def plan_add(rows: list, queue: list, to: str, subject: str, body: str,
-             ad_count, brand: str = "", close: str = "", offer_image: str = ""):
+             ad_count, brand: str = "", close: str = "", offer_image: str = "",
+             short: bool = False):
     """(tracker row, problems). An empty problems list is the only permission to queue."""
     to = _c(to).lower()
     row = next((r for r in rows
@@ -531,7 +559,11 @@ def plan_add(rows: list, queue: list, to: str, subject: str, body: str,
                         "don't burn the funnel on it")
     if close == "offer":
         problems += offer_image_problems(offer_image, _c(row.get("domain")))
-    problems += guard_body(body)
+    if short:
+        sp = short_problem(row, to)
+        if sp:
+            problems.append(sp)
+    problems += guard_body(body, SHORT_MIN_WORDS if short else None)
     return row, problems
 
 
@@ -756,7 +788,8 @@ def plan_readdress(rows: list, queue: list, to: str, new_to: str) -> list:
     return problems
 
 
-def plan_revise(queue: list, to: str, subject: str, body: str, offer_image: str, domain: str):
+def plan_revise(queue: list, to: str, subject: str, body: str, offer_image: str, domain: str,
+                short: bool = False, arm: str = None):
     """(entry, problems) for revising a queued first touch.
 
     Only a PENDING entry may change. Once released it is in Alex's outbox with a 3 h timer, or
@@ -778,9 +811,11 @@ def plan_revise(queue: list, to: str, subject: str, body: str, offer_image: str,
         if sub_problem:
             problems.append(sub_problem)
     if body is not None:
-        problems += guard_body(body)
+        problems += guard_body(body, SHORT_MIN_WORDS if short else None)
     img = offer_image if offer_image is not None else _c(entry.get("offer_image"))
-    if _c(entry.get("close_variant")) == "offer":
+    # An arm replaces the offer/question close: arm A attaches a static that already exists and
+    # arm B asks permission, so neither promises an ad that would need a photo to keep.
+    if not arm and _c(entry.get("close_variant")) == "offer":
         problems += offer_image_problems(img, domain)
     return entry, problems
 
@@ -1400,8 +1435,15 @@ def cmd_add(args) -> int:
     with open(args.body_file, encoding="utf-8") as f:
         body = f.read().strip()
     variant_arg = _c(args.close)
+    arm = _c(getattr(args, "arm", "")).upper()
+    if arm:
+        variant_arg = ARMS[arm]
     row, problems = plan_add(rows, queue, args.to, args.subject, body, args.ad_count, args.brand,
-                             variant_arg, _c(args.offer_image))
+                             variant_arg, _c(args.offer_image),
+                             short=bool(getattr(args, "short", False)))
+    hold = hold_until_problem(getattr(args, "hold_until", ""))
+    if hold:
+        problems = problems + [hold]
     if problems:
         print("NOT queued:")
         for p in problems:
@@ -1424,6 +1466,10 @@ def cmd_add(args) -> int:
                   "close_variant": variant, "offer_image": _c(args.offer_image),
                   "evidence": _c(args.evidence), "queued_at": datetime.now(LOCAL_TZ).isoformat(),
                   "queued_by": "money-shift"})
+    if arm:
+        queue[-1]["arm"] = arm
+    if _c(getattr(args, "hold_until", "")):
+        queue[-1]["hold_until"] = _c(args.hold_until)
     save_queue(q, queue)
     notes, status, changes = stamp_count(row, args.ad_count, today)
     row["notes"], row["status"] = notes, status
@@ -1456,11 +1502,23 @@ def cmd_revise(args) -> int:
     row = next((r for r in rows
                 if _c(args.to).lower() in {_c(r.get("email")).lower(),
                                            _c(r.get("email_generic")).lower()}), None)
+    short = bool(getattr(args, "short", False))
+    arm = _c(getattr(args, "arm", None)).upper()
     entry, problems = plan_revise(queue, args.to, args.subject, body,
-                                  args.offer_image, _c(row.get("domain")) if row else "")
+                                  args.offer_image, _c(row.get("domain")) if row else "",
+                                  short=short, arm=arm or None)
     new_to = _c(getattr(args, "new_to", None)).lower()
     if new_to:
         problems = problems + plan_readdress(rows, queue, args.to, new_to)
+    if short:
+        sp = short_problem(row, new_to or _c(args.to).lower())
+        if sp:
+            problems = problems + [sp]
+    hold_arg = getattr(args, "hold_until", None)
+    if hold_arg is not None:
+        hp = hold_until_problem(hold_arg)
+        if hp:
+            problems = problems + [hp]
     if problems:
         print("NOT revised:")
         for p in problems:
@@ -1482,9 +1540,23 @@ def cmd_revise(args) -> int:
         entry["readdressed_from"], entry["to"] = _c(entry.get("to")), new_to
     if args.offer_image is not None:
         entry["offer_image"] = _c(args.offer_image)
+    if arm:
+        entry["arm"], entry["close_variant"] = arm, ARMS[arm]
+    if hold_arg is not None:
+        if _c(hold_arg):
+            entry["hold_until"] = _c(hold_arg)
+        else:
+            entry.pop("hold_until", None)
     entry["revised_at"] = datetime.now(LOCAL_TZ).isoformat()
     entry["revised_why"] = _c(args.why)
     save_queue(q, queue)
+    if arm and row is not None and _c(row.get("close_variant")) != ARMS[arm]:
+        # The funnel report slices replies by the tracker's close_variant: the arm has to be
+        # there, not only on the queue entry, or a reply can't be attributed.
+        row["close_variant"] = ARMS[arm]
+        if "close_variant" not in _fields:
+            _fields = _fields + ["close_variant"]
+        write_tracker(rows, _fields, "arm")
     print(f"REVISED: {entry.get('brand')} <{args.to}> draft {entry.get('draft_id')} — {msg}")
     if new_subject != was:
         print(f'  subject: "{was}" -> "{new_subject}"')
@@ -1641,6 +1713,11 @@ def main(argv=None) -> int:
     a.add_argument("--offer-image", default="",
                    help="with --close offer: the photo ON THEIR OWN SITE the promised ad would be "
                         "built from. Required, because the promise is unkeepable without one")
+    a.add_argument("--short", action="store_true",
+                   help="named founder only: a 35-word floor instead of 80 (the A/B templates)")
+    a.add_argument("--arm", default="", choices=("", "A", "B", "a", "b"),
+                   help="A/B arm (Money/Research — first-touch audit); replaces --close")
+    a.add_argument("--hold-until", default="", help="YYYY-MM-DD: the release skips it before then")
     a.add_argument("--dry-run", action="store_true", help="run every guard, draft nothing")
     a.set_defaults(fn=cmd_add)
     so = sub.add_parser("source", help="add a brand nobody had, from a live Ad Library read")
@@ -1696,6 +1773,12 @@ def main(argv=None) -> int:
     rv.add_argument("--why", default="", help="one line: what was wrong")
     rv.add_argument("--new-to", default=None,
                     help="re-address to the founder's own address on the same tracker row")
+    rv.add_argument("--short", action="store_true",
+                    help="named founder only: a 35-word floor instead of 80 (the A/B templates)")
+    rv.add_argument("--arm", default=None, choices=("A", "B", "a", "b"),
+                    help="A/B arm; recorded on the entry and the tracker's close_variant")
+    rv.add_argument("--hold-until", default=None,
+                    help="YYYY-MM-DD: the release skips it before then; '' clears it")
     rv.add_argument("--dry-run", action="store_true")
     rv.set_defaults(fn=cmd_revise)
     n = sub.add_parser("note", help="stamp a live Ad Library count into the tracker")

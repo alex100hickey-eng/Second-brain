@@ -964,10 +964,16 @@ def release_first_touches(outbox_mod, drafts_url: str, limit: int = None) -> lis
         by_address = rows_by_address(tracker_rows())
     except (OSError, csv.Error):
         by_address = {}            # no row to consult: is_person(to) alone decides the tier
-    released, deferred, malformed, stale, desk = [], [], [], [], []
+    released, deferred, malformed, stale, desk, held = [], [], [], [], [], []
     for entry in pending:
         if len(released) >= room:
             break
+        hold_until = _s(entry.get("hold_until"))
+        if hold_until and today.isoformat() < hold_until:
+            # A date set with `splitframe_queue.py revise --hold-until`: the queue is FIFO, and a
+            # draft kept for a planned day (the 09-28 A/B) must not go on an earlier one.
+            held.append(f"{entry.get('brand') or entry.get('to')} (until {hold_until})")
+            continue
         to = (entry.get("to") or "").strip()
         draft_id = (entry.get("draft_id") or "").strip()
         if not to or not draft_id:
@@ -1020,6 +1026,8 @@ def release_first_touches(outbox_mod, drafts_url: str, limit: int = None) -> lis
     if desk:
         log("first touch HELD — named person or no send (NAMED_ONLY): a front desk waits until "
             "a founder's address is on its row: " + ", ".join(desk))
+    if held:
+        log("first touch HELD — kept for a later day on purpose (--hold-until): " + ", ".join(held))
     if stale:
         log(f"first touch HELD — drafted more than {STALE_DRAFT_DAYS} days ago and its ad-library "
             "claims may no longer be true; re-read the account and re-draft: " + ", ".join(stale))
