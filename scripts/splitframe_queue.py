@@ -910,7 +910,7 @@ def creator_state(list_text: str, queue: list) -> dict:
 
 
 def plan_creator(list_text: str, queue: list, to: str, subject: str, body: str,
-                 evidence: str, offer_approved: bool) -> tuple:
+                 evidence: str, offer_approved: bool, short: bool = False) -> tuple:
     """(entry, problems). An empty problems list is the only permission to queue."""
     to = _c(to).lower()
     problems = []
@@ -935,7 +935,9 @@ def plan_creator(list_text: str, queue: list, to: str, subject: str, body: str,
         problems.append("--evidence must say which stream and which moment was actually watched: "
                         "the pitch is their own footage back at them, and it is the one claim "
                         "that cannot be bluffed")
-    problems += guard_body(body)
+    # --short: the creator lane's sample-first template. A streamer's business inbox is the person
+    # (the named-only rule exempts the lane for that reason), so no named check is needed here.
+    problems += guard_body(body, SHORT_MIN_WORDS if short else None)
     return entry, problems
 
 
@@ -1293,7 +1295,8 @@ def cmd_creator(args) -> int:
     with open(args.body_file, encoding="utf-8") as f:
         body = f.read().strip()
     entry, problems = plan_creator(list_text, queue, args.to, args.subject, body,
-                                   args.evidence, os.path.exists(CREATOR_OFFER))
+                                   args.evidence, os.path.exists(CREATOR_OFFER),
+                                   short=bool(getattr(args, "short", False)))
     if problems:
         print("NOT queued:")
         for p in problems:
@@ -1736,6 +1739,8 @@ def main(argv=None) -> int:
     c.add_argument("--body-file", required=True, help="plain-text body, 110-150 words")
     c.add_argument("--evidence", required=True,
                    help="which stream and which moment was watched, with the date")
+    c.add_argument("--short", action="store_true",
+                   help="a 35-word floor instead of 80 (the sample-first template)")
     c.add_argument("--dry-run", action="store_true", help="run every guard, draft nothing")
     c.set_defaults(fn=cmd_creator)
     cb = sub.add_parser("creator-backfill",

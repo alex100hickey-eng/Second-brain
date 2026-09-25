@@ -141,3 +141,30 @@ def test_revise_records_the_arm_and_the_hold(monkeypatch, tmp_path):
     args.hold_until, args.body_file, args.short, args.arm = "", None, False, None
     assert sq.cmd_revise(args) == 0
     assert "hold_until" not in state.rows[sfd.QUEUE_KEY]["queue"][0]
+
+
+CREATOR_LIST = """# Creator lane — prospect list
+
+### Guzu
+- **Platform:** Twitch `twitch.tv/guzu`
+- **Email:** `guzubusiness@hotmail.com` — read directly off his own Twitch About panel.
+"""
+SAMPLE_FIRST = ("Guzu,\n\nCut your Tuesday clutch into a 40 second vertical with captions. It's attached. "
+                "Two fans already clipped the same ten seconds, so it travels. I edit clips for "
+                "streamers. Want the next five from this week?\n\nAlex Hickey, Splitframe Studio")
+
+
+def test_short_works_on_the_creator_command_too(monkeypatch):
+    """Lane B's sample-first template is about 40 words: the same 35-word floor, same guards."""
+    monkeypatch.setattr(sq, "subject_problem", lambda s: "")
+    ev = "watched the 09-22 stream, the clutch at 1:14:05"
+    assert 35 <= len(SAMPLE_FIRST.split()) < 80
+    _e, problems = sq.plan_creator(CREATOR_LIST, [], "guzubusiness@hotmail.com", "your clutch",
+                                   SAMPLE_FIRST, ev, True)
+    assert any("too short" in p for p in problems)
+    _e, problems = sq.plan_creator(CREATOR_LIST, [], "guzubusiness@hotmail.com", "your clutch",
+                                   SAMPLE_FIRST, ev, True, short=True)
+    assert problems == []
+    _e, problems = sq.plan_creator(CREATOR_LIST, [], "guzubusiness@hotmail.com", "your clutch",
+                                   "Guzu, want a clip?", ev, True, short=True)
+    assert any("too short" in p for p in problems)
