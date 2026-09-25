@@ -215,15 +215,52 @@ def clipping_metrics(today: date) -> dict:
         try:
             cols = [c[1] for c in cur.execute("pragma table_info(accounts)").fetchall()]
             if "linked" in cols:
-                out["linked_accounts"] = cur.execute("select count(*) from accounts where linked").fetchone()[0]
+                # `linked` is TEXT ("whop"); a bare `where linked` casts it to 0 in SQLite and counts nothing.
+                out["linked_accounts"] = cur.execute(
+                    "select count(*) from accounts where coalesce(linked, '') != ''").fetchone()[0]
             elif "verified" in cols:
                 out["linked_accounts"] = cur.execute("select count(*) from accounts where verified").fetchone()[0]
         except sqlite3.Error:
             pass
+        out["campaigns"] = _clip_payout_by_campaign(cur)
         con.close()
     except sqlite3.Error as exc:
         out["error"] = str(exc)[:80]
     return out
+
+
+CLIP_PAYOUT_FLOOR = {"vyro": 5000, "whop": 1000}   # per-post floor; mirrors clipbot.ledger.PAYOUT_FLOOR_VIEWS
+
+
+def _clip_payout_by_campaign(cur) -> list:
+    """Per live campaign: submitted posts, views since submission, estimate at the campaign's rate (posts
+    past the board's floor only), and posts that can't be submitted because the account isn't linked.
+    Same arithmetic as clipbot's `payout_by_campaign`, read-only SQL so this script never imports clipbot."""
+    pcols = {c[1] for c in cur.execute("pragma table_info(posts)").fetchall()}
+    base = "p.views_at_submit" if "views_at_submit" in pcols else "0"
+    try:
+        linked = {h: (l or "").split(",") for h, l in cur.execute("select handle, linked from accounts").fetchall()}
+    except sqlite3.Error:
+        linked = {}
+    rows = cur.execute(f"""select k.name, lower(k.marketplace), k.rate_per_1k, p.views, {base}, p.submitted_at,
+                                  coalesce(p.account, '')
+                           from posts p join variants v on v.id = p.variant_id join clips c on c.id = v.clip_id
+                           join sources s on s.id = c.source_id join campaigns k on k.id = s.campaign_id
+                           where k.status = 'active'""").fetchall()
+    camps = {}
+    for name, board, rate, views, at_submit, submitted, acct in rows:
+        c = camps.setdefault(name, dict(campaign=name, board=board, rate=float(rate or 0), submitted=0,
+                                        views_since_submit=0, usd_est=0.0, blocked_unlinked=0, blocked_views=0))
+        if submitted:
+            since = max(0, int(views or 0) - int(at_submit or 0))
+            c["submitted"] += 1
+            c["views_since_submit"] += since
+            if since >= CLIP_PAYOUT_FLOOR.get(board, 0):
+                c["usd_est"] += since / 1000.0 * c["rate"]
+        elif board not in linked.get(acct, []):
+            c["blocked_unlinked"] += 1
+            c["blocked_views"] += int(views or 0)
+    return sorted(camps.values(), key=lambda c: (-c["usd_est"], c["campaign"]))
 
 
 # ------------------------------------------------------------------ polybot
@@ -539,6 +576,11 @@ def main(argv) -> int:
              f"{cl['views_total']:,} views; submitted in window {cl['submitted_in_window']}, late {cl['submitted_late']}, "
              f"unsubmitted {cl['unsubmitted']}; approved ${cl['usd_approved']:.2f}, settled ${cl['usd_settled']:.2f}."
              + (f" ({cl['error']})" if cl["error"] else ""))
+    for c in cl.get("campaigns", []):
+        L.append(f"  - {c['campaign']}: {c['submitted']} submitted on {c['board'] or '?'}, "
+                 f"{c['views_since_submit']:,} views since submission, est ${c['usd_est']:.2f} at ${c['rate']:.2f}/1k"
+                 + (f"; blocked: {c['blocked_unlinked']} post(s) / {c['blocked_views']:,} views from accounts not "
+                    f"linked on {c['board']}" if c["blocked_unlinked"] else ""))
     gates = ", ".join(f"{k} {v}" for k, v in pb["gates"].items()) or pb.get("error") or "no report"
     L.append(f"- **D Polybot:** loop {'alive' if pb['alive'] else 'NOT alive'}; gates: {gates}."
              + (f" PASSING: {', '.join(pb['passing'])}" if pb["passing"] else ""))

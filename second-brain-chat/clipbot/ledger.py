@@ -133,6 +133,9 @@ class Ledger:
         if "submitted_at" not in pcols:
             self.conn.execute("ALTER TABLE posts ADD COLUMN submitted_at REAL")
             self.conn.commit()
+        if "views_at_submit" not in pcols:            # boards pay on views after submission, not before
+            self.conn.execute("ALTER TABLE posts ADD COLUMN views_at_submit INTEGER DEFAULT 0")
+            self.conn.commit()
         acols = {r[1] for r in self.conn.execute("PRAGMA table_info(accounts)")}
         if "linked" not in acols:                     # boards this account is verified on, e.g. "whop"
             self.conn.execute("ALTER TABLE accounts ADD COLUMN linked TEXT DEFAULT ''")
@@ -271,8 +274,13 @@ class Ledger:
                              FROM posts p JOIN variants v ON v.id=p.variant_id JOIN clips c ON c.id=v.clip_id
                              JOIN sources s ON s.id=c.source_id JOIN campaigns k ON k.id=s.campaign_id ORDER BY p.posted_at""")
 
-    def mark_submitted(self, variant_id, ts=None) -> None:
-        self.update_post(variant_id, submitted_at=ts or _now())
+    def mark_submitted(self, variant_id, ts=None, views_at_submit=None) -> None:
+        """Record the submission and the view count at that moment: what a board pays on is the
+        views AFTER it has the URL, so the report needs the baseline to say what is actually earning."""
+        if views_at_submit is None:
+            p = self._one("SELECT views FROM posts WHERE variant_id=?", (variant_id,))
+            views_at_submit = int((p or {}).get("views") or 0)
+        self.update_post(variant_id, submitted_at=ts or _now(), views_at_submit=views_at_submit)
 
     # ---- accounts ------------------------------------------------------------------------
     def add_account(self, handle, platform="tiktok", created_at=None, campaigns=(), connector_id="",
@@ -372,6 +380,43 @@ class Ledger:
                 counted += 1
         return {"usd_estimated": round(paid, 2), "usd_if_all_paid": round(naive, 2), "posts_paying": counted}
 
+    def payout_by_campaign(self) -> list:
+        """Per live campaign: what is submitted, the views it gained since submission, the estimate at the
+        campaign's rate (posts past the board's per-post floor only), and what can't be submitted yet
+        because its account isn't linked on the board. The views-to-dollars line Alex reads."""
+        linked = {a["handle"]: (a.get("linked") or "").split(",")
+                  for a in self._rows("SELECT handle, linked FROM accounts")}
+        out = {}
+        for p in self.posts():
+            board = (p.get("marketplace") or "").lower()
+            c = out.setdefault(p["campaign"], {"campaign": p["campaign"], "board": board,
+                                               "rate": p["rate_per_1k"] or 0, "submitted": 0,
+                                               "views_since_submit": 0, "usd_est": 0.0, "unsubmitted": 0,
+                                               "blocked_unlinked": 0, "blocked_views": 0})
+            views = int(p["views"] or 0)
+            if p.get("submitted_at"):
+                since = max(0, views - int(p.get("views_at_submit") or 0))
+                c["submitted"] += 1
+                c["views_since_submit"] += since
+                if since >= PAYOUT_FLOOR_VIEWS.get(board, 0):
+                    c["usd_est"] += since / 1000.0 * c["rate"]
+            else:
+                c["unsubmitted"] += 1
+                if board not in linked.get(p.get("account") or "", []):
+                    c["blocked_unlinked"] += 1
+                    c["blocked_views"] += views
+        for c in out.values():
+            c["usd_est"] = round(c["usd_est"], 2)
+        return sorted(out.values(), key=lambda c: (-c["usd_est"], -c["views_since_submit"], c["campaign"]))
+
+    def payout_lines(self, campaigns=None) -> list:
+        rows = [c for c in self.payout_by_campaign() if not campaigns or c["campaign"] in campaigns]
+        return [f"  {c['campaign']}: {c['submitted']} submitted · {c['views_since_submit']:,} views since submission "
+                f"· est ${c['usd_est']:.2f} at ${c['rate']:.2f}/1k"
+                + (f" · {c['blocked_unlinked']} post(s) / {c['blocked_views']:,} views blocked: account not linked on "
+                   f"{c['board']}" if c["blocked_unlinked"] else "")
+                for c in rows]
+
     def report(self) -> str:
         s = self.stats()
         lines = [f"clipbot — {datetime.now().strftime('%Y-%m-%d %H:%M')}",
@@ -380,4 +425,8 @@ class Ledger:
                  f"  posts {s['posts']} · views {s['views']:,} (qualified {s['qualified_views']:,}) · "
                  f"expected ${s['usd_expected']:.2f} · approved ${s['usd_approved']:.2f} · settled ${s['usd_settled']:.2f}",
                  f"  credits this week {s['credits_week']} · total {s['credits_total']}"]
+        live = {c["name"] for c in self.campaigns()}
+        pay = self.payout_lines(live)
+        if pay:
+            lines += ["  payout (live campaigns):"] + pay
         return "\n".join(lines)
