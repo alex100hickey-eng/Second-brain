@@ -51,6 +51,47 @@ CHAT = os.path.expanduser("~/second-brain/second-brain-chat")
 MODEL = "claude-sonnet-5"
 MAX_TOUCHES = 3          # first touch + 2 follow-ups, then the brand is left alone
 MIN_BODY_WORDS = 25      # below this the generation failed; it is not a short email
+# Follow-up cadence from the first touch (Money/Research — follow-up audit, 2026-09-25): touch 2 on
+# day 3, touch 3 on day 10, no touch 4. It was day 7, which left 4 days between two asks and ate
+# the daily ceiling that first touches need. splitframe_send and splitframe_queue read these.
+FU1_DAYS, FU2_DAYS = 3, 10
+
+# Two touch-2s went to founders as raw JSON (Monday Swimwear 09-20, Goodwipes 09-21: the body
+# began `{"body":"Natasha —` and stopped mid-sentence) before parse_body was fixed. Whatever the
+# drafter does next, the drafter AND the sender refuse a body that is machine output.
+_JSON_KEY = re.compile(r'"body"\s*:')
+_FREE_OFFER = re.compile(r"\b(free|yours either way|no charge|on the house)\b|"
+                         r"\bi'?ll (build|make|put together|mock up)\b|"
+                         r"\bwant me to (build|make|send|put)\b", re.I)
+
+
+def broken_body(body: str) -> str:
+    """Why this body is machine output rather than an email, or ""."""
+    b = (body or "").strip()
+    if b.startswith("{") or b.startswith("```"):
+        return "starts with raw code"
+    if _JSON_KEY.search(b):
+        return 'contains a "body": key'
+    return ""
+
+
+def followup_problems(body: str, static_sent: bool) -> list:
+    """Every reason a written follow-up must not go out (the audit's rules, checked)."""
+    problems = []
+    broken = broken_body(body)
+    if broken:
+        problems.append(broken)
+    if not static_sent and _FREE_OFFER.search(body or ""):
+        problems.append("offers to build something that doesn't exist")
+    if "the math" in (body or "").lower():
+        problems.append('"the math" re-grades the first email')
+    if (body or "").count("—") > 1:
+        problems.append("more than one em dash")
+    lines = [l.strip() for l in (body or "").strip().splitlines() if l.strip()]
+    lines = [l for l in lines if l not in ("Alex Hickey", "Splitframe Studio", "Alex")]
+    if not lines or not lines[-1].endswith("?"):
+        problems.append("does not end on a question")
+    return problems
 # Shared inboxes. A first touch about ad creative dies in a support queue, and Hunter will
 # happily return one as "deliverable" — talktous@ and support@ both came back in the
 # 2026-09-15 pass looking exactly like a real person's address.
@@ -293,20 +334,46 @@ So you may NOT:
 The whole pitch rests on Alex only ever saying things he actually did. One invented detail a
 founder can check is worse than no follow-up at all.
 
-What "something new" is allowed to be, then:
-- reasoning he did not spell out the first time, built from what the first email already stated
-- the arithmetic on numbers ALREADY in the first email, shown plainly
-- a sharper version of the same observation
-- a concrete, honest offer (he will build one concept free if they want it — offered, not done)
+The follow-up templates (Money/Research — follow-up audit, 2026-09-25). Fill them, don't
+improvise around them. The first email already told them what's wrong with their ads; saying it
+again, or as a percentage ("did the math"), is a grade, not something new.
 
-Follow-up rules:
-- Three touches total, then stop. EVERY follow-up must add something NEW, drawn only from the
-  list above. Never "just bumping this up".
-- The last touch gives an explicit easy out ("if this isn't a priority that's a fair no"),
-  because a clean no is worth more than silence.
-- 60-110 words. Shorter than a first touch.
-- It is a reply inside the original thread, so do not reintroduce himself.
-- End with something answerable, not a CTA wearing a question mark.
+Touch 2, no ad attached:
+  {First name},
+  Different idea from my first email.
+  {One line, quoted exactly, that the first email already quoted from their site, reviews or ads,
+  and one plain test built on it: that line as a static against what they run now.}
+  {One question about their customer, not their numbers, not their ads.}
+  Alex Hickey
+  Splitframe Studio
+
+Touch 3, no ad attached (the last one):
+  {First name},
+  Last one from me. {The test from the first two emails, in one short sentence} is still the
+  first thing I'd test.
+  If that isn't a priority right now, that's a fair no. If it's timing, tell me a month and I'll
+  check back then.
+  Is it a no, or a not now?
+  Alex Hickey
+  Splitframe Studio
+
+Touch 3 after the ad was already delivered (the brief below says so):
+  {First name},
+  Last one from me. The {product} ad is yours to run whether we ever talk or not.
+  If ads aren't a priority right now, that's a fair no. If it's timing, tell me a month and I'll
+  check back then.
+  Is it a no, or a not now?
+  Alex Hickey
+  Splitframe Studio
+
+Rules:
+- NEVER offer to build, make or send anything, and never say "free" or "yours either way",
+  unless the brief below says the ad already exists and was delivered. An offer of work that
+  doesn't exist is the one promise this lane kept breaking.
+- No price. No "the math". No guilt ("so I stop following up"). No "one more thing".
+- The line before the sign-off is a question they can answer about their own customers.
+- 35-80 words. It is a reply inside the original thread, so do not reintroduce himself.
+- If the contact's first name is unknown, open with no name at all.
 
 Return STRICT JSON: {"body": "..."} and nothing else. No subject — it is a threaded reply."""
 
@@ -1224,6 +1291,11 @@ def main() -> int:
         if len(body.split()) < MIN_BODY_WORDS:
             log(f"{brand}: touch {touch} REJECTED — body came back empty or too short to send")
             rejected.append(f"{brand} (touch {touch}): empty draft")
+            continue
+        shape = followup_problems(body, static_sent=(plan == "delivered"))
+        if shape:
+            log(f"{brand}: touch {touch} REJECTED — {'; '.join(shape)}")
+            rejected.append(f"{brand} (touch {touch}): {'; '.join(shape)}")
             continue
         risky = fabrication_risk(body)
         if risky:

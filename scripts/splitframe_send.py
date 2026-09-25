@@ -272,6 +272,17 @@ def approved_recipients() -> set | None:
     return out
 
 
+def body_is_broken(item: dict) -> str:
+    """The outbox row's body (after its "Subject:" line) is machine output: why, or ""."""
+    detail = item.get("detail") or ""
+    body = detail.split("\n", 1)[1] if detail.lower().startswith("subject:") and "\n" in detail else detail
+    try:
+        return _daily_module().broken_body(body)
+    except Exception:                                   # noqa: BLE001
+        b = body.strip()
+        return "starts with raw code" if b.startswith("{") or '"body":' in b else ""
+
+
 def is_follow_up(item: dict) -> bool:
     """A reply on an existing thread, rather than a cold first touch.
 
@@ -409,14 +420,20 @@ def stamp_tracker(address: str) -> None:
     except (OSError, IndexError):
         return
     today = date.today()
+    try:
+        fu1, fu2 = _daily_module().FU1_DAYS, _daily_module().FU2_DAYS
+    except Exception:                                   # noqa: BLE001
+        fu1, fu2 = 3, 10
     changed = False
     for r in rows:
         addrs = {(r.get(c) or "").strip().lower() for c in ("email", "email_generic")}
         if address not in addrs or (r.get("sent_date") or "").strip():
             continue
         r["sent_date"] = today.isoformat()
-        r["followup1_date"] = date.fromordinal(today.toordinal() + 3).isoformat()
-        r["followup2_date"] = date.fromordinal(today.toordinal() + 7).isoformat()
+        # The creator lane keeps its own day-7 touch 3; the 09-25 audit changed Splitframe's only.
+        last = 7 if (r.get("category") or "").strip().lower() == "creator" else fu2
+        r["followup1_date"] = date.fromordinal(today.toordinal() + fu1).isoformat()
+        r["followup2_date"] = date.fromordinal(today.toordinal() + last).isoformat()
         changed = True
     if not changed:
         return
@@ -610,6 +627,17 @@ def main() -> int:
             nudge("Splitframe: send held", f"{who or 'unknown recipient'} isn't on the approved "
                   "list, so nothing was sent. The email is still queued — add the address to the "
                   "tracker or the creator list and it goes on the next pass.")
+            continue
+        broken = body_is_broken(item)
+        if broken:
+            # 2026-09-20/21: two follow-ups reached founders as raw JSON. Never again, whatever
+            # the drafter does: hold it for a day and tell Alex, since a rewrite is the only fix.
+            log(f"item {item['id']}: body is machine output ({broken}) — HELD, not sent")
+            outbox.snooze(item["id"], hours=24)
+            if item.get("auto_send_at") and not item.get("send_approved"):
+                outbox.arm_auto_send(item["id"], (datetime.now() + timedelta(hours=24)).isoformat())
+            nudge("Splitframe: send held", f"The email to {who} is broken code, not text "
+                  f"({broken}). Nothing was sent. Rewrite the draft or tap Not doing it.")
             continue
         # Close FIRST: a crash between send and bookkeeping must never leave a row that
         # another pass would send a second time.
