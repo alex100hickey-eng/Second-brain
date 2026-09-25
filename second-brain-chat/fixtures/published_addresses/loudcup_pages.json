@@ -1,0 +1,6 @@
+{"pages": [
+  {"id": 1, "handle": "our-founder", "title": "Our Founder",
+   "body_html": "<p>Loudcup was founded by Wrenna Voss in 2019, in her garage in Tacoma.</p>"},
+  {"id": 2, "handle": "data-requests", "title": "Data requests",
+   "body_html": "<p>For any data request, write to wrenna@theloudcup.com.</p>"}
+]}
