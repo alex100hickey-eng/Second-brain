@@ -149,3 +149,26 @@ def test_an_edit_made_during_the_release_survives_it(monkeypatch):
     queue = state.queue()
     assert [bool(e.get("released")) for e in queue] == [True, True, False]
     assert queue[2]["body"] == "revised mid-release"
+
+
+def test_a_static_swap_keeps_the_entrys_place_in_line():
+    """swap-first replaces the Gmail draft (new id, old one in replaced_draft). Keyed on the
+    draft id alone that read as remove + add, and the entry dropped to the end of the queue."""
+    base = [_e(1), _e(2), _e(3)]
+    mine = [_e(1), dict(_e(2), draft_id="r2-static", replaced_draft="r2", static_attached="b2.png"), _e(3)]
+    latest = [_e(1), _e(2), _e(3, body="edited meanwhile")]
+    out = sfd.merge_queue(base, mine, latest)
+    assert [e["draft_id"] for e in out] == ["r1", "r2-static", "r3"]
+    assert out[1]["static_attached"] == "b2.png" and out[2]["body"] == "edited meanwhile"
+
+
+def test_the_server_daily_run_waits_for_the_0730_static_swap():
+    """The loop ran at its first hourly tick after 07:00, which drifted with every deploy (07:18
+    on 09-25), so the Mac's 07:30 swap could land after the release. Now: 07:40 or later."""
+    from datetime import datetime as dt
+    tz = sfd.LOCAL_TZ
+    assert not sfd.daily_run_due(dt(2026, 9, 28, 7, 18, tzinfo=tz), "2026-09-27")
+    assert not sfd.daily_run_due(dt(2026, 9, 28, 7, 39, tzinfo=tz), "2026-09-27")
+    assert sfd.daily_run_due(dt(2026, 9, 28, 7, 40, tzinfo=tz), "2026-09-27")
+    assert sfd.daily_run_due(dt(2026, 9, 28, 13, 5, tzinfo=tz), "2026-09-27"), "a late wake still runs"
+    assert not sfd.daily_run_due(dt(2026, 9, 28, 9, 0, tzinfo=tz), "2026-09-28"), "once a day"
