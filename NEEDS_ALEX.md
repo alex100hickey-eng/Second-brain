@@ -14,6 +14,8 @@ is still yours to do.
 
 ## 💰 Money lanes — what only you can do
 
+**2026-09-25 18:10 — optional, real supply for the creator lane:** about 100 long-form YouTubers who fit the offer hide their business email behind YouTube's "view email address" button (signed-in click + a captcha each). If you ever have 20 idle minutes on the laptop, the list to click through is `Money/Creator Lane — Long-form Supply (2026-09-25).md`; paste what you get into the same file and the creator tab drafts them. Not urgent; 27 with published emails are being drafted now.
+
 **2026-09-25 16:10 — the lid is now the #1 blocker. One command fixes it until the server move.** The Mac slept again 15:12–15:30 (lid). Every sleep stops the Splitframe sender, the polybot loop, the statics backstops and the scorecard; today that cost about 5 hours of sending. Run this once in Terminal (it asks for your Mac password, which I cannot type), keep the Mac plugged in, and the lid can stay closed:
 ```
 sudo pmset -a disablesleep 1
