@@ -10,7 +10,7 @@ SRT cue. Homebrew ffmpeg has no `drawtext`/`subtitles`, so every cue is a Pillow
 on AnthonyZ's studio clip. Never writes under ClipBot/ready (clipbot posts from there).
 """
 from __future__ import annotations
-import argparse, os, re, subprocess, sys, tempfile
+import argparse, os, re, shutil, subprocess, sys, tempfile
 
 FONT = "/System/Library/Fonts/Supplemental/Arial Black.ttf"
 MODEL = os.path.expanduser("~/second-brain/models/ggml-base.en.bin")
@@ -75,6 +75,13 @@ def main(argv=None) -> int:
         print("refusing to write under a ClipBot ready folder"); return 2
     from PIL import Image, ImageDraw, ImageFont  # lazy: the pure helpers need no Pillow
     tmp = tempfile.mkdtemp(prefix="creator_cut_")
+    try:
+        return _run(a, tmp, Image, ImageDraw, ImageFont)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)   # a 50 MB source per cut must not pile up in /var/folders
+
+
+def _run(a, tmp, Image, ImageDraw, ImageFont) -> int:
     src = a.source
     if src.startswith("http"):
         subprocess.run([f"{BIN}/yt-dlp", "-q", "--no-warnings", "-f", "best", "-o", os.path.join(tmp, "src.%(ext)s"), src], check=True)
@@ -86,6 +93,12 @@ def main(argv=None) -> int:
         subprocess.run([f"{BIN}/whisper-cli", "-m", MODEL, "-f", wav, "-osrt", "-of", os.path.join(tmp, "captions"), "-np"],
                        check=True, capture_output=True)
         srt = os.path.join(tmp, "captions.srt")
+    # keep the caption file beside the output: whisper mishears names, and a corrected SRT re-run
+    # (--srt) is the fix; a caption file that vanished with the temp dir cannot be corrected
+    kept = os.path.splitext(a.out)[0] + ".srt"
+    if os.path.abspath(srt) != os.path.abspath(kept):
+        os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
+        shutil.copyfile(srt, kept)
     cues = [c for c in parse_srt(open(srt, encoding="utf-8").read())
             if c[1] > a.start and (a.end is None or c[0] < a.end)]
     font = ImageFont.truetype(FONT, 58)

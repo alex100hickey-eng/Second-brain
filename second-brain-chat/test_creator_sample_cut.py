@@ -29,3 +29,18 @@ def test_a_start_offset_shifts_the_cue_times():
 def test_refuses_to_write_into_the_clipbot_ready_folder(tmp_path):
     out = str(tmp_path / "ClipBot" / "ready" / "x.mp4")
     assert m.main(["file.mp4", out]) == 2
+
+
+def test_temp_dir_is_removed_even_when_the_cut_fails(tmp_path, monkeypatch):
+    made = []
+    real = m.tempfile.mkdtemp
+    def fake_mkdtemp(prefix=""):
+        d = real(prefix=prefix); made.append(d); return d
+    monkeypatch.setattr(m.tempfile, "mkdtemp", fake_mkdtemp)
+    def boom(*a, **k): raise RuntimeError("no source")
+    monkeypatch.setattr(m, "_run", boom)
+    try:
+        m.main(["file.mp4", str(tmp_path / "out.mp4")])
+    except RuntimeError:
+        pass
+    assert made and not os.path.exists(made[0])
