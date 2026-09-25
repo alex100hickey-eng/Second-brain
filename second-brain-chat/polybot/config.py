@@ -12,11 +12,15 @@ import os
 from dataclasses import asdict, dataclass, field
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
-CONFIG_PATH = os.environ.get("POLYBOT_CONFIG", os.path.join(ROOT, "config.json"))
-DB_PATH = os.environ.get("POLYBOT_DB", os.path.join(ROOT, "polybot.db"))
-KILL_PATH = os.path.join(ROOT, "KILL")          # touch this file = every module stops placing orders
-CALIBRATION_PATH = os.path.join(ROOT, "calibration.json")
-REPORT_PATH = os.path.join(ROOT, "report-latest.txt")
+# Where the ledger and every other runtime file live. On the Mac: next to the code, as always. On the
+# server: a persistent volume (POLYBOT_DATA_DIR=/data/polybot), because a Coolify redeploy replaces
+# the code directory and would take the gate evidence with it. See SERVER_MOVE.md.
+DATA_DIR = os.environ.get("POLYBOT_DATA_DIR", ROOT)
+CONFIG_PATH = os.environ.get("POLYBOT_CONFIG", os.path.join(DATA_DIR, "config.json"))
+DB_PATH = os.environ.get("POLYBOT_DB", os.path.join(DATA_DIR, "polybot.db"))
+KILL_PATH = os.path.join(DATA_DIR, "KILL")          # touch this file = every module stops placing orders
+CALIBRATION_PATH = os.path.join(DATA_DIR, "calibration.json")
+REPORT_PATH = os.path.join(DATA_DIR, "report-latest.txt")
 
 MODES = ("off", "paper", "signal", "live")
 

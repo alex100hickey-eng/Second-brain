@@ -3795,3 +3795,85 @@ def test_a_fill_does_not_get_its_market_swapped_out(monkeypatch):
     out = mk.tick()
     assert any(s.market == victim for s in out["signals"])
     assert victim in {q["market"] for q in led.maker_quotes()}
+
+
+# ---- the server move ------------------------------------------------------------------------------
+def test_runtime_files_live_in_the_data_dir_which_defaults_to_the_code_dir():
+    from polybot import calibration as cal, compounding, pairs, runner as runner_mod
+    if not os.environ.get("POLYBOT_DATA_DIR"):
+        assert config.DATA_DIR == config.ROOT
+    for p in (config.DB_PATH, config.CONFIG_PATH, config.KILL_PATH, config.CALIBRATION_PATH, pairs.PAIRS_PATH,
+              cal.SAMPLES_PATH, compounding.STATE_PATH, runner_mod.JOBS_PATH):
+        assert os.path.dirname(p) == config.DATA_DIR
+    assert runner_mod.APP_DIR == os.path.dirname(config.ROOT)       # not ~/second-brain/...
+
+
+def test_the_lease_keeps_two_loops_off_one_account():
+    from polybot import lease
+
+    class Store:
+        def __init__(self):
+            self.rows = {}
+        def _load_state(self, key):
+            return dict(self.rows.get(key, {}))
+        def _save_state(self, st):
+            self.rows[st["key"]] = dict(st)
+
+    s, now = Store(), time.time()
+    assert lease.conflict("server", lease.holder(s), now) is None               # nobody holds it
+    lease.renew("mac:alex", s, now=now)
+    assert "mac:alex holds" in lease.conflict("server", lease.holder(s), now + 60)
+    assert lease.conflict("mac:alex", lease.holder(s), now + 60) is None       # its own lease
+    assert lease.conflict("server", lease.holder(s), now + lease.LEASE_TTL_S + 1) is None   # gone quiet
+    lease.release("mac:alex", s)
+    assert lease.holder(s) == {}
+
+
+def test_the_server_supervisor_stays_off_until_every_switch_is_set(tmp_path, monkeypatch):
+    import polybot_supervisor as sup
+    env = {"POLYBOT_ON_SERVER": "1", "POLYBOT_DATA_DIR": str(tmp_path), "POLYMARKET_KEY_ID": "k",
+           "POLYMARKET_SECRET_KEY": "s", "SUPABASE_URL": "u", "SUPABASE_KEY": "k"}
+    assert sup.enabled({})[0] is False                                           # the default: off
+    assert "no ledger" in sup.enabled(env)[1]
+    (tmp_path / "polybot.db").write_text("")
+    assert sup.enabled(env) == (True, "ok")
+    assert "POLYMARKET_KEY_ID" in sup.enabled(dict(env, POLYMARKET_KEY_ID=""))[1]
+
+    # one loop per container, restarted when it exits, and it waits while another node holds the lease
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+    stop, runs, sleeps = __import__("threading").Event(), [], []
+
+    class Proc:
+        def wait(self):
+            runs.append(1)
+            if len(runs) >= 2:
+                stop.set()
+            return 1
+
+    monkeypatch.setattr(sup, "_other_node_live", lambda: None)
+    sup.supervise(stop, spawn=lambda *a, **k: Proc(), sleep=sleeps.append, log=lambda *_: None)
+    assert len(runs) == 2 and sleeps[0] == 60.0                                  # quick death backs off
+    held = open(tmp_path / ".supervisor.lock", "w")
+    import fcntl
+    fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)                            # another worker has it
+    msgs = []
+    sup.supervise(__import__("threading").Event(), spawn=lambda *a, **k: Proc(), sleep=sleeps.append, log=msgs.append)
+    assert "already runs the loop" in msgs[0]
+
+
+def test_the_migration_catches_any_change_to_the_evidence(tmp_path):
+    from polybot import migrate
+    from polybot.strategies.base import Signal
+    src = tmp_path / "src"
+    src.mkdir()
+    led = Ledger(str(src / "polybot.db"))
+    led.add_signal(Signal("bucket_sum", "us", "m", "x", "BUY_YES", 0.5, 10, 1, "r"), "paper")
+    led.conn.close()
+    (src / "config.json").write_text(json.dumps({"gate_since_ts": 0.0}))
+    snap = tmp_path / "snap"
+    m = migrate.snapshot(str(snap), data_dir=str(src))
+    assert m["fingerprint"]["modules"]["bucket_sum"]["signals"] == 1
+    assert migrate.verify(str(snap), data_dir=str(snap)) == []
+    (snap / "config.json").write_text(json.dumps({"gate_since_ts": 5.0}))             # a "reset" in transit
+    assert any("gate_since_ts changed" in p for p in migrate.verify(str(snap), data_dir=str(snap)))

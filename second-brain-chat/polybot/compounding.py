@@ -24,7 +24,7 @@ from zoneinfo import ZoneInfo
 
 from . import config
 
-STATE_PATH = os.path.join(config.ROOT, "compounding-state.json")
+STATE_PATH = os.path.join(config.DATA_DIR, "compounding-state.json")
 CAPS_FIELDS = ("max_per_market_usd", "max_exposure_usd", "daily_loss_stop_usd", "bankroll_floor_usd")
 CFG_FIELDS = ("arb_max_set_cost_usd", "arb_max_risk_usd")
 ET = ZoneInfo("America/New_York")

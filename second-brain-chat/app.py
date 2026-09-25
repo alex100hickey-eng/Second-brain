@@ -6386,6 +6386,18 @@ else:
     print("Money operator OFF on this node (server-only; MONEY_OPERATOR=0 also disables it).")
 
 
+# The polybot loop, on the server — OFF unless POLYBOT_ON_SERVER=1 and its persistent volume, ledger and
+# keys are in place (polybot_supervisor.enabled). A supervised CHILD PROCESS, not a thread: polybot's
+# watchdog exits its process on a stall, which in a thread would take the web app down. Runbook:
+# second-brain-chat/polybot/SERVER_MOVE.md.
+if task_manager.RUNTIME == "server" and not TEST_MODE:
+    try:
+        import polybot_supervisor
+        polybot_supervisor.start()
+    except Exception as _e:
+        print(f"polybot supervisor failed to start: {_e}")
+
+
 # ------------------------------------------------------------
 # Mail intake worker. iMessage has had a background watcher since day one, but
 # every mail scan (personal Gmail, school Gmail, iCloud) existed ONLY as a tool
