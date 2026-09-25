@@ -20,6 +20,7 @@ import os
 import sys
 import time
 import json
+import re
 import faulthandler
 import traceback
 from contextlib import contextmanager
@@ -205,6 +206,70 @@ def _beat(name: str, stale_after_s: int, note: str = "") -> None:
 # scorecard can read the loop wherever it runs: once it is on the server, the Mac's ledger and
 # loop.log are a stale copy (scripts/money_progress.py, polybot/SERVER_MOVE.md). 0.02 s to build.
 REPORT_PUBLISH_S = 900.0
+
+
+LOOP_LOG_PATH = os.path.join(config.DATA_DIR, "loop.log")
+_STAMP_RE = re.compile(r"^(\d\d)-(\d\d) (\d\d):(\d\d):(\d\d) ")
+
+
+def backfill_uptime(ledger, log_path: str = LOOP_LOG_PATH, days: int = 7, now: float | None = None) -> int:
+    """Once, into an EMPTY loop_alive table: every minute loop.log has a stamped line for, over the
+    last `days`. The loop stamps every line (_stamped_log); a crash loop writes only unstamped
+    tracebacks, so it still reads as the gap it was. Returns the minutes written."""
+    if ledger.conn.execute("SELECT 1 FROM loop_alive LIMIT 1").fetchone():
+        return 0
+    now = time.time() if now is None else now
+    since, year = now - days * 86400, datetime.fromtimestamp(now, ET).year
+    minutes = set()
+    try:
+        with open(log_path, errors="replace") as f:
+            for line in f:
+                m = _STAMP_RE.match(line)
+                if not m:
+                    continue
+                mo, d, h, mi, se = map(int, m.groups())
+                try:
+                    t = datetime(year, mo, d, h, mi, se, tzinfo=ET).timestamp()
+                    if t > now + 3600:                  # a December line read in January
+                        t = datetime(year - 1, mo, d, h, mi, se, tzinfo=ET).timestamp()
+                except ValueError:
+                    continue
+                if since <= t <= now:
+                    minutes.add(int(t // 60) * 60.0)
+    except OSError:
+        return 0
+    ledger.mark_alive_many(sorted(minutes))
+    return len(minutes)
+
+
+def uptime_line(ledger, days: int = 1, now: float | None = None, max_gaps: int = 5) -> str:
+    """"loop alive X of Y quarter-hours (gaps: ...)", so a sleeping Mac shows in the report itself.
+
+    On 2026-09-25 the lid was shut 09:10-12:27 and the only record was pmset; the report read like a
+    quiet day. The longest gaps are listed, in time order, as local (ET) clock times."""
+    now = time.time() if now is None else now
+    try:
+        u = ledger.uptime(now - days * 86400, now)
+    except Exception as exc:                        # a report must never fail on its footnote
+        return f"loop uptime: unavailable ({type(exc).__name__})"
+    fmt = "%H:%M" if days <= 1 else "%m-%d %H:%M"
+    clock = lambda t: datetime.fromtimestamp(t, ET).strftime(fmt)
+
+    def span(a, b):
+        m = int((b - a) // 60)
+        return f"{clock(a)}-{clock(b)} ({m // 60}h{m % 60:02d}m)" if m >= 60 else f"{clock(a)}-{clock(b)} ({m}m)"
+    head = f"loop alive {u['alive']} of {u['total']} quarter-hours"
+    if u["total"]:
+        head += f" ({u['alive'] / u['total']:.0%})"
+    if u["tracked_since"] is not None and u["alive"] == 0 and not u["gaps"]:
+        return "loop uptime: not tracked yet (starts with the next loop tick)"
+    if u["tracked_since"] is not None:
+        head += f", tracked since {clock(u['tracked_since'])}"
+    if not u["gaps"]:
+        return head + " — no gaps"
+    longest = sorted(sorted(u["gaps"], key=lambda g: g[1] - g[0], reverse=True)[:max_gaps])
+    more = len(u["gaps"]) - len(longest)
+    return head + " — gaps: " + ", ".join(span(a, b) for a, b in longest) + (f" (+{more} shorter)" if more > 0 else "")
 
 
 def report_publish_facts(runner) -> dict:
@@ -1124,7 +1189,8 @@ class Runner:
         return line
 
     def report_text(self, days: int = 1) -> str:
-        return self.ledger.report(days) + "\n  " + compounding.describe(self.compounding, self.cfg)
+        return (self.ledger.report(days) + "\n  " + uptime_line(self.ledger, days) + "\n  "
+                + compounding.describe(self.compounding, self.cfg))
 
     def report(self, days: int = 1) -> str:
         text = self.report_text(days)
@@ -1302,6 +1368,10 @@ class Runner:
         finally:
             self._heartbeat = time.time()
             _arm_hard_watchdog(WATCHDOG_HARD_S)
+            try:
+                self.ledger.mark_alive()          # a 10-minute job is the loop working, not a gap
+            except Exception:
+                pass
 
     def _start_watchdog(self, limit_s: float = 240.0) -> None:
         """Kill the process if the loop stops making progress, so launchd can restart it.
@@ -1356,6 +1426,12 @@ class Runner:
             time.sleep(60)
             return
         self.log(f"polybot loop started on {me} (Ctrl+C to stop)")
+        try:
+            n = backfill_uptime(self.ledger)
+            if n:
+                self.log(f"  uptime: backfilled {n} minute(s) of the last 7 days from loop.log")
+        except Exception:
+            pass
         last_lease = 0.0
         last_report_pub = 0.0
         done = set()
@@ -1374,6 +1450,10 @@ class Runner:
             key = now.strftime("%Y-%m-%d %H:%M")
             if key not in done:
                 done.add(key)
+                try:
+                    self.ledger.mark_alive()          # the uptime line in the daily report
+                except Exception:
+                    pass
                 try:
                     self.reload_config_if_changed()
                     # weather_lock first: it is the only module the 208-city-day backtest paid

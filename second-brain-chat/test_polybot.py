@@ -4218,3 +4218,93 @@ def test_a_missed_0700_report_runs_at_the_next_tick_and_only_once(monkeypatch, t
     r._ran("daily_report")
     assert nudged == ["polybot daily"] and (tmp_path / "report-latest.txt").exists()
     assert not r._due("daily_report", datetime(2026, 9, 25, 12, 0, tzinfo=et), (7,))
+
+
+def test_uptime_counts_quarters_and_names_the_gaps():
+    from polybot import runner as runner_mod
+    led = _ledger()
+    et = ZoneInfo("America/New_York")
+    day0 = datetime(2026, 9, 25, 0, 0, tzinfo=et).timestamp()
+    now = day0 + 86400
+    # alive every minute except 09:10-12:27 (the lid) and 01:40-02:28 (a restart)
+    t = now - 86400 + 60
+    while t < now:
+        lt = datetime.fromtimestamp(t, et)
+        hm = lt.hour * 60 + lt.minute
+        if not (9 * 60 + 10 < hm < 12 * 60 + 27) and not (1 * 60 + 40 < hm < 2 * 60 + 28):
+            led.mark_alive(t)
+        t += 60
+    u = led.uptime(now - 86400, now)
+    # dead quarters: 09:15-12:15 (12) and 01:45-02:15 (2); the edge quarters keep >= 2 ticks
+    assert u["total"] == 96 and u["alive"] == 82 and len(u["gaps"]) == 2 and u["tracked_since"] is None
+    line = runner_mod.uptime_line(led, 1, now=now)
+    assert line.startswith("loop alive ") and "of 96 quarter-hours" in line
+    assert "09:10-12:27 (3h17m)" in line and "01:40-02:28 (48m)" in line
+
+
+def test_uptime_on_a_fresh_ledger_is_not_downtime():
+    from polybot import runner as runner_mod
+    led = _ledger()
+    now = 1_800_000_000.0
+    assert "not tracked yet" in runner_mod.uptime_line(led, 1, now=now)
+    for k in range(30, 0, -1):                       # a loop that started 30 minutes ago and never stopped
+        led.mark_alive(now - 60 * k)
+    line = runner_mod.uptime_line(led, 1, now=now)
+    assert "tracked since" in line and "no gaps" in line
+
+
+def test_the_report_carries_the_uptime_line(monkeypatch, tmp_path):
+    from polybot import runner as runner_mod
+    monkeypatch.setattr(config, "REPORT_PATH", str(tmp_path / "report-latest.txt"))
+    r = runner_mod.Runner(_cfg(), _ledger(), log=lambda *_: None)
+    text = r.report(1)
+    assert "loop uptime: not tracked yet" in text                  # a fresh ledger says so, not "0 of 96"
+    now = time.time()
+    for k in range(40, 0, -1):
+        r.ledger.mark_alive(now - 60 * k)
+    assert "loop alive " in r.report(1)
+
+
+def test_uptime_backfills_once_from_the_stamped_log_and_a_crash_loop_stays_a_gap(tmp_path):
+    from polybot import runner as runner_mod
+    led = _ledger()
+    et = ZoneInfo("America/New_York")
+    now = datetime(2026, 9, 25, 15, 0, tzinfo=et).timestamp()
+    lines = []
+    t = now - 6 * 3600
+    while t < now:
+        lt = datetime.fromtimestamp(t, et)
+        if not (lt.hour == 10):                                   # 10:00-10:59: a crash loop
+            lines.append(lt.strftime("%m-%d %H:%M:%S") + "   us nyc 2026-09-25 high [KNYC/cli] running=64")
+        else:
+            lines.append("Traceback (most recent call last):")
+        t += 60
+    log = tmp_path / "loop.log"
+    log.write_text("\n".join(lines) + "\n")
+    n = runner_mod.backfill_uptime(led, str(log), now=now)
+    assert n > 250 and runner_mod.backfill_uptime(led, str(log), now=now) == 0     # once only
+    u = led.uptime(now - 6 * 3600, now)
+    assert len(u["gaps"]) == 1
+    a, b = u["gaps"][0]
+    assert datetime.fromtimestamp(a, et).strftime("%H:%M") == "09:59" and datetime.fromtimestamp(b, et).strftime("%H:%M") == "11:00"
+
+
+def test_a_dark_wake_minute_does_not_make_a_quarter_alive():
+    led = _ledger()
+    et = ZoneInfo("America/New_York")
+    now = datetime(2026, 9, 25, 13, 0, tzinfo=et).timestamp()
+    t = now - 4 * 3600
+    while t < now - 3 * 3600:                                  # awake 09:00-10:00
+        led.mark_alive(t)
+        t += 60
+    for wake in (10 * 60 + 35, 10 * 60 + 53, 11 * 60 + 9, 11 * 60 + 56):    # one-minute dark wakes
+        led.mark_alive(datetime(2026, 9, 25, wake // 60, wake % 60, tzinfo=et).timestamp())
+    t = datetime(2026, 9, 25, 12, 27, tzinfo=et).timestamp()     # lid opened
+    while t < now:
+        led.mark_alive(t)
+        t += 60
+    u = led.uptime(now - 4 * 3600, now)
+    assert len(u["gaps"]) == 1
+    a, b = u["gaps"][0]
+    assert datetime.fromtimestamp(a, et).strftime("%H:%M") == "09:59"
+    assert datetime.fromtimestamp(b, et).strftime("%H:%M") in ("12:15", "12:27")
