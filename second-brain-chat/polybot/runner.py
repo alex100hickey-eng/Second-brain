@@ -81,6 +81,7 @@ def _days_until(iso: str | None) -> float | None:
         return None
 from .strategies.bucket_sum import (consume_levels, BucketSum, arb_check, arb_possible, explain_no_set, unpriced,
                                     worth_confirming)
+from .strategies.fed_lag import FedLag
 from .strategies.hold_favorites import HoldFavorites
 from .strategies.leadlag import LeadLag
 from .strategies import maker_rewards as maker_mod
@@ -318,6 +319,7 @@ class Runner:
             "leadlag": LeadLag(self.cfg, self.us, self.pair_rec, quote_fn=self.pair_rec.quote,
                                pairs_fn=self.leadlag_pairs),
             "maker_rewards": MakerRewards(self.cfg, self.us, self.ledger),
+            "fed_lag": FedLag(self.cfg, self.us, self.pair_rec, self.ledger),
         }
 
     # ---- paper price paths per venue ------------------------------------------------------
@@ -624,7 +626,8 @@ class Runner:
         # so five cities scanned slowly is worth less than three scanned now — and on 2026-09-19 a
         # pass stalled after its first city and held the loop for fifteen minutes, which no amount
         # of cadence tuning upstream can fix. Abandon the tail and let the next tick start clean.
-        deadline = time.time() + self.cfg.arb_pass_budget_s if venue == "us" else None
+        budget = self._pass_budget_s(light)
+        deadline = time.time() + budget if venue == "us" else None
         # Ask for every event this pass needs in ONE request before touching the first city. Ten
         # separate lookups was more than the venue's whole per-window quota, so the pass spent its
         # budget on housekeeping and finished a minute late — see prefetch_weather_events.
@@ -666,9 +669,33 @@ class Runner:
                 self.log(f"  {venue} {city} {kind} +{day_offset}d: scan failed ({exc}) — "
                          f"skipping this book, continuing the sweep")
         if skipped:
-            self.log(f"  us scan over its {self.cfg.arb_pass_budget_s:.0f}s budget — skipped "
+            self.log(f"  us scan over its {budget:.0f}s budget — skipped "
                      f"{skipped} city-day(s); next tick starts fresh")
         return n
+
+    def _pass_budget_s(self, light: bool, now=None) -> float:
+        """The arb sweep (light) always gets arb_pass_budget_s; a weather pass gets the longer
+        weather_pass_budget_s outside ARB_HOURS, where no arb sweep is waiting behind it."""
+        hour = (now or datetime.now(ET)).hour
+        if light or hour in ARB_HOURS:
+            return self.cfg.arb_pass_budget_s
+        return max(self.cfg.arb_pass_budget_s, getattr(self.cfg, "weather_pass_budget_s", 0.0))
+
+    def _slot_due(self, name: str, now, period_min: int, offset_min: int, grace_min: int | None = None) -> bool:
+        """Once per slot: slots are `period_min` long and start `offset_min` past the hour (US weather:
+        15, 10 -> :10 :25 :40 :55; offshore weather: 60, 55). Due at the slot's own minute, or at the
+        first minute after it the loop is free, within `grace_min` (default: the whole slot).
+
+        The scans used to fire only when the loop happened to be free AT that minute (`minute % 15 ==
+        10`). A long job or a restart spanning it lost the whole quarter: 37 of the 63 quarters with
+        no US weather scan on 09-23/24 had no loop activity at :10-:12 at all."""
+        slots = self.__dict__.setdefault("_slots", {})
+        m = int(now.timestamp() // 60) - offset_min           # ET offsets are whole hours: minute-exact
+        slot, into = divmod(m, period_min)
+        if slots.get(name) == slot or into > (period_min - 1 if grace_min is None else grace_min):
+            return False
+        slots[name] = slot
+        return True
 
     def _scan_one(self, city, kind, day_offset, wanted, light, venue, date) -> int:
         """One (city, kind, day): build the context, snapshot the book, run the wanted modules."""
@@ -938,10 +965,20 @@ class Runner:
     def record_pairs(self) -> int:
         """Sample both sides of every recorded pair, then run leadlag on the fresh paths."""
         rows = self.leadlag_pairs()
-        if not (rows or self.watched_us_events()) or not self.us.available:
+        if not self.us.available:
             return 0
-        got = self.pair_rec.record(rows, extra_events=self.watched_us_events())
-        n = self.scan_other(modules=["leadlag"])
+        fed = self.other_modules.get("fed_lag")
+        fed_on = fed is not None and self.cfg.mode("fed_lag") != "off"
+        if fed_on:
+            fed.record_ref()                          # one Kalshi read; its own API, not the US budget
+        # watched events first: the recorder takes 20 extras at most, and the fed events must never
+        # push out a book an open hold_favorites position needs to fill and exit
+        extra = self.watched_us_events()
+        extra += [e for e in (fed.us_events() if fed_on else []) if e not in extra]
+        if not (rows or extra):
+            return 0
+        got = self.pair_rec.record(rows, extra_events=extra)
+        n = self.scan_other(modules=["leadlag", "fed_lag"])
         if time.time() - getattr(self, "_pairs_logged", 0.0) >= 3600:
             self._pairs_logged = time.time()
             self.log(f"  pairs: recording {got['events']} US events every {pairs.RECORD_INTERVAL_S:.0f}s — "
@@ -962,10 +999,11 @@ class Runner:
         """US events holding an open position that nothing else samples (hold_favorites' US path):
         paper needs their books to fill, mark and exit them."""
         out = []
-        for r in self.ledger.open_signals(module="hold_favorites", venue="us"):
-            ev = json.loads(r["meta"] or "{}").get("us_event")
-            if ev and ev not in out:
-                out.append(ev)
+        for module in ("hold_favorites", "fed_lag"):
+            for r in self.ledger.open_signals(module=module, venue="us"):
+                ev = json.loads(r["meta"] or "{}").get("us_event")
+                if ev and ev not in out:
+                    out.append(ev)
         return out
 
     def record_maker(self) -> int:
@@ -1071,6 +1109,19 @@ class Runner:
         if changed:
             self.log("  config reloaded: " + ", ".join(f"{m} {a}->{b}" for m, (a, b) in changed.items()))
         return True
+
+    def daily_report(self) -> str:
+        """The 07:00 job: the report into loop.log, auto-promote if Alex turned it on, the phone line."""
+        self.compounding = compounding.apply(self.cfg, self.ledger)
+        self.log(self.report(1))
+        promoted = self.promote() if self.cfg.auto_promote else []
+        line = self.ledger.summary(1)
+        if not promoted:
+            ready = [m for m in config.MODULES if self.cfg.mode(m) == "paper" and self.ledger.promotion_check(m)[0]]
+            if ready:
+                line += f" — say the word to go live: {', '.join(ready)}"
+        notify.nudge("polybot daily", line, key="polybot-daily", log=self.log)
+        return line
 
     def report_text(self, days: int = 1) -> str:
         return self.ledger.report(days) + "\n  " + compounding.describe(self.compounding, self.cfg)
@@ -1329,7 +1380,7 @@ class Runner:
                     # (+29.8% ROI vs weather_hold -14.5%), and in paper the per-market cap let
                     # whoever scanned first take the bucket — weather_hold refused 95 lock signals
                     # that way, starving the one strategy worth promoting.
-                    if now.minute == 55:
+                    if self._slot_due("weather_offshore", now, 60, 55, grace_min=20):
                         self.scan_weather(modules=["weather_lock", "weather_model_update", "weather_hold", "weather_obs"])
                     # The US venue is scanned four times an hour, not once. It is the only venue that
                     # can ever hold real money and it carries ~1 signal a day — the scarcest resource
@@ -1338,7 +1389,7 @@ class Runner:
                     # fallback); unwrapping the event envelope and remembering 404s for an hour cut
                     # that to ~5, which is what buys the extra passes without walking back into the
                     # Cloudflare rate limit that banned this IP on 2026-09-17.
-                    if now.minute % 15 == 10 and self.us.available:
+                    if self.us.available and self._slot_due("weather_us", now, 15, 10):
                         self.scan_weather(modules=["weather_lock", "weather_model_update", "weather_hold", "weather_obs"], venue="us")
                     # Arbs are brief: 12 of the 16 buy-side episodes on record were seen in a
                     # single observed minute, and the observation cadence WAS five minutes — so a
@@ -1392,16 +1443,12 @@ class Runner:
                             n = self.scan_hold_favorites_us()
                         self._ran("hold_favorites_us")
                         self.log(f"  hold_favorites (US books): {n} signal(s)")
-                    if now.hour == 7 and now.minute == 0:
-                        self.compounding = compounding.apply(self.cfg, self.ledger)
-                        self.log(self.report(1))
-                        promoted = self.promote() if self.cfg.auto_promote else []
-                        line = self.ledger.summary(1)
-                        if not promoted:
-                            ready = [m for m in config.MODULES if self.cfg.mode(m) == "paper" and self.ledger.promotion_check(m)[0]]
-                            if ready:
-                                line += f" — say the word to go live: {', '.join(ready)}"
-                        notify.nudge("polybot daily", line, key="polybot-daily", log=self.log)
+                    # 07:00, or the first tick after it: on 2026-09-25 the loop was down 06:13-07:44
+                    # and the exact-minute report simply did not happen that day.
+                    if self._due("daily_report", now, (7,)):
+                        self._attempt("daily_report")
+                        self.daily_report()
+                        self._ran("daily_report")
                     # Re-discover the catalogue twice a day (~20 search calls) and promote any
                     # series a settled instance has now proved. The registry compounds: every
                     # proof is permanent and every future instance of that series is tradable.

@@ -378,6 +378,7 @@ class PairRecorder:
         extra_set = set(extra)
         for slug, (bid, ask) in us_quotes.items():      # the watched events: US books only
             if market_event.get(slug) in extra_set and (bid is not None or ask is not None):
+                self.quotes[slug] = (ts, bid, ask)
                 self._push("us", slug, bid, ask, ts)
                 got["watched"] = got.get("watched", 0) + 1
         try:
