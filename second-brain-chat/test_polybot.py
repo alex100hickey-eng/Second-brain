@@ -4072,3 +4072,104 @@ def test_account_value_is_unknown_not_cash_only_when_positions_fail(monkeypatch)
     assert notes and "positions unreadable" in notes[0]
     monkeypatch.setattr(usvenue.USVenue, "positions", lambda self: [{"cost": {"value": "187.0"}}])
     assert v.account_value_usd() == 187.41
+
+
+_KALSHI = {"events": [{"event_ticker": "KXFEDDECISION-26OCT", "strike_date": "2026-10-28T18:00:00Z", "markets": [
+    {"ticker": "KXFEDDECISION-26OCT-H25", "status": "active", "yes_bid_dollars": "0.6700", "yes_ask_dollars": "0.6800"},
+    {"ticker": "KXFEDDECISION-26OCT-C25", "status": "active", "yes_bid_dollars": "0.0000", "yes_ask_dollars": "0.0100"},
+    {"ticker": "KXFEDDECISION-26OCT-H26", "status": "active", "yes_bid_dollars": "0.9900", "yes_ask_dollars": "1.0000"},
+    {"ticker": "KXFEDDECISION-26OCT-XYZ", "status": "active", "yes_bid_dollars": "0.5", "yes_ask_dollars": "0.6"}]}]}
+
+
+def test_kalshi_fed_events_parse_and_map_to_us_slugs():
+    from polybot.feeds import kalshi
+    evs = kalshi.fed_events(get=lambda url, params: _KALSHI)
+    assert evs[0]["date"] == "2026-10-28" and [m["outcome"] for m in evs[0]["markets"]] == ["H25", "C25", "H26"]
+    h25, c25, h26 = evs[0]["markets"]
+    assert (h25["bid"], h25["ask"]) == (0.67, 0.68)
+    assert c25["bid"] is None and h26["ask"] is None            # no resting order reads None, never 0 or 1
+    assert kalshi.us_market_slug("2026-10-28", "H25") == "rdc-usfed-fomc-2026-10-28-hike25"
+    assert kalshi.us_event_slug("2026-10-28") == "usfed-fomc-2026-10-28"
+
+
+class _FakeUSFed:
+    available, why_unavailable = True, None
+
+    def __init__(self):
+        self.books = {}             # us market slug -> (bid, ask, status)
+
+    def events_by_slug(self, slugs):
+        out = {}
+        for ev in slugs:
+            ms = [{"slug": m, "status": st, "closed": st.endswith("HALTED"),       # halted books read closed
+                   "bestBidQuote": {"value": str(b)}, "bestAskQuote": {"value": str(a)}}
+                  for m, (b, a, st) in self.books.items() if m.startswith("rdc-" + ev)]
+            if ms:
+                out[ev] = {"slug": ev, "markets": ms}
+        return out
+
+
+def _fed_setup(kalshi_seq, us_books, held=()):
+    from polybot import pairs as pairs_mod
+    from polybot.strategies.fed_lag import FedLag
+    clock = {"t": 1_800_000_000.0}
+    us = _FakeUSFed()
+    us.books = us_books
+    led = _ledger()
+    for m in held:
+        led.add_signal(Signal("bucket_sum", "us", m, "x", "BUY_YES", 0.5, 10, 1, "r", arb=True, taker=True), "paper")
+    rec = pairs_mod.PairRecorder(led, us, clock=lambda: clock["t"], offshore_prices=lambda toks: {})
+    it = iter(kalshi_seq)
+    fed = FedLag(_cfg(), us, rec, led, events_fn=lambda: next(it), clock=lambda: clock["t"])
+
+    def tick():
+        fed.record_ref()
+        rec.record([], extra_events=fed.us_events())
+        clock["t"] += 40
+        return fed.scan()
+    return tick, fed, rec
+
+
+def _k(bid, ask):
+    return [{"date": "2026-10-28", "event": "E", "markets": [
+        {"ticker": "KXFEDDECISION-26OCT-H25", "outcome": "H25", "bid": bid, "ask": ask}]}]
+
+
+def test_fed_lag_trades_the_us_book_toward_a_kalshi_move():
+    books = {"rdc-usfed-fomc-2026-10-28-hike25": (0.67, 0.68, "MARKET_STATUS_OPEN")}
+    tick, fed, rec = _fed_setup([_k(0.67, 0.68), _k(0.67, 0.68), _k(0.72, 0.73), _k(0.73, 0.74)], books)
+    got = [tick() for _ in range(4)]
+    sigs = [s for g in got for s in g]
+    assert got[0] == got[1] == [] and sigs            # nothing until Kalshi moves; repeats are handle()'s to dedupe
+    s = sigs[0]
+    assert s.module == "fed_lag" and s.side == "BUY_YES" and s.market == "rdc-usfed-fomc-2026-10-28-hike25"
+    assert s.price == 0.68 and s.meta["reference"] == "kalshi" and s.meta["us_event"] == "usfed-fomc-2026-10-28"
+    assert s.exit == "reference" and s.category == "economics"
+
+
+def test_fed_lag_skips_a_halted_book_and_a_market_another_module_holds():
+    move = [_k(0.67, 0.68), _k(0.67, 0.68), _k(0.72, 0.73), _k(0.73, 0.74)]
+    halted = {"rdc-usfed-fomc-2026-10-28-hike25": (0.67, 0.68, "MARKET_STATUS_HALTED")}
+    tick, _, rec = _fed_setup(list(move), halted)
+    assert [s for _ in range(4) for s in tick()] == [] and rec.get("us", "rdc-usfed-fomc-2026-10-28-hike25") == []
+    open_ = {"rdc-usfed-fomc-2026-10-28-hike25": (0.67, 0.68, "MARKET_STATUS_OPEN")}
+    tick, _, _ = _fed_setup(list(move), open_, held=["rdc-usfed-fomc-2026-10-28-hike25"])   # bucket_sum's leg
+    assert [s for _ in range(4) for s in tick()] == []
+
+
+def test_fed_lag_is_a_paper_module_by_default_and_its_positions_stay_watched():
+    from polybot import runner as runner_mod
+    assert "fed_lag" in config.MODULES and config.load("/nonexistent.json").mode("fed_lag") == "paper"
+    r = runner_mod.Runner(_cfg(), _ledger(), log=lambda *_: None)
+    r.ledger.add_signal(Signal("fed_lag", "us", "rdc-usfed-fomc-2026-10-28-hike25", "x", "BUY_YES", 0.68, 10, 5, "r",
+                               meta={"us_event": "usfed-fomc-2026-10-28"}), "paper")
+    assert r.watched_us_events() == ["usfed-fomc-2026-10-28"]
+
+
+def test_fed_lag_reads_only_the_nearest_meetings():
+    from polybot.strategies import fed_lag as fl
+    evs = [{"date": f"2027-0{i}-15", "event": "E", "markets": [{"ticker": f"T{i}-H0", "outcome": "H0", "bid": 0.5,
+                                                                 "ask": 0.51}]} for i in range(1, 8)]
+    fed = fl.FedLag(_cfg(), _FakeUSFed(), type("R", (), {"_push": lambda *a: None})(), None, events_fn=lambda: evs[::-1])
+    fed.record_ref()
+    assert fed.us_events() == ["usfed-fomc-2027-01-15", "usfed-fomc-2027-02-15", "usfed-fomc-2027-03-15"]

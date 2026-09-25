@@ -34,6 +34,7 @@ MODULES = [
     "hold_favorites",        # H2  85-95c favorites + deadline longshot NO, sized by the calibration table
     "leadlag",               # S2/S3/S4  US book lags the offshore reference (politics; sports if enabled)
     "maker_rewards",         # M1  two-sided quotes inside the incentive spread (needs the US key)
+    "fed_lag",               # S5  US Fed-decision books lag Kalshi's (leadlag's rule, Kalshi reference)
 ]
 
 # Weather cities on Polymarket US (docs.polymarket.us/faqs/weather-faqs): settlement = NWS Daily

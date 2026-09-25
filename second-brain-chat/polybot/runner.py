@@ -81,6 +81,7 @@ def _days_until(iso: str | None) -> float | None:
         return None
 from .strategies.bucket_sum import (consume_levels, BucketSum, arb_check, arb_possible, explain_no_set, unpriced,
                                     worth_confirming)
+from .strategies.fed_lag import FedLag
 from .strategies.hold_favorites import HoldFavorites
 from .strategies.leadlag import LeadLag
 from .strategies import maker_rewards as maker_mod
@@ -318,6 +319,7 @@ class Runner:
             "leadlag": LeadLag(self.cfg, self.us, self.pair_rec, quote_fn=self.pair_rec.quote,
                                pairs_fn=self.leadlag_pairs),
             "maker_rewards": MakerRewards(self.cfg, self.us, self.ledger),
+            "fed_lag": FedLag(self.cfg, self.us, self.pair_rec, self.ledger),
         }
 
     # ---- paper price paths per venue ------------------------------------------------------
@@ -938,10 +940,20 @@ class Runner:
     def record_pairs(self) -> int:
         """Sample both sides of every recorded pair, then run leadlag on the fresh paths."""
         rows = self.leadlag_pairs()
-        if not (rows or self.watched_us_events()) or not self.us.available:
+        if not self.us.available:
             return 0
-        got = self.pair_rec.record(rows, extra_events=self.watched_us_events())
-        n = self.scan_other(modules=["leadlag"])
+        fed = self.other_modules.get("fed_lag")
+        fed_on = fed is not None and self.cfg.mode("fed_lag") != "off"
+        if fed_on:
+            fed.record_ref()                          # one Kalshi read; its own API, not the US budget
+        # watched events first: the recorder takes 20 extras at most, and the fed events must never
+        # push out a book an open hold_favorites position needs to fill and exit
+        extra = self.watched_us_events()
+        extra += [e for e in (fed.us_events() if fed_on else []) if e not in extra]
+        if not (rows or extra):
+            return 0
+        got = self.pair_rec.record(rows, extra_events=extra)
+        n = self.scan_other(modules=["leadlag", "fed_lag"])
         if time.time() - getattr(self, "_pairs_logged", 0.0) >= 3600:
             self._pairs_logged = time.time()
             self.log(f"  pairs: recording {got['events']} US events every {pairs.RECORD_INTERVAL_S:.0f}s — "
@@ -962,10 +974,11 @@ class Runner:
         """US events holding an open position that nothing else samples (hold_favorites' US path):
         paper needs their books to fill, mark and exit them."""
         out = []
-        for r in self.ledger.open_signals(module="hold_favorites", venue="us"):
-            ev = json.loads(r["meta"] or "{}").get("us_event")
-            if ev and ev not in out:
-                out.append(ev)
+        for module in ("hold_favorites", "fed_lag"):
+            for r in self.ledger.open_signals(module=module, venue="us"):
+                ev = json.loads(r["meta"] or "{}").get("us_event")
+                if ev and ev not in out:
+                    out.append(ev)
         return out
 
     def record_maker(self) -> int:
