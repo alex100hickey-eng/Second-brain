@@ -21,8 +21,10 @@ VAULT="${VAULT_SYNC_PATH:-/Users/alexhickey24/Library/Mobile Documents/com~apple
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Use the framework Python (it has supabase/dotenv); /usr/bin/python3 does not.
-PY="/Library/Frameworks/Python.framework/Versions/3.14/bin/python3"
+PY="${VAULT_SYNC_PY:-/Library/Frameworks/Python.framework/Versions/3.14/bin/python3}"
 [ -x "$PY" ] || PY="python3"
+BRCTL="${VAULT_SYNC_BRCTL:-brctl}"          # tests pass /usr/bin/true
+WAIT_TRIES="${VAULT_SYNC_WAIT_TRIES:-12}"   # 5 s each
 
 ts() { date "+%Y-%m-%dT%H:%M:%S%z"; }
 report() {  # report <level> <message> [detail]  — fail-soft, never blocks the job
@@ -50,24 +52,54 @@ fi
 # Claude/ is skipped: it is git-ignored (a local mirror of Claude Code's memory, written by
 # ~/.claude/obsidian-mirror/mirror.py), so git never reads it and an evicted copy there
 # must not fail this run.
-dataless() { find . -type f -flags +dataless -not -path './Claude/*' 2>/dev/null; }
+dataless() {
+    if [ -n "${VAULT_SYNC_FAKE_DATALESS:-}" ]; then printf '%s\n' "$VAULT_SYNC_FAKE_DATALESS"; return; fi
+    find . -type f -flags +dataless -not -path './Claude/*' 2>/dev/null
+}
+LEFT_OUT=()  # files still dataless after the wait: left out of this run
+SKIPPED=()   # tracked files still dataless after the wait: git told not to read them (below)
+clear_skips() {
+    [ ${#SKIPPED[@]} -gt 0 ] || return 0
+    git update-index --no-assume-unchanged -- "${SKIPPED[@]}" >/dev/null 2>&1 || true
+}
+trap clear_skips EXIT
 DATALESS_COUNT=$(dataless | wc -l | tr -d ' ')
 if [ "$DATALESS_COUNT" -gt 0 ]; then
     echo "[$(ts)] MATERIALIZING — $DATALESS_COUNT iCloud-evicted file(s), requesting download."
     dataless | while IFS= read -r f; do
-        brctl download "$f" >/dev/null 2>&1 || true
+        "$BRCTL" download "$f" >/dev/null 2>&1 || true
     done
-    for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do   # wait up to ~60s for iCloud
-        sleep 5
+    i=0
+    while [ "$i" -lt "$WAIT_TRIES" ]; do   # wait up to ~60s for iCloud
+        i=$((i + 1))
+        [ -n "${VAULT_SYNC_FAKE_DATALESS:-}" ] || sleep 5
         DATALESS_COUNT=$(dataless | wc -l | tr -d ' ')
         [ "$DATALESS_COUNT" -eq 0 ] && break
     done
     if [ "$DATALESS_COUNT" -gt 0 ]; then
-        echo "[$(ts)] ERROR — $DATALESS_COUNT evicted file(s) still dataless after 60s; skipping this run."
-        report error "iCloud-evicted vault files failed to materialize" "$DATALESS_COUNT still dataless"
-        exit 1
+        # This used to skip the WHOLE run. On 2026-09-24 seven files iCloud would not give
+        # back (they read empty; git: "short read while indexing") stopped every sync from
+        # 12:19 on, so nothing written after that reached git, and everything that reads the
+        # vault's git copy as a fallback (the send gate, reply watch, the 07:30 static-first
+        # backstop) read a copy twelve hours old. A dataless file has no local edit to lose:
+        # iCloud only evicts content that is safely in the cloud. So leave just those files
+        # out of this run and sync everything else. The .git pointer file is the exception:
+        # without it there is no repo, so that still stops the run.
+        while IFS= read -r f; do
+            [ -n "$f" ] && LEFT_OUT+=("${f#./}")
+        done < <(dataless)
+        for f in "${LEFT_OUT[@]}"; do
+            if [ "$f" = ".git" ]; then
+                echo "[$(ts)] ERROR — the .git pointer file is still dataless after the wait; skipping this run."
+                report error "vault .git pointer evicted and not materializing" "$VAULT/.git"
+                exit 1
+            fi
+        done
+        echo "[$(ts)] PARTIAL — $DATALESS_COUNT evicted file(s) still dataless after the wait; syncing everything else, leaving out: ${LEFT_OUT[*]}"
+        report warning "iCloud-evicted vault files left out of this sync" "$DATALESS_COUNT still dataless: ${LEFT_OUT[*]}"
+    else
+        echo "[$(ts)] MATERIALIZED — all evicted files downloaded; proceeding."
     fi
-    echo "[$(ts)] MATERIALIZED — all evicted files downloaded; proceeding."
 fi
 
 # Detect the iCloud .git eviction explicitly, before any mutating command.
@@ -88,12 +120,26 @@ fi
 # failure is NOT fatal: pushing local work still beats skipping the run, and the
 # server's own push (if it lands first) will simply make the next push a no-fast-forward
 # that this script reports rather than hides.
+# Files left out above: excluded from `git add`, and the tracked ones marked assume-unchanged
+# so git does not read them at all this run. Without the mark, a tracked file whose stat info
+# changed on eviction is re-read by the index refresh in stash/commit, and the short read fails
+# the whole commit even with the file excluded from `git add` (seen 2026-09-25). The trap
+# clears the mark on exit, so a later real edit to the file is picked up as usual.
+EXCLUDES=()
+for f in ${LEFT_OUT[@]+"${LEFT_OUT[@]}"}; do
+    EXCLUDES+=(":(exclude)$f")
+    git ls-files --error-unmatch -- "$f" >/dev/null 2>&1 && SKIPPED+=("$f")
+done
+if [ ${#SKIPPED[@]} -gt 0 ]; then
+    git update-index --assume-unchanged -- "${SKIPPED[@]}" >/dev/null 2>&1 || true
+fi
+
 if ! git pull --rebase --autostash 2>&1; then
     echo "[$(ts)] WARN — git pull failed; continuing with local commit/push."
     report warning "vault pull failed (continuing)" "$VAULT"
 fi
 
-if ! git add -A 2>&1; then
+if ! git add -A -- . ${EXCLUDES[@]+"${EXCLUDES[@]}"} 2>&1; then
     echo "[$(ts)] ERROR — git add failed."
     report error "git add failed" "$VAULT"
     exit 1
@@ -118,4 +164,4 @@ if ! git push origin main 2>&1; then
 fi
 
 echo "[$(ts)] SYNCED — vault changes committed and pushed to GitHub."
-beat "synced"
+if [ ${#EXCLUDES[@]} -gt 0 ]; then beat "synced (${#EXCLUDES[@]} dataless left out)"; else beat "synced"; fi
