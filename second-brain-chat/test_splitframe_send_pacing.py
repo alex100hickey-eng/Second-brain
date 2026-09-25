@@ -213,6 +213,18 @@ def test_the_switch_restores_the_shared_cap_in_the_sender(run):
     assert sent == [] and "ceiling reached" in log
 
 
+def test_the_sender_takes_its_ceiling_from_the_bounce_guarded_rule(monkeypatch):
+    monkeypatch.setattr(sfs, "_daily_module", lambda: types.SimpleNamespace(effective_ceiling=lambda: (25, "clean")))
+    assert sfs.total_ceiling() == 25
+    monkeypatch.setattr(sfs, "_daily_module", lambda: types.SimpleNamespace(effective_ceiling=lambda: (20, "bounce")))
+    assert sfs.total_ceiling() == 20
+
+    def broken():
+        raise RuntimeError("module failed to load")
+    monkeypatch.setattr(sfs, "_daily_module", broken)
+    assert sfs.total_ceiling() == sfs.DEFAULT_TOTAL_CEILING == 20, "a failure falls back to 20"
+
+
 def test_send_budget_arithmetic():
     c = {"first": 3, "follow": 9, "total": 12}
     assert sfs.send_budget(c, 10, 20, share=False) == (7, 8)

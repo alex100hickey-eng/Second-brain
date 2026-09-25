@@ -638,9 +638,62 @@ BOUNCE_WINDOW_DAYS = 14
 # hard bound on everything the mailbox sends in a day, which is what the domain experiences.
 # Flip FOLLOWUPS_SHARE_CAP to True to restore the pre-09-23 rule in the release AND the sender.
 FOLLOWUPS_SHARE_CAP = False
-TOTAL_DAILY_CEILING = 20
+# Raised 20 -> 25 on 2026-09-24 (tab 1's decision under Alex's standing order, logged in the Shift
+# Log). The record then: 1 bounce in 53 sends, a 54-day-old Workspace domain, and 14-17 follow-ups
+# a day to addresses already written to, which at 20 left room for about 3 first touches. 25
+# keeps ~8 named first touches a day flowing; 30 waits for two weeks of clean bounce data.
+# Revert: set TOTAL_DAILY_CEILING back to 20.
+TOTAL_DAILY_CEILING = 25
+# The guard on the raise: any bounce in the last BOUNCE_CEILING_HOURS holds the day at
+# CEILING_AFTER_BOUNCE. So one bounce drops it to 20 at once and it only comes back after 48 hours
+# with none, and an unreadable bounce record also reads as 20, never as the raised number.
+CEILING_AFTER_BOUNCE = 20
+BOUNCE_CEILING_HOURS = 48
 BOUNCE_HOLD_RATE, BOUNCE_HOLD_MIN = 0.08, 2   # same threshold the bounce nudge fires on
 BOUNCE_KEY = "splitframe:bounces"
+
+
+def _event_time(e: dict):
+    raw = _s((e or {}).get("at"))
+    try:
+        dt = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=LOCAL_TZ)
+
+
+def ceiling_for(events: list, now: datetime) -> tuple:
+    """(today's total ceiling, why) from the bounce events. Pure."""
+    cutoff = now - timedelta(hours=BOUNCE_CEILING_HOURS)
+    recent = [e for e in (events or []) if (_event_time(e) or cutoff) > cutoff]
+    if recent:
+        return CEILING_AFTER_BOUNCE, (f"{len(recent)} bounce(s) in the last {BOUNCE_CEILING_HOURS} h: "
+                                      f"held at {CEILING_AFTER_BOUNCE}")
+    return TOTAL_DAILY_CEILING, f"no bounce in {BOUNCE_CEILING_HOURS} h"
+
+
+def _bounce_events() -> list:
+    """The bounce record. The server wires _shared in main(); the Mac sender loads this module on
+    its own and never did, so connect here the same way when it is missing."""
+    shared = _shared
+    if shared is None:
+        sys.path.insert(0, CHAT)
+        import intake                                   # type: ignore
+        if intake.supabase is None:
+            from supabase import create_client          # type: ignore
+            intake.supabase = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_KEY"])
+        shared = intake
+    return (shared._load_state(BOUNCE_KEY) or {}).get("events") or []
+
+
+def effective_ceiling(now: datetime = None) -> tuple:
+    """(ceiling, why) for today, bounce-guarded. Unreadable reads as CEILING_AFTER_BOUNCE."""
+    try:
+        events = _bounce_events()
+    except Exception as e:                            # noqa: BLE001
+        return CEILING_AFTER_BOUNCE, (f"bounce record unreadable ({type(e).__name__}): "
+                                      f"held at {CEILING_AFTER_BOUNCE}")
+    return ceiling_for(events, now or datetime.now(LOCAL_TZ))
 
 
 def daily_cap(sent_total: int, bounces_recent: int, sent_recent: int) -> int:
@@ -819,9 +872,10 @@ def release_first_touches(outbox_mod, drafts_url: str, limit: int = None) -> lis
             # First touches get their own cap; what the ceiling leaves after today's follow-ups
             # still bounds them, or the release would queue drafts the sender cannot send today
             # and they would go stale in the outbox.
-            limit = max(0, min(cap, TOTAL_DAILY_CEILING - due))
+            ceiling, ceiling_why = effective_ceiling()
+            limit = max(0, min(cap, ceiling - due))
             log(f"first-touch cap {cap}/day ({why}); {due} follow-up(s) due today on their own "
-                f"budget under a ceiling of {TOTAL_DAILY_CEILING}, so up to {limit} first touch(es)")
+                f"budget under a ceiling of {ceiling} ({ceiling_why}), so up to {limit} first touch(es)")
             if limit == 0 and due:
                 log("no first touches today — follow-ups alone reach the daily ceiling. If that "
                     "repeats, the ceiling is what limits new prospects, not the drafting.")
