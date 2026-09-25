@@ -22,7 +22,7 @@ To undo later: `sudo pmset -a disablesleep 0`.
 
 **2026-09-25 16:00 — you said "anything and everything"; here is what that unlocked, and what is still only yours.**
 - Done by me: the sample site is pushed and live (48 private pages under splitframestudio.com/samples/); 25 queued creator drafts now carry their sample link instead of the price; the 20 round-10 creators are queued (68 first touches in the queue); all five Monday Splitframe statics are approved in the new ad layouts; the funnel, creator, polybot and clipping tabs are all running their lists again.
-- Still only yours: (1) the X DM / Discord batch (one sitting; lines are under each creator in `Money/Clients/creator-drafts-2026-09-25-v2.md`); (2) paste `CR-9R54SC` into the Instagram bio; (3) YouTube OAuth for Whop if the clipping tab could not click it (it will say so below); (4) Coolify prep for the polybot server move; (5) keep the lid open on send days.
+- Still only yours: (1) the X DM / Discord batch (one sitting; lines are under each creator in `Money/Clients/creator-drafts-2026-09-25-v2.md`); (2) paste `CR-R5Q23P` into the Instagram bio; (3) YouTube OAuth for Whop if the clipping tab could not click it (it will say so below); (4) Coolify prep for the polybot server move; (5) keep the lid open on send days.
 
 **2026-09-25 12:45 — keep the lid open until ~17:00.** The Mac slept 09:10–12:27 and the sender stopped with it: 8 named first touches and 13 follow-ups are due and go out one every 10 minutes while the Mac is awake (all 8 first touches by ~17:00). Closed lid = nothing sends. The real fix is moving the sender to the server; until then, awake Mac in the afternoon on send days.
 
@@ -60,7 +60,7 @@ publish an invite. Send them the same day their email goes out, not before the p
 - Fixed: the polybot loop crash-looped 06:14–07:44 (Polymarket 500s after the overnight DNS outage); fixed, restarted, running.
 - Landed: the first-touch copy audit and the creator-market research (`Money/Research — …(2026-09-25).md`). Monday is a real A/B on Splitframe; creator first touches now carry the sample clip instead of the price.
 - Coming to this list: a batch of two-line X DMs to send from your own account, one per creator emailed (the research says the DM alongside the email is what gets replies). One sitting, when the creator tab has drafted them.
-- Still yours, unchanged: paste `CR-9R54SC` into @wildestmomentsclips' Instagram bio from your phone and say "done"; click "Open YouTube" in the clipping tab and approve Whop's read-only access as basketballlacrosse; Coolify prep for the polybot server move (Volume `/data/polybot`; env `POLYBOT_DATA_DIR=/data/polybot`, `POLYMARKET_KEY_ID`, `POLYMARKET_SECRET_KEY`, `POLYBOT_ON_SERVER=0`; redeploy once; then say "move polybot to the server").
+- Still yours, unchanged: paste `CR-R5Q23P` into @wildestmomentsclips' Instagram bio from your phone and say "done"; click "Open YouTube" in the clipping tab and approve Whop's read-only access as basketballlacrosse; Coolify prep for the polybot server move (Volume `/data/polybot`; env `POLYBOT_DATA_DIR=/data/polybot`, `POLYMARKET_KEY_ID`, `POLYMARKET_SECRET_KEY`, `POLYBOT_ON_SERVER=0`; redeploy once; then say "move polybot to the server").
 
 **2026-09-24 04:30 — creator lane: 20 new prospects and 20 drafts, one veto for you.** The list is at 32 qualified
 (`Money/Creator Lane — Prospects.md`, "round 7"). Eleven of the new twenty average 1.5–2k viewers, under the
@@ -321,7 +321,7 @@ account. One thing is blocking money, and it takes about a minute.*
 still reports zero Higgsfield tools, that is a new problem, not this one.
 
 ### 2. Clipping: your 4 clicks, in money order (updated 2026-09-24 ~23:30 by the clipping tab)
-1. **Instagram → Whop link (1 min, yours).** The code is now **CR-R5Q23P** (it replaced CR-9R54SC). In the Claude
+1. **Instagram → Whop link (1 min, yours).** The code is now **CR-R5Q23P** (it replaced CR-R5Q23P). In the Claude
    pane's Instagram tab (Edit profile, signed in as wildestmomentsclips), add ` CR-R5Q23P` to the end of the Bio, click
    Submit, and tell the clipping tab "done". I click Verify on Whop and remove the code after. The classifier blocks me
    from typing into the bio. **YouTube:** Whop tab → Connect account → YouTube → Open YouTube → approve as
