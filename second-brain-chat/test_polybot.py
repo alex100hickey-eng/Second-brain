@@ -4035,3 +4035,40 @@ def test_leadlag_refs_replay_takes_the_same_signal_under_both_on_a_clean_book(tm
     res = leadlag_refs.replay(led_path, pairs_, t0 - 1)
     assert res["A"]["signals"] == res["C"]["signals"] == 1
     assert "flip to C" in leadlag_refs.render(res)
+
+
+def test_runner_starts_when_venue_account_read_raises(monkeypatch):
+    """2026-09-25: portfolio.positions answered 500 at startup and the loop died 66 times before it
+    ever ticked. A venue that cannot be read at start is logged and the config bankroll stands."""
+    from polybot import runner as runner_mod
+    from polybot.feeds import usvenue
+    cfg, led = _cfg(), _ledger()
+    before = cfg.bankroll_usd
+    monkeypatch.setattr(usvenue.USVenue, "available", property(lambda self: True, lambda self, v: None))
+
+    def _boom(self):
+        raise RuntimeError("The server was unable to process your request.")
+    monkeypatch.setattr(usvenue.USVenue, "account_value_usd", _boom)
+    lines = []
+    r = runner_mod.Runner(cfg, led, log=lambda *a: lines.append(" ".join(str(x) for x in a)))
+    assert r.cfg.bankroll_usd == before
+    assert any("account value unreadable at start" in ln for ln in lines)
+
+
+def test_account_value_is_unknown_not_cash_only_when_positions_fail(monkeypatch):
+    """Cash alone is buying power, the number that once halted the bot at "bankroll under floor".
+    An unreadable positions book is None, so sizing keeps the last known bankroll."""
+    from polybot.feeds import usvenue
+    v = usvenue.USVenue()
+    monkeypatch.setattr(usvenue.USVenue, "available", property(lambda self: True, lambda self, v: None))
+    monkeypatch.setattr(usvenue.USVenue, "balance_usd", lambda self: 0.41)
+
+    def _boom(self):
+        raise RuntimeError("500")
+    monkeypatch.setattr(usvenue.USVenue, "positions", _boom)
+    notes = []
+    v.on_backoff = notes.append
+    assert v.account_value_usd() is None
+    assert notes and "positions unreadable" in notes[0]
+    monkeypatch.setattr(usvenue.USVenue, "positions", lambda self: [{"cost": {"value": "187.0"}}])
+    assert v.account_value_usd() == 187.41
