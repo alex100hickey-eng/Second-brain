@@ -4199,3 +4199,22 @@ def test_weather_passes_get_the_longer_budget_only_outside_the_arb_window():
     assert r._pass_budget_s(light=False, now=datetime(2026, 9, 25, 20, 10, tzinfo=et)) == 150.0
     assert r._pass_budget_s(light=False, now=datetime(2026, 9, 25, 13, 10, tzinfo=et)) == 75.0   # arb window
     assert r._pass_budget_s(light=True, now=datetime(2026, 9, 25, 20, 10, tzinfo=et)) == 75.0    # arb sweep
+
+
+def test_a_missed_0700_report_runs_at_the_next_tick_and_only_once(monkeypatch, tmp_path):
+    from polybot import runner as runner_mod, notify
+    monkeypatch.setattr(config, "REPORT_PATH", str(tmp_path / "report-latest.txt"))
+    monkeypatch.setattr(runner_mod, "JOBS_PATH", str(tmp_path / "jobs.json"))
+    nudged = []
+    monkeypatch.setattr(notify, "nudge", lambda *a, **k: nudged.append(a[0]))
+    r = runner_mod.Runner(_cfg(), _ledger(), log=lambda *_: None)
+    r._jobs = {}
+    et = ZoneInfo("America/New_York")
+    late = datetime(2026, 9, 25, 7, 44, tzinfo=et)            # the loop came back at 07:44
+    monkeypatch.setattr(runner_mod.time, "time", lambda: late.timestamp())
+    assert r._due("daily_report", late, (7,))
+    r._attempt("daily_report")
+    r.daily_report()
+    r._ran("daily_report")
+    assert nudged == ["polybot daily"] and (tmp_path / "report-latest.txt").exists()
+    assert not r._due("daily_report", datetime(2026, 9, 25, 12, 0, tzinfo=et), (7,))

@@ -1110,6 +1110,19 @@ class Runner:
             self.log("  config reloaded: " + ", ".join(f"{m} {a}->{b}" for m, (a, b) in changed.items()))
         return True
 
+    def daily_report(self) -> str:
+        """The 07:00 job: the report into loop.log, auto-promote if Alex turned it on, the phone line."""
+        self.compounding = compounding.apply(self.cfg, self.ledger)
+        self.log(self.report(1))
+        promoted = self.promote() if self.cfg.auto_promote else []
+        line = self.ledger.summary(1)
+        if not promoted:
+            ready = [m for m in config.MODULES if self.cfg.mode(m) == "paper" and self.ledger.promotion_check(m)[0]]
+            if ready:
+                line += f" — say the word to go live: {', '.join(ready)}"
+        notify.nudge("polybot daily", line, key="polybot-daily", log=self.log)
+        return line
+
     def report_text(self, days: int = 1) -> str:
         return self.ledger.report(days) + "\n  " + compounding.describe(self.compounding, self.cfg)
 
@@ -1430,16 +1443,12 @@ class Runner:
                             n = self.scan_hold_favorites_us()
                         self._ran("hold_favorites_us")
                         self.log(f"  hold_favorites (US books): {n} signal(s)")
-                    if now.hour == 7 and now.minute == 0:
-                        self.compounding = compounding.apply(self.cfg, self.ledger)
-                        self.log(self.report(1))
-                        promoted = self.promote() if self.cfg.auto_promote else []
-                        line = self.ledger.summary(1)
-                        if not promoted:
-                            ready = [m for m in config.MODULES if self.cfg.mode(m) == "paper" and self.ledger.promotion_check(m)[0]]
-                            if ready:
-                                line += f" — say the word to go live: {', '.join(ready)}"
-                        notify.nudge("polybot daily", line, key="polybot-daily", log=self.log)
+                    # 07:00, or the first tick after it: on 2026-09-25 the loop was down 06:13-07:44
+                    # and the exact-minute report simply did not happen that day.
+                    if self._due("daily_report", now, (7,)):
+                        self._attempt("daily_report")
+                        self.daily_report()
+                        self._ran("daily_report")
                     # Re-discover the catalogue twice a day (~20 search calls) and promote any
                     # series a settled instance has now proved. The registry compounds: every
                     # proof is permanent and every future instance of that series is tradable.
