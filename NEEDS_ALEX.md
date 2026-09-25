@@ -22,7 +22,7 @@ To undo later: `sudo pmset -a disablesleep 0`.
 
 **2026-09-25 16:00 — you said "anything and everything"; here is what that unlocked, and what is still only yours.**
 - Done by me: the sample site is pushed and live (48 private pages under splitframestudio.com/samples/); 25 queued creator drafts now carry their sample link instead of the price; the 20 round-10 creators are queued (68 first touches in the queue); all five Monday Splitframe statics are approved in the new ad layouts; the funnel, creator, polybot and clipping tabs are all running their lists again.
-- Still only yours: (1) the X DM / Discord batch (one sitting; lines are under each creator in `Money/Clients/creator-drafts-2026-09-25-v2.md`); (2) paste `CR-R5Q23P` into the Instagram bio; (3) YouTube OAuth for Whop if the clipping tab could not click it (it will say so below); (4) Coolify prep for the polybot server move; (5) keep the lid open on send days.
+- Still only yours: (1) the X DM / Discord batch, one sitting from your phone: https://claude.ai/artifact/EL4hmCTn3Vt4wCTA5si636 (39 creators, Copy → Open → paste → send, tick when done); (2) paste `CR-R5Q23P` into the Instagram bio; (3) YouTube OAuth for Whop if the clipping tab could not click it (it will say so below); (4) Coolify prep for the polybot server move; (5) keep the lid open on send days.
 
 **2026-09-25 12:45 — keep the lid open until ~17:00.** The Mac slept 09:10–12:27 and the sender stopped with it: 8 named first touches and 13 follow-ups are due and go out one every 10 minutes while the Mac is awake (all 8 first touches by ~17:00). Closed lid = nothing sends. The real fix is moving the sender to the server; until then, awake Mac in the afternoon on send days.
 
@@ -33,28 +33,19 @@ cd ~/second-brain && git merge --no-edit swap-keeps-place && python3 run_tests.p
 - Why before Monday: Monday's first emails carry statics, which your Mac attaches at 07:30. Today the server released at 07:18, before that swap could run. This branch makes the server wait until 07:40, and keeps a swapped email's place in line. Suite 1080/0. The push restarts the server (it touches app.py), so run it between money shifts, when no `claude -p` worker is running.
 - Already done today, nothing for you: the release bug that sent 0 first emails since 09-21 is fixed and live. 8 are released and send themselves from 10:30 today, 6 with your approved statics. Monday's 10 founders are held for the A/B from the first-touch audit (`Money/Research — first-touch audit (2026-09-25).md`).
 
-**2026-09-25 08:10 — creator lane: two clicks from you, then the sample-linked first touches can go.**
-1. **Push the sample pages (publishing is your click).** 48 private, noindex pages sit committed in the site repo,
-   one per creator prospect, each with that creator's pre-cut clip (`splitframestudio.com/samples/<login>-<8hex>/`,
-   no index page, no links from the site, `noindex` meta). Nothing is live until you run:
+**2026-09-25 16:02 — creator lane: the sample site is live, the first touches carry the clips; one pass is still yours.**
+- Done since the morning note: the money session pushed the 48 sample pages (all 200), revised the 25 queued creator
+  drafts to the sample-linked body, queued round 10 (queue 68). Two captionless samples (akanemsko, yugi) were re-cut
+  with captions and re-pushed; madi2hottyy keeps the old body (no usable captions).
+- Round 11 (12 more, the "your YouTube is alive but has no Shorts" variant, ruled by the money session): drafts in
+  `Money/Clients/creator-drafts-2026-09-25-r11.md`, pages building now. Not queued until the money session runs it.
+- **Still yours: the caption pass.** 60 clips now, each ~30 s, all in `iCloud/ClipBot/creator-samples/<login>/`; every
+  one was read, not watched, and the Reply Playbook tables say which lines were hand-fixed or are unverified (two names:
+  "Gullipop", "Bilzo"). Say "captions checked" or name the ones to fix.
 
-    (done 15:40 by the money session) cd ~/second-brain/portfolio-site/dist && git push origin main
-
-   (GitHub Pages rebuilds in ~1 min.) The site is otherwise untouched. Unlisted YouTube from the clipping
-   accounts was ruled out by the money session, so this is the only route.
-2. **Caption pass before anyone links a clip.** Whisper captions were reviewed by reading, not by watching;
-   yugi, akanemsko and madi2hottyy ship captionless (README beside each). Two minutes per clip in
-   `iCloud/ClipBot/creator-samples/<login>/`; the same files are what the pages serve. Say "captions checked" or
-   name the ones to fix, and the creator tab re-renders and recommits.
-
-After the push: the money session runs `splitframe_queue.py revise --body-file` per creator from
-`Money/Clients/creator-v2-bodies/<login>.txt` (48 bodies, price paragraph replaced by the sample link, signed;
-the queued 09-24 drafts and round 10 both covered). Revising before the push would arm dead links, so it waits.
-
-**Your DM batch (one sitting, your own X account and Discord):** `Money/Clients/creator-drafts-2026-09-25-v2.md`
-has under each creator a two-line X DM (37 with a handle from their own Twitch panel) and a Discord line where they
-publish an invite. Send them the same day their email goes out, not before the pages are live.
-
+**Your DM batch (one sitting, your own X account and Discord):** `Money/Clients/creator-drafts-2026-09-25-v2.md` (48) and
+`creator-drafts-2026-09-25-r11.md` (12) have under each creator a two-line X DM and a Discord line where they publish an
+invite. Send them the same day their email goes out.
 **2026-09-25 08:05 — morning: three faults fixed, nothing new for you. Still open: the same three clicks.**
 - Fixed: the 07:50 release had released 0 first touches since 09-21 (a follow-up count bug); 8 named first touches went out this morning by hand, 6 with their approved statics. Fixed and deployed.
 - Fixed: the polybot loop crash-looped 06:14–07:44 (Polymarket 500s after the overnight DNS outage); fixed, restarted, running.
