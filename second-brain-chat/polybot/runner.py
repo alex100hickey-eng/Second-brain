@@ -1664,7 +1664,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(prog="polybot")
     ap.add_argument("cmd", choices=["scan", "settle", "report", "calibrate", "status", "loop", "backtest",
                                    "pairs", "promote", "arbs", "universe", "leadlag", "golive",
-                                   "leadlag-refs", "leadlag-fills"])
+                                   "leadlag-refs", "leadlag-fills", "twins"])
     ap.add_argument("--city", action="append")
     ap.add_argument("--modules", nargs="*")
     ap.add_argument("--venue", default="offshore", choices=["offshore", "us"], help="scan: which books to read")
@@ -1676,6 +1676,12 @@ def main(argv=None):
     ap.add_argument("--set-cap", type=float, help="golive: first-day arb set cap in $ (may only lower it)")
     ap.add_argument("--dry-run", action="store_true", help="golive: every check and the plan, nothing written")
     a = ap.parse_args(argv)
+    if a.cmd == "twins":
+        from . import twins
+        cfg = config.load(config.CONFIG_PATH)
+        led, prs = Ledger(config.DB_PATH), pairs.load_pairs()
+        print(twins.render(twins.divergence(led, prs, cfg.gate_since_ts), twins.settled_us(led, prs, cfg.gate_since_ts)))
+        return 0
     if a.cmd == "leadlag-fills":
         from . import leadlag_fills
         cfg = config.load(config.CONFIG_PATH)

@@ -4569,3 +4569,30 @@ def test_the_weekly_backtest_catches_up_outside_the_arb_window():
     assert not r._due("backtest", monday_noon, (4,), quiet_hours=runner_mod.ARB_HOURS, weekday=6)
     monday_eve = datetime(2026, 9, 28, 18, 0, tzinfo=et)
     assert r._due("backtest", monday_eve, (4,), quiet_hours=runner_mod.ARB_HOURS, weekday=6)
+
+
+def test_twins_measures_the_tilt_on_tight_books_only_and_counts_the_settled(tmp_path):
+    from polybot import twins
+    from polybot.strategies.base import Signal
+    led = Ledger(str(tmp_path / "l.db"))
+    prs = [{"us_slug": f"u{i}", "offshore_token": f"o{i}", "category": "politics"} for i in range(3)]
+    t0 = 1_800_000_000.0
+    for h in range(3):
+        t = t0 + h * 3600
+        led.add_snapshot("offshore", "o0", 0.89, 0.91, None, ts=t)          # favourite at 90c...
+        led.add_snapshot("us", "u0", 0.87, 0.89, None, ts=t + 1)           # ...US 2c cheaper
+        led.add_snapshot("offshore", "o1", 0.04, 0.06, None, ts=t)          # longshot at 5c...
+        led.add_snapshot("us", "u1", 0.05, 0.07, None, ts=t + 1)           # ...US 1c dearer
+        led.add_snapshot("offshore", "o2", 0.40, 0.60, None, ts=t)          # a wide book: never sampled
+        led.add_snapshot("us", "u2", 0.49, 0.51, None, ts=t + 1)
+    div = twins.divergence(led, prs, t0 - 1)
+    assert div["pairs"] == 2
+    assert div["bands"]["85-95c"] == {"pairs": 1, "median_cents": -2.0, "us_higher": 0, "us_lower": 1}
+    assert div["bands"]["<10c"]["median_cents"] == 1.0 and "10-50c" not in div["bands"]
+    sid = led.add_signal(Signal("hold_favorites", "us", "u0", "x", "BUY_YES", 0.88, 10, 3, "r", exit="settle"), "paper")
+    led.conn.execute("UPDATE signals SET ts=? WHERE id=?", (t0 + 2 * 3600 + 30, sid))
+    led.upsert_paper(sid, status="closed", pnl_usd=1.2)
+    st = twins.settled_us(led, prs, t0 - 1)
+    assert st["settled"] == 1 and st["won"] == 1 and st["gaps_cents"] == [-2.0]
+    text = twins.render(div, st)
+    assert "1/10 settled" in text and "re-measure when 10" in text and "-2.00c" in text
