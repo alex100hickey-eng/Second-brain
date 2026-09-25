@@ -933,3 +933,88 @@ def test_revised_draft_is_not_stale():
     fresh = datetime.now(sd.LOCAL_TZ).isoformat()
     assert sd._queued_age_days({"queued_at": old}) > sd.STALE_DRAFT_DAYS
     assert sd._queued_age_days({"queued_at": old, "revised_at": fresh}) < 1
+
+
+# ---- 2026-09-25: follow-ups that already went must not starve the release ----
+
+_REAL_DUE = sfd.followups_due_today        # captured before the autouse fixture pins it to 0
+
+
+class _KeyedShared:
+    """Shared state that keeps each key apart: the release reads the queue AND the follow-up
+    state, and _FakeShared hands back the same dict for every key."""
+    def __init__(self, states):
+        self.states = states
+
+    def _load_state(self, key):
+        return self.states.get(key)
+
+    def _save_state(self, st):
+        self.states[st["key"]] = st
+
+
+_OPEN = [
+    {"id": 1, "kind": "email_draft", "account": "studio", "detail": "Subject: Re: hi\n\nbody"},
+    {"id": 2, "kind": "email_draft", "account": "studio", "detail": "Subject: RE: two\n\nx"},
+    {"id": 3, "kind": "email_draft", "account": "studio", "detail": "Subject: Six ads\n\nx"},
+    {"id": 4, "kind": "email_draft", "account": "personal", "detail": "Subject: Re: dinner\n\nx"},
+    {"id": 5, "kind": "email_draft", "account": "studio", "detail": "Subject: Re: gone\n\nx",
+     "sent_at": "2026-09-25T09:00:00"},
+    {"id": 6, "kind": "task", "detail": "Subject: Re: not an email"},
+]
+
+
+def test_open_follow_up_drafts_are_counted_once_and_only_the_studios():
+    """Written, not yet sent, in the studio mailbox: two here. A first touch, a reply CLARVIS
+    drafted for Alex's own inbox, and one already sent are not today's follow-up budget."""
+    assert sfd.open_follow_ups(_FakeOutbox(_OPEN)) == 2
+
+
+def test_a_dead_outbox_counts_no_open_follow_ups():
+    class Dead:
+        @staticmethod
+        def open_items(limit=60):
+            raise RuntimeError("supabase down")
+    assert sfd.open_follow_ups(Dead) == 0
+
+
+def test_a_follow_up_already_drafted_is_not_due_again():
+    """The counter used to ignore the drafted state and count every prospect whose follow-up
+    DATE had passed, sent or not. `drafted` is what due_followups already skips on."""
+    today = date(2026, 9, 25)
+    rows = [dict(_fu_row(fu1="2026-09-20"), email="a@x.com"),                  # due, not drafted
+            dict(_fu_row(fu1="2026-09-20"), email="b@x.com"),                  # drafted (waiting)
+            dict(_fu_row(fu1="2026-09-20", fu2="2026-09-24"), email="c@x.com"),  # FU1 went, FU2 due
+            dict(_fu_row(fu1="2026-09-10", fu2="2026-09-14"), email="d@x.com")]  # both went
+    drafted = {"b@x.com": [2], "c@x.com": [2], "d@x.com": [2, 3]}
+    assert _REAL_DUE(rows, today, {}) == 4, "with no drafted state it is the old count"
+    assert _REAL_DUE(rows, today, drafted) == 2                # a (touch 2) and c (touch 3)
+    assert _REAL_DUE(rows, today, drafted, _FakeOutbox(_OPEN)) == 4   # + the two waiting drafts
+
+
+def test_the_release_is_not_starved_by_follow_ups_that_already_went(monkeypatch, quiet_log, tmp_path):
+    """The 2026-09-25 bug. 52 prospects past their follow-up dates, every touch already drafted
+    and sent. The old count called all 52 due, and under a ceiling of 20 that left room for 0
+    first touches: nothing was released from 09-22 on. Now only the 3 follow-up drafts still
+    waiting in the outbox take room, so 20 - 3 leaves 17 and the cap of 10 is the bound."""
+    past = (datetime.now(sfd.LOCAL_TZ).date() - timedelta(days=10)).isoformat()
+    tracker = tmp_path / "prospect-tracker.csv"
+    rows = [dict(_fu_row(fu1=past, fu2=past), email=f"p{n}@x.com") for n in range(52)]
+    with open(tracker, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=list(rows[0]))
+        w.writeheader()
+        w.writerows(rows)
+    monkeypatch.setattr(sfd, "TRACKER", str(tracker))
+    monkeypatch.setattr(sfd, "followups_due_today", _REAL_DUE)
+    queue = [_entry(n) for n in range(1, 13)]
+    monkeypatch.setattr(sfd, "_shared", _KeyedShared({
+        sfd.QUEUE_KEY: {"key": sfd.QUEUE_KEY, "queue": queue},
+        sfd.STATE_KEY: {"key": sfd.STATE_KEY, "drafted": {f"p{n}@x.com": [2, 3] for n in range(52)}},
+    }))
+    monkeypatch.setattr(sfd, "effective_ceiling", lambda now=None: (20, "pinned"))
+    monkeypatch.setattr(sfd, "current_cap", lambda: (10, "pinned"))
+    waiting = [{"id": 900 + i, "kind": "email_draft", "account": "studio", "title": f"Send the reply to w{i}@y.com",
+                "detail": "Subject: Re: earlier\n\nx", "auto_send_at": "2026-09-25T10:00:00"} for i in range(3)]
+    out = sfd.release_first_touches(_FakeOutbox(waiting), "https://mail")
+    assert len(out) == 10
+    assert any("3 follow-up(s) due today" in line for line in quiet_log), quiet_log
