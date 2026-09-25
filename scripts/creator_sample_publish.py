@@ -76,6 +76,8 @@ def publish(sample: str, login: str, *, title="", views=0, when="", site=SITE, p
             run=None) -> str:
     run = run or subprocess.run
     refuse_ready(sample); refuse_ready(site)
+    if not sample or not os.path.isfile(sample):
+        raise SystemExit(f"sample file not found: {sample!r} (an empty path here usually means a shell loop lost its stdin)")
     if not os.path.isdir(os.path.join(site, ".git")):
         raise SystemExit(f"site repo not found at {site}")
     slug = slug_for(login)

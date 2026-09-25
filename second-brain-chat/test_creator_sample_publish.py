@@ -36,13 +36,14 @@ def test_publish_writes_page_commits_and_pushes_only_when_asked(tmp_path):
         if cmd[0].endswith("ffmpeg"):
             open(cmd[-1], "wb").write(b"v" * 100)
         return subprocess.CompletedProcess(cmd, 0, "", "")
-    url = m.publish("s.mp4", "Kaise", title="honeymoon", site=str(site), push=False, run=run)
+    (tmp_path / "s.mp4").write_bytes(b"src"); src = str(tmp_path / "s.mp4")
+    url = m.publish(src, "Kaise", title="honeymoon", site=str(site), push=False, run=run)
     assert url == "https://splitframestudio.com/samples/kaise-" + m.slug_for("kaise")[-8:] + "/"
     folder = site / "samples" / m.slug_for("kaise")
     assert (folder / "index.html").exists() and (folder / "clip.mp4").read_bytes() == b"v" * 100
     gits = [c for c in calls if c[0] == "git"]
     assert [c[3] for c in gits] == ["add", "commit"]
-    m.publish("s.mp4", "Kaise", site=str(site), push=True, run=run)
+    m.publish(src, "Kaise", site=str(site), push=True, run=run)
     assert [c[3] for c in calls if c[0] == "git"][-1] == "push"
     assert calls[-1][3:] == ["push", "origin", "main"]
 
@@ -55,8 +56,9 @@ def test_refuses_the_clipbot_ready_folder(tmp_path):
 
 def test_refuses_when_site_repo_is_missing(tmp_path):
     import pytest
+    (tmp_path / "s.mp4").write_bytes(b"src")
     with pytest.raises(SystemExit, match="site repo not found"):
-        m.publish("s.mp4", "x", site=str(tmp_path), push=False)
+        m.publish(str(tmp_path / "s.mp4"), "x", site=str(tmp_path), push=False)
 
 
 def test_no_push_flag_prints_the_not_live_warning(tmp_path, capsys, monkeypatch):
@@ -65,5 +67,14 @@ def test_no_push_flag_prints_the_not_live_warning(tmp_path, capsys, monkeypatch)
         if cmd[0].endswith("ffmpeg"): open(cmd[-1], "wb").write(b"v")
         return subprocess.CompletedProcess(cmd, 0, "", "")
     monkeypatch.setattr(m.subprocess, "run", run)
-    assert m.main(["s.mp4", "Camy", "--site", str(site), "--no-push"]) == 0
+    (tmp_path / "s.mp4").write_bytes(b"src")
+    assert m.main([str(tmp_path / "s.mp4"), "Camy", "--site", str(site), "--no-push"]) == 0
     assert "NOT pushed" in capsys.readouterr().out
+
+
+def test_refuses_an_empty_or_missing_sample_path_before_touching_the_repo(tmp_path):
+    import pytest
+    site = tmp_path / "site"; (site / ".git").mkdir(parents=True)
+    with pytest.raises(SystemExit, match="sample file not found"):
+        m.publish("", "x", site=str(site), push=False)
+    assert not (site / "samples").exists()
