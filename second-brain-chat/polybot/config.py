@@ -193,6 +193,11 @@ class Config:
     arb_unwind_cover: float = 0.25
     arb_min_profit_usd: float = 0.10       # below this a set is not worth the calls or the risk
     arb_pass_budget_s: float = 75.0   # a COLD pass prices ~10 unquoted legs from scratch; 45s cut it off mid-sweep
+    # A US WEATHER pass (lock/obs, not the arb sweep) outside the arb window. It shared the arb's 75s,
+    # which a single 25s NWS timeout or a slow prefetch used up: 176 weather passes since the 09-18
+    # reset were cut short and 992 city-day scans dropped, ~60% of them after 17:00 when there are
+    # no arb sweeps to protect. Inside 09:00-16:59 the weather pass keeps the 75s.
+    weather_pass_budget_s: float = 150.0
     arb_dedupe_s: float = 180.0            # arb sets re-arm in 3 min, not the 3 hours a VIEW needs
     arb_notify_usd: float = 2.0            # a PAPER set worth at least this much is worth waking Alex for
     arb_live_ok: bool = False              # ALEX'S SWITCH. Executor is ready; no order has ever been sent, so the venue's real reply shape is still unverified

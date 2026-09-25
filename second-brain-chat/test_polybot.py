@@ -4173,3 +4173,29 @@ def test_fed_lag_reads_only_the_nearest_meetings():
     fed = fl.FedLag(_cfg(), _FakeUSFed(), type("R", (), {"_push": lambda *a: None})(), None, events_fn=lambda: evs[::-1])
     fed.record_ref()
     assert fed.us_events() == ["usfed-fomc-2027-01-15", "usfed-fomc-2027-02-15", "usfed-fomc-2027-03-15"]
+
+
+def test_slot_due_catches_up_a_missed_minute_inside_its_own_slot_only():
+    from polybot import runner as runner_mod
+    r = runner_mod.Runner(_cfg(), _ledger(), log=lambda *_: None)
+    et = ZoneInfo("America/New_York")
+    at = lambda h, m: datetime(2026, 9, 25, h, m, tzinfo=et)
+    r._slots = {"weather_us": None}
+    assert r._slot_due("weather_us", at(10, 10), 15, 10) and not r._slot_due("weather_us", at(10, 11), 15, 10)
+    # busy through :25-:27 (a long job): the :25 quarter still runs, at :28, once
+    assert r._slot_due("weather_us", at(10, 28), 15, 10) and not r._slot_due("weather_us", at(10, 39), 15, 10)
+    assert r._slot_due("weather_us", at(10, 40), 15, 10)
+    # offshore: :55 slot with a 20-minute grace; missed entirely past the grace
+    assert r._slot_due("weather_offshore", at(10, 58), 60, 55, grace_min=20)
+    assert not r._slot_due("weather_offshore", at(11, 5), 60, 55, grace_min=20)      # same slot, already run
+    assert not r._slot_due("weather_offshore", at(12, 20), 60, 55, grace_min=20)     # 25 min in: too late
+    assert r._slot_due("weather_offshore", at(12, 55), 60, 55, grace_min=20)
+
+
+def test_weather_passes_get_the_longer_budget_only_outside_the_arb_window():
+    from polybot import runner as runner_mod
+    r = runner_mod.Runner(_cfg(), _ledger(), log=lambda *_: None)
+    et = ZoneInfo("America/New_York")
+    assert r._pass_budget_s(light=False, now=datetime(2026, 9, 25, 20, 10, tzinfo=et)) == 150.0
+    assert r._pass_budget_s(light=False, now=datetime(2026, 9, 25, 13, 10, tzinfo=et)) == 75.0   # arb window
+    assert r._pass_budget_s(light=True, now=datetime(2026, 9, 25, 20, 10, tzinfo=et)) == 75.0    # arb sweep

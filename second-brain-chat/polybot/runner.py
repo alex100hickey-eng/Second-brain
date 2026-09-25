@@ -626,7 +626,8 @@ class Runner:
         # so five cities scanned slowly is worth less than three scanned now — and on 2026-09-19 a
         # pass stalled after its first city and held the loop for fifteen minutes, which no amount
         # of cadence tuning upstream can fix. Abandon the tail and let the next tick start clean.
-        deadline = time.time() + self.cfg.arb_pass_budget_s if venue == "us" else None
+        budget = self._pass_budget_s(light)
+        deadline = time.time() + budget if venue == "us" else None
         # Ask for every event this pass needs in ONE request before touching the first city. Ten
         # separate lookups was more than the venue's whole per-window quota, so the pass spent its
         # budget on housekeeping and finished a minute late — see prefetch_weather_events.
@@ -668,9 +669,33 @@ class Runner:
                 self.log(f"  {venue} {city} {kind} +{day_offset}d: scan failed ({exc}) — "
                          f"skipping this book, continuing the sweep")
         if skipped:
-            self.log(f"  us scan over its {self.cfg.arb_pass_budget_s:.0f}s budget — skipped "
+            self.log(f"  us scan over its {budget:.0f}s budget — skipped "
                      f"{skipped} city-day(s); next tick starts fresh")
         return n
+
+    def _pass_budget_s(self, light: bool, now=None) -> float:
+        """The arb sweep (light) always gets arb_pass_budget_s; a weather pass gets the longer
+        weather_pass_budget_s outside ARB_HOURS, where no arb sweep is waiting behind it."""
+        hour = (now or datetime.now(ET)).hour
+        if light or hour in ARB_HOURS:
+            return self.cfg.arb_pass_budget_s
+        return max(self.cfg.arb_pass_budget_s, getattr(self.cfg, "weather_pass_budget_s", 0.0))
+
+    def _slot_due(self, name: str, now, period_min: int, offset_min: int, grace_min: int | None = None) -> bool:
+        """Once per slot: slots are `period_min` long and start `offset_min` past the hour (US weather:
+        15, 10 -> :10 :25 :40 :55; offshore weather: 60, 55). Due at the slot's own minute, or at the
+        first minute after it the loop is free, within `grace_min` (default: the whole slot).
+
+        The scans used to fire only when the loop happened to be free AT that minute (`minute % 15 ==
+        10`). A long job or a restart spanning it lost the whole quarter: 37 of the 63 quarters with
+        no US weather scan on 09-23/24 had no loop activity at :10-:12 at all."""
+        slots = self.__dict__.setdefault("_slots", {})
+        m = int(now.timestamp() // 60) - offset_min           # ET offsets are whole hours: minute-exact
+        slot, into = divmod(m, period_min)
+        if slots.get(name) == slot or into > (period_min - 1 if grace_min is None else grace_min):
+            return False
+        slots[name] = slot
+        return True
 
     def _scan_one(self, city, kind, day_offset, wanted, light, venue, date) -> int:
         """One (city, kind, day): build the context, snapshot the book, run the wanted modules."""
@@ -1342,7 +1367,7 @@ class Runner:
                     # (+29.8% ROI vs weather_hold -14.5%), and in paper the per-market cap let
                     # whoever scanned first take the bucket — weather_hold refused 95 lock signals
                     # that way, starving the one strategy worth promoting.
-                    if now.minute == 55:
+                    if self._slot_due("weather_offshore", now, 60, 55, grace_min=20):
                         self.scan_weather(modules=["weather_lock", "weather_model_update", "weather_hold", "weather_obs"])
                     # The US venue is scanned four times an hour, not once. It is the only venue that
                     # can ever hold real money and it carries ~1 signal a day — the scarcest resource
@@ -1351,7 +1376,7 @@ class Runner:
                     # fallback); unwrapping the event envelope and remembering 404s for an hour cut
                     # that to ~5, which is what buys the extra passes without walking back into the
                     # Cloudflare rate limit that banned this IP on 2026-09-17.
-                    if now.minute % 15 == 10 and self.us.available:
+                    if self.us.available and self._slot_due("weather_us", now, 15, 10):
                         self.scan_weather(modules=["weather_lock", "weather_model_update", "weather_hold", "weather_obs"], venue="us")
                     # Arbs are brief: 12 of the 16 buy-side episodes on record were seen in a
                     # single observed minute, and the observation cadence WAS five minutes — so a
