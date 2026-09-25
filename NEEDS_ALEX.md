@@ -14,6 +14,12 @@ is still yours to do.
 
 ## 💰 Money lanes — what only you can do
 
+**2026-09-25 16:10 — the lid is now the #1 blocker. One command fixes it until the server move.** The Mac slept again 15:12–15:30 (lid). Every sleep stops the Splitframe sender, the polybot loop, the statics backstops and the scorecard; today that cost about 5 hours of sending. Run this once in Terminal (it asks for your Mac password, which I cannot type), keep the Mac plugged in, and the lid can stay closed:
+```
+sudo pmset -a disablesleep 1
+```
+To undo later: `sudo pmset -a disablesleep 0`.
+
 **2026-09-25 16:00 — you said "anything and everything"; here is what that unlocked, and what is still only yours.**
 - Done by me: the sample site is pushed and live (48 private pages under splitframestudio.com/samples/); 25 queued creator drafts now carry their sample link instead of the price; the 20 round-10 creators are queued (68 first touches in the queue); all five Monday Splitframe statics are approved in the new ad layouts; the funnel, creator, polybot and clipping tabs are all running their lists again.
 - Still only yours: (1) the X DM / Discord batch (one sitting; lines are under each creator in `Money/Clients/creator-drafts-2026-09-25-v2.md`); (2) paste `CR-9R54SC` into the Instagram bio; (3) YouTube OAuth for Whop if the clipping tab could not click it (it will say so below); (4) Coolify prep for the polybot server move; (5) keep the lid open on send days.
