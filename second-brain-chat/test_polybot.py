@@ -3889,3 +3889,149 @@ def test_the_published_report_is_the_report_and_leaves_the_file_alone(monkeypatc
     assert facts["report"] == r.report_text(1) and "compounding:" in facts["report"]
     assert abs(facts["report_at"] - time.time()) < 5 and not path.exists()     # only report() writes the file
     assert runner_mod.REPORT_PUBLISH_S == 900.0
+
+
+def _golive_env(monkeypatch, tmp_path, gate=(True, "PASS — 31 signals"), raw=None):
+    from polybot import runner as runner_mod, notify
+    path = tmp_path / "config.json"
+    raw = raw or {"modes": {"bucket_sum": "paper", "weather_lock": "paper"}, "arb_max_set_cost_usd": 120.0,
+                  "gate_since_ts": 1789739626.0158348, "caps": {"max_exposure_usd": 180.0}}
+    path.write_text(json.dumps(raw))
+    monkeypatch.setattr(config, "CONFIG_PATH", str(path))
+    monkeypatch.setattr(config, "DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(config, "KILL_PATH", str(tmp_path / "KILL"))
+    nudged = []
+    monkeypatch.setattr(notify, "nudge", lambda *a, **k: nudged.append(a[0]))
+    cfg = config.load(str(path))
+    led = _ledger()
+    monkeypatch.setattr(led, "promotion_check", lambda m, **k: gate)
+    out = []
+    r = runner_mod.Runner(cfg, led, log=out.append)
+    return r, path, out, nudged
+
+
+def test_golive_refuses_without_a_passing_gate_and_writes_nothing(monkeypatch, tmp_path):
+    r, path, out, nudged = _golive_env(monkeypatch, tmp_path, gate=(False, "19/30 signals"))
+    before = path.read_text()
+    assert r.golive("bucket_sum", 20) == 1
+    assert path.read_text() == before and nudged == [] and "gate does not pass: 19/30 signals" in out[-1]
+    assert not list(tmp_path.glob("config.json.pre-golive-*"))
+
+
+def test_golive_refuses_a_kill_switch_a_raised_cap_and_a_cap_on_a_non_arb_module(monkeypatch, tmp_path):
+    r, path, out, _ = _golive_env(monkeypatch, tmp_path)
+    before = path.read_text()
+    assert r.golive("bucket_sum", 200) == 1 and "may only lower it" in out[-1]
+    assert r.golive("weather_lock", 20) == 1 and "does not trade sets" in out[-1]
+    assert r.golive("nope") == 1 and "unknown module" in out[-1]
+    (tmp_path / "KILL").write_text("")
+    assert r.golive("bucket_sum", 20) == 1 and "kill switch is ON" in out[-1]
+    assert path.read_text() == before
+
+
+def test_golive_dry_run_prints_the_plan_and_the_drill_only(monkeypatch, tmp_path):
+    r, path, out, nudged = _golive_env(monkeypatch, tmp_path)
+    before = path.read_text()
+    assert r.golive("bucket_sum", 20, dry_run=True) == 0
+    text = "\n".join(out)
+    assert "arb_live_ok: False -> True" in text and "arb_max_set_cost_usd: 120.0 -> 20.0" in text
+    assert "KILL DRILL" in text and "back to 120" in text and path.read_text() == before and nudged == []
+
+
+def test_golive_writes_only_its_fields_and_restarts_nothing_when_the_loop_reloads(monkeypatch, tmp_path):
+    r, path, out, nudged = _golive_env(monkeypatch, tmp_path)
+    before = json.loads(path.read_text())
+    restarted = []
+    assert r.golive("bucket_sum", 20, watch=lambda *a: "09-30 07:01:00   config reloaded: bucket_sum paper->live",
+                    restart=lambda: restarted.append(1) or "x") == 0
+    after = json.loads(path.read_text())
+    assert after["modes"] == dict(before["modes"], bucket_sum="live")
+    assert after["arb_live_ok"] is True and after["arb_max_set_cost_usd"] == 20.0
+    assert after["gate_since_ts"] == before["gate_since_ts"] and after["caps"] == before["caps"]   # untouched
+    assert set(after) == set(before) | {"arb_live_ok"}
+    backups = list(tmp_path.glob("config.json.pre-golive-*"))
+    assert len(backups) == 1 and json.loads(backups[0].read_text()) == before
+    assert restarted == [] and nudged == ["polybot: LIVE"]
+    text = "\n".join(out)
+    assert "no restart needed" in text and f"cp '{backups[0]}'" in text
+    # the reloaded config is what risk sees: a live arb leg is no longer refused for arb_live_ok
+    assert config.load(str(path)).arb_live_ok is True
+
+
+def test_golive_restarts_the_loop_only_when_the_reload_is_not_seen(monkeypatch, tmp_path):
+    r, path, out, _ = _golive_env(monkeypatch, tmp_path)
+    restarted = []
+    assert r.golive("weather_lock", watch=lambda *a: None, restart=lambda: restarted.append(1) or "launchd: loop restarted") == 0
+    after = json.loads(path.read_text())
+    assert after["modes"]["weather_lock"] == "live" and "arb_live_ok" not in after      # not an arb module
+    assert restarted == [1] and "launchd: loop restarted" in "\n".join(out)
+
+
+def test_watch_log_reads_only_what_was_written_after_the_mark(tmp_path):
+    from polybot import runner as runner_mod
+    log = tmp_path / "loop.log"
+    log.write_text("09-24 config reloaded: bucket_sum paper->live\n")          # an OLD line must not count
+    mark = log.stat().st_size
+    assert runner_mod._watch_log(str(log), mark, "bucket_sum paper->live", 0) is None
+    with open(log, "a") as f:
+        f.write("09-30 07:01:00   config reloaded: bucket_sum paper->live\n")
+    assert "09-30" in runner_mod._watch_log(str(log), mark, "bucket_sum paper->live", 0)
+
+
+def test_tight_mid_moves_only_on_a_tight_book():
+    from polybot.strategies.leadlag import tight_mid_series
+    q = [(0, None, None), (1, 0.40, 0.60), (2, 0.44, 0.46), (3, 0.44, 0.80), (4, 0.49, 0.51)]
+    assert tight_mid_series(q, 0.05) == [(2, 0.45), (3, 0.45), (4, 0.50)]    # nothing until the first tight quote
+
+
+class _QuoteStore:
+    def __init__(self, rows):
+        self.rows = rows            # (venue, market) -> [(ts, bid, ask)]
+
+    def get(self, venue, market):
+        return [(t, (b + a) / 2) for t, b, a in self.rows.get((venue, market), [])]
+
+    def quotes(self, venue, market):
+        return self.rows.get((venue, market), [])
+
+
+def _leadlag_with(reference, off_rows):
+    from polybot.strategies.leadlag import LeadLag
+    cfg = _cfg()
+    cfg.leadlag_reference = reference
+    us = type("US", (), {"available": True, "why_unavailable": None, "bbo": lambda self, s: (0.40, 0.42)})()
+    store = _QuoteStore({("offshore", "tok"): off_rows,
+                         ("us", "slug"): [(0, 0.40, 0.42), (60, 0.40, 0.42), (120, 0.40, 0.42)]})
+    return LeadLag(cfg, us, store, pairs_fn=lambda: [{"us_slug": "slug", "offshore_token": "tok",
+                                                      "category": "politics", "label": "x"}])
+
+
+def test_reference_c_ignores_a_pulled_offer_that_reference_a_trades():
+    # the offshore offer is pulled (ask 0.43 -> 0.60, bid unchanged): the mid jumps 8.5c, the book is 19c wide
+    pulled = [(0, 0.40, 0.43), (60, 0.40, 0.43), (120, 0.41, 0.60)]
+    a = _leadlag_with("mid", pulled).scan()
+    assert len(a) == 1 and a[0].meta["reference"] == "mid"
+    assert _leadlag_with("tight_mid", pulled).scan() == []
+    # a real move on a tight book still trades under C
+    real = [(0, 0.40, 0.43), (60, 0.44, 0.46), (120, 0.47, 0.49)]
+    c = _leadlag_with("tight_mid", real).scan()
+    assert len(c) == 1 and c[0].meta["reference"] == "tight_mid"
+
+
+def test_the_live_default_is_still_reference_a():
+    assert config.Config().leadlag_reference == "mid"
+
+
+def test_leadlag_refs_replay_takes_the_same_signal_under_both_on_a_clean_book(tmp_path):
+    from polybot import leadlag_refs
+    led_path = str(tmp_path / "l.db")
+    led = Ledger(led_path)
+    t0 = 1_800_000_000.0
+    for i, (ob, oa, ub, ua) in enumerate([(0.40, 0.42, 0.40, 0.42), (0.40, 0.42, 0.40, 0.42),
+                                          (0.46, 0.48, 0.40, 0.42), (0.47, 0.49, 0.40, 0.42)]):
+        led.add_snapshot("offshore", "tok", ob, oa, None, ts=t0 + 40 * i)
+        led.add_snapshot("us", "slug", ub, ua, None, ts=t0 + 40 * i)
+    pairs_ = [{"us_slug": "slug", "offshore_token": "tok", "category": "politics", "label": "x"}]
+    res = leadlag_refs.replay(led_path, pairs_, t0 - 1)
+    assert res["A"]["signals"] == res["C"]["signals"] == 1
+    assert "flip to C" in leadlag_refs.render(res)

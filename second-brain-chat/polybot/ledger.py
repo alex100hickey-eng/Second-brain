@@ -632,7 +632,8 @@ class Ledger:
                 lines.append(f"       eta {eta}")
         closed_ll = self.closed_count("leadlag")
         lines.append(f"  leadlag closed positions since the reset: {closed_ll}/{LEADLAG_REFERENCE_REVIEW_AT} — at "
-                     f"{LEADLAG_REFERENCE_REVIEW_AT}, decide the reference (C = spread-limited mid, see the design doc)")
+                     f"{LEADLAG_REFERENCE_REVIEW_AT}, decide the reference: `runner leadlag-refs` replays A vs C; C = "
+                     f"\"leadlag_reference\": \"tight_mid\" in config.json")
         if any(s["module"] == "weather_lock" for s in stats):
             # Answers "why does live show so few weather_lock signals against the backtest ROI" from
             # snapshots the loop already wrote — no live API calls, so it belongs in the fast daily
