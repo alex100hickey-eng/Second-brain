@@ -47,15 +47,19 @@ fi
 # file with EDEADLK ("Resource deadlock avoided"), observed 2026-07-22 on Schedule/
 # brief-2026-07-22.md. Materialize any evicted files (including the .git pointer file)
 # before touching git; brctl only downloads content, it never modifies it.
-DATALESS_COUNT=$(find . -type f -flags +dataless 2>/dev/null | wc -l | tr -d ' ')
+# Claude/ is skipped: it is git-ignored (a local mirror of Claude Code's memory, written by
+# ~/.claude/obsidian-mirror/mirror.py), so git never reads it and an evicted copy there
+# must not fail this run.
+dataless() { find . -type f -flags +dataless -not -path './Claude/*' 2>/dev/null; }
+DATALESS_COUNT=$(dataless | wc -l | tr -d ' ')
 if [ "$DATALESS_COUNT" -gt 0 ]; then
     echo "[$(ts)] MATERIALIZING — $DATALESS_COUNT iCloud-evicted file(s), requesting download."
-    find . -type f -flags +dataless 2>/dev/null | while IFS= read -r f; do
+    dataless | while IFS= read -r f; do
         brctl download "$f" >/dev/null 2>&1 || true
     done
     for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do   # wait up to ~60s for iCloud
         sleep 5
-        DATALESS_COUNT=$(find . -type f -flags +dataless 2>/dev/null | wc -l | tr -d ' ')
+        DATALESS_COUNT=$(dataless | wc -l | tr -d ' ')
         [ "$DATALESS_COUNT" -eq 0 ] && break
     done
     if [ "$DATALESS_COUNT" -gt 0 ]; then
