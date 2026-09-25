@@ -416,6 +416,9 @@ def summary_text(limit: int = 6) -> str:
 
 # --- nudge sourcing (consumed by proactive.py) -------------------------------
 
+STALE_NUDGE_DAYS = 14
+
+
 def nudges_due() -> list:
     """Deterministic nudge candidates: [{key, title, body, priority}].
 
@@ -461,6 +464,13 @@ def nudges_due() -> list:
             days_late = (_today() - date.fromisoformat(s["due"])).days
         except (TypeError, ValueError):
             pass
+        # Past STALE_NUDGE_DAYS a step is backlog, not news — the ranked day already
+        # folds it into one "Backlog" line. The concern cap only paused it: a fresh
+        # 7-day window re-armed two more pushes, so "33d LATE — Sales call dry
+        # rehearsal" and "18d LATE — Wave 1 sends begin" (sends began 2026-09-01) were
+        # still reaching the phone in late September for a plan that ended Aug 31.
+        if days_late > STALE_NUDGE_DAYS:
+            continue
         late = f"{days_late}d LATE" if days_late > 0 else "LATE"
         body = "\n".join(x for x in (
             f"Was due {s['due']}.",

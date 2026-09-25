@@ -93,6 +93,10 @@ def test_item_weight():
           abs(w - (20 / 15)) < 0.01)
     check("a component with no item count doesn't divide by zero",
           school_grades.item_weight("TEST101", "Participation") == 20.0)
+    check("per_item_only: one deliverable never inherits an uncounted component's whole weight",
+          school_grades.item_weight("TEST101", "Participation", per_item_only=True) == 0.0)
+    check("per_item_only leaves counted components alone",
+          abs(school_grades.item_weight("TEST101", "Exams", per_item_only=True) - 15.0) < 0.01)
     check("an unknown component is 0, not a crash",
           school_grades.item_weight("TEST101", "Nonexistent") == 0.0)
     out = school_grades.worth_it_tool("TEST101", "Homework")

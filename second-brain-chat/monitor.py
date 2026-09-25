@@ -211,9 +211,21 @@ def beat(name: str, stale_after_s: int, note: str = "") -> None:
         st["stale_after_s"] = int(stale_after_s)
         st["note"] = note[:120]
         st["beat_at"] = _now_iso()
+        st.pop("retired", None)          # a job that beats again is back under watch
         intake._save_state(st)
     except Exception:
         pass
+
+
+def retire(name: str, why: str) -> None:
+    """Stop watching a heartbeat whose job was switched off on purpose. The row stays
+    (history, and beat() un-retires it if the job ever returns); only the alarm stops.
+    Rows are never deleted, so an orphan alarmed forever: d1_refresh after the Mac job
+    moved to the server as d1-refresh, the expansion scout after it went on-demand."""
+    import intake
+    st = intake._load_state(f"heartbeat:{name}")
+    st["retired"] = f"{datetime.now(ZoneInfo('America/New_York')).date().isoformat()}: {why}"[:200]
+    intake._save_state(st)
 
 
 # Heartbeats that only ever beat from the Mac. When the laptop sleeps they all go
@@ -258,7 +270,7 @@ def check_heartbeats() -> list:
         seen.add(key)          # newest row per key wins
         name = key[len("heartbeat:"):]
         beat_at, stale_after = d.get("beat_at"), d.get("stale_after_s")
-        if not beat_at or not stale_after:
+        if not beat_at or not stale_after or d.get("retired"):
             continue
         try:
             age_s = (now - datetime.fromisoformat(beat_at)).total_seconds()

@@ -231,12 +231,12 @@ def _csv_owns(text: str, due) -> bool:
 
 def _item_weight(code: str, text: str) -> float:
     """What this item is worth as a percent of the final grade, via the rubric
-    (0.0 when the label matches no component). The satisficing number: an APQ
-    is 0.4%, a MATH test is 15%. It belongs on the order, not in a tool Alex
-    would have to ask for."""
+    (0.0 when the label matches no component, or matches one the rubric doesn't
+    count items in). The satisficing number: an APQ is 0.4%, a MATH test is 15%.
+    It belongs on the order, not in a tool Alex would have to ask for."""
     try:
         import school_grades
-        return float(school_grades.item_weight(code, text) or 0.0)
+        return float(school_grades.item_weight(code, text, per_item_only=True) or 0.0)
     except Exception:
         return 0.0
 
