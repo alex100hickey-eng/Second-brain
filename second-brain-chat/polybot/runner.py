@@ -32,7 +32,7 @@ from .execution import Executor
 from .feeds import offshore
 from .feeds.usvenue import USVenue, buckets_from_markets
 from .ledger import Ledger
-from .paper import PaperEngine, snapshot_history
+from .paper import PaperEngine, fill_from_book, fill_from_history, snapshot_history
 from .risk import RiskManager
 from . import universe
 
@@ -345,7 +345,8 @@ class Runner:
         self.us = USVenue()
         self.us.on_backoff = lambda msg: self.log(f"  {msg}")
         self.risk = RiskManager(self.cfg, self.ledger)
-        self.paper = PaperEngine(self.ledger, history_fn=self._paper_history, resolution_fn=self._paper_resolution)
+        self.paper = PaperEngine(self.ledger, history_fn=self._paper_history, resolution_fn=self._paper_resolution,
+                                 fill_fn=self._paper_fill)
         self.executor = Executor(self.ledger, self.us, self.cfg, self.log)
         self.uni = universe.Universe(self.ledger.conn)
         self.arb = BucketSum(self.cfg)      # the universe path runs the arb outside scan_weather
@@ -392,6 +393,15 @@ class Runner:
         if sig["venue"] == "us":
             return snapshot_history(self.ledger, "us", sig["market"], sig["ts"] - 60)
         return offshore.prices_history(sig["market"], since_ts=sig["ts"] - 60, fidelity=1)
+
+    def _paper_fill(self, sig, hist):
+        """The paper fill rule: the mid reaching our level, unless leadlag's book_tick model is on."""
+        if (sig["module"] == "leadlag" and sig["venue"] == "us"
+                and getattr(self.cfg, "leadlag_fill_model", "mid") == "book_tick"):
+            rows = self.ledger.snapshots("us", sig["market"], sig["ts"] - 3600)
+            return fill_from_book(sig, [(r["ts"], r["bid"], r["ask"]) for r in rows],
+                                  until=sig["ts"] + (sig["horizon_h"] or 6) * 3600)
+        return fill_from_history(sig, hist)
 
     def _paper_resolution(self, sig):
         if sig["venue"] == "us":
@@ -1645,7 +1655,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(prog="polybot")
     ap.add_argument("cmd", choices=["scan", "settle", "report", "calibrate", "status", "loop", "backtest",
                                    "pairs", "promote", "arbs", "universe", "leadlag", "golive",
-                                   "leadlag-refs"])
+                                   "leadlag-refs", "leadlag-fills"])
     ap.add_argument("--city", action="append")
     ap.add_argument("--modules", nargs="*")
     ap.add_argument("--venue", default="offshore", choices=["offshore", "us"], help="scan: which books to read")
@@ -1657,6 +1667,11 @@ def main(argv=None):
     ap.add_argument("--set-cap", type=float, help="golive: first-day arb set cap in $ (may only lower it)")
     ap.add_argument("--dry-run", action="store_true", help="golive: every check and the plan, nothing written")
     a = ap.parse_args(argv)
+    if a.cmd == "leadlag-fills":
+        from . import leadlag_fills
+        cfg = config.load(config.CONFIG_PATH)
+        print(leadlag_fills.render(leadlag_fills.replay(Ledger(config.DB_PATH), cfg.gate_since_ts)))
+        return 0
     if a.cmd == "leadlag-refs":
         from . import leadlag_refs
         cfg = config.load(config.CONFIG_PATH)

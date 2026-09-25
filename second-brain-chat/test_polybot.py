@@ -4308,3 +4308,63 @@ def test_a_dark_wake_minute_does_not_make_a_quarter_alive():
     a, b = u["gaps"][0]
     assert datetime.fromtimestamp(a, et).strftime("%H:%M") == "09:59"
     assert datetime.fromtimestamp(b, et).strftime("%H:%M") in ("12:15", "12:27")
+
+
+def _maker(side="BUY_YES", price=0.41, ts=1000.0):
+    return {"ts": ts, "price": price, "side": side, "exit_rule": "reference", "horizon_h": 6, "contracts": 24,
+            "meta": "{}"}
+
+
+def test_book_tick_fill_needs_an_offer_at_our_bid_for_a_full_confirmed_tick():
+    from polybot.paper import fill_from_book
+    s = _maker()                                                    # resting bid at 0.41
+    walk_away = [(900, 0.40, 0.42), (1100, 0.36, 0.42), (1200, 0.36, 0.42)]      # mid 0.39: bid left, nobody sold
+    assert fill_from_book(s, walk_away) == (None, None)
+    offered = [(900, 0.40, 0.44), (1100, 0.39, 0.41), (1160, 0.39, 0.41), (1300, 0.40, 0.44)]
+    assert fill_from_book(s, offered) == (1100, 0.41)
+    flicker = [(900, 0.40, 0.44), (1100, 0.39, 0.41), (1120, 0.40, 0.44), (1400, 0.40, 0.44)]
+    assert fill_from_book(s, flicker) == (None, None)                 # 20 s is not a full tick
+    unconfirmed = [(900, 0.40, 0.44), (1100, 0.39, 0.41)]
+    assert fill_from_book(s, unconfirmed) == (None, None)             # no next row yet
+    blind = [(900, 0.40, 0.44), (1100, 0.39, 0.41), (9000, 0.39, 0.41)]
+    assert fill_from_book(s, blind) == (None, None)                   # the recorder was not watching
+    assert fill_from_book(s, offered, until=1050) == (None, None)     # the order was already cancelled
+
+
+def test_book_tick_counts_a_one_sided_book_and_a_marketable_post():
+    from polybot.paper import fill_from_book
+    one_sided = [(900, 0.40, 0.44), (1100, None, 0.41), (1200, None, 0.41)]
+    assert fill_from_book(_maker(), one_sided) == (1100, 0.41)
+    # BUY_NO posted at 0.50 NO = a YES offer at 0.50 into a 0.50/0.51 book: it met the bid at once
+    posted_into = [(990, 0.50, 0.51), (1047, 0.44, 0.51)]
+    assert fill_from_book(_maker("BUY_NO", 0.50), posted_into) == (1000.0, 0.5)
+
+
+def test_leadlag_fill_model_defaults_to_mid_and_book_tick_is_only_leadlag(monkeypatch):
+    from polybot import runner as runner_mod
+    assert config.Config().leadlag_fill_model == "mid"
+    r = runner_mod.Runner(_cfg(), _ledger(), log=lambda *_: None)
+    for t, b, a in [(900, 0.40, 0.44), (1100, 0.39, 0.41), (1160, 0.39, 0.41)]:
+        r.ledger.add_snapshot("us", "slug", b, a, None, ts=t)
+    sig = dict(_maker(), module="leadlag", venue="us", market="slug")
+    mid_hist = [(1100, 0.40), (1160, 0.40)]
+    assert r._paper_fill(sig, mid_hist) == (1100, 0.41)               # mid model: mid 0.40 <= 0.41
+    r.cfg.leadlag_fill_model = "book_tick"
+    assert r._paper_fill(sig, mid_hist) == (1100, 0.41)
+    assert r._paper_fill(dict(sig, module="hold_favorites"), []) == (None, None)   # others keep the mid model
+
+
+def test_leadlag_fills_replay_reports_both_models(tmp_path):
+    from polybot import leadlag_fills
+    from polybot.strategies.base import Signal
+    led = Ledger(str(tmp_path / "l.db"))
+    now = time.time()
+    sid = led.add_signal(Signal("leadlag", "us", "slug", "x", "BUY_YES", 0.41, 10, 5, "r", exit="reference",
+                                horizon_hours=6, category="politics"), "paper")
+    ts = led.conn.execute("SELECT ts FROM signals WHERE id=?", (sid,)).fetchone()[0]
+    for dt, b, a in [(-60, 0.40, 0.44), (100, 0.39, 0.41), (160, 0.39, 0.41), (7 * 3600, 0.45, 0.47)]:
+        led.add_snapshot("us", "slug", b, a, None, ts=ts + dt)
+    res = leadlag_fills.replay(led, ts - 10, now=now + 8 * 3600)
+    assert res["mid"]["signals"] == res["book_tick"]["signals"] == 1
+    assert res["book_tick"]["filled"] == 1 and res["book_tick"]["closed"] == 1
+    assert "book_tick" in leadlag_fills.render(res)
