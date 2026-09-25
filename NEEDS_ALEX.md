@@ -14,20 +14,192 @@ is still yours to do.
 
 ## 💰 Money lanes — what only you can do
 
-**2026-09-23 10:32 — a stray Chrome window is blocking every Ad Library read (10-second fix, close it).**
-The headless reader (`adlib_read.py`) and the one-time-login window from item 3 below share the same
-`~/.money-operator-chrome` profile, and Chrome only allows one process on a profile at a time. That
-window is open right now, sitting on `tiktok.com/signup/phone-or-email/email` and Vyro's add-clips page
-(launched 10:07). Every keyword/discover/page-id read fails with "PROFILE IN USE" while it's up, which
-means **no new brands can be sourced and no ad counts can be verified until it's closed** — today's
-sourcing task (find 6 new in-band brands) could not run because of it. Log into Vyro on that window if
-you want it connected (see item 3), then **close the window** — that's the whole fix.
+**2026-09-25 08:05 — morning: three faults fixed, nothing new for you. Still open: the same three clicks.**
+- Fixed: the 07:50 release had released 0 first touches since 09-21 (a follow-up count bug); 8 named first touches went out this morning by hand, 6 with their approved statics. Fixed and deployed.
+- Fixed: the polybot loop crash-looped 06:14–07:44 (Polymarket 500s after the overnight DNS outage); fixed, restarted, running.
+- Landed: the first-touch copy audit and the creator-market research (`Money/Research — …(2026-09-25).md`). Monday is a real A/B on Splitframe; creator first touches now carry the sample clip instead of the price.
+- Coming to this list: a batch of two-line X DMs to send from your own account, one per creator emailed (the research says the DM alongside the email is what gets replies). One sitting, when the creator tab has drafted them.
+- Still yours, unchanged: paste `CR-9R54SC` into @wildestmomentsclips' Instagram bio from your phone and say "done"; click "Open YouTube" in the clipping tab and approve Whop's read-only access as basketballlacrosse; Coolify prep for the polybot server move (Volume `/data/polybot`; env `POLYBOT_DATA_DIR=/data/polybot`, `POLYMARKET_KEY_ID`, `POLYMARKET_SECRET_KEY`, `POLYBOT_ON_SERVER=0`; redeploy once; then say "move polybot to the server").
+
+**2026-09-24 04:30 — creator lane: 20 new prospects and 20 drafts, one veto for you.** The list is at 32 qualified
+(`Money/Creator Lane — Prospects.md`, "round 7"). Eleven of the new twenty average 1.5–2k viewers, under the
+"roughly 2–8k" band; each row says so. If that is too small for $400/mo, delete those rows before anyone queues them.
+Drafts are in `Money/Clients/creator-drafts-2026-09-24.md` and are NOT queued; the money session or the operator
+queues them with `splitframe_queue.py creator`. The nine in-band ones were queued by the money session overnight.
+Also: sayeed's 09-21 first touch went stale in the queue (never had release room); a re-draft from a Tuesday clip is
+in the same drafts file under "sayeed (re-draft)". Whoever runs the queue should drop the stale entry and queue
+the re-draft. Nothing else here needs you.
+
+
+**2026-09-25 00:25 — Splitframe lane A: one merge for tab 1. Nothing for Alex.**
+- **Merge `vault-sync-dataless` (1cc28e8, suite 1074/0).** The vault's git copy froze at 09-24 12:19. Seven iCloud files won't come back (they read empty), and vault_sync skipped every run because of them. The send gate, reply watch, and the 07:30 static backstop all read that copy, and the backstop would have found none of the approvals. I committed the copy by hand twice (1cd5d9a is current). The branch makes vault_sync leave out only the stuck files. Merge between runs; the first command drops an uncommitted edit that the branch already contains, byte for byte:
+  ```
+  cd ~/second-brain && git checkout -- scripts/vault_sync.sh && git merge --no-edit vault-sync-dataless && python3 run_tests.py && git push
+  ```
+  Until it merges, anything written to the vault after 00:10 stays off the git copy.
+- Already done: `ceiling-25` and `sender-self-heal` are merged, the statics are approved, and STATIC_FIRST is on. A dry run from the git copy shows **6 of 7 statics attach at 07:30** (High Mesa, My Hair Dance, Saybrook, Jolie, A Cheerful Giver, BadkneesTs). Mika & Sammy's stays plain: Hunter scored erik@ "risky" (65), so it's still held at the front desk.
+- The follow-up statics in `qa-2026-09-23/INDEX.md` (Legally Addictive, Farmers Juice, Curie, A Cheerful Giver, BadkneesTs) are rendered and approved, and that approval is in the git copy too.
+
+**2026-09-24 11:20 — ignore the burst of "Splitframe: send held" nudges (10:57 and 11:07).** iCloud
+evicted the tracker, and the sender read that as "nobody is approved". Nothing was lost:
+- The 13 follow-ups are rescheduled. Ten go from 16:57, including Final Boss and Geode with their
+  statics. Busy Bees, Saltair (both with statics) and Oaktown go tomorrow morning.
+- The fix is merged (tab 1, 4a392f3). An evicted tracker is now read from the vault's git mirror,
+  and if nothing is readable the sender skips the run instead of holding everyone.
+- Nothing for you to do.
+
+**2026-09-24 10:30 — funnel lane, the morning in four lines (details in `Money/Funnel Lane — Log.md`):**
+- **Static follow-ups are landing.** Gracie, Beauty From Bees, Cape Candle and Moon Juice went out
+  as threaded replies, PNG attached (checked in Sent). Final Boss and Geode are next.
+  - Moon Juice was stuck. The sender could only see the newest 30 outbox rows, and it took due
+    drafts newest-first. Both are fixed and merged by tab 1 (936253d, 3096ba4).
+  - The daily ceiling of 20 means Busy Bees, Saltair (both with statics) and Oaktown go first
+    thing tomorrow instead of today.
+- **Hunter hasn't reset yet.** The 09:37 verify pass checked nothing: 113/100 verifications
+  used, even though the account says it resets today. No credits spent. I'm watching the account
+  and will run the verify when credits appear.
+- **Tomorrow's named first touches: about 5 of a possible 10.**
+  - High Mesa (brock@) and My Hair Dance (anna@), once the Hunter shift re-addresses them.
+  - New drafts for burnd, Legally Addictive and Sesto.
+  - Farmers Juice (j@) too, if `named-initial` merges.
+  - The 09-20 batch (including 3 already-named: A Cheerful Giver, BadkneesTs, TEES) needs an
+    ad-account re-read before it can send.
+  - **Deadline: before tomorrow's 07:50 release (tab 1's or the worker's job).** High Mesa and My
+    Hair Dance only count once they're re-addressed. The Hunter shift that normally does it only
+    runs when Hunter has searches left, and it has none. Both commands pass every guard in a dry
+    run. Each rewrites that brand's queued draft (a first touch, no thread) to the founder, with a
+    first-name greeting:
+    ```
+    cd ~/second-brain/scripts && python3 splitframe_queue.py revise --to info@highmesachile.co --new-to brock@highmesachile.co --body-file "$HOME/Library/Mobile Documents/com~apple~CloudDocs/Obsidian/Second brain/Money/Re-address bodies 2026-09-24/high-mesa.txt" --why "published founder address"
+    ```
+    ```
+    cd ~/second-brain/scripts && python3 splitframe_queue.py revise --to pr@myhairdance.com --new-to anna@myhairdance.com --body-file "$HOME/Library/Mobile Documents/com~apple~CloudDocs/Obsidian/Second brain/Money/Re-address bodies 2026-09-24/my-hair-dance.txt" --why "published founder address"
+    ```
+- **Waiting on a merge, all green, all clean together (the reply-watch one also survives an evicted tracker):** `named-verify-failures`,
+  `reply-watch-threads` (a reply on our thread from any address counts; spam is read; a dropped connection is retried, and a failed scan says so in reply_watch.log instead of dying silently, which killed about 1 scan in 5 today) and
+  `named-initial`.
+  ```
+  cd ~/second-brain && git merge --no-edit named-verify-failures reply-watch-threads named-initial && python3 run_tests.py && git push
+  ```
+
+**2026-09-24 09:30 — funnel lane: static-first arm is merged but off. 2 steps are yours (render + verdicts, then the flag); 7 statics are ready.**
+Folder: `Money/Clients/spec-ads/first-touch-qa-2026-09-24/`. `INDEX.md` has each static's copy, the site
+line behind each claim, and why Officine and TEES aren't there. `FIRST_TOUCH.md` has the 7 first-touch
+emails that carry them: High Mesa → brock@, My Hair Dance → anna@, Mika & Sammy's → erik@, Saybrook →
+phil@, Jolie → ryan@, A Cheerful Giver → mark@, BadkneesTs → jim@. All 7 pass the send guard, and a
+dry run of the approval path in a temp copy qualifies all 7.
+1. **Render.** This downloads one product photo per brand from Shopify's CDN, about 3.4 MB in total:
+   High Mesa `DSC06432.jpg` (721 KB at 1600 px), My Hair Dance `DSC03836.jpg` (91 KB), Mika &
+   Sammy's `ms36-v1-img1.png` (233 KB), Saybrook `Main.jpg` (148 KB), Jolie `PDP_Modern_Chrome_1.jpg`
+   (211 KB), A Cheerful Giver `VANILLABOURBON-JP145_01.jpg` (119 KB), BadkneesTs `IMG-1125.png`
+   (1.9 MB at 1600 px). A render that fails is retried 3 times with backoff and reported, never
+   skipped:
+   ```
+   bash "$HOME/Library/Mobile Documents/com~apple~CloudDocs/Obsidian/Second brain/Money/Clients/spec-ads/first-touch-qa-2026-09-24/render-all.sh"
+   ```
+   Then write approve / reject / a one-line change in INDEX.md's verdict column.
+2. **DONE 09-24 (tab 1 merged + pushed, main a4a7cba).** It was: merge 2 branches (both merge cleanly onto main 154d75c and with each other):
+   - `static-first` (8625616) only adds `offer_statics.py swap-first`, a Mac CLI that is off by
+     default. Its own tests are green. The only reds in its run were environmental (live DNS, a
+     fixture mtime) and a clipbot timeout that passes on main 154d75c.
+   - `named-sent-guard` (9765289) makes `named --write` never re-address a row that was already
+     emailed. Follow-ups find their thread by the address the first touch went to, so a swap
+     would silently skip every follow-up for that brand. Full suite 1067/0. It matters as soon as
+     anyone researches founders for the brands already emailed at a desk (Hunter item 4 in the
+     10:45 deliverability entry below).
+   ```
+   cd ~/second-brain && git merge --no-edit named-sent-guard static-first && python3 run_tests.py && git push
+   ```
+3. **Switch it on:** set `STATIC_FIRST = True` in `scripts/offer_statics.py`. The Hunter shift then
+   re-addresses a queued desk draft to its founder. After that, and before the draft releases, run
+   `python3 scripts/offer_statics.py swap-first` (a dry run that lists the swaps). Then run the same
+   command with `--apply`. Only approved and rendered brands addressed to that founder get swapped.
+   Anything else goes out as plain text, as it does today. To reverse, set the flag back to `False`.
+   Each swapped entry keeps the plain draft's id in `replaced_draft`.
+
+**Founders:** `Money/Named Contacts.csv` has 53 UNVERIFIED candidates, 6 published and 20 held. Four new
+published addresses were found printed in the brands' own privacy policies: j@thefarmersjuice.com
+(Junaid Kalmadi), lorenzo@sestosynergy.com, malachy@getburnd.com and laura@legallyaddictivefoods.com.
+`named --write` applies them with no Hunter credit. Boulder Hot Sauce's policy still prints
+harry@: that's the late founder's mailbox. The row says never to use it; Sam is the reader.
+The second pass also named 6 more with sources: Peel & Paper (Companies House), Melt Downs (BBB), Canvasback (their own press release), Mississippi Candle (their own About page), plus
+addresses for Tree Juice and Wild Gold.
+Today's queued brands (Mika, Saybrook, Officine, Jolie) are at the top, so the first 20-credit Hunter
+run checks them first. One small thing is the tracker owner's: Mississippi Candle's domain now
+redirects to mississippicandle.com, and `named --write` refuses the founder address until that row's
+domain says so. For the rest, the Hunter check is the real test of each guess.
+
+**One free founder address for a brand already emailed:** Formula 369's own privacy policy prints
+`eric@formula369.com` (founder Eric Ellis). Their first touch went to info@, and FU2 is due 09-26. I did
+not re-point the row: that would orphan its follow-ups (see `named-sent-guard`). The choice is yours:
+leave it, cc eric@ when you tap FU2, or a fresh first touch to him later. It saves one Hunter search
+either way.
+
+**2026-09-23 ~16:40 — the 11 owed offer-arm statics are RENDERED and waiting on your QA.**
+Folder: `Money/Clients/spec-ads/qa-2026-09-23/` (11 PNGs + `INDEX.md` with the exact copy and the site line
+each claim came from). Open INDEX.md, put approve / reject / a one-line change in the verdict column per brand.
+Approved ones get attached to that brand's next follow-up ("here's the one I said I'd make"). Nothing goes out
+until you mark it.
+
+**2026-09-23 17:00 — funnel lane: 2 merges, 1 decision (details in `Money/Funnel Lane — Log.md`).**
+1. **UPDATE 17:30: both are merged (tab 1: 4141caa, a89bb81), but NOT pushed.** main is 6 commits
+   ahead of origin. The front-desk hold runs in the server's daily job, and the worker's Hunter
+   brief is written on the server, so **tomorrow's Hunter shift won't apply the researched
+   founders until this runs** (it deploys the server):
+   ```
+   cd ~/second-brain && git push
+   ```
+   - `named-only`: **named person or no send** for the ad-creative lane (the audit's verdict).
+     Front-desk first touches are held, not deleted. `NAMED_ONLY = False` in
+     `scripts/splitframe_daily.py` restores them. The cost is fewer new first touches until
+     names come in.
+   - I researched founders for 32 front-desk brands into `Money/Named Contacts.csv`, each with a
+     source: 26 named; 2 founder addresses already published (brock@highmesachile.co,
+     anna@myhairdance.com); 22 guessed addresses.
+   - Tomorrow's Hunter shift (quota resets 09-24) runs `named --verify --write` first. That
+     verifies the guesses (about 22 of 100 verification credits, not searches), writes names and
+     good addresses into the tracker, and re-addresses queued drafts to the founders. The creator
+     shift also backfills tracker rows for sayeed and Konvy (queued before creator rows existed).
+   - `run-tests-pytest`: `run_tests.py` has never run 19 of its test files (464 tests, every money
+     one). Now it does. It first turned up 2 hidden failures in test_clipbot.py; the clipping tab
+     fixed them on main at 3211838, so the suite should be all green after the merge.
+**Founder names for tomorrow's free Hunter quota (09-24 reset): 79 brands researched.** 51 have a
+sourced founder name and a first-name address marked UNVERIFIED, and are ready to verify. 2 have a
+founder address already published (High Mesa, My Hair Dance). 26 stay nameless and held, because a
+wrong name is worse than a front desk. It's all in `Money/Named Contacts.csv`, with a source per
+row. The daily Hunter shift checks them (a verification credit each, not a search) and writes
+only the ones that pass. Nothing for you to do.
+
+2. **UPDATE 18:30: offer-arm statics are approved, and six are attached to tomorrow's follow-ups.**
+   You approved all 11 through tab 1. Tomorrow's FU1s for Gracie (09:05), Beauty From Bees (09:11),
+   Moon Juice (09:17), Cape (09:53), Final Boss (09:59) and Geode (10:11) now say "made the one I
+   said I would, it's attached", as real replies on the thread with the PNG. The texts are in
+   `Money/Clients/spec-ads/qa-2026-09-23/FOLLOWUPS.md`. The usual veto still works: tap *Not doing
+   it* on any of them.
+   - *Done:* tab 1 merged + pushed `offer-statics` (944494b). The other five get their static as
+     their follow-ups come due (Saltair and Busy Bees 09-24, Musculum and Plant Press 09-25, Antler
+     09-26), and a daily 08:20 Mac run catches any the server misses. Plant Press's "3g plant
+     sugar" turned out to be verbatim on their homepage, so no re-render.
+   - **Optional Gmail cleanup** (studio Drafts, nothing references these, and I'm not allowed to
+     delete drafts): the replaced versions of those six follow-ups and one titled "TEST
+     attachment + thread headers (funnel lane, delete me)". The older Gracie draft that said
+     "Still building" is already neutralized (tab 1 re-addressed it to the studio inbox and
+     marked it "[STALE COPY — do not send]").
+
+**2026-09-23 10:32 — RESOLVED by 17:28 — the stray Chrome window that blocked every Ad Library read is gone.**
+No process is holding `~/.money-operator-chrome` any more (checked 17:28 ET, no SingletonLock, reads go
+through). **What's still open: Vyro itself is not logged in.** A fresh read of
+`https://app.vyro.com/campaigns/add-clips` through that profile at 17:28 ET came back LOGIN WALL, so v48
+(the one live, unsubmitted, worth-a-paste post — see item 3 below) still can't be submitted.
+`open -na "Google Chrome" --args --user-data-dir="$HOME/.money-operator-chrome" https://app.vyro.com/campaigns/add-clips`,
+log in, close the window when done.
 
 **2026-09-23 10:45 — Splitframe: the deliverability audit is in `Money/Deliverability Audit — 2026-09-23.md`.**
 Verdict: the mail is arriving and authenticating (DMARC clean at Google and Microsoft, 1 bounce in 103, two
 support-desk autoresponders); the problem is that 23 of 49 first touches went to hello@/info@ desks. Also
 found the send arm **hung for 8 hours overnight** (nothing sent 01:56→10:15); cleared it and paced today's
-10 follow-ups 6.5 min apart. Four things are yours, in order:
+follow-ups one per 10-minute tick (8 went 10:15→11:07; Kirrin Finch and The Sill hit the cap and go at
+08:00 tomorrow). Four things are yours, in order:
 
 1. **Seed placement test (5 min, phone).** Studio Gmail → Drafts → send the one addressed to
    `alex100hickey@gmail.com`, then 10 min later the one to `alex2hoop@icloud.com`. Note which folder each
@@ -35,30 +207,20 @@ found the send arm **hung for 8 hours overnight** (nothing sent 01:56→10:15); 
    yours anywhere** — make one at outlook.com (accounts are yours to create), tell me the address, and the
    third draft is filed the same minute. Optional: paste the same body to the address mail-tester.com gives
    you and read the score; that gate has not been run since 08-21.
-2. **Merge `deliverability-fixes` between shifts (nothing else is running), then push so the server picks
-   up the bounce-watcher half.** The branch's first commit carries main's uncommitted `follow_ups_first`
-   change byte-for-byte, so discard those two working-tree copies first:
-   ```
-   cd ~/second-brain && git checkout -- scripts/splitframe_send.py second-brain-chat/test_splitframe_send_gate.py && git merge deliverability-fixes && git push origin main
-   ```
-   What it changes (mine plus the funnel session's sender hardening, lifted in): one send per
-   10-minute sender run, follow-ups keep their slots even before they are due, no automatic sends
-   22:00–08:00 (your "Send it now" tap still goes at night), a 420 s watchdog so a hung run can never
-   stop sending again, the SENT line logged before the bookkeeping that hung last night, the rot check
-   flags a hung job by process age, and the bounce watcher finally sees creator-lane addresses. The
-   repo plist is reconciled to the installed 600 s interval.
-3. **Follow-up backlog needs a decision.** The 10/day cap is shared between first touches and follow-ups.
-   22 follow-ups were due today, ~10 more land tomorrow, then the 09-18/19/20 batches' second follow-ups.
-   Follow-ups alone fill the cap for 3–4 days and first touches get zero slots. Say **A** or **B**:
-   **A** = the cap counts first touches only (follow-ups are replies on delivered threads, low risk) — I
-   code it, ~20 lines + tests. **B** = leave it; first touches pause until the backlog clears, which is
-   also what "named person or no send" wants until Hunter resets 09-24. I'd pick A.
+2. **Done by the money session 16:xx:** deliverability-fixes and followups-own-budget are merged and pushed
+   (server on 072d592). The sender now sends one email per 10-minute run, never between 22:00 and 08:00
+   unless you tapped it, counts the 10/day cap against first touches only, caps the whole day at 20, and
+   dies inside 7 minutes if it hangs. Reversal of the follow-up rule is `FOLLOWUPS_SHARE_CAP = True`
+   in scripts/splitframe_daily.py.
+3. (folded into 2)
 4. **Hunter resets 09-24.** The first nine searches should be founder addresses for brands already
    emailed at a front desk where the name is known: Moon Juice (Amanda Chantal Bacon), Brightland
    (Aishwarya Iyer), SwimZip (Betsy Johnson), Calypsa (Nava Brief Fried), Formula 369 (Eric Ellis),
    Saltair (Iskra Lawrence), Oaktown Spice Shop (John Beaver), Native Pet (Dan), Plant Press (Ariana) —
-   so their second follow-up goes to a person, not a ticket desk. Hunter Starter ($34/mo, your card) is
-   still the real unlock and I did not sign up for anything.
+   so a person hears from you, not a ticket desk. One caution from the funnel session: do NOT re-point a sent
+   row's address in the tracker, that silently kills its follow-ups. The founder gets a deliberate fresh
+   thread (or a cc on the follow-up) instead. Hunter Starter ($34/mo, your card) is still the real unlock
+   and I did not sign up for anything.
 
 
 **UPDATE 10:20: no action needed.** Something other than me killed the frozen process at 10:09
@@ -126,23 +288,24 @@ account. One thing is blocking money, and it takes about a minute.*
 `second-brain` project. Workers spawned after this should see the Higgsfield tools. If a shift
 still reports zero Higgsfield tools, that is a new problem, not this one.
 
-### 2. Clipping: the 4 things only you can do (updated 2026-09-23 11:00 by the clipping tab)
-Every Crazy Taxi view pays only after the post is **submitted on Whop**, and Whop only accepts posts from
-**linked** accounts, apparently within 30 minutes of posting. Instagram and YouTube posting already run without
-you. Linking is the bottleneck.
-1. **Sign into Whop in the Claude browser pane** (Google, basketballlacrosse387). You're currently signed out there,
-   so I can't check the budget, submit anything, or find other gaming campaigns.
-2. **Link Instagram @wildestmomentsclips and YouTube @wildestmomentsclips on Whop.** Clipping Culture → Settings →
-   Connected accounts → Connect → pick the platform → type the handle → Whop shows a code. Put the code in that
-   account's bio (IG: the app → Edit profile; YouTube: Studio → Customization → Description), click Verify, then
-   remove the code. I can't edit bios through the APIs I have.
-3. **New TikTok account (retry later; TikTok locked you out after too many code attempts).** Use the real Chrome
-   window I open, not the Claude pane (TikTok silently rejects codes there):
+### 2. Clipping: your 4 clicks, in money order (updated 2026-09-24 ~23:30 by the clipping tab)
+1. **Instagram → Whop link (1 min).** Say **yes** in the clipping tab and I'll add `CR-9R54SC` to the
+   @wildestmomentsclips bio, click Verify in the Whop dialog (it's open in the Claude pane), then remove the code.
+   Or paste it into the bio yourself and tell me. Same next for YouTube (code comes after IG).
+2. **OK two footage downloads** for the two gaming campaigns that opened today, both almost untouched:
+   - **Total War: WARHAMMER III – Lord of the End Times:** $27.2k left, 1 clipper. SEGA's Box folder, 4 videos,
+     3.6 GB: Thanquol & Boris Roster Showcase 1.24 GB, Glottkin & Nagash Roster Showcase 0.70 GB,
+     Announce Trailer 1.19 GB, Launch Trailer 0.48 GB.
+   - **Atlus Developer Sale (Persona 3 Reload / Persona 5 Royal / Metaphor):** $24k left, 1 clipper. Frame.io
+     folder, size unknown until opened.
+   Say "download both" and I'll pull them, clip them, and post them on Instagram/YouTube at the ramp cadence.
+   Both campaigns are registered in clipbot with their brief rules.
+3. ~~17 GB cleanup~~: done 09-24 night by tab 1. The dead Vyro renders are gone (ledger rows kept), and 29 GB is free.
+4. **TikTok sign-up: retry later** in the real Chrome window (the Claude pane silently rejects TikTok codes).
    `open -na "Google Chrome" --args --user-data-dir="$HOME/.money-operator-chrome" https://www.tiktok.com/signup/phone-or-email/email`
-   Email `basketballlacrosse387+ct2@gmail.com`, then tell me the handle. After that: approve the Higgsfield
-   link I send, and link the account on Whop the same way as step 2.
-4. **Close that Chrome window when you're done with it.** I can't read Vyro (or anything else on that profile)
-   while it's open.
+
+Why speed matters: Crazy Taxi CNT is 60% used (45 clippers now, 7 yesterday), so it will likely empty around Sep 26.
+New pools pay whoever posts first.
 
 ### 3. Vyro: expect $0; only v48 is worth one paste
 Vyro pays nothing under **5,000 views a post**; the best of the 25 has 536. Of the 25:
@@ -342,6 +505,10 @@ That is the thing to build next, and it is blocked behind the lift question in #
   awake. Until you do, anything you have already submitted keeps showing as **open**,
   and the school brief, ranked daily orders and phone nudges are all wrong in that
   direction — a week's worth now.
+- **2026-09-25 — the nightly Canvas status sync could not run.** canvas.case.edu
+  redirected to login.case.edu again; nothing was read. Open the Browser pane on the
+  Mac, go to canvas.case.edu, log in once, and leave the tab open with the Mac awake.
+  **Last good read: 2026-09-17 00:30 — 8 days stale.** Phone alert sent tonight.
 
 - **2026-09-11 — the nightly Canvas status sync could not run.** canvas.case.edu
   redirected to login.case.edu (SSO expired), so no submissions, grades or
@@ -1126,3 +1293,11 @@ invisible code.
 - **ACCT — the SEC 10-K instructions doc is missing.** Jarvis's Sep 3 announcement says he uploaded `SEC.Gov Instructions Finding a Company's 10K.docx` under the "Getting Started, General Admin, and Learning Resources" module. It is not there (all 10 module items checked live), and the ACCT Files listing is not student-visible to us. Ask him, or check the *Excel Information* page yourself.
 - **prepared_through is 8 days stale on all five courses** (still 2026-08-27). The Sunday scorecard ritual has never run, so every PACE/lead-target number in the brief is currently fiction. Ten minutes on the pace page fixes it — this one is yours, not the sweep's.
 - **No record of which MATH/AIQS suggested problems you have actually done.** All the Ch 1 and Ch 2 planning assumes §1.1-1.4 lists are finished. If they are not, say so before Test 1 (Fri 9/11).
+
+- **2026-09-23 — the nightly Canvas status sync could not run.** canvas.case.edu
+  redirected to login.case.edu (SSO expired), so no submissions, grades or
+  announcements were read tonight. Open the Browser pane on the Mac, go to
+  canvas.case.edu and log in once — and leave that tab open with the Mac awake, or
+  the session will be gone by the next nightly run. Until then, work already
+  submitted keeps showing as **open** in the vault, and the school brief, ranked
+  daily orders and phone nudges will all be wrong in that direction.
