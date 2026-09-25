@@ -26,7 +26,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from . import backtest, calibration, compounding, config, notify, pairs
+from . import backtest, calibration, compounding, config, lease, notify, pairs
 from .execution import Executor
 from .feeds import offshore
 from .feeds.usvenue import USVenue, buckets_from_markets
@@ -116,7 +116,10 @@ ARB_HOURS = range(9, 17)
 QUIET_REPEAT_S = 600.0
 JOB_RETRY_S = 3600.0
 UNIVERSE_SLOTS = ((6, 30), (18, 30))
-JOBS_PATH = os.path.join(config.ROOT, "jobs-state.json")
+JOBS_PATH = os.path.join(config.DATA_DIR, "jobs-state.json")
+# second-brain-chat/, where intake.py and monitor.py live. Was ~/second-brain/second-brain-chat, which
+# does not exist on the server, so the heartbeat and the scoreboard would have failed there silently.
+APP_DIR = os.path.dirname(config.ROOT)
 # Where the leadlag universe comes from. US: every non-sports category events.list honours.
 # Offshore: the gamma tags those questions live under (checked 2026-09-23).
 # "technology" is its own category (6 events on 2026-09-23); asking for "tech" returns nothing.
@@ -181,7 +184,7 @@ def _beat(name: str, stale_after_s: int, note: str = "") -> None:
     cannot be seen from the server is a loop nobody is watching."""
     try:
         import os, sys
-        sys.path.insert(0, os.path.expanduser("~/second-brain/second-brain-chat"))
+        sys.path.insert(0, APP_DIR)
         import intake, monitor
         from supabase import create_client
         if intake.supabase is None:
@@ -201,7 +204,7 @@ def _publish(lane: str, facts: dict) -> None:
     Mac's sqlite, so the scoreboard has to travel."""
     try:
         import os, sys
-        sys.path.insert(0, os.path.expanduser("~/second-brain/second-brain-chat"))
+        sys.path.insert(0, APP_DIR)
         import intake
         from supabase import create_client
         if intake.supabase is None:
@@ -825,7 +828,7 @@ class Runner:
         return (time.time() - last) >= 3 * 3600
 
     def backtest(self, days: int = 7, cities=None, kinds=("high",)) -> str:
-        out = f"{config.ROOT}/backtest-latest.json"
+        out = f"{config.DATA_DIR}/backtest-latest.json"
         summary = backtest.run(days, cities, kinds, self.cfg, self.log, out_path=out)
         text = backtest.format_summary(summary)
         self.log(text)
@@ -1132,7 +1135,21 @@ class Runner:
         threading.Thread(target=watch, daemon=True, name="polybot-watchdog").start()
 
     def loop(self):
-        self.log("polybot loop started (Ctrl+C to stop)")
+        _arm_hard_watchdog(WATCHDOG_HARD_S)     # the lease check is a network call; it must not hang us
+        me = lease.node_name()
+        try:
+            why = lease.conflict(me, lease.holder())
+        except Exception as exc:          # fail-open: see lease.py
+            why = None
+            self.log(f"  lease: store unreachable ({type(exc).__name__}) — starting anyway")
+        if why:
+            # Never two loops on one account. Exit cleanly (not a crash) so launchd / the supervisor
+            # can retry later, when the other node has stopped renewing.
+            self.log(f"polybot loop NOT started on {me}: {why}")
+            time.sleep(60)
+            return
+        self.log(f"polybot loop started on {me} (Ctrl+C to stop)")
+        last_lease = 0.0
         done = set()
         next_arb = 0.0        # sweep immediately on start, then on its own seconds clock
         next_pairs = 0.0
@@ -1303,6 +1320,12 @@ class Runner:
                     self.record_maker()
                 except Exception as exc:
                     self.log(f"  maker_rewards error: {exc}\n{traceback.format_exc(limit=2)}")
+            if time.time() - last_lease >= lease.RENEW_EVERY_S:
+                last_lease = time.time()
+                try:
+                    lease.renew(me)
+                except Exception:
+                    pass
             _beat("polybot", 3 * 3600, f"{self.cfg.mode('weather_lock')} lock")
             try:
                 ready = [m for m in config.MODULES

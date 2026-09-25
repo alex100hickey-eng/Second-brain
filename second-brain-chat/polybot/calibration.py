@@ -78,7 +78,7 @@ def lookup(table: dict, price: float, category: str, min_n: int = 25, shrink: in
 # in 0.85-0.90 and 15 in 0.90-0.95 — under lookup's min_n of 25 in BOTH favourite bands, so
 # hold_favorites could never produce a signal, and the 03:00 rebuild never ran again because the
 # Mac is asleep at 03:00.
-SAMPLES_PATH = os.path.join(config.ROOT, "calibration-samples.json")
+SAMPLES_PATH = os.path.join(config.DATA_DIR, "calibration-samples.json")
 # Not sampled: the "Up or Down" 5/15-minute series (~75% of everything that closes, never a
 # favourite a day out) and sports (never traded under the Ohio rule). Both would only have spent
 # history calls; neither ever lands in a band hold_favorites trades.

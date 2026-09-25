@@ -33,7 +33,7 @@ from difflib import SequenceMatcher
 from . import config
 from .feeds.usvenue import _market_closed
 
-PAIRS_PATH = os.path.join(config.ROOT, "pairs.json")
+PAIRS_PATH = os.path.join(config.DATA_DIR, "pairs.json")
 
 _STOP = {"will", "the", "a", "an", "of", "in", "on", "at", "to", "be", "by", "for", "vs", "and", "or",
          "who", "which", "what", "election", "elections", "winner", "win", "midterm", "midterms",
