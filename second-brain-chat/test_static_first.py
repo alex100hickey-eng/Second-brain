@@ -34,7 +34,10 @@ def qa(tmp_path):
 
 
 def test_it_is_off_by_default_and_touches_nothing_while_off(monkeypatch, capsys):
-    assert ofs.STATIC_FIRST is False
+    # The flag is a bool Alex flips (on since 2026-09-25, his approval of every static);
+    # the contract under test is that OFF touches nothing, so pin it off for the test.
+    assert isinstance(ofs.STATIC_FIRST, bool)
+    monkeypatch.setattr(ofs, "STATIC_FIRST", False)
 
     def boom():
         raise AssertionError("must not reach the network while STATIC_FIRST is off")
