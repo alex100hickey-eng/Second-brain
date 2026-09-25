@@ -57,6 +57,22 @@ def noise_signal(ref, tgt, window_s: float, move_cents: float, quiet_ratio: floa
     return ("BUY_YES" if gap > 0 else "BUY_NO", ref_now, tgt_now, round(gap, 1))
 
 
+REFERENCES = ("mid", "tight_mid")
+
+
+def tight_mid_series(quotes, max_spread: float):
+    """Reference C: [(ts, bid, ask)] -> [(ts, mid)] where the mid moves only on a book whose spread
+    is <= max_spread, and holds its last tight value while the book is wide. Nothing until the first
+    tight quote: a reference that has never been sane is no reference."""
+    out, last = [], None
+    for ts, bid, ask in quotes:
+        if bid is not None and ask is not None and ask - bid <= max_spread + 1e-9:
+            last = (bid + ask) / 2
+        if last is not None:
+            out.append((ts, last))
+    return out
+
+
 def load_pairs(path: str | None = None) -> list:
     """[{'us_slug':..., 'offshore_token':..., 'category': 'politics'|'sports'|..., 'label':...}]"""
     return pairs_mod.load_pairs(path)
@@ -88,7 +104,7 @@ class LeadLag(Strategy):
             cat = pair.get("category", "other")
             if cat == "sports" and not self.cfg.caps.sports_enabled:
                 continue
-            ref = self.store.get("offshore", pair["offshore_token"])
+            ref = self._reference(pair["offshore_token"])
             tgt = self.store.get("us", pair["us_slug"])
             hit = leadlag_signal(ref, tgt, self.cfg.leadlag_window_s, self.cfg.leadlag_move_cents,
                                  self.cfg.leadlag_follow_ratio)
@@ -111,5 +127,18 @@ class LeadLag(Strategy):
             out.append(Signal(self.name, "us", pair["us_slug"], pair.get("label", pair["us_slug"]), side, price,
                               self.cfg.caps.max_per_market_usd / 2, abs(gap), f"{kind}: ref {ref_now:.2f} vs us {tgt_now:.2f}",
                               exit="reference", horizon_hours=6, category=cat, spread_cents=spread,
-                              meta={"kind": kind, "ref": ref_now, "tgt": tgt_now}))
+                              meta={"kind": kind, "ref": ref_now, "tgt": tgt_now,
+                                    "reference": self.reference}))
         return out
+
+    @property
+    def reference(self) -> str:
+        return "tight_mid" if getattr(self.cfg, "leadlag_reference", "mid") == "tight_mid" else "mid"
+
+    def _reference(self, token):
+        if self.reference == "mid":
+            return self.store.get("offshore", token)
+        quotes = getattr(self.store, "quotes", None)
+        if quotes is None:
+            return []                      # a store without bid/ask cannot say whether the book was tight
+        return tight_mid_series(quotes("offshore", token), self.cfg.leadlag_ref_max_spread)

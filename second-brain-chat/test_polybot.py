@@ -3976,3 +3976,62 @@ def test_watch_log_reads_only_what_was_written_after_the_mark(tmp_path):
     with open(log, "a") as f:
         f.write("09-30 07:01:00   config reloaded: bucket_sum paper->live\n")
     assert "09-30" in runner_mod._watch_log(str(log), mark, "bucket_sum paper->live", 0)
+
+
+def test_tight_mid_moves_only_on_a_tight_book():
+    from polybot.strategies.leadlag import tight_mid_series
+    q = [(0, None, None), (1, 0.40, 0.60), (2, 0.44, 0.46), (3, 0.44, 0.80), (4, 0.49, 0.51)]
+    assert tight_mid_series(q, 0.05) == [(2, 0.45), (3, 0.45), (4, 0.50)]    # nothing until the first tight quote
+
+
+class _QuoteStore:
+    def __init__(self, rows):
+        self.rows = rows            # (venue, market) -> [(ts, bid, ask)]
+
+    def get(self, venue, market):
+        return [(t, (b + a) / 2) for t, b, a in self.rows.get((venue, market), [])]
+
+    def quotes(self, venue, market):
+        return self.rows.get((venue, market), [])
+
+
+def _leadlag_with(reference, off_rows):
+    from polybot.strategies.leadlag import LeadLag
+    cfg = _cfg()
+    cfg.leadlag_reference = reference
+    us = type("US", (), {"available": True, "why_unavailable": None, "bbo": lambda self, s: (0.40, 0.42)})()
+    store = _QuoteStore({("offshore", "tok"): off_rows,
+                         ("us", "slug"): [(0, 0.40, 0.42), (60, 0.40, 0.42), (120, 0.40, 0.42)]})
+    return LeadLag(cfg, us, store, pairs_fn=lambda: [{"us_slug": "slug", "offshore_token": "tok",
+                                                      "category": "politics", "label": "x"}])
+
+
+def test_reference_c_ignores_a_pulled_offer_that_reference_a_trades():
+    # the offshore offer is pulled (ask 0.43 -> 0.60, bid unchanged): the mid jumps 8.5c, the book is 19c wide
+    pulled = [(0, 0.40, 0.43), (60, 0.40, 0.43), (120, 0.41, 0.60)]
+    a = _leadlag_with("mid", pulled).scan()
+    assert len(a) == 1 and a[0].meta["reference"] == "mid"
+    assert _leadlag_with("tight_mid", pulled).scan() == []
+    # a real move on a tight book still trades under C
+    real = [(0, 0.40, 0.43), (60, 0.44, 0.46), (120, 0.47, 0.49)]
+    c = _leadlag_with("tight_mid", real).scan()
+    assert len(c) == 1 and c[0].meta["reference"] == "tight_mid"
+
+
+def test_the_live_default_is_still_reference_a():
+    assert config.Config().leadlag_reference == "mid"
+
+
+def test_leadlag_refs_replay_takes_the_same_signal_under_both_on_a_clean_book(tmp_path):
+    from polybot import leadlag_refs
+    led_path = str(tmp_path / "l.db")
+    led = Ledger(led_path)
+    t0 = 1_800_000_000.0
+    for i, (ob, oa, ub, ua) in enumerate([(0.40, 0.42, 0.40, 0.42), (0.40, 0.42, 0.40, 0.42),
+                                          (0.46, 0.48, 0.40, 0.42), (0.47, 0.49, 0.40, 0.42)]):
+        led.add_snapshot("offshore", "tok", ob, oa, None, ts=t0 + 40 * i)
+        led.add_snapshot("us", "slug", ub, ua, None, ts=t0 + 40 * i)
+    pairs_ = [{"us_slug": "slug", "offshore_token": "tok", "category": "politics", "label": "x"}]
+    res = leadlag_refs.replay(led_path, pairs_, t0 - 1)
+    assert res["A"]["signals"] == res["C"]["signals"] == 1
+    assert "flip to C" in leadlag_refs.render(res)

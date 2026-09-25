@@ -199,6 +199,12 @@ class Config:
     leadlag_move_cents: float = 3.0
     leadlag_window_s: int = 120
     leadlag_follow_ratio: float = 0.5
+    # What leadlag compares the US book against. "mid" (reference A) is the live rule. "tight_mid"
+    # (reference C) is the offshore mid updated only while the offshore spread is <= the limit, so
+    # a pulled offer on a thin book cannot fake a move (design doc, Sep 23 night). Alex's flip,
+    # decided when leadlag has 20 closed positions (`runner leadlag-refs` replays both).
+    leadlag_reference: str = "mid"
+    leadlag_ref_max_spread: float = 0.05
     favorites_band: tuple = (0.85, 0.95)
     longshot_band: tuple = (0.03, 0.20)
     horizon_days: int = 7

@@ -174,6 +174,10 @@ class SeriesStore:
         rows = self.ledger.snapshots(venue, market, time.time() - self.window_s)
         return [(r["ts"], r["mid"]) for r in rows if r["mid"] is not None]
 
+    def quotes(self, venue, market):
+        rows = self.ledger.snapshots(venue, market, time.time() - self.window_s)
+        return [(r["ts"], r["bid"], r["ask"]) for r in rows]
+
 
 
 def _beat(name: str, stale_after_s: int, note: str = "") -> None:
@@ -1504,7 +1508,8 @@ def _stamped_log(*parts):
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="polybot")
     ap.add_argument("cmd", choices=["scan", "settle", "report", "calibrate", "status", "loop", "backtest",
-                                   "pairs", "promote", "arbs", "universe", "leadlag", "golive"])
+                                   "pairs", "promote", "arbs", "universe", "leadlag", "golive",
+                                   "leadlag-refs"])
     ap.add_argument("--city", action="append")
     ap.add_argument("--modules", nargs="*")
     ap.add_argument("--venue", default="offshore", choices=["offshore", "us"], help="scan: which books to read")
@@ -1516,6 +1521,12 @@ def main(argv=None):
     ap.add_argument("--set-cap", type=float, help="golive: first-day arb set cap in $ (may only lower it)")
     ap.add_argument("--dry-run", action="store_true", help="golive: every check and the plan, nothing written")
     a = ap.parse_args(argv)
+    if a.cmd == "leadlag-refs":
+        from . import leadlag_refs
+        cfg = config.load(config.CONFIG_PATH)
+        since = time.time() - a.days * 86400 if a.days > 1 else cfg.gate_since_ts
+        print(leadlag_refs.render(leadlag_refs.replay(config.DB_PATH, pairs.load_pairs(), since, cfg=cfg)))
+        return 0
     if a.cmd == "golive":
         if not a.module:
             ap.error("golive needs --module")
