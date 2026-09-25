@@ -206,6 +206,42 @@ def report_publish_facts(runner) -> dict:
     return {"report": runner.report_text(1), "report_at": time.time()}
 
 
+# Modules whose signals are arb sets: live needs `arb_live_ok` too (risk.py), and --set-cap applies.
+ARB_MODULES = ("bucket_sum",)
+GOLIVE_WAIT_S = 150.0          # the loop re-reads config.json once a minute; allow a slow tick
+
+
+def _watch_log(path: str, mark: int, needle: str, wait_s: float, poll_s: float = 5.0):
+    """The first line containing `needle` written to `path` after byte `mark`, or None by `wait_s`."""
+    end = time.time() + wait_s
+    while True:
+        try:
+            with open(path, errors="replace") as f:
+                f.seek(mark)
+                for line in f:
+                    if needle in line:
+                        return line
+        except OSError:
+            pass
+        if time.time() >= end:
+            return None
+        time.sleep(poll_s)
+
+
+def _restart_loop() -> str:
+    """Restart the loop wherever it runs: launchd on the Mac; on the server the supervisor restarts
+    a child that exits, so stopping the child is the restart."""
+    import subprocess
+    if os.environ.get("POLYBOT_NODE", "").startswith("server") or os.environ.get("POLYBOT_ON_SERVER") == "1":
+        r = subprocess.run(["pkill", "-f", "polybot.runner loop"], capture_output=True, text=True)
+        return "server: loop child stopped; the supervisor starts it again in ~30s" if r.returncode == 0 \
+            else "server: no loop child found — restart the app in Coolify"
+    r = subprocess.run(["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/com.secondbrain.polybot"],
+                       capture_output=True, text=True)
+    return "launchd: loop restarted" if r.returncode == 0 else \
+        f"launchd restart failed ({(r.stderr or r.stdout).strip()[:120]}) — run: launchctl kickstart -k gui/$(id -u)/com.secondbrain.polybot"
+
+
 def _publish(lane: str, facts: dict) -> None:
     """Push this lane's money-relevant numbers into the SHARED store.
 
@@ -1032,6 +1068,100 @@ class Runner:
             f.write(text + "\n")
         return text
 
+    def golive(self, module: str, set_cap: float | None = None, dry_run: bool = False,
+               wait_s: float = GOLIVE_WAIT_S, watch=None, restart=None) -> int:
+        """Alex's word as one command: `runner golive --module bucket_sum --set-cap 20`.
+
+        Refuses unless the module is in paper, the kill switch is off and `promotion_check` PASSes;
+        there is no override. Then, in one atomic write to config.json (the previous file is kept
+        beside it): the mode paper -> live, and for an arb module `arb_live_ok` true and, if given,
+        the first-day set cap, which may only LOWER `arb_max_set_cost_usd`. Every other field is
+        left byte-for-byte as it was. The running loop re-reads config.json once a minute and, since
+        lane D, re-points the risk manager and every module at the new copy, so nothing is
+        restarted unless the loop is not seen picking it up. Prints the kill drill and the rollback.
+        Returns 0 on go-live (or a clean dry run), 1 on a refusal."""
+        say = self.log
+        refuse = lambda why: (say(f"golive {module}: REFUSED — {why}. Nothing was written."), 1)[1]
+        if module not in config.MODULES:
+            return refuse(f"unknown module (one of {', '.join(config.MODULES)})")
+        mode = self.cfg.mode(module)
+        if mode != "paper":
+            return refuse(f"mode is {mode}, not paper")
+        if config.kill_switch_on():
+            return refuse(f"the kill switch is ON ({config.KILL_PATH})")
+        arb = module in ARB_MODULES
+        current_cap = float(self.cfg.arb_max_set_cost_usd)
+        if set_cap is not None:
+            if not arb:
+                return refuse("--set-cap is the arb set cap; this module does not trade sets")
+            if not 0 < set_cap <= current_cap:
+                return refuse(f"--set-cap must be above 0 and at most today's ${current_cap:.0f} (it may only lower it)")
+        ok, why = self.ledger.promotion_check(module)
+        if not ok:
+            return refuse(f"the gate does not pass: {why}")
+        with open(config.CONFIG_PATH) as f:
+            raw = json.load(f)
+        changes = [(f"modes.{module}", "paper", "live")]
+        if arb:
+            changes.append(("arb_live_ok", bool(raw.get("arb_live_ok", False)), True))
+            if set_cap is not None:
+                changes.append(("arb_max_set_cost_usd", current_cap, float(set_cap)))
+        say(f"golive {module}: the gate PASSES — {why}")
+        for k, a, b in changes:
+            say(f"  {k}: {a} -> {b}")
+        if dry_run:
+            say("  dry run: nothing written.")
+            say(self._golive_drill(module, arb, current_cap if set_cap is not None else None, None))
+            return 0
+        backup = f"{config.CONFIG_PATH}.pre-golive-{datetime.now(ET).strftime('%Y%m%d-%H%M%S')}"
+        with open(backup, "w") as f:
+            json.dump(raw, f, indent=2)
+        raw.setdefault("modes", {})[module] = "live"
+        if arb:
+            raw["arb_live_ok"] = True
+            if set_cap is not None:
+                raw["arb_max_set_cost_usd"] = float(set_cap)
+        log_path = os.path.join(config.DATA_DIR, "loop.log")
+        try:
+            mark = os.path.getsize(log_path)
+        except OSError:
+            mark = 0
+        tmp = config.CONFIG_PATH + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(raw, f, indent=2)
+        os.replace(tmp, config.CONFIG_PATH)
+        say(f"  written: {config.CONFIG_PATH} (previous copy: {backup})")
+        notify.nudge("polybot: LIVE", f"{module} passed the gate and now places real orders"
+                     + (f" (first-day set cap ${set_cap:.0f})" if set_cap is not None else "") + ".",
+                     key="polybot-promote", log=self.log)
+        seen = (watch or _watch_log)(log_path, mark, f"{module} paper->live", wait_s)
+        if seen:
+            say(f"  the running loop picked it up: {seen.strip()} — no restart needed.")
+        else:
+            say(f"  the loop did not log the reload within {wait_s:.0f}s; restarting it.")
+            say("  " + (restart or _restart_loop)())
+        say(self._golive_drill(module, arb, current_cap if set_cap is not None else None, backup))
+        return 0
+
+    @staticmethod
+    def _golive_drill(module, arb, restore_cap, backup) -> str:
+        k = config.KILL_PATH
+        lines = ["",
+                 "KILL DRILL (do it once now, 2 minutes):",
+                 f"  1. touch {k}",
+                 "  2. python3 -m polybot.runner status   -> 'kill switch: ON'; risk refuses everything; within 5 min "
+                 "the loop logs 'kill switch: cancel_all sent'",
+                 f"  3. rm {k}   -> status reads 'off'",
+                 "DURING LIVE: the same `touch` stops everything; a half-filled set unwinds itself; a "
+                 "'polybot-arb-stranded' nudge is an unhedged position that needs you."]
+        if restore_cap is not None:
+            lines.append(f"AFTER THE FIRST SET SETTLES: put arb_max_set_cost_usd back to {restore_cap:.0f} in "
+                         f"{config.CONFIG_PATH} (the loop re-reads it within a minute).")
+        lines.append("ROLLBACK: " + (f"cp '{backup}' '{config.CONFIG_PATH}'" if backup else
+                                     f"set modes.{module} to \"paper\"" + (" and arb_live_ok to false" if arb else "")
+                                     + f" in {config.CONFIG_PATH}") + " — the loop re-reads it within a minute.")
+        return "\n".join(lines)
+
     def promote(self, modules=None) -> list:
         """Flip every paper module whose gate passes to live (or only the named ones), write config.json,
         and say so. Nothing else ever changes a mode. Returns the modules flipped."""
@@ -1374,7 +1504,7 @@ def _stamped_log(*parts):
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="polybot")
     ap.add_argument("cmd", choices=["scan", "settle", "report", "calibrate", "status", "loop", "backtest",
-                                   "pairs", "promote", "arbs", "universe", "leadlag"])
+                                   "pairs", "promote", "arbs", "universe", "leadlag", "golive"])
     ap.add_argument("--city", action="append")
     ap.add_argument("--modules", nargs="*")
     ap.add_argument("--venue", default="offshore", choices=["offshore", "us"], help="scan: which books to read")
@@ -1382,7 +1512,14 @@ def main(argv=None):
     ap.add_argument("--events", type=int, default=3000)
     ap.add_argument("--minutes", type=float, default=10, help="leadlag: how long to record")
     ap.add_argument("--kinds", nargs="*", default=["high"])
+    ap.add_argument("--module", help="golive: the module to take live")
+    ap.add_argument("--set-cap", type=float, help="golive: first-day arb set cap in $ (may only lower it)")
+    ap.add_argument("--dry-run", action="store_true", help="golive: every check and the plan, nothing written")
     a = ap.parse_args(argv)
+    if a.cmd == "golive":
+        if not a.module:
+            ap.error("golive needs --module")
+        return Runner(log=print).golive(a.module, a.set_cap, a.dry_run)
     r = Runner(log=_stamped_log if a.cmd == "loop" else print)
     if a.cmd == "universe":
         print(r.refresh_universe())

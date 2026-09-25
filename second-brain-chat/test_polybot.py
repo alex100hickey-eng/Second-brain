@@ -3889,3 +3889,90 @@ def test_the_published_report_is_the_report_and_leaves_the_file_alone(monkeypatc
     assert facts["report"] == r.report_text(1) and "compounding:" in facts["report"]
     assert abs(facts["report_at"] - time.time()) < 5 and not path.exists()     # only report() writes the file
     assert runner_mod.REPORT_PUBLISH_S == 900.0
+
+
+def _golive_env(monkeypatch, tmp_path, gate=(True, "PASS — 31 signals"), raw=None):
+    from polybot import runner as runner_mod, notify
+    path = tmp_path / "config.json"
+    raw = raw or {"modes": {"bucket_sum": "paper", "weather_lock": "paper"}, "arb_max_set_cost_usd": 120.0,
+                  "gate_since_ts": 1789739626.0158348, "caps": {"max_exposure_usd": 180.0}}
+    path.write_text(json.dumps(raw))
+    monkeypatch.setattr(config, "CONFIG_PATH", str(path))
+    monkeypatch.setattr(config, "DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(config, "KILL_PATH", str(tmp_path / "KILL"))
+    nudged = []
+    monkeypatch.setattr(notify, "nudge", lambda *a, **k: nudged.append(a[0]))
+    cfg = config.load(str(path))
+    led = _ledger()
+    monkeypatch.setattr(led, "promotion_check", lambda m, **k: gate)
+    out = []
+    r = runner_mod.Runner(cfg, led, log=out.append)
+    return r, path, out, nudged
+
+
+def test_golive_refuses_without_a_passing_gate_and_writes_nothing(monkeypatch, tmp_path):
+    r, path, out, nudged = _golive_env(monkeypatch, tmp_path, gate=(False, "19/30 signals"))
+    before = path.read_text()
+    assert r.golive("bucket_sum", 20) == 1
+    assert path.read_text() == before and nudged == [] and "gate does not pass: 19/30 signals" in out[-1]
+    assert not list(tmp_path.glob("config.json.pre-golive-*"))
+
+
+def test_golive_refuses_a_kill_switch_a_raised_cap_and_a_cap_on_a_non_arb_module(monkeypatch, tmp_path):
+    r, path, out, _ = _golive_env(monkeypatch, tmp_path)
+    before = path.read_text()
+    assert r.golive("bucket_sum", 200) == 1 and "may only lower it" in out[-1]
+    assert r.golive("weather_lock", 20) == 1 and "does not trade sets" in out[-1]
+    assert r.golive("nope") == 1 and "unknown module" in out[-1]
+    (tmp_path / "KILL").write_text("")
+    assert r.golive("bucket_sum", 20) == 1 and "kill switch is ON" in out[-1]
+    assert path.read_text() == before
+
+
+def test_golive_dry_run_prints_the_plan_and_the_drill_only(monkeypatch, tmp_path):
+    r, path, out, nudged = _golive_env(monkeypatch, tmp_path)
+    before = path.read_text()
+    assert r.golive("bucket_sum", 20, dry_run=True) == 0
+    text = "\n".join(out)
+    assert "arb_live_ok: False -> True" in text and "arb_max_set_cost_usd: 120.0 -> 20.0" in text
+    assert "KILL DRILL" in text and "back to 120" in text and path.read_text() == before and nudged == []
+
+
+def test_golive_writes_only_its_fields_and_restarts_nothing_when_the_loop_reloads(monkeypatch, tmp_path):
+    r, path, out, nudged = _golive_env(monkeypatch, tmp_path)
+    before = json.loads(path.read_text())
+    restarted = []
+    assert r.golive("bucket_sum", 20, watch=lambda *a: "09-30 07:01:00   config reloaded: bucket_sum paper->live",
+                    restart=lambda: restarted.append(1) or "x") == 0
+    after = json.loads(path.read_text())
+    assert after["modes"] == dict(before["modes"], bucket_sum="live")
+    assert after["arb_live_ok"] is True and after["arb_max_set_cost_usd"] == 20.0
+    assert after["gate_since_ts"] == before["gate_since_ts"] and after["caps"] == before["caps"]   # untouched
+    assert set(after) == set(before) | {"arb_live_ok"}
+    backups = list(tmp_path.glob("config.json.pre-golive-*"))
+    assert len(backups) == 1 and json.loads(backups[0].read_text()) == before
+    assert restarted == [] and nudged == ["polybot: LIVE"]
+    text = "\n".join(out)
+    assert "no restart needed" in text and f"cp '{backups[0]}'" in text
+    # the reloaded config is what risk sees: a live arb leg is no longer refused for arb_live_ok
+    assert config.load(str(path)).arb_live_ok is True
+
+
+def test_golive_restarts_the_loop_only_when_the_reload_is_not_seen(monkeypatch, tmp_path):
+    r, path, out, _ = _golive_env(monkeypatch, tmp_path)
+    restarted = []
+    assert r.golive("weather_lock", watch=lambda *a: None, restart=lambda: restarted.append(1) or "launchd: loop restarted") == 0
+    after = json.loads(path.read_text())
+    assert after["modes"]["weather_lock"] == "live" and "arb_live_ok" not in after      # not an arb module
+    assert restarted == [1] and "launchd: loop restarted" in "\n".join(out)
+
+
+def test_watch_log_reads_only_what_was_written_after_the_mark(tmp_path):
+    from polybot import runner as runner_mod
+    log = tmp_path / "loop.log"
+    log.write_text("09-24 config reloaded: bucket_sum paper->live\n")          # an OLD line must not count
+    mark = log.stat().st_size
+    assert runner_mod._watch_log(str(log), mark, "bucket_sum paper->live", 0) is None
+    with open(log, "a") as f:
+        f.write("09-30 07:01:00   config reloaded: bucket_sum paper->live\n")
+    assert "09-30" in runner_mod._watch_log(str(log), mark, "bucket_sum paper->live", 0)
