@@ -4545,3 +4545,27 @@ def test_server_move_dry_run_on_a_copy_and_go_needs_yes(tmp_path, monkeypatch, c
     assert mv.dry_run() == 0 and calls == []                              # no command at all: nothing left here
     monkeypatch.setattr(server_move, "Move", lambda host: mv)
     assert server_move.main(["go"]) == 2 and "add --yes" in capsys.readouterr().out and calls == []
+
+
+def test_settle_runs_once_an_hour_even_when_the_loop_misses_minute_20():
+    from polybot import runner as runner_mod
+    r = runner_mod.Runner(_cfg(), _ledger(), log=lambda *_: None)
+    et = ZoneInfo("America/New_York")
+    at = lambda h, m: datetime(2026, 9, 25, h, m, tzinfo=et)
+    r._slots = {}
+    assert r._slot_due("settle", at(12, 21), 60, 20)                 # woke at 12:20:19, busy through :20
+    assert not r._slot_due("settle", at(12, 50), 60, 20)
+    assert r._slot_due("settle", at(13, 58), 60, 20)                 # a stall over 13:20: still that hour's
+    assert not r._slot_due("settle", at(14, 5), 60, 20)              # ...and not twice
+    assert r._slot_due("settle", at(14, 20), 60, 20)
+
+
+def test_the_weekly_backtest_catches_up_outside_the_arb_window():
+    from polybot import runner as runner_mod
+    r = runner_mod.Runner(_cfg(), _ledger(), log=lambda *_: None)
+    r._jobs, r._attempts = {}, {}
+    et = ZoneInfo("America/New_York")
+    monday_noon = datetime(2026, 9, 28, 12, 0, tzinfo=et)            # asleep all Sunday; awake in the arb window
+    assert not r._due("backtest", monday_noon, (4,), quiet_hours=runner_mod.ARB_HOURS, weekday=6)
+    monday_eve = datetime(2026, 9, 28, 18, 0, tzinfo=et)
+    assert r._due("backtest", monday_eve, (4,), quiet_hours=runner_mod.ARB_HOURS, weekday=6)

@@ -1507,12 +1507,21 @@ class Runner:
                         if self.us.available:
                             with self._long_job("sync", grace_s=300):
                                 self.executor.sync()
-                    if now.minute == 20:
+                    # Hourly, at :20 or the first free minute after it. It fired only AT :20, and on
+                    # 2026-09-25 it last ran 09:22: 10:20 and 11:20 fell in the lid's sleep, 12:20 in a
+                    # DNS error on wake, 13:20-15:20 in stalls the watchdog killed. Six hours of
+                    # fills and exits went unrecorded, and leadlag's gate read 42% fills instead of
+                    # the 49% its own books showed.
+                    if self._slot_due("settle", now, 60, 20):
                         with self._long_job("settle", grace_s=600):
                             self.settle()
-                    if now.weekday() == 6 and now.hour == 4 and now.minute == 0:
+                    # Weekly, Sunday 04:00, which the laptop sleeps through: catch it up, outside the
+                    # arb window (it is the heaviest job there is).
+                    if self._due("backtest", now, (4,), quiet_hours=ARB_HOURS, weekday=6):
+                        self._attempt("backtest")
                         with self._long_job("backtest"):
                             self.backtest(7)
+                        self._ran("backtest")
                     if (self.us.available and self.cfg.mode("leadlag") != "off"
                             and self._due("build_pairs", now, (5,), quiet_hours=ARB_HOURS)):
                         self._attempt("build_pairs")
