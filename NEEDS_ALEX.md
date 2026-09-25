@@ -14,6 +14,37 @@ is still yours to do.
 
 ## 💰 Money lanes — what only you can do
 
+**2026-09-25 12:45 — keep the lid open until ~17:00.** The Mac slept 09:10–12:27 and the sender stopped with it: 8 named first touches and 13 follow-ups are due and go out one every 10 minutes while the Mac is awake (all 8 first touches by ~17:00). Closed lid = nothing sends. The real fix is moving the sender to the server; until then, awake Mac in the afternoon on send days.
+
+**2026-09-25 08:15 — Splitframe lane A: ONE merge, any time before Monday 07:00 (tab 1 is paused).**
+```
+cd ~/second-brain && git merge --no-edit swap-keeps-place && python3 run_tests.py && git push
+```
+- Why before Monday: Monday's first emails carry statics, which your Mac attaches at 07:30. Today the server released at 07:18, before that swap could run. This branch makes the server wait until 07:40, and keeps a swapped email's place in line. Suite 1080/0. The push restarts the server (it touches app.py), so run it between money shifts, when no `claude -p` worker is running.
+- Already done today, nothing for you: the release bug that sent 0 first emails since 09-21 is fixed and live. 8 are released and send themselves from 10:30 today, 6 with your approved statics. Monday's 10 founders are held for the A/B from the first-touch audit (`Money/Research — first-touch audit (2026-09-25).md`).
+
+**2026-09-25 08:10 — creator lane: two clicks from you, then the sample-linked first touches can go.**
+1. **Push the sample pages (publishing is your click).** 48 private, noindex pages sit committed in the site repo,
+   one per creator prospect, each with that creator's pre-cut clip (`splitframestudio.com/samples/<login>-<8hex>/`,
+   no index page, no links from the site, `noindex` meta). Nothing is live until you run:
+
+    cd ~/second-brain/portfolio-site/dist && git push origin main
+
+   (GitHub Pages rebuilds in ~1 min.) The site is otherwise untouched. Unlisted YouTube from the clipping
+   accounts was ruled out by the money session, so this is the only route.
+2. **Caption pass before anyone links a clip.** Whisper captions were reviewed by reading, not by watching;
+   yugi, akanemsko and madi2hottyy ship captionless (README beside each). Two minutes per clip in
+   `iCloud/ClipBot/creator-samples/<login>/`; the same files are what the pages serve. Say "captions checked" or
+   name the ones to fix, and the creator tab re-renders and recommits.
+
+After the push: the money session runs `splitframe_queue.py revise --body-file` per creator from
+`Money/Clients/creator-v2-bodies/<login>.txt` (48 bodies, price paragraph replaced by the sample link, signed;
+the queued 09-24 drafts and round 10 both covered). Revising before the push would arm dead links, so it waits.
+
+**Your DM batch (one sitting, your own X account and Discord):** `Money/Clients/creator-drafts-2026-09-25-v2.md`
+has under each creator a two-line X DM (37 with a handle from their own Twitch panel) and a Discord line where they
+publish an invite. Send them the same day their email goes out, not before the pages are live.
+
 **2026-09-25 08:05 — morning: three faults fixed, nothing new for you. Still open: the same three clicks.**
 - Fixed: the 07:50 release had released 0 first touches since 09-21 (a follow-up count bug); 8 named first touches went out this morning by hand, 6 with their approved statics. Fixed and deployed.
 - Fixed: the polybot loop crash-looped 06:14–07:44 (Polymarket 500s after the overnight DNS outage); fixed, restarted, running.
@@ -30,15 +61,6 @@ Also: sayeed's 09-21 first touch went stale in the queue (never had release room
 in the same drafts file under "sayeed (re-draft)". Whoever runs the queue should drop the stale entry and queue
 the re-draft. Nothing else here needs you.
 
-
-**2026-09-25 00:25 — Splitframe lane A: one merge for tab 1. Nothing for Alex.**
-- **Merge `vault-sync-dataless` (1cc28e8, suite 1074/0).** The vault's git copy froze at 09-24 12:19. Seven iCloud files won't come back (they read empty), and vault_sync skipped every run because of them. The send gate, reply watch, and the 07:30 static backstop all read that copy, and the backstop would have found none of the approvals. I committed the copy by hand twice (1cd5d9a is current). The branch makes vault_sync leave out only the stuck files. Merge between runs; the first command drops an uncommitted edit that the branch already contains, byte for byte:
-  ```
-  cd ~/second-brain && git checkout -- scripts/vault_sync.sh && git merge --no-edit vault-sync-dataless && python3 run_tests.py && git push
-  ```
-  Until it merges, anything written to the vault after 00:10 stays off the git copy.
-- Already done: `ceiling-25` and `sender-self-heal` are merged, the statics are approved, and STATIC_FIRST is on. A dry run from the git copy shows **6 of 7 statics attach at 07:30** (High Mesa, My Hair Dance, Saybrook, Jolie, A Cheerful Giver, BadkneesTs). Mika & Sammy's stays plain: Hunter scored erik@ "risky" (65), so it's still held at the front desk.
-- The follow-up statics in `qa-2026-09-23/INDEX.md` (Legally Addictive, Farmers Juice, Curie, A Cheerful Giver, BadkneesTs) are rendered and approved, and that approval is in the git copy too.
 
 **2026-09-24 11:20 — ignore the burst of "Splitframe: send held" nudges (10:57 and 11:07).** iCloud
 evicted the tracker, and the sender read that as "nobody is approved". Nothing was lost:
