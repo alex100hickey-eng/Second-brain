@@ -3837,6 +3837,8 @@ def test_the_server_supervisor_stays_off_until_every_switch_is_set(tmp_path, mon
     assert sup.enabled({})[0] is False                                           # the default: off
     assert "no ledger" in sup.enabled(env)[1]
     (tmp_path / "polybot.db").write_text("")
+    assert "no MOVE_VERIFIED" in sup.enabled(env)[1]                             # a copy is not a verified copy
+    (tmp_path / "MOVE_VERIFIED").write_text("{}")
     assert sup.enabled(env) == (True, "ok")
     assert "POLYMARKET_KEY_ID" in sup.enabled(dict(env, POLYMARKET_KEY_ID=""))[1]
 
@@ -4368,3 +4370,178 @@ def test_leadlag_fills_replay_reports_both_models(tmp_path):
     assert res["mid"]["signals"] == res["book_tick"]["signals"] == 1
     assert res["book_tick"]["filled"] == 1 and res["book_tick"]["closed"] == 1
     assert "book_tick" in leadlag_fills.render(res)
+
+
+def test_armed_supervisor_waits_for_the_verified_ledger_then_starts(tmp_path, monkeypatch):
+    import threading
+    import polybot_supervisor as sup
+    for k, v in {"POLYBOT_ON_SERVER": "1", "POLYBOT_DATA_DIR": str(tmp_path), "POLYMARKET_KEY_ID": "k",
+                 "POLYMARKET_SECRET_KEY": "s", "SUPABASE_URL": "u", "SUPABASE_KEY": "k"}.items():
+        monkeypatch.setenv(k, v)
+    msgs, started, polls = [], [], []
+
+    def sleep(s):                                    # the copy lands, then verify --mark, while it waits
+        polls.append(s)
+        if len(polls) == 1:
+            (tmp_path / "polybot.db").write_text("")
+        if len(polls) == 2:
+            (tmp_path / "MOVE_VERIFIED").write_text("{}")
+    assert sup.wait_then_supervise(threading.Event(), log=msgs.append, sleep=sleep,
+                                   supervise_fn=lambda stop, log: started.append(1)) is True
+    assert started == [1] and polls == [60.0, 60.0]
+    assert [m for m in msgs if "waiting" in m][0].endswith("carry it over first (polybot.migrate)")
+    assert any("MOVE_VERIFIED" in m for m in msgs) and msgs[-1].endswith("supervisor started")
+
+
+def test_removing_the_marker_stops_the_server_loop_at_its_next_restart(tmp_path, monkeypatch):
+    import threading
+    import polybot_supervisor as sup
+    for k, v in {"POLYBOT_ON_SERVER": "1", "POLYBOT_DATA_DIR": str(tmp_path), "POLYMARKET_KEY_ID": "k",
+                 "POLYMARKET_SECRET_KEY": "s", "SUPABASE_URL": "u", "SUPABASE_KEY": "k"}.items():
+        monkeypatch.setenv(k, v)
+    (tmp_path / "polybot.db").write_text("")
+    (tmp_path / "MOVE_VERIFIED").write_text("{}")
+    monkeypatch.setattr(sup, "_other_node_live", lambda: None)
+    stop, runs, msgs = threading.Event(), [], []
+
+    class Proc:
+        def wait(self):                                 # rollback: unmark, then the child is stopped
+            runs.append(1)
+            (tmp_path / "MOVE_VERIFIED").unlink()
+            return -15
+
+    def sleep(s):
+        if any("not starting" in m for m in msgs):
+            stop.set()
+    sup.supervise(stop, spawn=lambda *a, **k: Proc(), sleep=sleep, log=msgs.append)
+    assert runs == [1] and any("no MOVE_VERIFIED" in m for m in msgs)
+
+
+def test_migrate_verify_mark_writes_the_go_ahead_only_on_a_clean_verify(tmp_path, monkeypatch):
+    from polybot import migrate
+    from polybot.strategies.base import Signal
+    src, vol = tmp_path / "src", tmp_path / "vol"
+    src.mkdir()
+    led = Ledger(str(src / "polybot.db"))
+    led.add_signal(Signal("bucket_sum", "us", "m", "x", "BUY_YES", 0.5, 10, 1, "r"), "paper")
+    led.conn.close()
+    (src / "config.json").write_text(json.dumps({"gate_since_ts": 0.0}))
+    migrate.snapshot(str(vol), data_dir=str(src))                      # the copy, landed in the "volume"
+    monkeypatch.setattr(config, "DATA_DIR", str(vol))
+    monkeypatch.setattr(migrate.config, "DATA_DIR", str(vol))
+    (vol / "config.json").write_text(json.dumps({"gate_since_ts": 9.0}))      # damaged in transit
+    assert migrate.main(["verify", "--dir", str(vol), "--mark"]) == 1 and not (vol / "MOVE_VERIFIED").exists()
+    (vol / "config.json").write_text(json.dumps({"gate_since_ts": 0.0}))
+    assert migrate.main(["verify", "--dir", str(vol), "--mark"]) == 0 and (vol / "MOVE_VERIFIED").exists()
+    assert migrate.main(["unmark"]) == 0 and not (vol / "MOVE_VERIFIED").exists()
+
+
+def _move_env(tmp_path, monkeypatch):
+    """A small real ledger in a stand-in data dir, and a fake shell that plays the host."""
+    from polybot import server_move, lease
+    from polybot.strategies.base import Signal
+    data = tmp_path / "data"
+    data.mkdir()
+    led = Ledger(str(data / "polybot.db"))
+    led.add_signal(Signal("bucket_sum", "us", "m", "x", "BUY_YES", 0.5, 10, 1, "r"), "paper")
+    led.conn.close()
+    (data / "config.json").write_text(json.dumps({"gate_since_ts": 1789739626.0158348}))
+    released = []
+    monkeypatch.setattr(lease, "release", lambda me, store=None: released.append(me))
+    calls, script = [], {}
+
+    def run(cmd, timeout=180):
+        calls.append(cmd)
+        line = cmd[-1] if cmd[0] == "ssh" else " ".join(cmd)
+        for key, result in script.items():
+            if key in line:
+                return result(cmd) if callable(result) else result
+        return 0, ""
+    clock = {"t": 1_800_000_000.0}
+
+    def sleep(s):
+        clock["t"] += s
+    mv = server_move.Move(run=run, sleep=sleep, log=lambda *_: None, uid=501, data_dir=str(data),
+                          home=str(tmp_path), clock=lambda: clock["t"])
+    return mv, calls, script, released, data
+
+
+def _happy_host(script):
+    script.update({"docker ps --format": (0, "h72tei3gy97z4wlqyqpvuylg-123456\n"),
+                   "echo code-ok": (0, "code-ok"), "echo env-ok": (0, "env-ok"), "echo volume-empty": (0, "volume-empty"),
+                   "pgrep -f polybot.runner loop": (1, ""),
+                   "migrate verify --dir /data/polybot --mark": (0, "verify: OK — every file\nmarked: /data/polybot/MOVE_VERIFIED"),
+                   "polybot loop started on server": (0, "1")})
+
+
+def test_server_move_go_runs_the_steps_in_order_and_never_prints_an_env_value(tmp_path, monkeypatch):
+    mv, calls, script, released, data = _move_env(tmp_path, monkeypatch)
+    _happy_host(script)
+    assert mv.go() == 0
+    flat = [c[-1] if c[0] == "ssh" else " ".join(c) for c in calls]
+    order = [next(i for i, c in enumerate(flat) if key in c) for key in
+             ("echo env-ok", "launchctl bootout", "scp -r", "docker cp", "verify --dir /data/polybot --mark",
+              "polybot loop started on server")]
+    assert order == sorted(order) and released == [__import__("polybot.lease").lease.node_name()]
+    assert not any(k in c for c in flat for k in ("printenv", "env |", "echo $POLY", "echo $SUPA"))
+    assert not any("launchctl enable" in c for c in flat)              # the Mac loop stays off after a move
+    assert (tmp_path / f"polybot-move-{mv.stamp}" / "manifest.json").exists()
+
+
+def test_server_move_go_stops_before_the_mac_loop_when_preflight_fails(tmp_path, monkeypatch):
+    mv, calls, script, _, _ = _move_env(tmp_path, monkeypatch)
+    _happy_host(script)
+    script["echo env-ok"] = (1, "")                                      # Coolify prep not done
+    assert mv.go() == 1
+    assert not any("bootout" in " ".join(c) for c in calls)
+    script["echo env-ok"] = (0, "env-ok")
+    script["echo volume-empty"] = (1, "")                                # a ledger is already on the server
+    assert mv.go() == 1 and not any("bootout" in " ".join(c) for c in calls)
+    assert mv.go(allow_existing=True) == 0
+
+
+def test_server_move_go_undoes_itself_when_the_server_verify_fails(tmp_path, monkeypatch):
+    mv, calls, script, _, _ = _move_env(tmp_path, monkeypatch)
+    _happy_host(script)
+    script["migrate verify --dir /data/polybot --mark"] = (1, "verify: FAILED\n  polybot.db: sha256 differs")
+    assert mv.go() == 1
+    flat = [c[-1] if c[0] == "ssh" else " ".join(c) for c in calls]
+    stop_i = next(i for i, c in enumerate(flat) if "migrate unmark" in c)
+    assert any("launchctl enable" in c for c in flat[stop_i:]) and any("launchctl bootstrap" in c for c in flat[stop_i:])
+    assert not any("polybot loop started on server" in c for c in flat)
+
+
+def test_server_move_rollback_brings_the_server_ledger_back_and_restarts_the_mac(tmp_path, monkeypatch):
+    from polybot import migrate
+    mv, calls, script, _, data = _move_env(tmp_path, monkeypatch)
+    _happy_host(script)
+    server_copy = tmp_path / "server-copy"
+    migrate.snapshot(str(server_copy), data_dir=str(data))              # what the container's snapshot holds
+    (data / "polybot.db").write_text("stale")                            # the Mac's copy is behind
+
+    def scp_back(cmd):
+        import shutil
+        shutil.copytree(server_copy, cmd[-1])
+        return 0, ""
+    script.update({"|| echo stopped": (0, "stopped"), "scp -r -o BatchMode=yes -o ConnectTimeout=15 root@": scp_back})
+    assert mv.rollback() == 0
+    assert migrate.verify(str(server_copy), data_dir=str(data)) == []
+    assert list(data.glob("polybot.db.pre-rollback-*"))                 # the stale copy is kept, not deleted
+    flat = [" ".join(c) for c in calls]
+    assert any("launchctl bootstrap" in c for c in flat)
+
+
+def test_server_move_rollback_never_starts_the_mac_while_the_server_loop_runs(tmp_path, monkeypatch):
+    mv, calls, script, _, _ = _move_env(tmp_path, monkeypatch)
+    _happy_host(script)
+    script["|| echo stopped"] = (0, "4242")                              # the child will not die
+    assert mv.rollback() == 1
+    assert not any("launchctl" in " ".join(c) for c in calls)
+
+
+def test_server_move_dry_run_on_a_copy_and_go_needs_yes(tmp_path, monkeypatch, capsys):
+    from polybot import server_move
+    mv, calls, _, _, _ = _move_env(tmp_path, monkeypatch)
+    assert mv.dry_run() == 0 and calls == []                              # no command at all: nothing left here
+    monkeypatch.setattr(server_move, "Move", lambda host: mv)
+    assert server_move.main(["go"]) == 2 and "add --yes" in capsys.readouterr().out and calls == []

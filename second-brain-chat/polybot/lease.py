@@ -68,3 +68,26 @@ def release(me: str, store=None) -> None:
     if st.get("node") == me:
         st.update(key=LEASE_KEY, node=None, renewed_at=0)
         s._save_state(st)
+
+
+def main(argv=None) -> int:
+    """`python3 -m polybot.lease show | release [--node NAME]` — the server move's lease steps."""
+    import argparse
+    ap = argparse.ArgumentParser(prog="polybot.lease")
+    ap.add_argument("cmd", choices=["show", "release"])
+    ap.add_argument("--node", default=None, help="release: the node whose lease to drop (default: this one)")
+    a = ap.parse_args(argv)
+    if a.cmd == "show":
+        row = holder()
+        print(f"lease: {row.get('node')} (renewed {time.time() - float(row.get('renewed_at') or 0):.0f}s ago)"
+              if row else "lease: free")
+        return 0
+    me = a.node or node_name()
+    release(me)
+    print(f"lease released for {me} (if it held it)")
+    return 0
+
+
+if __name__ == "__main__":
+    import sys
+    sys.exit(main())
