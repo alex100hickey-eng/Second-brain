@@ -34,6 +34,9 @@ def parse_srt(text: str) -> list:
         if len(times) < 2:
             continue
         body = " ".join(l.strip() for l in lines[2:]).replace("♪", "").strip()
+        # whisper's silence/music markers are not captions
+        if re.fullmatch(r"(\[[A-Z _]+\]\s*)+", body):
+            body = ""
         if body:
             out.append((t2s(times[0]), t2s(times[1]), body))
     return out

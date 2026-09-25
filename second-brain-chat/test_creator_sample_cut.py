@@ -44,3 +44,8 @@ def test_temp_dir_is_removed_even_when_the_cut_fails(tmp_path, monkeypatch):
     except RuntimeError:
         pass
     assert made and not os.path.exists(made[0])
+
+
+def test_blank_audio_and_music_markers_are_not_captions():
+    srt = "1\n00:00:00,000 --> 00:00:02,000\n [BLANK_AUDIO]\n\n2\n00:00:02,000 --> 00:00:04,000\n [MUSIC PLAYING] [CHEERING]\n\n3\n00:00:04,000 --> 00:00:06,000\n real words\n"
+    assert m.parse_srt(srt) == [(4.0, 6.0, "real words")]
