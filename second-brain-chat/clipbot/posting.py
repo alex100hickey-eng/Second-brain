@@ -108,7 +108,10 @@ def format_post_order(rows: list) -> str:
     return "\n".join(out) + "\n"
 
 
-def write_post_order(ledger, ready_dir: str = config.READY_DIR) -> str:
+def write_post_order(ledger, ready_dir: str | None = None) -> str:
+    # Resolved per call, not at import: a default bound to config.READY_DIR at import time ignores
+    # a test's monkeypatch, so the suite wrote into the live iCloud POST ORDER (and hung on iCloud sync).
+    ready_dir = ready_dir or config.READY_DIR
     os.makedirs(ready_dir, exist_ok=True)
     path = os.path.join(ready_dir, "POST ORDER.txt")
     with open(path, "w") as f:

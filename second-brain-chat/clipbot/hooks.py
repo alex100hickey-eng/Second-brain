@@ -11,7 +11,8 @@ from . import config
 from .transform import probe_duration
 
 
-def library(hooks_dir: str = config.HOOKS_DIR) -> list:
+def library(hooks_dir: str | None = None) -> list:
+    hooks_dir = hooks_dir or config.HOOKS_DIR   # per call, so tests' monkeypatched dir is honoured
     if not os.path.isdir(hooks_dir):
         return []
     manifest = {}

@@ -825,3 +825,17 @@ def test_submission_queue_shows_what_can_still_be_submitted(tmp_path, monkeypatc
     r.ledger.link_account("@ct", "whop")
     assert all(x["linked"] for x in r.submission_queue("whop"))
     assert "IN WINDOW" in r.submission_queue_text() and "2h00m old" in r.submission_queue_text()
+
+
+def test_no_default_argument_pins_a_live_path(tmp_path, monkeypatch):
+    """write_post_order(ready_dir=config.READY_DIR) bound the REAL iCloud folder at import, so the
+    suite overwrote the live POST ORDER.txt with test rows (2026-09-24) and hung on iCloud sync.
+    Every path default must be resolved when the function runs."""
+    monkeypatch.setattr(config, "READY_DIR", str(tmp_path / "ready"))
+    monkeypatch.setattr(config, "HOOKS_DIR", str(tmp_path / "hooks"))
+    path = posting.write_post_order(_ledger())
+    assert path.startswith(str(tmp_path)), path
+    assert hooks.library() == []
+    from clipbot.runner import write_hook_script
+    written = write_hook_script()
+    assert written is None or written.startswith(str(tmp_path))

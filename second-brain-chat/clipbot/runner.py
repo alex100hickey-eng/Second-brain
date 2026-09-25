@@ -91,8 +91,9 @@ this is the answer
 """
 
 
-def write_hook_script(hooks_dir: str = config.HOOKS_DIR) -> str | None:
+def write_hook_script(hooks_dir: str | None = None) -> str | None:
     """Drop a RECORD_THESE.txt into the hooks folder if it is empty, so Alex knows what to record."""
+    hooks_dir = hooks_dir or config.HOOKS_DIR
     try:
         os.makedirs(hooks_dir, exist_ok=True)
         has_audio = any(n.lower().endswith(config.AUDIO_EXT) for n in os.listdir(hooks_dir))
