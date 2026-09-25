@@ -851,6 +851,49 @@ def _released_date(entry):
     return dt.astimezone(LOCAL_TZ).date()
 
 
+def _entry_key(e: dict) -> tuple:
+    """What identifies a queue entry across writers: its Gmail draft id, which `revise` keeps
+    (it edits the draft in place, re-addresses included). Without a draft id: recipient, brand
+    and when it was queued."""
+    d = _s(e.get("draft_id"))
+    if d:
+        return ("draft", d)
+    return ("entry", _s(e.get("to")).lower(), _s(e.get("brand")), _s(e.get("queued_at")))
+
+
+def merge_queue(base: list, mine: list, latest: list) -> list:
+    """Apply THIS writer's changes (base -> mine) onto the queue as it is now (latest).
+
+    Every writer loads the whole queue, spends seconds on Gmail or the outbox, then saves the
+    whole queue back. Two writers overlapping meant the later save erased the earlier one's
+    work. 2026-09-25 07:38: the operator re-addressed four brands while a founder re-address of
+    Loudcup was saving, and the Loudcup edit vanished from the queue while its Gmail draft kept
+    the new text and the new recipient. Now only what this writer changed, added or removed is
+    applied; everyone else's edits since the load survive. The same entry changed by both: the
+    later save wins that entry, which is the old behaviour narrowed to one entry.
+    """
+    def sig(e):
+        return json.dumps(e, sort_keys=True, default=str)
+    base_sig = {_entry_key(e): sig(e) for e in base}
+    out = list(latest)
+    index = {_entry_key(e): i for i, e in enumerate(out)}
+    kept = set()
+    for e in mine:
+        k = _entry_key(e)
+        kept.add(k)
+        if k not in base_sig:                          # added by this writer
+            if k not in index:
+                index[k] = len(out)
+                out.append(e)
+            continue
+        if sig(e) != base_sig[k] and k in index:        # changed by this writer
+            out[index[k]] = e
+    removed = set(base_sig) - kept                     # removed by this writer
+    if removed:
+        out = [e for e in out if _entry_key(e) not in removed]
+    return out
+
+
 def release_first_touches(outbox_mod, drafts_url: str, limit: int = None) -> list:
     """Move up to `limit` already-written first-touch drafts into the outbox, which is what puts
     them in front of Alex. The drafts are written in a batch (they need a live Ad Library read,
@@ -907,6 +950,7 @@ def release_first_touches(outbox_mod, drafts_url: str, limit: int = None) -> lis
                     "repeats, the ceiling is what limits new prospects, not the drafting.")
     q = _shared._load_state(QUEUE_KEY)
     queue = q.get("queue") or []
+    base = json.loads(json.dumps(queue, default=str))   # what this run loaded, for merge_queue
     today = datetime.now(LOCAL_TZ).date()
     spent = sum(1 for d in queue if _released_date(d) == today)
     room = limit - spent
@@ -980,7 +1024,11 @@ def release_first_touches(outbox_mod, drafts_url: str, limit: int = None) -> lis
         log(f"first touch HELD — drafted more than {STALE_DRAFT_DAYS} days ago and its ad-library "
             "claims may no longer be true; re-read the account and re-draft: " + ", ".join(stale))
     q["key"] = QUEUE_KEY
-    q["queue"] = queue
+    try:
+        latest = (_shared._load_state(QUEUE_KEY) or {}).get("queue") or []
+        q["queue"] = merge_queue(base, queue, latest)
+    except Exception:                                  # noqa: BLE001
+        q["queue"] = queue                             # can't re-read: the old whole-queue write
     _shared._save_state(q)
     return released
 

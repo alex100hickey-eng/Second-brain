@@ -665,15 +665,33 @@ def recent_bounces(days: int = 14) -> list:
                   key=lambda e: _c(e.get("at")), reverse=True)
 
 
+# What each load_queue() call read, keyed by the state dict it returned, so save_queue() can
+# send only this process's changes (splitframe_daily.merge_queue) instead of the whole queue.
+_LOADED: dict = {}
+
+
 def load_queue():
     q = _intake()._load_state(QUEUE_KEY) or {}
-    return q, list(q.get("queue") or [])
+    queue = list(q.get("queue") or [])
+    _LOADED[id(q)] = json.loads(json.dumps(queue, default=str))
+    return q, queue
 
 
 def save_queue(q: dict, queue: list) -> None:
+    """Write this process's changes onto the queue as it is NOW, not the whole list it loaded:
+    a revise spends seconds on Gmail between its load and its save, and another writer's save
+    in that gap used to be erased (2026-09-25, see splitframe_daily.merge_queue)."""
+    base = _LOADED.pop(id(q), None)
+    if base is not None:
+        try:
+            latest = list((_intake()._load_state(QUEUE_KEY) or {}).get("queue") or [])
+            queue = _sfd.merge_queue(base, queue, latest)
+        except Exception:                                    # noqa: BLE001
+            pass                                             # can't re-read: whole-queue write
     q["key"] = QUEUE_KEY
     q["queue"] = queue
     _intake()._save_state(q)
+    _LOADED[id(q)] = json.loads(json.dumps(queue, default=str))   # a second save diffs from here
 
 
 def create_studio_draft(to: str, subject: str, body: str):
