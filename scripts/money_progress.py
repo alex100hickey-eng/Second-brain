@@ -54,12 +54,36 @@ TARGETS = {
 SUBMIT_WINDOW_S = 30 * 60
 
 
+VAULT_GIT = os.path.expanduser("~/.second-brain-vault.git")
+SF_DATALESS = 0x40000000
+
+
+def _mirror_read(path: str) -> str:
+    """The vault git mirror's copy of a vault file, or "" when it has none."""
+    rel = os.path.relpath(path, VAULT)
+    if rel.startswith(".."):
+        return ""
+    try:
+        r = subprocess.run(["git", "--git-dir", VAULT_GIT, "show", f"HEAD:{rel}"],
+                           capture_output=True, text=True, timeout=20)
+        return r.stdout if r.returncode == 0 else ""
+    except Exception:                               # noqa: BLE001
+        return ""
+
+
 def _read(path: str) -> str:
+    """A vault file evicted by iCloud (dataless) would block or read empty; the git
+    mirror always has the last synced copy, so read that instead of waiting."""
+    try:
+        if path.startswith(VAULT) and os.stat(path).st_flags & SF_DATALESS:
+            return _mirror_read(path)
+    except (OSError, AttributeError):
+        pass
     try:
         with open(path, encoding="utf-8") as f:
             return f.read()
     except OSError:
-        return ""
+        return _mirror_read(path) if path.startswith(VAULT) else ""
 
 
 def _c(v) -> str:
