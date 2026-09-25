@@ -1746,6 +1746,20 @@ def suite_heartbeat(app, live):
         check("staleness is per-subsystem cadence, not one global clock",
               names == ["proactive"], str(names))
 
+        # A job switched off on purpose is retired, not alarmed about forever (d1_refresh,
+        # the scout and a one-off polybot probe each pushed "subsystem down" for weeks).
+        fake_states["heartbeat:expansion-scout"]["beat_at"] = (
+            datetime.now(tz) - timedelta(hours=300)).isoformat()
+        monitor.retire("expansion-scout", "scout went on-demand")
+        names = [i["component"] for i in monitor.check_heartbeats()]
+        check("a retired heartbeat raises no incident, however stale",
+              names == ["proactive"], str(names))
+        check("retire() keeps the row and says why",
+              "on-demand" in fake_states["heartbeat:expansion-scout"].get("retired", ""))
+        monitor.beat("expansion-scout", stale_after_s=30 * 3600)
+        check("a retired job that beats again is back under watch",
+              "retired" not in fake_states["heartbeat:expansion-scout"])
+
         # Malformed rows must not crash the scan.
         fake_states["heartbeat:broken"] = {"key": "heartbeat:broken", "beat_at": "not-a-date",
                                            "stale_after_s": 60}

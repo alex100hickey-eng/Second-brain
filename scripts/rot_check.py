@@ -65,19 +65,22 @@ def check_vault(today):
     if courses is None:
         warn("School/courses.csv unreadable")
         return
-    stale = []
-    for c in courses:
-        if int((c.get("lead_target_days") or "0") or 0) <= 0:
-            continue
-        try:
-            pt = datetime.strptime((c.get("prepared_through") or "")[:10], "%Y-%m-%d").date()
-        except ValueError:
-            stale.append(f"{c.get('course')} (unset)")
-            continue
-        if (today - pt).days > 9:
-            stale.append(f"{c.get('course')} ({(today - pt).days}d old)")
-    (warn if stale else ok)(f"prepared_through untouched >9d: {', '.join(stale)}" if stale
-                            else "prepared_through moved within 9 days for every course")
+    # prepared_through is no longer a rot signal: school_status.effective_prepared floors it
+    # at attendance and submitted work (2026-09-02), so pace never decays from an untouched
+    # column. Warning on the raw column fired on every run for a month (all five courses
+    # "29d old") and taught the reader to skip this report. The real school signal is below:
+    # whether the Canvas status pull still works.
+    canvas_dir = os.path.join(ROOT, ".canvas_status")
+    try:
+        pulled = max(os.path.getmtime(os.path.join(canvas_dir, f))
+                     for f in os.listdir(canvas_dir) if f.endswith(".assignments.json"))
+        pulled_d = (datetime.now().timestamp() - pulled) / 86400
+        (warn if pulled_d > 2 else ok)(
+            f"Canvas status last pulled {pulled_d:.0f}d ago — nothing marks work submitted until "
+            "Alex logs in once at canvas.case.edu in the Claude Browser pane (CWRU SSO expired)"
+            if pulled_d > 2 else f"Canvas status pulled {pulled_d:.1f}d ago")
+    except (OSError, ValueError):
+        warn("Canvas status pull has never written .canvas_status/*.assignments.json")
     asg = _rows("assignments.csv") or []
 
     def _ungraded(r):
@@ -162,6 +165,8 @@ def check_supabase(now_utc):
         if not k.startswith("heartbeat:") or k in seen:
             continue
         seen.add(k)
+        if j.get("retired"):             # switched off on purpose (monitor.retire)
+            continue
         try:
             age = (datetime.now(LOCAL_TZ) - datetime.fromisoformat(j["beat_at"])).total_seconds()
             if age > float(j.get("stale_after_s") or 0):
@@ -259,8 +264,10 @@ def check_nodes():
 MONEY_JOBS = {
     "com.secondbrain.replywatch": ("reply_watch.log", 2, 15),
     "com.secondbrain.splitframesend": ("splitframe_send.log", 24, 15),
-    # the watcher runs a headless worker as a child for up to 50 min and waits for it
-    "com.secondbrain.capabilitywatcher": ("capability_watcher.log", 2, 90),
+    # the watcher runs a headless worker as a child for up to 50 min and waits for it. Its log
+    # only moves when there is work (a quiet queue read as "silent for 5h" on a healthy watcher,
+    # 2026-09-25); the heartbeat file is rewritten on every poll, so that is the liveness signal.
+    "com.secondbrain.capabilitywatcher": ("../.capability_watcher_heartbeat", 2, 90),
     "com.secondbrain.kickscan": ("kick_scan.log", 26, 60),
 }
 DEFAULT_MAX_RUN_MIN = 15

@@ -6328,9 +6328,17 @@ def _business_monitor_loop():
             probs = business_monitor.problems(snap)
             st = intake._load_state("business:monitor")
             today = datetime.now(LOCAL_TZ).strftime("%Y-%m-%d")
+            # Per-problem marks only matter on the day they were set; the salted keys left
+            # 202 dead ones in this row by 2026-09-25.
+            for k in [k for k, v in st.items() if ":" in k and k != "key" and v != today]:
+                st.pop(k, None)
             for lane, text in probs:
-                # one nudge per distinct problem per day: a stuck lane is one fact, not 48 buzzes
-                key = f"{lane}:{abs(hash(text)) % 10**8}"
+                # one nudge per distinct problem per day: a stuck lane is one fact, not 48 buzzes.
+                # The key must survive a restart and a changing count. It was the built-in hash(): Python
+                # salts str hashes per process, so every deploy minted a new key (six identical
+                # "reach is dead" pushes on 2026-09-24), and "stuck 6h" / "stuck 7h" were new
+                # problems every hour. Digits are masked so a count or an age is the same fact.
+                key = f"{lane}:{business_monitor.problem_id(text)}"
                 if st.get(key) == today:
                     continue
                 proactive.send_nudge(f"biz:{key}", f"{lane} needs you", text,

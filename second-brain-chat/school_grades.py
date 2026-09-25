@@ -167,15 +167,23 @@ def _match_component(name: str, comps: list):
     return best
 
 
-def item_weight(course: str, component: str) -> float:
+def item_weight(course: str, component: str, per_item_only: bool = False) -> float:
     """What ONE item in a component is worth, as a percent of the final grade.
 
     This is the satisficing number. Drops make it smaller than the naive
     weight/count: an 8% component of 22 items with 4 dropped spreads over 18
-    counted items, so each is 0.44% — and the four you bomb cost nothing."""
+    counted items, so each is 0.44% — and the four you bomb cost nothing.
+
+    count 0 means the rubric doesn't count items (participation is one continuous
+    component), so the whole weight is returned. `per_item_only=True` returns 0.0
+    there instead: a caller labelling ONE deliverable must not hand it the whole
+    component — the 5-point CSDS pre-proposal read "≈25.0% of grade" on the
+    ranked day because Course Project has no item count."""
     comps = rubric(course).get(_code(course) or course.upper(), [])
     c = _match_component(component, comps)
     if not c:
+        return 0.0
+    if per_item_only and not c["count"]:
         return 0.0
     effective = max(1, c["count"] - c["drops"]) if c["count"] else 1
     return c["weight_pct"] / effective

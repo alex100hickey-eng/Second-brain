@@ -62,3 +62,39 @@ def test_a_lane_that_stops_reporting_is_noticed():
     assert any("not reported" in p for p in bm.polybot_status()["problems"])
     bm.init(FakeIntake({}), None)
     assert any("never published" in p for p in bm.polybot_status()["problems"])
+
+
+# --- problem_id: the once-a-day guard for "<lane> needs you" pushes -------------------------
+
+def test_a_changing_count_or_age_is_the_same_problem():
+    a = "an approved email to x@y.com has been stuck 6h — the Mac has not been awake to send it"
+    b = "an approved email to x@y.com has been stuck 7h — the Mac has not been awake to send it"
+    assert bm.problem_id(a) == bm.problem_id(b)
+    assert (bm.problem_id("reach is dead: 2054 views across 30 posts.")
+            == bm.problem_id("reach is dead: 1864 views across 29 posts."))
+
+
+def test_different_problems_stay_different():
+    assert (bm.problem_id("an approved email to x@y.com has been stuck 6h")
+            != bm.problem_id("an approved email to z@y.com has been stuck 6h"))
+
+
+def test_the_problem_id_survives_a_restart():
+    """hash(str) is salted per process; six identical pushes on 2026-09-24 were six deploys."""
+    import os
+    import subprocess
+    import sys
+    code = "import business_monitor as b; print(b.problem_id('reach is dead: 2054 views across 30 posts.'))"
+    here = os.path.dirname(os.path.abspath(__file__))
+    ids = {subprocess.run([sys.executable, "-c", code], cwd=here, capture_output=True, text=True,
+                          env={**os.environ, "PYTHONHASHSEED": seed}).stdout.strip()
+           for seed in ("1", "2", "3")}
+    assert len(ids) == 1 and ids != {""}
+
+
+def test_app_keys_the_daily_guard_on_problem_id():
+    import os
+    src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "app.py"),
+               encoding="utf-8").read()
+    assert "business_monitor.problem_id(text)" in src
+    assert "abs(hash(text))" not in src

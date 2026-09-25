@@ -120,6 +120,17 @@ def clipbot_status() -> dict:
     return out
 
 
+def problem_id(text: str) -> str:
+    """Stable id for one problem line: the same text modulo numbers gives the same id in
+    every process. app.py keyed its once-a-day guard on hash(text), which Python salts per
+    process — every deploy re-sent the same problem (six identical "reach is dead" pushes
+    on 2026-09-24) — and on text that embeds a count or an age ("stuck 6h", "stuck 7h"),
+    which made each hour a new problem."""
+    import hashlib
+    import re
+    return hashlib.sha1(re.sub(r"\d+", "#", text or "").encode("utf-8")).hexdigest()[:8]
+
+
 def snapshot() -> dict:
     return {"splitframe": splitframe_status(),
             "polybot": polybot_status(),
