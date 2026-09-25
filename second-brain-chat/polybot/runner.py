@@ -292,7 +292,16 @@ class Runner:
             # Account VALUE, not buying power: money already in positions is still the bankroll.
             # Reading buying power halted the bot at "bankroll under floor" the moment anything
             # was deployed, and it can never compound if deployed money stops counting.
-            bal = self.us.account_value_usd()
+            # A venue that cannot answer at startup (DNS out, a 500 on positions) must not stop the
+            # loop from starting: 2026-09-25 06:14-08:00 it crash-looped 66 times on exactly that,
+            # and every paper signal in that window was lost. Config bankroll stands until the
+            # next clean read.
+            try:
+                bal = self.us.account_value_usd()
+            except Exception as exc:                   # noqa: BLE001
+                self.log(f"  us venue: account value unreadable at start ({type(exc).__name__}); "
+                         f"bankroll stays ${self.cfg.bankroll_usd:.2f} from config")
+                bal = None
             if bal is not None:
                 self.cfg.bankroll_usd = bal
         self.compounding = compounding.apply(self.cfg, self.ledger, persist=False) \

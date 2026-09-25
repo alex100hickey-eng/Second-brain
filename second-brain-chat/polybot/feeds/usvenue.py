@@ -712,7 +712,21 @@ class USVenue:
             return None
         cash = self.balance_usd() or 0.0
         held = 0.0
-        for p in (self.positions() or []):
+        try:
+            positions = self.positions() or []
+        except Exception as exc:                        # noqa: BLE001
+            # 2026-09-25: portfolio.positions answered 500 for hours while balances answered fine,
+            # and the raise here killed the loop at startup 66 times in a row. Cash alone is buying
+            # power, the number that halted the bot once, so an unreadable book is "unknown", never
+            # "cash only".
+            if self.on_backoff:
+                try:
+                    self.on_backoff(f"us venue: positions unreadable ({type(exc).__name__}: "
+                                    f"{str(exc).splitlines()[0][:100]}); account value unknown this read")
+                except Exception:                      # noqa: BLE001
+                    pass
+            return None
+        for p in positions:
             cost = p.get("cost") if isinstance(p, dict) else None
             val = (cost or {}).get("value") if isinstance(cost, dict) else None
             if val is not None:
