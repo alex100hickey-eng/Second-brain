@@ -6260,12 +6260,17 @@ def _splitframe_followups_loop():
     while True:
         try:
             st = intake._load_state("splitframe:loop")
-            today = datetime.now(LOCAL_TZ).strftime("%Y-%m-%d")
-            if st.get("last_run", "") != today and datetime.now(LOCAL_TZ).hour >= 7 \
-                    and os.path.exists(path):
+            now = datetime.now(LOCAL_TZ)
+            today = now.strftime("%Y-%m-%d")
+            mod = None
+            if st.get("last_run", "") != today and now.hour >= 7 and os.path.exists(path):
                 spec = importlib.util.spec_from_file_location("splitframe_daily", path)
                 mod = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(mod)
+            # daily_run_due: not before 07:40, so the Mac's 07:30 static swap lands first
+            # (splitframe_daily.DAILY_RUN_AFTER). Checked every 10 min, not hourly, so the run
+            # time no longer drifts with the process's start time.
+            if mod and mod.daily_run_due(now, st.get("last_run", "")):
                 mod.main()
                 st["last_run"] = today
                 intake._save_state(st)
@@ -6276,7 +6281,7 @@ def _splitframe_followups_loop():
                 monitor.report_event("splitframe", "warning", "follow-up drafting failed", str(e))
             except Exception:
                 pass
-        time.sleep(3600)
+        time.sleep(600)
 
 
 def _splitframe_stuck_check():

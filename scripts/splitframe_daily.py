@@ -851,6 +851,21 @@ def _released_date(entry):
     return dt.astimezone(LOCAL_TZ).date()
 
 
+# When the server's daily run (follow-up drafting, then the first-touch release) may start. The
+# Mac attaches approved statics to queued first touches at 07:30 (static_first_backstop.sh), and
+# a first touch the release has already put in the outbox can't be swapped any more. The loop
+# used to wake hourly and run at its first tick after 07:00, which drifted with every deploy: on
+# 2026-09-25 it ran at 07:18, so an approved static would have missed its email. Nothing sends
+# before 08:00 and every release carries a 3 h hold, so starting at 07:40 costs nothing.
+DAILY_RUN_AFTER = (7, 40)
+
+
+def daily_run_due(now, last_run: str) -> bool:
+    """True when the server loop should run today's splitframe job: not yet run today, and past
+    DAILY_RUN_AFTER local time."""
+    return last_run != now.strftime("%Y-%m-%d") and (now.hour, now.minute) >= DAILY_RUN_AFTER
+
+
 def _entry_key(e: dict) -> tuple:
     """What identifies a queue entry across writers: its Gmail draft id, which `revise` keeps
     (it edits the draft in place, re-addresses included). Without a draft id: recipient, brand
@@ -881,6 +896,17 @@ def merge_queue(base: list, mine: list, latest: list) -> list:
     for e in mine:
         k = _entry_key(e)
         kept.add(k)
+        swapped = ("draft", _s(e.get("replaced_draft")))
+        if k not in base_sig and swapped in base_sig:
+            # swap-first gives an entry a new Gmail draft (the one with the static attached) and
+            # keeps the old id in replaced_draft. That is an edit of the old entry, not a removal
+            # plus an addition: keyed naively it moved to the END of the FIFO queue and could miss
+            # the day it was attached for.
+            kept.add(swapped)
+            if swapped in index:
+                out[index[swapped]] = e
+                index[k] = index.pop(swapped)
+            continue
         if k not in base_sig:                          # added by this writer
             if k not in index:
                 index[k] = len(out)
