@@ -14,6 +14,10 @@ is still yours to do.
 
 ## 💰 Money lanes — what only you can do
 
+**2026-09-25 16:00 — you said "anything and everything"; here is what that unlocked, and what is still only yours.**
+- Done by me: the sample site is pushed and live (48 private pages under splitframestudio.com/samples/); 25 queued creator drafts now carry their sample link instead of the price; the 20 round-10 creators are queued (68 first touches in the queue); all five Monday Splitframe statics are approved in the new ad layouts; the funnel, creator, polybot and clipping tabs are all running their lists again.
+- Still only yours: (1) the X DM / Discord batch (one sitting; lines are under each creator in `Money/Clients/creator-drafts-2026-09-25-v2.md`); (2) paste `CR-9R54SC` into the Instagram bio; (3) YouTube OAuth for Whop if the clipping tab could not click it (it will say so below); (4) Coolify prep for the polybot server move; (5) keep the lid open on send days.
+
 **2026-09-25 12:45 — keep the lid open until ~17:00.** The Mac slept 09:10–12:27 and the sender stopped with it: 8 named first touches and 13 follow-ups are due and go out one every 10 minutes while the Mac is awake (all 8 first touches by ~17:00). Closed lid = nothing sends. The real fix is moving the sender to the server; until then, awake Mac in the afternoon on send days.
 
 **2026-09-25 08:15 — Splitframe lane A: ONE merge, any time before Monday 07:00 (tab 1 is paused).**
@@ -28,7 +32,7 @@ cd ~/second-brain && git merge --no-edit swap-keeps-place && python3 run_tests.p
    one per creator prospect, each with that creator's pre-cut clip (`splitframestudio.com/samples/<login>-<8hex>/`,
    no index page, no links from the site, `noindex` meta). Nothing is live until you run:
 
-    cd ~/second-brain/portfolio-site/dist && git push origin main
+    (done 15:40 by the money session) cd ~/second-brain/portfolio-site/dist && git push origin main
 
    (GitHub Pages rebuilds in ~1 min.) The site is otherwise untouched. Unlisted YouTube from the clipping
    accounts was ruled out by the money session, so this is the only route.
@@ -311,16 +315,18 @@ account. One thing is blocking money, and it takes about a minute.*
 still reports zero Higgsfield tools, that is a new problem, not this one.
 
 ### 2. Clipping: your 4 clicks, in money order (updated 2026-09-24 ~23:30 by the clipping tab)
-1. **Instagram → Whop link (1 min).** Say **yes** in the clipping tab and I'll add `CR-9R54SC` to the
-   @wildestmomentsclips bio, click Verify in the Whop dialog (it's open in the Claude pane), then remove the code.
-   Or paste it into the bio yourself and tell me. Same next for YouTube (code comes after IG).
+1. **Instagram → Whop link (1 min, yours).** The code is now **CR-R5Q23P** (it replaced CR-9R54SC). In the Claude
+   pane's Instagram tab (Edit profile, signed in as wildestmomentsclips), add ` CR-R5Q23P` to the end of the Bio, click
+   Submit, and tell the clipping tab "done". I click Verify on Whop and remove the code after. The classifier blocks me
+   from typing into the bio. **YouTube:** Whop tab → Connect account → YouTube → Open YouTube → approve as
+   basketballlacrosse387 (read-only; no code).
 2. **OK two footage downloads** for the two gaming campaigns that opened today, both almost untouched:
    - **Total War: WARHAMMER III – Lord of the End Times:** $27.2k left, 1 clipper. SEGA's Box folder, 4 videos,
      3.6 GB: Thanquol & Boris Roster Showcase 1.24 GB, Glottkin & Nagash Roster Showcase 0.70 GB,
      Announce Trailer 1.19 GB, Launch Trailer 0.48 GB.
    - **Atlus Developer Sale (Persona 3 Reload / Persona 5 Royal / Metaphor):** $24k left, 1 clipper. Frame.io
      folder, size unknown until opened.
-   Say "download both" and I'll pull them, clip them, and post them on Instagram/YouTube at the ramp cadence.
+   Type "download both" in the clipping tab (a relayed OK from another tab can't count) and I'll pull them, clip them, and post them on Instagram/YouTube at the ramp cadence.
    Both campaigns are registered in clipbot with their brief rules.
 3. ~~17 GB cleanup~~: done 09-24 night by tab 1. The dead Vyro renders are gone (ledger rows kept), and 29 GB is free.
 4. **TikTok sign-up: retry later** in the real Chrome window (the Claude pane silently rejects TikTok codes).
