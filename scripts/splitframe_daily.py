@@ -784,12 +784,40 @@ def _queued_age_days(entry, now=None) -> float:
     return ((now or datetime.now(LOCAL_TZ)) - dt).total_seconds() / 86400.0
 
 
-def followups_due_today(rows=None, today=None) -> int:
-    """How much of today's send budget the follow-up sequence has already claimed.
+def open_follow_ups(outbox_mod) -> int:
+    """Follow-up drafts sitting in the outbox: written, not yet sent. The same marker the sender
+    uses (splitframe_send.is_follow_up): the drafter always threads a follow-up with "Re:".
+    Studio mailbox only; a reply CLARVIS drafted for another inbox is not this lane's budget."""
+    n = 0
+    try:
+        for it in outbox_mod.open_items():
+            if it.get("kind") != "email_draft" or it.get("sent_at"):
+                continue
+            if (it.get("account") or "studio") != "studio":
+                continue
+            head = (it.get("detail") or "").split("\n", 1)[0].strip().lower()
+            if head.startswith("subject: re:"):
+                n += 1
+    except Exception:                                  # noqa: BLE001
+        pass
+    return n
 
-    Counts scheduled touches that will actually go: a brand that replied or was closed out is
-    not chased. Reads the tracker directly and fails to 0 — an unreadable tracker must not
-    silently stop first touches, which is the failure the logger bug already taught once.
+
+def followups_due_today(rows=None, today=None, drafted=None, outbox_mod=None) -> int:
+    """How much of today's send budget the follow-up sequence has already claimed: the touches
+    still to be drafted (due, and not in `drafted`) plus the follow-up drafts already waiting in
+    the outbox.
+
+    Until 2026-09-25 this counted every prospect whose follow-up DATE had passed, including the
+    ones whose follow-ups had long since gone out. By 09-24 that read 52 against a ceiling of
+    20-25, so the release worked out room for 0 first touches every morning: nothing was
+    released after 09-21, fresh named founders and creator drafts included, while the real
+    number due was 14. `drafted` is what due_followups already uses to skip done touches.
+
+    A brand that replied or was closed out is not chased. Reads the tracker directly and fails
+    to 0 — an unreadable tracker must not silently stop first touches, which is the failure the
+    logger bug already taught once. A follow-up already SENT today isn't counted: the release
+    runs at 07:50, before the 08:00 send window, and the sender enforces the ceiling itself.
     """
     today = today or datetime.now(LOCAL_TZ).date()
     if rows is None:
@@ -798,15 +826,9 @@ def followups_due_today(rows=None, today=None) -> int:
                 rows = list(csv.DictReader(f))
         except (OSError, csv.Error):
             return 0
-    n = 0
-    for r in rows:
-        if not _s(r.get("sent_date")) or _s(r.get("replied")) or _s(r.get("outcome")):
-            continue
-        for column in ("followup1_date", "followup2_date"):
-            when = _d(r.get(column, ""))
-            if when and when <= today:
-                n += 1
-                break                      # one touch per prospect per run, as due_followups does
+    n = len(due_followups(rows, today, drafted or {}))
+    if outbox_mod is not None:
+        n += open_follow_ups(outbox_mod)
     return n
 
 
@@ -860,7 +882,11 @@ def release_first_touches(outbox_mod, drafts_url: str, limit: int = None) -> lis
         # they are where replies actually come from, and their clock is fixed by a date already
         # promised to a prospect. A first touch can wait a day; a follow-up cannot be moved
         # without lying about the sequence.
-        due = followups_due_today()
+        try:
+            drafted = load_state().get("drafted") or {}
+        except Exception:                              # noqa: BLE001
+            drafted = {}
+        due = followups_due_today(drafted=drafted, outbox_mod=outbox_mod)
         if FOLLOWUPS_SHARE_CAP:
             limit = max(0, cap - due)
             log(f"daily cap {cap}/day ({why}); {due} follow-up(s) due today, "
