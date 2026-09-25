@@ -116,6 +116,15 @@ CREATE TABLE IF NOT EXISTS daily (
     unrealized_usd REAL DEFAULT 0,
     notes TEXT
 );
+-- One row per quarter-hour the loop actually ticked in (first and last tick seen). A sleeping Mac,
+-- a crash loop or a hung socket all leave the same thing: missing quarters. The daily report reads
+-- this instead of loop.log, which a crash loop fills with tracebacks and a quiet quarter leaves empty.
+CREATE TABLE IF NOT EXISTS loop_alive (
+    quarter INTEGER PRIMARY KEY,
+    first_ts REAL NOT NULL,
+    last_ts REAL NOT NULL,
+    ticks INTEGER NOT NULL DEFAULT 1       -- minutes the loop ticked in; a lone dark-wake minute is 1
+);
 """
 
 
@@ -124,6 +133,11 @@ def _now() -> float:
 
 
 LEADLAG_REFERENCE_REVIEW_AT = 20      # closed leadlag positions before the reference (A vs C) is decided
+QUARTER_S = 900
+# A quarter counts as alive when the loop ticked in at least this many of its minutes. On 2026-09-25
+# the lid was shut from ~10:22 and macOS woke the Mac for a minute every 15-20 min (dark wakes):
+# counting any tick made 3 hours of sleep read as a loop that was up.
+ALIVE_MIN_TICKS = 2
 
 
 class Ledger:
@@ -290,6 +304,72 @@ class Ledger:
             (ts or _now(), venue, market, bid, ask, mid, last, bid_qty, ask_qty,
              dump(bid_levels), dump(ask_levels)))
         self.conn.commit()
+
+    # ---- loop liveness -----------------------------------------------------------------------
+    def mark_alive(self, ts: float | None = None) -> None:
+        """One loop tick (the runner calls this once a minute, and when a long job ends)."""
+        ts = _now() if ts is None else ts
+        self.conn.execute("INSERT INTO loop_alive (quarter, first_ts, last_ts, ticks) VALUES (?,?,?,1) "
+                          "ON CONFLICT(quarter) DO UPDATE SET last_ts=MAX(last_ts, excluded.last_ts), "
+                          "ticks=ticks+1", (int(ts // QUARTER_S), ts, ts))
+        self.conn.commit()
+
+    def mark_alive_many(self, minutes) -> None:
+        """Many one-minute ticks in one transaction (the one-time backfill from loop.log).
+
+        The log is not a tick record: a quiet loop can print in one minute of a quarter. A lone-minute
+        quarter between two busy ones (27 of 178 in the 09-18..25 log) is counted as the loop running;
+        a lone minute amid dead quarters stays what it looks like, a dark wake."""
+        agg: dict = {}
+        for t in minutes:
+            q = int(t // QUARTER_S)
+            a = agg.get(q)
+            agg[q] = (min(a[0], t), max(a[1], t), a[2] + 1) if a else (t, t, 1)
+        for q, (a, b, n) in list(agg.items()):
+            if n == 1 and agg.get(q - 1, (0, 0, 0))[2] >= ALIVE_MIN_TICKS and agg.get(q + 1, (0, 0, 0))[2] >= ALIVE_MIN_TICKS:
+                agg[q] = (a, b, ALIVE_MIN_TICKS)
+        self.conn.executemany("INSERT INTO loop_alive (quarter, first_ts, last_ts, ticks) VALUES (?,?,?,?) "
+                              "ON CONFLICT(quarter) DO UPDATE SET first_ts=MIN(first_ts, excluded.first_ts), "
+                              "last_ts=MAX(last_ts, excluded.last_ts), ticks=ticks+excluded.ticks",
+                              [(q, a, b, n) for q, (a, b, n) in agg.items()])
+        self.conn.commit()
+
+    def uptime(self, since_ts: float, until_ts: float | None = None, min_ticks: int = ALIVE_MIN_TICKS) -> dict:
+        """Of the full quarter-hours in the window (the one in progress is left out), how many the
+        loop was alive in, and the gaps: runs of dead quarters, from the last tick before the run to
+        the first tick after it. {"alive", "total", "gaps": [(from_ts, to_ts)], "tracked_since"};
+        `tracked_since` is set when tracking began inside the window, so a new install is not downtime."""
+        until_ts = _now() if until_ts is None else until_ts
+        q_end = int(until_ts // QUARTER_S) - 1
+        q_start = q_end - int(round((until_ts - since_ts) / QUARTER_S)) + 1
+        out = {"alive": 0, "total": 0, "gaps": [], "tracked_since": None}
+        first_ever = self.conn.execute("SELECT MIN(first_ts) FROM loop_alive").fetchone()[0]
+        if first_ever is None:
+            out["tracked_since"] = until_ts
+            return out
+        if int(first_ever // QUARTER_S) > q_start:        # tracking began after the window's first quarter
+            out["tracked_since"] = first_ever
+            q_start = int(first_ever // QUARTER_S)
+        rows = {r["quarter"]: r for r in self.conn.execute(
+            "SELECT quarter, first_ts, last_ts, ticks FROM loop_alive WHERE quarter BETWEEN ? AND ?",
+            (q_start - 1, q_end + 1))}
+        alive = {q for q, r in rows.items() if r["ticks"] >= min_ticks}
+        out["total"] = max(0, q_end - q_start + 1)
+        out["alive"] = sum(1 for q in range(q_start, q_end + 1) if q in alive)
+        q = q_start
+        while q <= q_end:
+            if q in alive:
+                q += 1
+                continue
+            qa = q
+            while q <= q_end and q not in alive:
+                q += 1
+            qb = q - 1
+            before, after = rows.get(qa - 1), rows.get(qb + 1)
+            a = before["last_ts"] if before is not None and (qa - 1) in alive else qa * QUARTER_S
+            b = after["first_ts"] if after is not None else min(until_ts, (qb + 1) * QUARTER_S)
+            out["gaps"].append((a, b))
+        return out
 
     def snapshots(self, venue, market, since_ts):
         return [dict(r) for r in self.conn.execute(

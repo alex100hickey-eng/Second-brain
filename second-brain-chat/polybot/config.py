@@ -211,6 +211,11 @@ class Config:
     # decided when leadlag has 20 closed positions (`runner leadlag-refs` replays both).
     leadlag_reference: str = "mid"
     leadlag_ref_max_spread: float = 0.05
+    # How paper decides a resting leadlag order FILLED. "mid" (live today): the snapshot mid reached
+    # our level. "book_tick": the book offered at our level (ask <= a bid of ours, bid >= an offer)
+    # for a full recorder tick, confirmed by the recorder's next row. Changes the gate's evidence, so
+    # it is Alex's switch; `runner leadlag-fills` replays both first (2026-09-25: 51% vs 49% fills).
+    leadlag_fill_model: str = "mid"
     favorites_band: tuple = (0.85, 0.95)
     longshot_band: tuple = (0.03, 0.20)
     horizon_days: int = 7

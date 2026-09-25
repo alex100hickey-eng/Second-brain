@@ -62,6 +62,51 @@ def fill_from_history(sig, history):
     return None, None
 
 
+BOOK_TICK_S = 40.0          # one pair-recorder tick (pairs.RECORD_INTERVAL_S)
+# A next row proves the book held only if the recorder was still watching: it writes a heartbeat
+# row at least every pairs.SNAPSHOT_HEARTBEAT_S (1800 s) per market, so a successor later than that
+# (plus two ticks) means the market dropped out of the recorder in between.
+CONFIRM_WITHIN_S = 1800.0 + 2 * BOOK_TICK_S
+
+
+def fill_from_book(sig, quotes, until: float | None = None, hold_s: float = BOOK_TICK_S):
+    """The stricter maker fill (paper only; `leadlag_fill_model: "book_tick"`, default off).
+
+    A resting BUY_YES at L counts as filled only when the book OFFERS at or under L (best ask <= L)
+    and keeps offering for a full recorder tick; a BUY_NO (a resting YES offer at L) when the best
+    bid is at or over L for a full tick. `fill_from_history` fills on the MID reaching L, which a
+    bid that merely walks away also does. `quotes` are the recorder's change-only [(ts, bid, ask)]
+    rows; a state lasts until the NEXT row, and only a next row proves it lasted (the recorder
+    writes a heartbeat row every 30 min, so a book that sits still is still confirmed). A market
+    the recorder stopped watching proves nothing. The row before the signal is the book it was
+    posted into. `until` is the order's life (signal + horizon): a crossing that starts later
+    would have met a cancelled order. Sizes are not recorded for recorder rows, so "showed size"
+    means a price was there. It differs from the mid model both ways: a bid that walks away is
+    not a fill here; a one-sided book (no mid to read) and an order that was marketable when posted
+    (a 1c book: bid+1c is the ask) are. The latter would really fill at once as a TAKER, so its
+    maker fee here is slightly optimistic."""
+    if is_taker(sig) or _meta(sig).get("filled_at_signal"):
+        return sig["ts"], _yes_entry(sig)
+    lvl = _yes_entry(sig)
+    buy = sig["side"] == "BUY_YES"
+    prior = [q for q in quotes if q[0] <= sig["ts"]]
+    timeline = ([(sig["ts"], prior[-1][1], prior[-1][2])] if prior else []) + [q for q in quotes if q[0] > sig["ts"]]
+    since = None
+    for i in range(len(timeline) - 1):              # the last row has no successor: unproven
+        t, bid, ask = timeline[i]
+        nxt = timeline[i + 1][0]
+        crossing = (ask is not None and ask <= lvl + 1e-9) if buy else (bid is not None and bid >= lvl - 1e-9)
+        if not crossing or nxt - t > CONFIRM_WITHIN_S:   # a successor from after a blind spell proves nothing
+            since = None
+            continue
+        since = t if since is None else since
+        if until is not None and since > until:
+            return None, None
+        if nxt - since >= hold_s:
+            return since, lvl
+    return None, None
+
+
 def exit_from_history(sig, fill_ts, history):
     """Return (exit_ts, exit_price_yes, kind) or (None, None, None) for a still-open position."""
     rule = sig["exit_rule"] or "settle"
@@ -132,8 +177,9 @@ def snapshot_history(ledger, venue: str, market: str, since_ts: float) -> list:
 
 
 class PaperEngine:
-    def __init__(self, ledger, history_fn=None, resolution_fn=None, now_fn=None):
+    def __init__(self, ledger, history_fn=None, resolution_fn=None, now_fn=None, fill_fn=None):
         self.ledger = ledger
+        self.fill = fill_fn or fill_from_history
         self.history = history_fn or (lambda sig: offshore.prices_history(sig["market"], since_ts=sig["ts"] - 60, fidelity=1))
         self.resolve = resolution_fn or (lambda sig: offshore.market_resolution(json.loads(sig["meta"] or "{}").get("market_id", "")))
         self.now = now_fn or time.time
@@ -173,7 +219,7 @@ class PaperEngine:
             category = sig.get("category") or "other"
             fill_ts, fill_px = row.get("filled_ts"), row.get("fill_price")
             if fill_ts is None:
-                fill_ts, fill_px = fill_from_history(sig, hist)
+                fill_ts, fill_px = self.fill(sig, hist)
                 if fill_ts is None:
                     # unfilled past the horizon: the order would have been cancelled
                     if self.now() > sig["ts"] + (sig["horizon_h"] or 24) * 3600:

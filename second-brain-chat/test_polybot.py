@@ -3837,6 +3837,8 @@ def test_the_server_supervisor_stays_off_until_every_switch_is_set(tmp_path, mon
     assert sup.enabled({})[0] is False                                           # the default: off
     assert "no ledger" in sup.enabled(env)[1]
     (tmp_path / "polybot.db").write_text("")
+    assert "no MOVE_VERIFIED" in sup.enabled(env)[1]                             # a copy is not a verified copy
+    (tmp_path / "MOVE_VERIFIED").write_text("{}")
     assert sup.enabled(env) == (True, "ok")
     assert "POLYMARKET_KEY_ID" in sup.enabled(dict(env, POLYMARKET_KEY_ID=""))[1]
 
@@ -4218,3 +4220,352 @@ def test_a_missed_0700_report_runs_at_the_next_tick_and_only_once(monkeypatch, t
     r._ran("daily_report")
     assert nudged == ["polybot daily"] and (tmp_path / "report-latest.txt").exists()
     assert not r._due("daily_report", datetime(2026, 9, 25, 12, 0, tzinfo=et), (7,))
+
+
+def test_uptime_counts_quarters_and_names_the_gaps():
+    from polybot import runner as runner_mod
+    led = _ledger()
+    et = ZoneInfo("America/New_York")
+    day0 = datetime(2026, 9, 25, 0, 0, tzinfo=et).timestamp()
+    now = day0 + 86400
+    # alive every minute except 09:10-12:27 (the lid) and 01:40-02:28 (a restart)
+    t = now - 86400 + 60
+    while t < now:
+        lt = datetime.fromtimestamp(t, et)
+        hm = lt.hour * 60 + lt.minute
+        if not (9 * 60 + 10 < hm < 12 * 60 + 27) and not (1 * 60 + 40 < hm < 2 * 60 + 28):
+            led.mark_alive(t)
+        t += 60
+    u = led.uptime(now - 86400, now)
+    # dead quarters: 09:15-12:15 (12) and 01:45-02:15 (2); the edge quarters keep >= 2 ticks
+    assert u["total"] == 96 and u["alive"] == 82 and len(u["gaps"]) == 2 and u["tracked_since"] is None
+    line = runner_mod.uptime_line(led, 1, now=now)
+    assert line.startswith("loop alive ") and "of 96 quarter-hours" in line
+    assert "09:10-12:27 (3h17m)" in line and "01:40-02:28 (48m)" in line
+
+
+def test_uptime_on_a_fresh_ledger_is_not_downtime():
+    from polybot import runner as runner_mod
+    led = _ledger()
+    now = 1_800_000_000.0
+    assert "not tracked yet" in runner_mod.uptime_line(led, 1, now=now)
+    for k in range(30, 0, -1):                       # a loop that started 30 minutes ago and never stopped
+        led.mark_alive(now - 60 * k)
+    line = runner_mod.uptime_line(led, 1, now=now)
+    assert "tracked since" in line and "no gaps" in line
+
+
+def test_the_report_carries_the_uptime_line(monkeypatch, tmp_path):
+    from polybot import runner as runner_mod
+    monkeypatch.setattr(config, "REPORT_PATH", str(tmp_path / "report-latest.txt"))
+    r = runner_mod.Runner(_cfg(), _ledger(), log=lambda *_: None)
+    text = r.report(1)
+    assert "loop uptime: not tracked yet" in text                  # a fresh ledger says so, not "0 of 96"
+    now = time.time()
+    for k in range(40, 0, -1):
+        r.ledger.mark_alive(now - 60 * k)
+    assert "loop alive " in r.report(1)
+
+
+def test_uptime_backfills_once_from_the_stamped_log_and_a_crash_loop_stays_a_gap(tmp_path):
+    from polybot import runner as runner_mod
+    led = _ledger()
+    et = ZoneInfo("America/New_York")
+    now = datetime(2026, 9, 25, 15, 0, tzinfo=et).timestamp()
+    lines = []
+    t = now - 6 * 3600
+    while t < now:
+        lt = datetime.fromtimestamp(t, et)
+        if not (lt.hour == 10):                                   # 10:00-10:59: a crash loop
+            lines.append(lt.strftime("%m-%d %H:%M:%S") + "   us nyc 2026-09-25 high [KNYC/cli] running=64")
+        else:
+            lines.append("Traceback (most recent call last):")
+        t += 60
+    log = tmp_path / "loop.log"
+    log.write_text("\n".join(lines) + "\n")
+    n = runner_mod.backfill_uptime(led, str(log), now=now)
+    assert n > 250 and runner_mod.backfill_uptime(led, str(log), now=now) == 0     # once only
+    u = led.uptime(now - 6 * 3600, now)
+    assert len(u["gaps"]) == 1
+    a, b = u["gaps"][0]
+    assert datetime.fromtimestamp(a, et).strftime("%H:%M") == "09:59" and datetime.fromtimestamp(b, et).strftime("%H:%M") == "11:00"
+
+
+def test_a_dark_wake_minute_does_not_make_a_quarter_alive():
+    led = _ledger()
+    et = ZoneInfo("America/New_York")
+    now = datetime(2026, 9, 25, 13, 0, tzinfo=et).timestamp()
+    t = now - 4 * 3600
+    while t < now - 3 * 3600:                                  # awake 09:00-10:00
+        led.mark_alive(t)
+        t += 60
+    for wake in (10 * 60 + 35, 10 * 60 + 53, 11 * 60 + 9, 11 * 60 + 56):    # one-minute dark wakes
+        led.mark_alive(datetime(2026, 9, 25, wake // 60, wake % 60, tzinfo=et).timestamp())
+    t = datetime(2026, 9, 25, 12, 27, tzinfo=et).timestamp()     # lid opened
+    while t < now:
+        led.mark_alive(t)
+        t += 60
+    u = led.uptime(now - 4 * 3600, now)
+    assert len(u["gaps"]) == 1
+    a, b = u["gaps"][0]
+    assert datetime.fromtimestamp(a, et).strftime("%H:%M") == "09:59"
+    assert datetime.fromtimestamp(b, et).strftime("%H:%M") in ("12:15", "12:27")
+
+
+def _maker(side="BUY_YES", price=0.41, ts=1000.0):
+    return {"ts": ts, "price": price, "side": side, "exit_rule": "reference", "horizon_h": 6, "contracts": 24,
+            "meta": "{}"}
+
+
+def test_book_tick_fill_needs_an_offer_at_our_bid_for_a_full_confirmed_tick():
+    from polybot.paper import fill_from_book
+    s = _maker()                                                    # resting bid at 0.41
+    walk_away = [(900, 0.40, 0.42), (1100, 0.36, 0.42), (1200, 0.36, 0.42)]      # mid 0.39: bid left, nobody sold
+    assert fill_from_book(s, walk_away) == (None, None)
+    offered = [(900, 0.40, 0.44), (1100, 0.39, 0.41), (1160, 0.39, 0.41), (1300, 0.40, 0.44)]
+    assert fill_from_book(s, offered) == (1100, 0.41)
+    flicker = [(900, 0.40, 0.44), (1100, 0.39, 0.41), (1120, 0.40, 0.44), (1400, 0.40, 0.44)]
+    assert fill_from_book(s, flicker) == (None, None)                 # 20 s is not a full tick
+    unconfirmed = [(900, 0.40, 0.44), (1100, 0.39, 0.41)]
+    assert fill_from_book(s, unconfirmed) == (None, None)             # no next row yet
+    blind = [(900, 0.40, 0.44), (1100, 0.39, 0.41), (9000, 0.39, 0.41)]
+    assert fill_from_book(s, blind) == (None, None)                   # the recorder was not watching
+    assert fill_from_book(s, offered, until=1050) == (None, None)     # the order was already cancelled
+
+
+def test_book_tick_counts_a_one_sided_book_and_a_marketable_post():
+    from polybot.paper import fill_from_book
+    one_sided = [(900, 0.40, 0.44), (1100, None, 0.41), (1200, None, 0.41)]
+    assert fill_from_book(_maker(), one_sided) == (1100, 0.41)
+    # BUY_NO posted at 0.50 NO = a YES offer at 0.50 into a 0.50/0.51 book: it met the bid at once
+    posted_into = [(990, 0.50, 0.51), (1047, 0.44, 0.51)]
+    assert fill_from_book(_maker("BUY_NO", 0.50), posted_into) == (1000.0, 0.5)
+
+
+def test_leadlag_fill_model_defaults_to_mid_and_book_tick_is_only_leadlag(monkeypatch):
+    from polybot import runner as runner_mod
+    assert config.Config().leadlag_fill_model == "mid"
+    r = runner_mod.Runner(_cfg(), _ledger(), log=lambda *_: None)
+    for t, b, a in [(900, 0.40, 0.44), (1100, 0.39, 0.41), (1160, 0.39, 0.41)]:
+        r.ledger.add_snapshot("us", "slug", b, a, None, ts=t)
+    sig = dict(_maker(), module="leadlag", venue="us", market="slug")
+    mid_hist = [(1100, 0.40), (1160, 0.40)]
+    assert r._paper_fill(sig, mid_hist) == (1100, 0.41)               # mid model: mid 0.40 <= 0.41
+    r.cfg.leadlag_fill_model = "book_tick"
+    assert r._paper_fill(sig, mid_hist) == (1100, 0.41)
+    assert r._paper_fill(dict(sig, module="hold_favorites"), []) == (None, None)   # others keep the mid model
+
+
+def test_leadlag_fills_replay_reports_both_models(tmp_path):
+    from polybot import leadlag_fills
+    from polybot.strategies.base import Signal
+    led = Ledger(str(tmp_path / "l.db"))
+    now = time.time()
+    sid = led.add_signal(Signal("leadlag", "us", "slug", "x", "BUY_YES", 0.41, 10, 5, "r", exit="reference",
+                                horizon_hours=6, category="politics"), "paper")
+    ts = led.conn.execute("SELECT ts FROM signals WHERE id=?", (sid,)).fetchone()[0]
+    for dt, b, a in [(-60, 0.40, 0.44), (100, 0.39, 0.41), (160, 0.39, 0.41), (7 * 3600, 0.45, 0.47)]:
+        led.add_snapshot("us", "slug", b, a, None, ts=ts + dt)
+    res = leadlag_fills.replay(led, ts - 10, now=now + 8 * 3600)
+    assert res["mid"]["signals"] == res["book_tick"]["signals"] == 1
+    assert res["book_tick"]["filled"] == 1 and res["book_tick"]["closed"] == 1
+    assert "book_tick" in leadlag_fills.render(res)
+
+
+def test_armed_supervisor_waits_for_the_verified_ledger_then_starts(tmp_path, monkeypatch):
+    import threading
+    import polybot_supervisor as sup
+    for k, v in {"POLYBOT_ON_SERVER": "1", "POLYBOT_DATA_DIR": str(tmp_path), "POLYMARKET_KEY_ID": "k",
+                 "POLYMARKET_SECRET_KEY": "s", "SUPABASE_URL": "u", "SUPABASE_KEY": "k"}.items():
+        monkeypatch.setenv(k, v)
+    msgs, started, polls = [], [], []
+
+    def sleep(s):                                    # the copy lands, then verify --mark, while it waits
+        polls.append(s)
+        if len(polls) == 1:
+            (tmp_path / "polybot.db").write_text("")
+        if len(polls) == 2:
+            (tmp_path / "MOVE_VERIFIED").write_text("{}")
+    assert sup.wait_then_supervise(threading.Event(), log=msgs.append, sleep=sleep,
+                                   supervise_fn=lambda stop, log: started.append(1)) is True
+    assert started == [1] and polls == [60.0, 60.0]
+    assert [m for m in msgs if "waiting" in m][0].endswith("carry it over first (polybot.migrate)")
+    assert any("MOVE_VERIFIED" in m for m in msgs) and msgs[-1].endswith("supervisor started")
+
+
+def test_removing_the_marker_stops_the_server_loop_at_its_next_restart(tmp_path, monkeypatch):
+    import threading
+    import polybot_supervisor as sup
+    for k, v in {"POLYBOT_ON_SERVER": "1", "POLYBOT_DATA_DIR": str(tmp_path), "POLYMARKET_KEY_ID": "k",
+                 "POLYMARKET_SECRET_KEY": "s", "SUPABASE_URL": "u", "SUPABASE_KEY": "k"}.items():
+        monkeypatch.setenv(k, v)
+    (tmp_path / "polybot.db").write_text("")
+    (tmp_path / "MOVE_VERIFIED").write_text("{}")
+    monkeypatch.setattr(sup, "_other_node_live", lambda: None)
+    stop, runs, msgs = threading.Event(), [], []
+
+    class Proc:
+        def wait(self):                                 # rollback: unmark, then the child is stopped
+            runs.append(1)
+            (tmp_path / "MOVE_VERIFIED").unlink()
+            return -15
+
+    def sleep(s):
+        if any("not starting" in m for m in msgs):
+            stop.set()
+    sup.supervise(stop, spawn=lambda *a, **k: Proc(), sleep=sleep, log=msgs.append)
+    assert runs == [1] and any("no MOVE_VERIFIED" in m for m in msgs)
+
+
+def test_migrate_verify_mark_writes_the_go_ahead_only_on_a_clean_verify(tmp_path, monkeypatch):
+    from polybot import migrate
+    from polybot.strategies.base import Signal
+    src, vol = tmp_path / "src", tmp_path / "vol"
+    src.mkdir()
+    led = Ledger(str(src / "polybot.db"))
+    led.add_signal(Signal("bucket_sum", "us", "m", "x", "BUY_YES", 0.5, 10, 1, "r"), "paper")
+    led.conn.close()
+    (src / "config.json").write_text(json.dumps({"gate_since_ts": 0.0}))
+    migrate.snapshot(str(vol), data_dir=str(src))                      # the copy, landed in the "volume"
+    monkeypatch.setattr(config, "DATA_DIR", str(vol))
+    monkeypatch.setattr(migrate.config, "DATA_DIR", str(vol))
+    (vol / "config.json").write_text(json.dumps({"gate_since_ts": 9.0}))      # damaged in transit
+    assert migrate.main(["verify", "--dir", str(vol), "--mark"]) == 1 and not (vol / "MOVE_VERIFIED").exists()
+    (vol / "config.json").write_text(json.dumps({"gate_since_ts": 0.0}))
+    assert migrate.main(["verify", "--dir", str(vol), "--mark"]) == 0 and (vol / "MOVE_VERIFIED").exists()
+    assert migrate.main(["unmark"]) == 0 and not (vol / "MOVE_VERIFIED").exists()
+
+
+def _move_env(tmp_path, monkeypatch):
+    """A small real ledger in a stand-in data dir, and a fake shell that plays the host."""
+    from polybot import server_move, lease
+    from polybot.strategies.base import Signal
+    data = tmp_path / "data"
+    data.mkdir()
+    led = Ledger(str(data / "polybot.db"))
+    led.add_signal(Signal("bucket_sum", "us", "m", "x", "BUY_YES", 0.5, 10, 1, "r"), "paper")
+    led.conn.close()
+    (data / "config.json").write_text(json.dumps({"gate_since_ts": 1789739626.0158348}))
+    released = []
+    monkeypatch.setattr(lease, "release", lambda me, store=None: released.append(me))
+    calls, script = [], {}
+
+    def run(cmd, timeout=180):
+        calls.append(cmd)
+        line = cmd[-1] if cmd[0] == "ssh" else " ".join(cmd)
+        for key, result in script.items():
+            if key in line:
+                return result(cmd) if callable(result) else result
+        return 0, ""
+    clock = {"t": 1_800_000_000.0}
+
+    def sleep(s):
+        clock["t"] += s
+    mv = server_move.Move(run=run, sleep=sleep, log=lambda *_: None, uid=501, data_dir=str(data),
+                          home=str(tmp_path), clock=lambda: clock["t"])
+    return mv, calls, script, released, data
+
+
+def _happy_host(script):
+    script.update({"docker ps --format": (0, "h72tei3gy97z4wlqyqpvuylg-123456\n"),
+                   "echo code-ok": (0, "code-ok"), "echo env-ok": (0, "env-ok"), "echo volume-empty": (0, "volume-empty"),
+                   "pgrep -f polybot.runner loop": (1, ""),
+                   "migrate verify --dir /data/polybot --mark": (0, "verify: OK — every file\nmarked: /data/polybot/MOVE_VERIFIED"),
+                   "polybot loop started on server": (0, "1")})
+
+
+def test_server_move_go_runs_the_steps_in_order_and_never_prints_an_env_value(tmp_path, monkeypatch):
+    mv, calls, script, released, data = _move_env(tmp_path, monkeypatch)
+    _happy_host(script)
+    assert mv.go() == 0
+    flat = [c[-1] if c[0] == "ssh" else " ".join(c) for c in calls]
+    order = [next(i for i, c in enumerate(flat) if key in c) for key in
+             ("echo env-ok", "launchctl bootout", "scp -r", "docker cp", "verify --dir /data/polybot --mark",
+              "polybot loop started on server")]
+    assert order == sorted(order) and released == [__import__("polybot.lease").lease.node_name()]
+    assert not any(k in c for c in flat for k in ("printenv", "env |", "echo $POLY", "echo $SUPA"))
+    assert not any("launchctl enable" in c for c in flat)              # the Mac loop stays off after a move
+    assert (tmp_path / f"polybot-move-{mv.stamp}" / "manifest.json").exists()
+
+
+def test_server_move_go_stops_before_the_mac_loop_when_preflight_fails(tmp_path, monkeypatch):
+    mv, calls, script, _, _ = _move_env(tmp_path, monkeypatch)
+    _happy_host(script)
+    script["echo env-ok"] = (1, "")                                      # Coolify prep not done
+    assert mv.go() == 1
+    assert not any("bootout" in " ".join(c) for c in calls)
+    script["echo env-ok"] = (0, "env-ok")
+    script["echo volume-empty"] = (1, "")                                # a ledger is already on the server
+    assert mv.go() == 1 and not any("bootout" in " ".join(c) for c in calls)
+    assert mv.go(allow_existing=True) == 0
+
+
+def test_server_move_go_undoes_itself_when_the_server_verify_fails(tmp_path, monkeypatch):
+    mv, calls, script, _, _ = _move_env(tmp_path, monkeypatch)
+    _happy_host(script)
+    script["migrate verify --dir /data/polybot --mark"] = (1, "verify: FAILED\n  polybot.db: sha256 differs")
+    assert mv.go() == 1
+    flat = [c[-1] if c[0] == "ssh" else " ".join(c) for c in calls]
+    stop_i = next(i for i, c in enumerate(flat) if "migrate unmark" in c)
+    assert any("launchctl enable" in c for c in flat[stop_i:]) and any("launchctl bootstrap" in c for c in flat[stop_i:])
+    assert not any("polybot loop started on server" in c for c in flat)
+
+
+def test_server_move_rollback_brings_the_server_ledger_back_and_restarts_the_mac(tmp_path, monkeypatch):
+    from polybot import migrate
+    mv, calls, script, _, data = _move_env(tmp_path, monkeypatch)
+    _happy_host(script)
+    server_copy = tmp_path / "server-copy"
+    migrate.snapshot(str(server_copy), data_dir=str(data))              # what the container's snapshot holds
+    (data / "polybot.db").write_text("stale")                            # the Mac's copy is behind
+
+    def scp_back(cmd):
+        import shutil
+        shutil.copytree(server_copy, cmd[-1])
+        return 0, ""
+    script.update({"|| echo stopped": (0, "stopped"), "scp -r -o BatchMode=yes -o ConnectTimeout=15 root@": scp_back})
+    assert mv.rollback() == 0
+    assert migrate.verify(str(server_copy), data_dir=str(data)) == []
+    assert list(data.glob("polybot.db.pre-rollback-*"))                 # the stale copy is kept, not deleted
+    flat = [" ".join(c) for c in calls]
+    assert any("launchctl bootstrap" in c for c in flat)
+
+
+def test_server_move_rollback_never_starts_the_mac_while_the_server_loop_runs(tmp_path, monkeypatch):
+    mv, calls, script, _, _ = _move_env(tmp_path, monkeypatch)
+    _happy_host(script)
+    script["|| echo stopped"] = (0, "4242")                              # the child will not die
+    assert mv.rollback() == 1
+    assert not any("launchctl" in " ".join(c) for c in calls)
+
+
+def test_server_move_dry_run_on_a_copy_and_go_needs_yes(tmp_path, monkeypatch, capsys):
+    from polybot import server_move
+    mv, calls, _, _, _ = _move_env(tmp_path, monkeypatch)
+    assert mv.dry_run() == 0 and calls == []                              # no command at all: nothing left here
+    monkeypatch.setattr(server_move, "Move", lambda host: mv)
+    assert server_move.main(["go"]) == 2 and "add --yes" in capsys.readouterr().out and calls == []
+
+
+def test_settle_runs_once_an_hour_even_when_the_loop_misses_minute_20():
+    from polybot import runner as runner_mod
+    r = runner_mod.Runner(_cfg(), _ledger(), log=lambda *_: None)
+    et = ZoneInfo("America/New_York")
+    at = lambda h, m: datetime(2026, 9, 25, h, m, tzinfo=et)
+    r._slots = {}
+    assert r._slot_due("settle", at(12, 21), 60, 20)                 # woke at 12:20:19, busy through :20
+    assert not r._slot_due("settle", at(12, 50), 60, 20)
+    assert r._slot_due("settle", at(13, 58), 60, 20)                 # a stall over 13:20: still that hour's
+    assert not r._slot_due("settle", at(14, 5), 60, 20)              # ...and not twice
+    assert r._slot_due("settle", at(14, 20), 60, 20)
+
+
+def test_the_weekly_backtest_catches_up_outside_the_arb_window():
+    from polybot import runner as runner_mod
+    r = runner_mod.Runner(_cfg(), _ledger(), log=lambda *_: None)
+    r._jobs, r._attempts = {}, {}
+    et = ZoneInfo("America/New_York")
+    monday_noon = datetime(2026, 9, 28, 12, 0, tzinfo=et)            # asleep all Sunday; awake in the arb window
+    assert not r._due("backtest", monday_noon, (4,), quiet_hours=runner_mod.ARB_HOURS, weekday=6)
+    monday_eve = datetime(2026, 9, 28, 18, 0, tzinfo=et)
+    assert r._due("backtest", monday_eve, (4,), quiet_hours=runner_mod.ARB_HOURS, weekday=6)

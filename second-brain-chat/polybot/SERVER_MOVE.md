@@ -12,30 +12,30 @@ same ledger, same `gate_since_ts`.
 2. **Environment variables:**
    - `POLYBOT_DATA_DIR=/data/polybot`
    - `POLYMARKET_KEY_ID` and `POLYMARKET_SECRET_KEY` (the same values as `~/second-brain/.env`)
-   - `POLYBOT_ON_SERVER=0` (still off)
-3. **Redeploy** once, so the volume is mounted. Nothing starts: `POLYBOT_ON_SERVER=0`.
+   - `POLYBOT_ON_SERVER=1`. Safe to set now: with no verified ledger in the volume, the server only waits and logs `polybot on server: armed, waiting — no ledger ...`.
+3. **Redeploy** once, so the volume is mounted and the env is live.
 
-**The move** (≈2 minutes, in this order; never both loops at once):
+**The move: one command** (from the Mac, after Alex says "move polybot to the server"):
 
-| # | what | done when |
+| | command | what it does |
 |---|---|---|
-| 1 | Stop the Mac loop: `launchctl bootout gui/$(id -u)/com.secondbrain.polybot && launchctl disable gui/$(id -u)/com.secondbrain.polybot` | `pgrep -f "polybot.runner loop"` prints nothing |
-| 2 | Snapshot: `cd ~/second-brain/second-brain-chat && python3 -m polybot.migrate snapshot --out ~/polybot-move` | prints the gate fingerprint (per-module signals/decisions/closed/P&L) |
-| 3 | Copy: `scp -r ~/polybot-move root@178.156.209.40:/tmp/` then on the server `docker cp /tmp/polybot-move/. <container>:/data/polybot/` | files are in the volume |
-| 4 | Verify on the server: `docker exec <container> sh -c 'cd /app/second-brain-chat && python3 -m polybot.migrate verify --dir /data/polybot'` | **`verify: OK`**. Anything else: stop, go to rollback |
-| 5 | Coolify: `POLYBOT_ON_SERVER=1` → **Restart** | — |
-| 6 | Watch: `docker exec <container> tail -f /data/polybot/loop.log` | `polybot loop started on server` within ~10 min (it waits out the Mac's lease) |
+| read | `cd ~/second-brain/second-brain-chat && python3 -m polybot.server_move plan` | prints every command `go` will run, local and remote. Alex names it; nothing runs |
+| rehearse | `python3 -m polybot.server_move dry-run` | every local step on a copy: snapshot, the volume copy, `verify --mark`, and the supervisor's own readiness check. The Mac loop keeps running and nothing leaves the Mac (tested 9/25: 82 MB, 2.4 s, READY) |
+| **move** | `python3 -m polybot.server_move go --yes` | preflight on the host (the container, the volume, the new code, and the env check, which prints `env-ok` and never a value; the volume must hold no ledger yet) → stop and disable the Mac loop, release its lease → snapshot → scp + docker cp → `migrate verify --dir /data/polybot --mark` in the container → waits for `polybot loop started on server`. **Any failure after the Mac loop stops undoes itself:** it unmarks the server and restarts the Mac loop |
+| back | `python3 -m polybot.server_move rollback --yes` | unmark and stop the server loop (the Mac never starts while the server loop runs) → server snapshot copied back → the Mac's stale files kept as `*.pre-rollback-*` → verify → start the Mac loop |
 
-`<container>` is the name from `docker ps | grep second-brain`. `/app` is where nixpacks puts the code; check
-with `docker exec <container> ls /app/second-brain-chat/polybot`.
+**Why no Coolify click at move time:** the server loop needs **both** `POLYBOT_ON_SERVER=1` **and** a `MOVE_VERIFIED` marker in `/data/polybot`. Only `polybot.migrate verify --mark` writes the marker, and only when every file and the gate fingerprint match. The supervisor checks every 60 s, and re-checks before every restart of the loop, so removing the marker is also a clean server-side stop.
 
 **Kill switch on the server:** `docker exec <container> touch /data/polybot/KILL` (remove the file to resume).
 
-**Rollback** (the reverse, same tools):
-1. Coolify: `POLYBOT_ON_SERVER=0` → Restart.
-2. On the server: `python3 -m polybot.migrate snapshot --out /tmp/polybot-back`, then scp it to the Mac.
-3. On the Mac, copy the files into `~/second-brain/second-brain-chat/polybot/`, then `python3 -m polybot.migrate verify --dir <that folder>` must print OK.
-4. Restart the Mac loop: `launchctl enable gui/$(id -u)/com.secondbrain.polybot && launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.secondbrain.polybot.plist`.
+**By hand, if the script can't be used** (the same steps):
+1. `launchctl bootout gui/$(id -u)/com.secondbrain.polybot && launchctl disable gui/$(id -u)/com.secondbrain.polybot`, then `python3 -m polybot.lease release`
+2. `python3 -m polybot.migrate snapshot --out ~/polybot-move`
+3. `scp -r ~/polybot-move root@178.156.209.40:/tmp/`, then on the host `docker cp /tmp/polybot-move/. <container>:/data/polybot/`
+4. `docker exec <container> sh -c 'cd /app/second-brain-chat && python3 -m polybot.migrate verify --dir /data/polybot --mark'`. It must print `verify: OK` and `marked:`
+5. `docker exec <container> tail -f /data/polybot/loop.log` until `polybot loop started on server` (≤ ~2 min)
+
+`<container>` is the name from `docker ps | grep h72tei3gy97z4wlqyqpvuylg`.
 
 ---
 
@@ -47,9 +47,9 @@ with `docker exec <container> ls /app/second-brain-chat/polybot`.
 - **Default is off.** `polybot_supervisor.enabled()` refuses unless all of these hold:
   - `POLYBOT_ON_SERVER=1`
   - `POLYBOT_DATA_DIR` is a directory
-  - `polybot.db` is already in it
+  - `polybot.db` is already in it, **and** `MOVE_VERIFIED` (written only by a clean `migrate verify --mark`)
   - the four keys are set (both Polymarket keys, both Supabase keys)
-  Until then it prints `polybot on server: OFF (…why…)` at boot.
+  With `POLYBOT_ON_SERVER` unset or 0 it prints `polybot on server: OFF` at boot. With it set to 1 but not ready, it waits (`armed, waiting — …why…`) and starts on its own once the verified ledger is there.
 
 ## Secrets and files
 - **Env:** `POLYMARKET_KEY_ID` and `POLYMARKET_SECRET_KEY` (Polymarket US), `SUPABASE_URL` and `SUPABASE_KEY` (already set for the app), `POLYBOT_DATA_DIR`, `POLYBOT_ON_SERVER`. `POLYBOT_NODE` is set to `server` by the supervisor.

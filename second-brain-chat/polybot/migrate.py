@@ -19,6 +19,7 @@ import os
 import shutil
 import sqlite3
 import sys
+import time
 
 from . import config
 
@@ -97,20 +98,47 @@ def verify(snapshot_dir: str, data_dir: str = config.DATA_DIR) -> list:
     return problems
 
 
+MARKER = "MOVE_VERIFIED"      # polybot_supervisor.MARKER: the server loop starts only once this exists
+
+
+def mark(data_dir: str, manifest_dir: str) -> str:
+    with open(os.path.join(manifest_dir, "manifest.json")) as f:
+        manifest = json.load(f)
+    path = os.path.join(data_dir, MARKER)
+    with open(path, "w") as f:
+        json.dump({"verified_at": time.time(), "polybot.db": manifest["files"].get("polybot.db"),
+                   "gate_since_ts": manifest["fingerprint"]["gate_since_ts"]}, f)
+    return path
+
+
+def unmark(data_dir: str) -> bool:
+    try:
+        os.remove(os.path.join(data_dir, MARKER))
+        return True
+    except FileNotFoundError:
+        return False
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="polybot.migrate")
-    ap.add_argument("cmd", choices=["snapshot", "verify"])
+    ap.add_argument("cmd", choices=["snapshot", "verify", "unmark"])
     ap.add_argument("--out")
     ap.add_argument("--dir")
+    ap.add_argument("--mark", action="store_true", help=f"verify: on OK, write {MARKER} (the server loop's go-ahead)")
     a = ap.parse_args(argv)
+    if a.cmd == "unmark":
+        print(f"{MARKER} removed" if unmark(config.DATA_DIR) else f"no {MARKER} in {config.DATA_DIR}")
+        return 0
     if a.cmd == "snapshot":
-        m = snapshot(a.out)
+        m = snapshot(a.out, data_dir=config.DATA_DIR)
         print(json.dumps(m["fingerprint"], indent=1))
         print(f"snapshot written to {a.out} ({len(m['files'])} files)")
         return 0
-    problems = verify(a.dir)
+    problems = verify(a.dir, data_dir=config.DATA_DIR)
     print("verify: OK — every file and the gate fingerprint match" if not problems else
           "verify: FAILED\n  " + "\n  ".join(problems))
+    if not problems and a.mark:
+        print(f"marked: {mark(config.DATA_DIR, a.dir)}")
     return 1 if problems else 0
 
 
