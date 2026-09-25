@@ -55,7 +55,7 @@ FIRST_TOUCH_MAX_WORDS = 190     # a first touch carries the observation too; the
 # The static-first arm: a NAMED first touch carries the static in the first email, not just a
 # follow-up. Two locks, both required: this switch, and Alex's `approve` in the first-touch QA
 # folder's INDEX.md. With either missing, every first touch goes out as plain text, as before.
-STATIC_FIRST = False
+STATIC_FIRST = True
 FIRST_TOUCH_PREFIX = "first-touch-qa-"
 
 # The note the drafter adds once a static has gone. Without it the model reads the first touch,
