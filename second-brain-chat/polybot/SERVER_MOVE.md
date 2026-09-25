@@ -71,6 +71,6 @@ Tested 9/24 against the live ledger: 81 MB plus 5 files in 1.4 s, integrity `ok`
 2. **Lease:** `polybot/lease.py` keeps a `polybot:lease` row in the shared Supabase state store. Every loop renews it each minute. A loop won't start while another node's lease is under 10 minutes old; it logs `NOT started … holds the polybot lease` and retries. The Mac side fails open on a store error, which it has always survived. The server supervisor fails **closed**, so the new node is the one that waits.
 
 ## Things that change after the move (for whoever owns them)
-- **`scripts/money_progress.py`** (the /money scorecard) runs `python -m polybot.runner report` against the **Mac** ledger and checks the **Mac** `loop.log` age. After the move it must read the server instead. The loop already publishes `business:polybot` to Supabase every tick, and the `heartbeat:polybot` row shows it's alive.
+- **`scripts/money_progress.py`** (the /money scorecard) follows the loop by itself: while the Mac's `loop.log` is fresh it reads the Mac ledger as before; once that log is quiet it reads `business:polybot` (the 1-day report, published every 15 min with the node's name) and `heartbeat:polybot` from Supabase, and uses them only when the node is `server`. After the move its polybot line says "alive on the server".
 - **The Mac's `polybot/` data** becomes a stale copy. Leave it; it's the rollback's starting point only via a fresh snapshot, never directly.
 - **Memory and disk:** the loop is small next to the 2 GB box. The ledger is 81 MB and snapshots are pruned at 30 days.

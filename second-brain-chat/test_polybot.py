@@ -3878,3 +3878,14 @@ def test_the_migration_catches_any_change_to_the_evidence(tmp_path):
     assert migrate.verify(str(snap), data_dir=str(snap)) == []
     (snap / "config.json").write_text(json.dumps({"gate_since_ts": 5.0}))             # a "reset" in transit
     assert any("gate_since_ts changed" in p for p in migrate.verify(str(snap), data_dir=str(snap)))
+
+
+def test_the_published_report_is_the_report_and_leaves_the_file_alone(monkeypatch, tmp_path):
+    from polybot import runner as runner_mod
+    path = tmp_path / "report-latest.txt"
+    monkeypatch.setattr(config, "REPORT_PATH", str(path))
+    r = runner_mod.Runner(_cfg(), _ledger(), log=lambda *_: None)
+    facts = runner_mod.report_publish_facts(r)
+    assert facts["report"] == r.report_text(1) and "compounding:" in facts["report"]
+    assert abs(facts["report_at"] - time.time()) < 5 and not path.exists()     # only report() writes the file
+    assert runner_mod.REPORT_PUBLISH_S == 900.0

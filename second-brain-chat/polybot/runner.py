@@ -196,6 +196,16 @@ def _beat(name: str, stale_after_s: int, note: str = "") -> None:
 
 
 
+# The 1-day report (gates, ETAs, accrual) travels with business:polybot every 15 min, so the money
+# scorecard can read the loop wherever it runs: once it is on the server, the Mac's ledger and
+# loop.log are a stale copy (scripts/money_progress.py, polybot/SERVER_MOVE.md). 0.02 s to build.
+REPORT_PUBLISH_S = 900.0
+
+
+def report_publish_facts(runner) -> dict:
+    return {"report": runner.report_text(1), "report_at": time.time()}
+
+
 def _publish(lane: str, facts: dict) -> None:
     """Push this lane's money-relevant numbers into the SHARED store.
 
@@ -1013,8 +1023,11 @@ class Runner:
             self.log("  config reloaded: " + ", ".join(f"{m} {a}->{b}" for m, (a, b) in changed.items()))
         return True
 
+    def report_text(self, days: int = 1) -> str:
+        return self.ledger.report(days) + "\n  " + compounding.describe(self.compounding, self.cfg)
+
     def report(self, days: int = 1) -> str:
-        text = self.ledger.report(days) + "\n  " + compounding.describe(self.compounding, self.cfg)
+        text = self.report_text(days)
         with open(config.REPORT_PATH, "w") as f:
             f.write(text + "\n")
         return text
@@ -1150,6 +1163,7 @@ class Runner:
             return
         self.log(f"polybot loop started on {me} (Ctrl+C to stop)")
         last_lease = 0.0
+        last_report_pub = 0.0
         done = set()
         next_arb = 0.0        # sweep immediately on start, then on its own seconds clock
         next_pairs = 0.0
@@ -1330,7 +1344,7 @@ class Runner:
             try:
                 ready = [m for m in config.MODULES
                          if self.cfg.mode(m) == "paper" and self.ledger.promotion_check(m)[0]]
-                _publish("polybot", {
+                facts = {
                     "modes": {m: self.cfg.mode(m) for m in config.MODULES
                               if self.cfg.mode(m) != "off"},
                     "signals_24h": self.ledger.signal_count_since(time.time() - 86400)
@@ -1338,7 +1352,12 @@ class Runner:
                     "ready_to_promote": ready,
                     "live_orders": self.ledger.live_order_count()
                     if hasattr(self.ledger, "live_order_count") else None,
-                    "bankroll_usd": self.cfg.bankroll_usd})
+                    "bankroll_usd": self.cfg.bankroll_usd,
+                    "node": me}
+                if time.time() - last_report_pub >= REPORT_PUBLISH_S:
+                    last_report_pub = time.time()
+                    facts.update(report_publish_facts(self))
+                _publish("polybot", facts)
             except Exception:
                 pass
             time.sleep(20)

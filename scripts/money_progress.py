@@ -267,34 +267,113 @@ def _clip_payout_by_campaign(cur) -> list:
 GATE_RE = re.compile(r"^\s*gate (\w+)\s+(hold|PASS)\s*[—-]\s*(.*)$")
 
 
-def polybot_metrics() -> dict:
-    out = dict(alive=False, gates={}, passing=[], etas={}, accrual="", error="")
+POLYBOT_ALIVE_S = 15 * 60
+STATE_AGENT = "intake_state"         # must match intake.STATE_AGENT
+
+
+def _parse_report(text: str, out: dict) -> None:
+    """Gates, ETAs and the accrual line out of `polybot.runner report` text, into `out`."""
+    last = None
+    for line in text.splitlines():
+        m = GATE_RE.match(line)
+        if m:
+            last = m.group(1)
+            out["gates"][last] = m.group(3).strip()
+            if m.group(2) == "PASS":
+                out["passing"].append(last)
+            continue
+        e = re.match(r"^\s*eta (.*)$", line)
+        if e and last:
+            out["etas"][last] = e.group(1).strip()
+            continue
+        if "incentive accrual" in line:
+            out["accrual"] = line.strip()
+
+
+def _shared_state(keys) -> dict:
+    """{key: state} for these intake-state keys in Supabase; {} when the store can't be read."""
+    try:
+        try:
+            from dotenv import load_dotenv
+            load_dotenv(os.path.join(ROOT, ".env"))
+        except Exception:                           # noqa: BLE001
+            pass
+        import json
+        from supabase import create_client
+        sb = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_KEY"])
+        got = {}
+        for key in keys:
+            rows = (sb.table("Agent Outputs").select("output_text").eq("agent_name", STATE_AGENT)
+                    .ilike("output_text", f'%"key": "{key}"%').order("id", desc=True).limit(5).execute().data or [])
+            for row in rows:
+                try:
+                    d = json.loads(row["output_text"])
+                except (TypeError, ValueError):
+                    continue
+                if d.get("key") == key:
+                    got[key] = d
+                    break
+        return got
+    except Exception:                               # noqa: BLE001
+        return {}
+
+
+def _ts(v):
+    if isinstance(v, (int, float)):
+        return float(v)
+    try:
+        return datetime.fromisoformat(str(v).replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
+def polybot_remote(now: float | None = None, state_fn=_shared_state):
+    """The scorecard from what the SERVER loop publishes (business:polybot + heartbeat:polybot), or
+    None when the loop is not on the server. The Mac loop publishes too, so the node is what decides:
+    only a row written by node "server" replaces the Mac's own ledger and log."""
+    now = time.time() if now is None else now
+    st = state_fn(("business:polybot", "heartbeat:polybot"))
+    biz, hb = st.get("business:polybot") or {}, st.get("heartbeat:polybot") or {}
+    if not str(biz.get("node") or "").startswith("server") or not biz.get("report"):
+        return None
+    out = dict(alive=False, gates={}, passing=[], etas={}, accrual="", error="", source="server")
+    beat = _ts(hb.get("beat_at"))
+    if beat is None:
+        out["log_age_min"] = -1
+    else:
+        out["alive"] = now - beat < POLYBOT_ALIVE_S
+        out["log_age_min"] = int((now - beat) // 60)
+    _parse_report(biz["report"], out)
+    rep = _ts(biz.get("report_at"))
+    out["report_age_min"] = int((now - rep) // 60) if rep is not None else -1
+    if rep is None or now - rep > 3600:
+        out["error"] = f"server report {out['report_age_min']} min old"
+    return out
+
+
+def polybot_metrics(remote_fn=polybot_remote) -> dict:
+    """The Mac's ledger and loop.log while the loop runs on the Mac. When that log has gone quiet,
+    ask the shared store whether the loop now runs on the server (polybot/SERVER_MOVE.md); a fresh
+    Mac log never costs a network call, so nothing changes while the loop is here."""
+    out = dict(alive=False, gates={}, passing=[], etas={}, accrual="", error="", source="mac")
     try:
         age = time.time() - os.path.getmtime(POLYBOT_LOG)
-        out["alive"] = age < 15 * 60
+        out["alive"] = age < POLYBOT_ALIVE_S
         out["log_age_min"] = int(age // 60)
     except OSError:
         out["log_age_min"] = -1
+    if not out["alive"]:
+        try:
+            remote = remote_fn()
+        except Exception:                           # noqa: BLE001
+            remote = None
+        if remote:
+            return remote
     try:
         r = subprocess.run([sys.executable, "-m", "polybot.runner", "report", "--days", "1"],
                            capture_output=True, text=True, timeout=90,
                            cwd=os.path.join(ROOT, "second-brain-chat"))
-        out["etas"], out["accrual"] = {}, ""
-        last = None
-        for line in r.stdout.splitlines():
-            m = GATE_RE.match(line)
-            if m:
-                last = m.group(1)
-                out["gates"][last] = m.group(3).strip()
-                if m.group(2) == "PASS":
-                    out["passing"].append(last)
-                continue
-            e = re.match(r"^\s*eta (.*)$", line)
-            if e and last:
-                out["etas"][last] = e.group(1).strip()
-                continue
-            if "incentive accrual" in line:
-                out["accrual"] = line.strip()
+        _parse_report(r.stdout, out)
     except Exception as exc:                        # noqa: BLE001
         out["error"] = str(exc)[:80]
     return out
@@ -582,7 +661,8 @@ def main(argv) -> int:
                  + (f"; blocked: {c['blocked_unlinked']} post(s) / {c['blocked_views']:,} views from accounts not "
                     f"linked on {c['board']}" if c["blocked_unlinked"] else ""))
     gates = ", ".join(f"{k} {v}" for k, v in pb["gates"].items()) or pb.get("error") or "no report"
-    L.append(f"- **D Polybot:** loop {'alive' if pb['alive'] else 'NOT alive'}; gates: {gates}."
+    where = (" on the server" + (f" ({pb['error']})" if pb.get("error") else "")) if pb.get("source") == "server" else ""
+    L.append(f"- **D Polybot:** loop {'alive' if pb['alive'] else 'NOT alive'}{where}; gates: {gates}."
              + (f" PASSING: {', '.join(pb['passing'])}" if pb["passing"] else ""))
     etas = [f"{k}: {v.split('->')[-1].strip()}" for k, v in pb.get("etas", {}).items() if "->" in v]
     if etas:
