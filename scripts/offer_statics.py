@@ -83,6 +83,41 @@ def latest_qa_dir(spec_dir: str = None, prefix: str = "qa-", on_or_before: str =
     return os.path.join(spec_dir, dirs[-1]) if dirs else ""
 
 
+# Follow-up statics live in two kinds of folder: qa-<date> (the offer arm's promised statics,
+# 09-23) and followup-qa-<date> (a SECOND static for a touch 2, from 2026-09-28: a different
+# product or claim than the one the first touch carried). The swap reads every one dated today
+# or earlier, so a new folder never hides an older folder's approvals.
+FOLLOWUP_PREFIXES = ("qa-", "followup-qa-")
+
+
+def followup_qa_dirs(spec_dir: str = None, today: str = "") -> list:
+    """Every follow-up QA folder dated today or earlier, oldest first."""
+    spec_dir = spec_dir or SPEC_DIR
+    today = today or datetime.now().date().isoformat()
+    try:
+        names = os.listdir(spec_dir)
+    except OSError:
+        return []
+    dated = []
+    for d in names:
+        for p in FOLLOWUP_PREFIXES:
+            day = d[len(p):len(p) + 10] if d.startswith(p) else ""
+            if re.fullmatch(r"\d{4}-\d{2}-\d{2}", day) and day <= today:
+                dated.append((day, d))
+    return [os.path.join(spec_dir, d) for _, d in sorted(dated)]
+
+
+def approved_followup_statics(spec_dir: str = None, today: str = "") -> tuple:
+    """approved_statics over every follow-up QA folder; a newer folder's approval for an address
+    replaces an older one's. An unapproved row in a newer folder leaves the older approval."""
+    ok, skipped = {}, []
+    for d in followup_qa_dirs(spec_dir, today):
+        got, why = approved_statics(d)
+        ok.update(got)
+        skipped += [f"{os.path.basename(d)}: {w}" for w in why]
+    return ok, skipped
+
+
 def first_touch_dir(spec_dir: str = None, today: str = "") -> str:
     """Today's first-touch folder: the newest one dated today or earlier (Thursday's statics
     ride in Wednesday's folder, so "exactly today" would miss them)."""
@@ -178,14 +213,37 @@ def approved_statics(qa_dir: str = None, variants_file: str = "FOLLOWUPS.md",
     return ok, skipped
 
 
+def delivered_files(entry) -> list:
+    """Every file already sent to this address, oldest first ("file" is the latest)."""
+    entry = entry or {}
+    out = []
+    for f in list(entry.get("files") or []) + [entry.get("file")]:
+        if f and f not in out:
+            out.append(f)
+    return out
+
+
+def delivered_entry(prev, new: dict) -> dict:
+    """The record of a new delivery, keeping the files this address was already sent."""
+    return {**new, "files": delivered_files({"files": delivered_files(prev), "file": new.get("file")})}
+
+
 def plan_for(address: str, delivered: dict, approved: dict) -> str:
     """What the next follow-up to `address` should be: "attach", "delivered" (normal wording,
-    told not to re-offer), or "" (normal wording)."""
+    told not to re-offer), or "" (normal wording).
+
+    A static already sent is never sent again, but a DIFFERENT approved file is a new email:
+    the touch-2 second statics (followup-qa-2026-09-28) go to brands whose first touch carried
+    their first one. Unknown is not different: a second static goes only when both the approval
+    and the delivery record name their files and the files differ."""
     a = _c(address).lower()
-    if a in (delivered or {}):
-        return "delivered"
-    if a in (approved or {}):
+    info = (approved or {}).get(a)
+    sent = (delivered or {}).get(a)
+    if info is not None and (sent is None or (info.get("file") and delivered_files(sent)
+                                              and info["file"] not in delivered_files(sent))):
         return "attach"
+    if sent is not None:
+        return "delivered"
     return ""
 
 
@@ -391,9 +449,18 @@ def _env():
         os.environ.get("STUDIO_GMAIL_ENTITY", "")
 
 
+def _followup_approvals(args) -> tuple:
+    """(label, approved, skipped): one folder with --dir, else every follow-up folder dated today
+    or earlier under --spec-dir (the backstop's mirror copy) or the vault."""
+    if args.dir:
+        return args.dir, *approved_statics(args.dir)
+    spec = getattr(args, "spec_dir", None) or SPEC_DIR
+    dirs = followup_qa_dirs(spec)
+    return ", ".join(os.path.basename(d) for d in dirs), *approved_followup_statics(spec)
+
+
 def cmd_status(args) -> int:
-    qa = args.dir or latest_qa_dir()
-    ok, skipped = approved_statics(qa)
+    qa, ok, skipped = _followup_approvals(args)
     print(f"QA folder: {qa or '(none)'}")
     print(f"approved and ready: {', '.join(v['brand'] for v in ok.values()) or 'none yet'}")
     for s in skipped:
@@ -402,8 +469,7 @@ def cmd_status(args) -> int:
 
 
 def cmd_swap(args) -> int:
-    qa = args.dir or latest_qa_dir()
-    ok, skipped = approved_statics(qa)
+    _qa, ok, skipped = _followup_approvals(args)
     for s in skipped:
         print(f"skipped: {s}")
     if not ok:
@@ -414,8 +480,9 @@ def cmd_swap(args) -> int:
     delivered = state.get("delivered") or {}
     open_items = outbox.open_items()
     for address, info in ok.items():
-        if address in delivered:
-            print(f"{info['brand']}: static already on its way ({delivered[address].get('at', '')[:16]})")
+        if plan_for(address, delivered, ok) != "attach":
+            print(f"{info['brand']}: {info['file']} already on its way "
+                  f"({delivered[address].get('at', '')[:16]})")
             continue
         row = pending_followup(open_items, address)
         if not row:
@@ -442,9 +509,9 @@ def cmd_swap(args) -> int:
         outbox._write(row["id"], {"ref": f"gmail:studio:{new_id}",
                                   "detail": f"Subject: {subject}\n\n{info['body']}",
                                   "static_attached": info["file"]})
-        delivered[address] = {"brand": info["brand"], "file": info["file"], "row": row["id"],
-                              "draft": new_id, "replaced": draft, "via": "swap",
-                              "at": datetime.now().isoformat()}
+        delivered[address] = delivered_entry(delivered.get(address), {
+            "brand": info["brand"], "file": info["file"], "row": row["id"], "draft": new_id,
+            "replaced": draft, "via": "swap", "at": datetime.now().isoformat()})
         state.update({"key": STATE_KEY, "delivered": delivered})
         intake._save_state(state)
         print(f"SWAPPED: {info['brand']} row {row['id']} now sends the static version "
@@ -457,9 +524,12 @@ def main(argv=None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
     st = sub.add_parser("status")
     st.add_argument("--dir", default=None)
+    st.add_argument("--spec-dir", default=None, help="read every follow-up folder under this one")
     st.set_defaults(fn=cmd_status)
     sw = sub.add_parser("swap")
-    sw.add_argument("--dir", default=None)
+    sw.add_argument("--dir", default=None, help="one QA folder only")
+    sw.add_argument("--spec-dir", default=None,
+                    help="every qa-/followup-qa- folder dated today or earlier under this one")
     sw.add_argument("--apply", action="store_true")
     sw.set_defaults(fn=cmd_swap)
     sf = sub.add_parser("swap-first", help="attach approved statics to queued first touches")

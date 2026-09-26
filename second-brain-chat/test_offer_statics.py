@@ -263,5 +263,130 @@ def test_every_real_variant_parses_and_passes_the_guard():
         assert os.path.exists(os.path.join(qa, idx[key]["file"])), idx[key]["file"]
 
 
+
+# ---- the touch-2 second static (2026-09-28) ----
+#
+# Six of the seven brands whose touch 2 comes due 09-28 got their first static in the first
+# touch. A SECOND, different static for touch 2 lives in followup-qa-2026-09-28. The 08:20 swap
+# read only the newest qa-* folder (never a followup-qa-* one), and any delivery at all to an
+# address blocked every later static. Now: every follow-up folder dated today or earlier, and
+# "already sent" is per file.
+
+TOUCH2 = ("Made you a second one, it's attached: the Hatch Green Chile Salt this time, with the "
+          "line from its page. Different product, same idea. Which do your customers reorder "
+          "first, the salts or the sauces?")
+
+
+def _folder(root, name, rows, bodies):
+    d = root / name
+    d.mkdir()
+    (d / "INDEX.md").write_text("| brand | file | verdict (Alex) |\n|---|---|---|\n"
+                                + "".join(f"| {b} | `{f}` | {v} |\n" for b, f, v in rows), encoding="utf-8")
+    (d / "FOLLOWUPS.md").write_text("".join(f"## {b}\nto: {to}\n```text\n{body}\n```\n\n"
+                                            for b, to, body in bodies), encoding="utf-8")
+    for _b, f, _v in rows:
+        (d / f).write_bytes(b"\x89PNG fake")
+    return d
+
+
+@pytest.fixture
+def spec(tmp_path):
+    _folder(tmp_path, "qa-2026-09-23",
+            [("Moon Juice", "moon.png", "approve"), ("High Mesa", "hm.png", "approve")],
+            [("Moon Juice", "press@moonjuice.com", BODY), ("High Mesa", "brock@highmesachile.co", BODY)])
+    _folder(tmp_path, "followup-qa-2026-09-28",
+            [("High Mesa", "hm-2.png", "approve"), ("Moon Juice", "moon-2.png", "")],
+            [("High Mesa", "brock@highmesachile.co", TOUCH2), ("Moon Juice", "press@moonjuice.com", TOUCH2)])
+    _folder(tmp_path, "followup-qa-2026-10-05", [("High Mesa", "hm-3.png", "approve")],
+            [("High Mesa", "brock@highmesachile.co", TOUCH2)])
+    (tmp_path / "first-touch-qa-2026-09-28").mkdir()
+    return tmp_path
+
+
+def test_every_follow_up_folder_dated_today_or_earlier_is_read(spec):
+    got = [os.path.basename(d) for d in ofs.followup_qa_dirs(str(spec), "2026-09-28")]
+    assert got == ["qa-2026-09-23", "followup-qa-2026-09-28"], "never first-touch-qa, never a later date"
+
+
+def test_a_newer_folder_replaces_an_older_approval_and_an_unapproved_row_leaves_it(spec):
+    ok, _skipped = ofs.approved_followup_statics(str(spec), "2026-09-28")
+    assert ok["brock@highmesachile.co"]["file"] == "hm-2.png"
+    assert ok["press@moonjuice.com"]["file"] == "moon.png"
+
+
+def test_a_second_different_static_is_attached_the_same_one_never_twice():
+    first = {"brock@highmesachile.co": {"file": "hm.png", "via": "first-touch"}}
+    assert ofs.plan_for("brock@highmesachile.co", first, {"brock@highmesachile.co": {"file": "hm-2.png"}}) == "attach"
+    assert ofs.plan_for("brock@highmesachile.co", first, {"brock@highmesachile.co": {"file": "hm.png"}}) == "delivered"
+    both = ofs.delivered_entry(first["brock@highmesachile.co"], {"file": "hm-2.png", "via": "swap"})
+    assert both["files"] == ["hm.png", "hm-2.png"] and both["file"] == "hm-2.png"
+    for f in ("hm.png", "hm-2.png"):
+        assert ofs.plan_for("brock@highmesachile.co", {"brock@highmesachile.co": both},
+                            {"brock@highmesachile.co": {"file": f}}) == "delivered"
+
+
+class _Store:
+    def __init__(self, data):
+        self.data = data
+
+    def _load_state(self, key):
+        return self.data.get(key)
+
+    def _save_state(self, st):
+        self.data[st["key"]] = st
+
+
+def test_the_0820_swap_attaches_the_second_static_to_touch_2(spec, monkeypatch, capsys):
+    store = _Store({ofs.STATE_KEY: {"delivered": {
+        "brock@highmesachile.co": {"brand": "High Mesa", "file": "hm.png", "via": "first-touch"},
+        "press@moonjuice.com": {"brand": "Moon Juice", "file": "moon.png", "via": "swap"}}}})
+    written = {}
+    box = types.SimpleNamespace(
+        open_items=lambda: [{"id": 9, "kind": "email_draft", "title": "Send the reply to brock@highmesachile.co",
+                             "detail": "Subject: Re: 282 five-star reviews\n\nplain", "ref": "gmail:studio:r-old",
+                             "auto_send_at": "2026-09-28T10:40"}],
+        _write=lambda rid, ch: written.setdefault(rid, ch))
+    comp = types.SimpleNamespace(tools=types.SimpleNamespace(
+        execute=lambda slug, **k: {"data": {"message": {"threadId": "T1"}}}))
+    made = []
+    monkeypatch.setattr(ofs, "_env", lambda: (store, box, comp, "studio"))
+    monkeypatch.setattr(ofs, "create_attach_draft",
+                        lambda c, e, to, subj, body, thread, png: made.append((to, thread, os.path.basename(png))) or ("r-new", []))
+    monkeypatch.setattr(ofs, "datetime", types.SimpleNamespace(
+        now=lambda: types.SimpleNamespace(date=lambda: types.SimpleNamespace(isoformat=lambda: "2026-09-28"),
+                                          isoformat=lambda: "2026-09-28T08:20")))
+    assert ofs.main(["swap", "--apply", "--spec-dir", str(spec)]) == 0
+    assert made == [("brock@highmesachile.co", "T1", "hm-2.png")]
+    assert written[9]["static_attached"] == "hm-2.png" and written[9]["detail"].endswith(TOUCH2)
+    rec = store.data[ofs.STATE_KEY]["delivered"]["brock@highmesachile.co"]
+    assert rec["files"] == ["hm.png", "hm-2.png"] and rec["via"] == "swap"
+    assert "moon.png already on its way" in capsys.readouterr().out
+
+
+PY = "/Library/Frameworks/Python.framework/Versions/3.14/bin/python3"
+
+
+@pytest.mark.skipif(not os.path.exists(PY), reason="the backstop's own python is not on this machine")
+def test_the_0820_backstop_hands_every_follow_up_folder_to_the_swap(tmp_path):
+    import subprocess
+    home, src = tmp_path / "home", tmp_path / "src"
+    for d in ("qa-2026-09-23", "followup-qa-2026-09-28", "first-touch-qa-2026-09-28"):
+        folder = src / "Money" / "Clients" / "spec-ads" / d
+        folder.mkdir(parents=True)
+        (folder / "INDEX.md").write_text(d, encoding="utf-8")
+    git = ["git", "--git-dir", str(home / ".second-brain-vault.git"), "--work-tree", str(src)]
+    subprocess.run(["git", "init", "-q", "--bare", str(home / ".second-brain-vault.git")], check=True)
+    subprocess.run(git + ["add", "-A"], check=True)
+    subprocess.run(git + ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "v"], check=True)
+    stub = home / "second-brain" / "scripts"
+    stub.mkdir(parents=True)
+    (stub / "offer_statics.py").write_text(
+        "import os, sys\nd = sys.argv[sys.argv.index('--spec-dir') + 1]\n"
+        "print('ARGS', ' '.join(sys.argv[1:3]), sorted(os.listdir(d)))\n")
+    out = subprocess.run(["/bin/zsh", os.path.join(SCRIPTS, "offer_statics_backstop.sh")],
+                         env=dict(os.environ, HOME=str(home)), capture_output=True, text=True, timeout=60).stdout
+    assert "ARGS swap --apply ['followup-qa-2026-09-28', 'qa-2026-09-23']" in out, out
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q", "-p", "no:cacheprovider"]))

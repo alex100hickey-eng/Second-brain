@@ -1254,7 +1254,7 @@ def load_offer_statics():
                                           "offer_statics.py"))
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
-        approved, skipped = mod.approved_statics()
+        approved, skipped = mod.approved_followup_statics()
         for why in skipped:
             log(f"static not used: {why}")
         state = (_shared._load_state(mod.STATE_KEY) if _shared else {}) or {}
@@ -1342,9 +1342,10 @@ def main() -> int:
                 mail_drafts._file_in_outbox("studio", address, subject, info["body"], draft_id)
                 drafted.setdefault(address.lower(), []).append(touch)
                 save_state(st)
-                delivered_statics[address.lower()] = {
-                    "brand": brand, "file": info["file"], "touch": touch, "draft": draft_id,
-                    "via": "drafter", "at": datetime.now(LOCAL_TZ).isoformat()}
+                delivered_statics[address.lower()] = statics_mod.delivered_entry(
+                    delivered_statics.get(address.lower()),
+                    {"brand": brand, "file": info["file"], "touch": touch, "draft": draft_id,
+                     "via": "drafter", "at": datetime.now(LOCAL_TZ).isoformat()})
                 try:
                     _shared._save_state({**statics_state, "key": statics_mod.STATE_KEY,
                                          "delivered": delivered_statics})
