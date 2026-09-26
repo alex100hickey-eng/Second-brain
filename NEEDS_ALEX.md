@@ -14,10 +14,12 @@ is still yours to do.
 
 ## 💰 Money lanes — what only you can do
 
+**2026-09-26 01:25 — creator tab hit its usage limit mid-round-13; nothing for you, but the next creator session picks up here.** Round 12 (21) and the 8 re-cuts are live and queued; round 13 has 4 of 25 drafted with pages committed locally (Cody Gunn, Macy McNeely, Chuck Kile, Kiran Kaur), the rest of the cuts were still running when the session stopped (see the 01:25 Shift Log line for the exact files). Reply watch stopped at 01:12 with 0 inbound; the money session's own watcher still runs.
+
 **⭐ 2026-09-26 — Saturday morning, in this order (everything else below is detail):**
 1. **Whop, 30 s:** open the Claude browser pane, whop.com, sign in as basketballlacrosse, say "whop signed in". I finish the YouTube approval. Also type **"download both"** in the clipping tab: the Crazy Taxi bounty pool was projected to run dry about today, so the second campaign (Total War WH3, everything staged) is what pays next; download turns into clips within an hour. While signed in: complete Whop's KYC + W-9 (Settings → Payouts), because the first approved dollar lands in the Whop balance about 10 days after approval and cannot be withdrawn without them.
 2. **Instagram, 30 s, phone:** paste `CR-R5Q23P` into @wildestmomentsclips' bio, say "done".
-3. **Stripe, 2 min:** Payment links → New: "Splitframe first drop" one-time $650 (card + ACH); "Splitframe retainer" monthly $950. Send me the two URLs.
+3. ~~Stripe~~ DONE 10:34: both payment links live and in the reply playbook ($650 drop, $950/mo retainer).
 4. **Mac, 10 s:** `sudo pmset -a disablesleep 1` in Terminal, keep it plugged in. Closed lid = nothing sends.
 5. **Coolify, 5 min:** second-brain app → Storage: volume `/data/polybot`; Environment: `POLYBOT_DATA_DIR=/data/polybot`, `POLYMARKET_KEY_ID`, `POLYMARKET_SECRET_KEY`, `POLYBOT_ON_SERVER=1`; Redeploy once; then say "move polybot to the server".
    - What it's worth: only bucket_sum is close to live (21/30, about 3 days). Paper since 9/18 is +$39 in 7.6 days, all 19 closed sets won, and every leg had real depth. That's about $36/week at full caps, $10/week at the $20 first-day cap.
