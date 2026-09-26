@@ -4,7 +4,7 @@
     creator_sample_publish.py <sample.mp4> <login> [--title "..."] [--views N] [--no-push] [--site DIR]
 
 Transcodes the 1080x1920 sample to 720x1280 H.264 (CRF 28, faststart, aims under 6 MB), writes
-`samples/<login>-<8hex>/index.html` + `clip.mp4` in the site repo, commits, pushes (unless --no-push)
+`samples/<login>-<8hex>/index.html` + `clip.mp4` + `poster.jpg` (frame at 1 s) in the site repo, commits, pushes (unless --no-push)
 and prints the URL. The slug is login + sha256("splitframe-sample:"+login)[:8], so the URL is not
 guessable and stays stable across re-renders. No index page, no nav link, `noindex,nofollow,noarchive`.
 
@@ -22,7 +22,7 @@ PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name=
 <meta name="robots" content="noindex,nofollow,noarchive"><title>A clip for {name}</title>
 <style>body{{margin:0;background:#0b0b0c;color:#f2f2f2;font:16px/1.5 -apple-system,Helvetica,Arial,sans-serif}}main{{max-width:480px;margin:0 auto;padding:24px 16px 48px}}
 video{{width:100%;max-height:82vh;background:#000;border-radius:14px;display:block}}h1{{font-size:18px;font-weight:600;margin:16px 0 4px}}p{{margin:6px 0;color:#c9c9c9}}a{{color:#9ad1ff}}small{{color:#8a8a8a}}</style></head>
-<body><main><video controls playsinline preload="metadata" src="clip.mp4"></video>
+<body><main><video controls autoplay muted loop playsinline preload="metadata" poster="poster.jpg" src="clip.mp4"></video>
 <h1>A clip for {name}</h1><p>{line}</p><p>Yours to post, no strings. <a href="clip.mp4" download>Download the file</a>.</p>
 <p><small>Cut by Alex Hickey · Splitframe Studio · <a href="https://splitframestudio.com">splitframestudio.com</a></small></p></main></body></html>
 """
@@ -63,6 +63,10 @@ def transcode(src: str, dst: str, run=None) -> int:
     return size
 
 
+def poster_cmd(clip: str, dst: str) -> list:
+    return [f"{BIN}/ffmpeg", "-v", "error", "-y", "-ss", "1", "-i", clip, "-frames:v", "1", "-vf", "scale=720:1280", "-q:v", "4", dst]
+
+
 def refuse_ready(path: str) -> None:
     if "/ClipBot/ready/" in os.path.abspath(path) + "/":
         raise SystemExit("refusing to touch ClipBot/ready/ (clipbot posts from there)")
@@ -73,24 +77,31 @@ def git(site: str, *args, run=None):
 
 
 def publish(sample: str, login: str, *, title="", views=0, when="", site=SITE, push=True,
-            run=None) -> str:
+            page_only=False, run=None) -> str:
+    """page_only=True rewrites index.html and the poster from the clip already in the repo (no transcode)."""
     run = run or subprocess.run
-    refuse_ready(sample); refuse_ready(site)
-    if not sample or not os.path.isfile(sample):
-        raise SystemExit(f"sample file not found: {sample!r} (an empty path here usually means a shell loop lost its stdin)")
+    refuse_ready(site)
     if not os.path.isdir(os.path.join(site, ".git")):
         raise SystemExit(f"site repo not found at {site}")
     slug = slug_for(login)
     folder = os.path.join(site, "samples", slug)
-    os.makedirs(folder, exist_ok=True)
     clip = os.path.join(folder, "clip.mp4")
-    size = transcode(sample, clip, run=run)
-    if size > MAX_BYTES:
-        print(f"warning: {size/1e6:.1f} MB after CRF 34, over the 6 MB target", file=sys.stderr)
+    if page_only:
+        if not os.path.isfile(clip):
+            raise SystemExit(f"page-only rebuild needs an existing clip at {clip}")
+    else:
+        refuse_ready(sample)
+        if not sample or not os.path.isfile(sample):
+            raise SystemExit(f"sample file not found: {sample!r} (an empty path here usually means a shell loop lost its stdin)")
+        os.makedirs(folder, exist_ok=True)
+        size = transcode(sample, clip, run=run)
+        if size > MAX_BYTES:
+            print(f"warning: {size/1e6:.1f} MB after CRF 34, over the 6 MB target", file=sys.stderr)
+    run(poster_cmd(clip, os.path.join(folder, "poster.jpg")), check=True)
     with open(os.path.join(folder, "index.html"), "w") as f:
         f.write(page_html(login, title, views, when))
     git(site, "add", f"samples/{slug}", run=run)
-    git(site, "commit", "-q", "-m", f"samples: private page for {login}", run=run)
+    git(site, "commit", "-q", "-m", f"samples: {'page rebuild' if page_only else 'private page'} for {login}", run=run)
     if push:
         git(site, "push", "origin", "main", run=run)
     return BASE_URL + slug + "/"
@@ -98,13 +109,14 @@ def publish(sample: str, login: str, *, title="", views=0, when="", site=SITE, p
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("sample"); ap.add_argument("login")
+    ap.add_argument("sample", nargs="?", default=""); ap.add_argument("login")
     ap.add_argument("--title", default=""); ap.add_argument("--views", type=int, default=0)
     ap.add_argument("--when", default="", help="e.g. 'Tuesday' or 'Sept 23'")
     ap.add_argument("--site", default=SITE)
     ap.add_argument("--no-push", action="store_true", help="commit locally only (the push publishes)")
+    ap.add_argument("--page-only", action="store_true", help="rewrite index.html + poster from the clip already in the repo")
     a = ap.parse_args(argv)
-    url = publish(a.sample, a.login, title=a.title, views=a.views, when=a.when, site=a.site, push=not a.no_push)
+    url = publish(a.sample, a.login, title=a.title, views=a.views, when=a.when, site=a.site, push=not a.no_push, page_only=a.page_only)
     print(url + ("" if not a.no_push else "   (committed, NOT pushed: not live until `git push origin main` in the site repo)"))
     return 0
 

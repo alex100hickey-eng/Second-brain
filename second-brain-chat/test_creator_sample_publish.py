@@ -13,7 +13,7 @@ def test_slug_is_login_plus_eight_hex_and_stable():
 def test_page_is_noindex_has_video_download_and_no_ai():
     p = m.page_html("Henya", 'the "okay, anyway" bit', 3560, "Tuesday")
     assert 'name="robots" content="noindex,nofollow,noarchive"' in p
-    assert "<video controls playsinline" in p and 'href="clip.mp4" download' in p
+    assert "<video controls autoplay muted loop playsinline" in p and 'poster="poster.jpg"' in p and 'href="clip.mp4" download' in p
     assert "From your Tuesday stream" in p and "3,560 views" in p and "&quot;okay, anyway&quot;" in p
     assert "Yours to post, no strings." in p and " AI" not in p and "<nav" not in p
 
@@ -34,13 +34,14 @@ def test_publish_writes_page_commits_and_pushes_only_when_asked(tmp_path):
     def run(cmd, check=True, capture_output=False, text=False):
         calls.append(cmd)
         if cmd[0].endswith("ffmpeg"):
-            open(cmd[-1], "wb").write(b"v" * 100)
+            open(cmd[-1], "wb").write(b"v" * 100 if cmd[-1].endswith(".mp4") else b"jpg")
         return subprocess.CompletedProcess(cmd, 0, "", "")
     (tmp_path / "s.mp4").write_bytes(b"src"); src = str(tmp_path / "s.mp4")
     url = m.publish(src, "Kaise", title="honeymoon", site=str(site), push=False, run=run)
     assert url == "https://splitframestudio.com/samples/kaise-" + m.slug_for("kaise")[-8:] + "/"
     folder = site / "samples" / m.slug_for("kaise")
     assert (folder / "index.html").exists() and (folder / "clip.mp4").read_bytes() == b"v" * 100
+    assert (folder / "poster.jpg").read_bytes() == b"jpg"
     gits = [c for c in calls if c[0] == "git"]
     assert [c[3] for c in gits] == ["add", "commit"]
     m.publish(src, "Kaise", site=str(site), push=True, run=run)
@@ -78,3 +79,23 @@ def test_refuses_an_empty_or_missing_sample_path_before_touching_the_repo(tmp_pa
     with pytest.raises(SystemExit, match="sample file not found"):
         m.publish("", "x", site=str(site), push=False)
     assert not (site / "samples").exists()
+
+
+def test_page_only_rebuilds_page_and_poster_without_transcoding(tmp_path):
+    import pytest
+    site = tmp_path / "site"; (site / ".git").mkdir(parents=True)
+    folder = site / "samples" / m.slug_for("kaise"); folder.mkdir(parents=True)
+    (folder / "clip.mp4").write_bytes(b"existing")
+    calls = []
+    def run(cmd, check=True, capture_output=False, text=False):
+        calls.append(cmd)
+        if cmd[0].endswith("ffmpeg"): open(cmd[-1], "wb").write(b"jpg")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+    m.publish("", "Kaise", title="t", site=str(site), push=False, page_only=True, run=run)
+    ff = [c for c in calls if c[0].endswith("ffmpeg")]
+    assert len(ff) == 1 and "-frames:v" in ff[0]            # poster only, no transcode
+    assert (folder / "clip.mp4").read_bytes() == b"existing" and (folder / "poster.jpg").exists()
+    assert "autoplay muted loop playsinline" in (folder / "index.html").read_text()
+    assert [c[3] for c in calls if c[0] == "git"] == ["add", "commit"]
+    with pytest.raises(SystemExit, match="page-only rebuild needs an existing clip"):
+        m.publish("", "nobody", site=str(site), push=False, page_only=True, run=run)
