@@ -113,9 +113,37 @@ def test_the_release_skips_a_held_entry_until_its_day(monkeypatch):
     monkeypatch.setattr(sfd, "front_desk_hold", lambda entry, by: "")
     monkeypatch.setattr(sfd, "_queued_age_days", lambda entry: 0.0)
     out = sfd.release_first_touches(_Outbox(), "https://mail", limit=10)
-    assert out == ["Free", "Due"]
+    assert out == ["Due", "Free"], "a draft dated today goes ahead of the undated FIFO"
     assert any("kept for a later day on purpose" in l and "Held" in l for l in lines)
     assert not state.rows[sfd.QUEUE_KEY]["queue"][0].get("released")
+
+
+def test_a_dated_draft_goes_ahead_of_the_fifo_on_its_day(monkeypatch):
+    """2026-09-28: the day's A/B sat behind undated creator drafts and the limit ran out first."""
+    today = datetime.now(sfd.LOCAL_TZ).date()
+    d = lambda n: (today + timedelta(days=n)).isoformat()
+    queue = [{"brand": "Creator1", "to": "c1@x.com", "draft_id": "c1"},
+             {"brand": "Creator2", "to": "c2@x.com", "draft_id": "c2"},
+             {"brand": "Tomorrow", "to": "t@x.com", "draft_id": "t1", "hold_until": d(1)},
+             {"brand": "Today", "to": "a@x.com", "draft_id": "a1", "hold_until": d(0)},
+             {"brand": "Yesterday", "to": "y@x.com", "draft_id": "y1", "hold_until": d(-1)},
+             {"brand": "Today2", "to": "b@x.com", "draft_id": "a2", "hold_until": d(0)}]
+    state = _State(queue)
+    monkeypatch.setattr(sfd, "_shared", state)
+    monkeypatch.setattr(sfd, "log", lambda *a, **k: None)
+    monkeypatch.setattr(sfd, "tracker_rows", lambda: [])
+    monkeypatch.setattr(sfd, "front_desk_hold", lambda entry, by: "")
+    monkeypatch.setattr(sfd, "_queued_age_days", lambda entry: 0.0)
+    assert sfd.release_first_touches(_Outbox(), "https://mail", limit=3) == ["Yesterday", "Today", "Today2"]
+    assert [e["brand"] for e in state.rows[sfd.QUEUE_KEY]["queue"]] == [e["brand"] for e in queue], \
+        "the stored queue keeps its order"
+    assert sfd.release_first_touches(_Outbox(), "https://mail", limit=5) == ["Creator1", "Creator2"]
+
+
+def test_with_no_dates_the_order_is_plain_fifo():
+    from datetime import date
+    q = [{"brand": str(i)} for i in range(5)]
+    assert sfd.planned_first(q, date(2026, 9, 28)) == q
 
 
 def test_revise_records_the_arm_and_the_hold(monkeypatch, tmp_path):

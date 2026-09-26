@@ -1047,6 +1047,22 @@ def merge_queue(base: list, mine: list, latest: list) -> list:
     return out
 
 
+def planned_first(pending: list, today) -> list:
+    """The release order: drafts held for a day that has come (`hold_until` today or earlier),
+    earliest plan first, then everything else first in, first out.
+
+    hold_until used to mean only "not before". The queue is shared with the creator lane and runs
+    FIFO, so on 2026-09-28 the day's ten A/B first touches (queued 09-24/25) sat behind creator
+    drafts dated the same day, the 12-slot limit ran out, and Lord of Maps went stale waiting.
+    Tuesday's ten, queued Sunday night behind ~40 undated creators, would have missed their day
+    entirely. A date is a plan for that day, so it goes first; undated order is unchanged."""
+    t = today.isoformat()
+    dated = [e for e in pending if _s(e.get("hold_until")) and _s(e.get("hold_until")) <= t]
+    ids = {id(e) for e in dated}
+    return (sorted(dated, key=lambda e: _s(e.get("hold_until")))
+            + [e for e in pending if id(e) not in ids])
+
+
 def release_first_touches(outbox_mod, drafts_url: str, limit: int = None) -> list:
     """Move up to `limit` already-written first-touch drafts into the outbox, which is what puts
     them in front of Alex. The drafts are written in a batch (they need a live Ad Library read,
@@ -1109,7 +1125,7 @@ def release_first_touches(outbox_mod, drafts_url: str, limit: int = None) -> lis
     room = limit - spent
     if room <= 0:
         return []
-    pending = [d for d in queue if _released_date(d) is None]
+    pending = planned_first([d for d in queue if _released_date(d) is None], today)
     if not pending:
         return []
     waiting = already_waiting(outbox_mod)
