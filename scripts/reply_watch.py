@@ -417,6 +417,79 @@ def _refresh_funnel() -> None:
         log(f"funnel report not refreshed ({type(exc).__name__}: {str(exc)[:80]})")
 
 
+QUEUE_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "splitframe_queue.py")
+AUTO_DRAFT_TIMEOUT = 180
+# Two drafts at most per run: each can take AUTO_DRAFT_TIMEOUT and the whole run has
+# RUN_BUDGET_SECONDS before the watchdog kills it (and a killed run never saves `seen`).
+MAX_AUTO_DRAFTS_PER_RUN = 2
+
+
+def _draft_link(address: str) -> str:
+    """The /do page of the newest unapproved outbox draft to `address`: the one-tap Send."""
+    try:
+        sys.path.insert(0, os.path.expanduser("~/second-brain/second-brain-chat"))
+        import action_links  # type: ignore
+        import outbox  # type: ignore
+        from supabase import create_client  # type: ignore
+        outbox.init(create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_KEY"]))
+        rows = [it for it in outbox.open_items() if it.get("kind") == "email_draft"
+                and not it.get("send_approved")
+                and (it.get("title") or "").strip().lower().endswith(address.lower())]
+        if not rows:
+            return ""
+        item = max(rows, key=lambda it: it.get("id") or 0)
+        return action_links.url(action_links.KIND_OUTBOX, str(item["id"]),
+                                ops=("done", "snooze", "drop", "send"))
+    except Exception:                                  # noqa: BLE001
+        return ""
+
+
+def handle_human_reply(brand: str, address: str, thread_id: str, st: dict, preview: str,
+                       run=None, link_for=None, notify=None) -> str:
+    """Draft the playbook answer the moment a founder replies, then tell Alex it is waiting.
+
+    A Friday-night reply used to wait until someone ran `splitframe_queue.py reply` by hand. Now
+    the draft is on the thread with its outbox row before the nudge goes, so Alex's part is one
+    Send. Drafted once per thread (st["drafted_threads"]): a founder who writes twice gets the
+    alert again, never a second draft. Never sends, never arms: `reply` only drafts.
+    Returns "drafted", "again" or "failed"."""
+    import subprocess
+    run = run or subprocess.run
+    link_for = link_for or _draft_link
+    notify = notify or nudge
+    drafted = st.setdefault("drafted_threads", [])
+    if thread_id and thread_id in drafted:
+        notify(f"{brand} replied again",
+               f"{preview[:180]}\nThe first answer is still waiting in your outbox.")
+        return "again"
+    out = ""
+    if st.get("_drafts_this_run", 0) >= MAX_AUTO_DRAFTS_PER_RUN:
+        out = "draft limit for this run reached"
+    elif thread_id:
+        st["_drafts_this_run"] = st.get("_drafts_this_run", 0) + 1
+        try:
+            res = run([sys.executable, QUEUE_SCRIPT, "reply", "--thread", thread_id],
+                      capture_output=True, text=True, timeout=AUTO_DRAFT_TIMEOUT)
+            out = (res.stdout or "") + (res.stderr or "")
+        except Exception as exc:                       # noqa: BLE001
+            out = f"{type(exc).__name__}: {exc}"
+    if not thread_id:
+        out = out or "no thread id on the message"
+    if "DRAFTED" in out:
+        drafted.append(thread_id)
+        st["drafted_threads"] = drafted[-500:]
+        link = link_for(address)
+        notify(f"Reply from {brand}: answer drafted, tap to send",
+               f"{preview[:160]}\n{link or 'It is in your outbox (studio drafts).'}")
+        log(f"  answer drafted on thread {thread_id}{' — ' + link if link else ''}")
+        return "drafted"
+    log(f"  auto-draft FAILED for thread {thread_id or '(none)'}: {out.strip()[-300:]}")
+    notify(f"{brand} replied",
+           f"{preview[:180]}\nNo draft yet (the drafter refused or failed). Run: "
+           f"python3 scripts/splitframe_queue.py reply --thread {thread_id}\nCall card: Money/call-card.md")
+    return "failed"
+
+
 def main() -> int:
     arm_watchdog()
     from composio import Composio  # type: ignore
@@ -488,9 +561,14 @@ def main() -> int:
                     log(f"  could not stamp {b} as replied ({type(exc).__name__}): stamp it by hand")
             which = (f"\n(Sent from a domain shared by {brand}; all of them are marked replied so "
                      "nobody gets chased. Un-stamp the ones it isn't.)" if len(brands) > 1 else "")
-            nudge(f"{brand} replied", f"{sender}: {subject}\n{preview[:180]}\nReply today. Call card: Money/call-card.md{which}")
+            if which:
+                log("  shared-domain reply: no auto-draft (which brand it is has to be decided by hand)")
+                nudge(f"{brand} replied", f"{sender}: {subject}\n{preview[:180]}\nReply today. Call card: Money/call-card.md{which}")
+            else:
+                handle_human_reply(brand, addr, m.get("threadId") or "", st, f"{sender}: {subject}\n{preview}")
             hits += 1
         seen.add(mid)
+    st.pop("_drafts_this_run", None)
     st["seen"] = sorted(seen)[-500:]
     st["checked"] = sorted(checked)[-500:]
     st["last_run"] = datetime.now().isoformat()
