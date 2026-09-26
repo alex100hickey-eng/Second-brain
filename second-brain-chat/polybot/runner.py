@@ -118,6 +118,11 @@ ARB_HOURS = range(9, 17)
 QUIET_REPEAT_S = 600.0
 JOB_RETRY_S = 3600.0
 UNIVERSE_SLOTS = ((6, 30), (18, 30))
+# hold_favorites' US scan (scan timing, not a rule): ~20 catalogue calls, so never inside ARB_HOURS.
+# 04:00 was added 2026-09-26 to catch markets entering the band overnight; 02:00 was the first
+# idea, but the US books go quiet ~01:00-03:15 (recorded US rows per alive quarter-hour ~0-30,
+# against 400-750 from 03:30), so a 02:00 pass would mostly read closed books.
+HF_US_SLOTS = (4, 8, 20)
 JOBS_PATH = os.path.join(config.DATA_DIR, "jobs-state.json")
 # second-brain-chat/, where intake.py and monitor.py live. Was ~/second-brain/second-brain-chat, which
 # does not exist on the server, so the heartbeat and the scoreboard would have failed there silently.
@@ -1560,7 +1565,7 @@ class Runner:
                         self.log(f"  hold_favorites: {n} signal(s)")
                     # The US half of hold_favorites: ~20 catalogue calls, so outside the arb window.
                     if (self.us.available and self.cfg.mode("hold_favorites") != "off"
-                            and self._due("hold_favorites_us", now, (8, 20), quiet_hours=ARB_HOURS)):
+                            and self._due("hold_favorites_us", now, HF_US_SLOTS, quiet_hours=ARB_HOURS)):
                         self._attempt("hold_favorites_us")
                         with self._long_job("hold_favorites_us", grace_s=600):
                             n = self.scan_hold_favorites_us()
