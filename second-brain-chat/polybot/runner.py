@@ -242,6 +242,27 @@ def backfill_uptime(ledger, log_path: str = LOOP_LOG_PATH, days: int = 7, now: f
     return len(minutes)
 
 
+NUDGE_GAP_S = 3600          # a gap this long in the last day earns a line in the 07:00 phone nudge
+
+
+def uptime_nudge(ledger, now: float | None = None) -> str:
+    """One line for the daily phone nudge, only when the loop was down an hour or more in the last
+    day ("" otherwise): a sleeping Mac is news the same morning, not something to find in pmset."""
+    now = time.time() if now is None else now
+    try:
+        u = ledger.uptime(now - 86400, now)
+    except Exception:
+        return ""
+    long_gaps = [(a, b) for a, b in u["gaps"] if b - a >= NUDGE_GAP_S]
+    if not long_gaps:
+        return ""
+    total = int(sum(b - a for a, b in long_gaps) // 60)
+    a, b = max(long_gaps, key=lambda g: g[1] - g[0])
+    clock = lambda t: datetime.fromtimestamp(t, ET).strftime("%H:%M")
+    return (f"loop down {total // 60}h{total % 60:02d}m in {len(long_gaps)} gap(s) over 1h "
+            f"(longest {clock(a)}-{clock(b)}); alive {u['alive']}/{u['total']} quarter-hours")
+
+
 def uptime_line(ledger, days: int = 1, now: float | None = None, max_gaps: int = 5) -> str:
     """"loop alive X of Y quarter-hours (gaps: ...)", so a sleeping Mac shows in the report itself.
 
@@ -1195,6 +1216,9 @@ class Runner:
             ready = [m for m in config.MODULES if self.cfg.mode(m) == "paper" and self.ledger.promotion_check(m)[0]]
             if ready:
                 line += f" — say the word to go live: {', '.join(ready)}"
+        down = uptime_nudge(self.ledger)
+        if down:
+            line += "\n" + down
         notify.nudge("polybot daily", line, key="polybot-daily", log=self.log)
         return line
 

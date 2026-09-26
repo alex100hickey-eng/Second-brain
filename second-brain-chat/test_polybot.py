@@ -4596,3 +4596,32 @@ def test_twins_measures_the_tilt_on_tight_books_only_and_counts_the_settled(tmp_
     assert st["settled"] == 1 and st["won"] == 1 and st["gaps_cents"] == [-2.0]
     text = twins.render(div, st)
     assert "1/10 settled" in text and "re-measure when 10" in text and "-2.00c" in text
+
+
+def test_the_daily_nudge_names_a_gap_over_an_hour_and_stays_quiet_otherwise(monkeypatch, tmp_path):
+    from polybot import runner as runner_mod, notify
+    led = _ledger()
+    et = ZoneInfo("America/New_York")
+    now = datetime(2026, 9, 26, 7, 0, tzinfo=et).timestamp()
+    t = now - 86400 + 60
+    while t < now:                                                  # awake all day but 10:22-12:27
+        hm = datetime.fromtimestamp(t, et)
+        if not ((10, 22) < (hm.hour, hm.minute) < (12, 27)):
+            led.mark_alive(t)
+        t += 60
+    line = runner_mod.uptime_nudge(led, now=now)
+    assert line.startswith("loop down 2h0") and "longest 10:22-12:27" in line and "1 gap(s)" in line
+    quiet = _ledger()
+    t = now - 86400 + 60
+    while t < now:
+        quiet.mark_alive(t)
+        t += 60
+    assert runner_mod.uptime_nudge(quiet, now=now) == ""
+    # and it rides the 07:00 nudge
+    monkeypatch.setattr(config, "REPORT_PATH", str(tmp_path / "r.txt"))
+    sent = []
+    monkeypatch.setattr(notify, "nudge", lambda title, body, **k: sent.append(body))
+    r = runner_mod.Runner(_cfg(), led, log=lambda *_: None)
+    monkeypatch.setattr(runner_mod, "uptime_nudge", lambda ledger, now=None: "loop down 2h05m in 1 gap(s) over 1h")
+    r.daily_report()
+    assert sent and sent[0].endswith("loop down 2h05m in 1 gap(s) over 1h")
