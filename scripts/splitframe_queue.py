@@ -1631,8 +1631,8 @@ def cmd_reply(args) -> int:
     client = anthropic.Anthropic(api_key=os.environ.get("CLAUDE_API_KEY")
                                  or os.environ["ANTHROPIC_API_KEY"])
     ask = r.build_ask(brand, contact, r.body_text(them), r.body_text(r.our_latest(msgs)), brief, slots,
-                      r.row_facts(row))
-    kind, body, problems = r.write_reply(client, ask, slots)
+                      r.row_facts(row) + r.thread_facts(msgs))
+    kind, body, problems = r.write_reply(client, ask, slots, offered=r.retainer_offered(msgs))
     print(f"{brand} <{to}> [{kind or '?'}]  brief: {os.path.basename(os.path.dirname(precall_path)) or 'none'}"
           f"  times: {'; '.join(slots) or 'none (pass --slots)'}\n\n{body}\n")
     if problems:

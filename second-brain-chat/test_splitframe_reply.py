@@ -162,3 +162,59 @@ def test_study_and_work_blocks_can_hold_a_call_class_and_gym_cannot():
     assert not any(rp.is_flexible(b) for b in (monday[0], monday[1], monday[3], monday[4], monday[6]))
     got = rp.free_slots(lambda d: monday if d.day == 28 else [], datetime(2026, 9, 25, 8, 0))
     assert got[0] == datetime(2026, 9, 28, 17, 30)
+
+
+# ---------------------------------------------------------------------------
+# The Stripe payment links (2026-09-26). The day-0 email after a yes carries the first-drop link
+# verbatim and the five brief questions; the retainer link goes out only on a "go" to the monthly
+# line. Every other reply still carries no link, and nothing promises ACH (not on the links yet).
+# ---------------------------------------------------------------------------
+
+DAY0 = ("Great, let's do it.\n\n" + rp.FIRST_DROP_LINK + "\n\n" + rp.KICKOFF_LINE + "\n"
+        + "\n".join(f"{i}. {q}" for i, q in enumerate(rp.BRIEF_QUESTIONS, 1)) + "\n\nAlex")
+GO = ("Done. Here's the monthly.\n\n" + rp.RETAINER_LINK
+      + "\n\n20 new ads a month, five a week, plus the readout. Cancel any month.\n\nAlex")
+
+
+def test_the_day0_email_carries_the_first_drop_link_verbatim():
+    assert rp.FIRST_DROP_LINK == "https://buy.stripe.com/aFaeVdgqD3iM1C724MeEo00"
+    assert rp.check_reply("yes", DAY0, SLOTS) == []
+    assert any("first-drop payment link" in p for p in rp.check_reply(
+        "yes", DAY0.replace(rp.FIRST_DROP_LINK, "https://buy.stripe.com/aFaeVdgqD3iM1C724MeEo0"), SLOTS))
+    assert any("word for word" in p for p in rp.check_reply(
+        "yes", DAY0.replace(rp.BRIEF_QUESTIONS[2], "Anything off limits?"), SLOTS))
+    assert any("72 hours" in p for p in rp.check_reply("yes", DAY0.replace(rp.KICKOFF_LINE, ""), SLOTS))
+    curly = DAY0.replace("'", "’")
+    assert rp.check_reply("yes", curly, SLOTS) == [], "a curly apostrophe is the same words"
+
+
+def test_the_retainer_link_only_after_the_monthly_offer():
+    assert rp.check_reply("go", GO, SLOTS, offered=True) == []
+    assert any("no monthly offer" in p for p in rp.check_reply("go", GO, SLOTS, offered=False))
+    assert any("a link" in p for p in rp.check_reply("go", GO, SLOTS, offered=False))
+    assert any("a link" in p for p in rp.check_reply("yes", DAY0 + "\n" + rp.RETAINER_LINK, SLOTS))
+
+
+def test_every_other_reply_still_carries_no_link():
+    for kind in ("interested", "pricing", "not_now", "call", "other"):
+        assert any("a link" in p for p in rp.check_reply(kind, INTERESTED + " " + rp.FIRST_DROP_LINK, SLOTS))
+
+
+def test_nothing_promises_ach():
+    assert any("ACH" in p for p in rp.check_reply("yes", DAY0 + "\nACH works too.", SLOTS))
+    assert any("ACH" in p for p in rp.check_reply("pricing", INTERESTED + " Happy to take a bank transfer.", SLOTS))
+
+
+def test_the_monthly_offer_is_read_from_our_emails_only():
+    ours = {"sender": "Alex <alexhickey@splitframestudio.com>", "messageText":
+            'If you want this every month, it\'s $950 for 20 new ads. Reply "go" and I\'ll send the Stripe payment link.'}
+    theirs = {"sender": "Jake <jake@treejuice.com>", "messageText": 'Reply "go"? ok go'}
+    assert rp.retainer_offered([theirs, ours]) is True
+    assert rp.retainer_offered([theirs]) is False
+    assert "monthly offer" in rp.thread_facts([ours]) and rp.thread_facts([ours]).rstrip().endswith("yes")
+
+
+def test_the_voice_prompt_carries_both_links_and_no_placeholder():
+    assert rp.FIRST_DROP_LINK in rp.REPLY_VOICE and rp.RETAINER_LINK in rp.REPLY_VOICE
+    assert "{FIRST_DROP}" not in rp.REPLY_VOICE and "{RETAINER}" not in rp.REPLY_VOICE
+    assert all(q in rp.REPLY_VOICE for q in rp.BRIEF_QUESTIONS)

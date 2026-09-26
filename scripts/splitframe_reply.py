@@ -9,7 +9,8 @@ and leaves a Gmail draft on the thread with an outbox row, so Alex sees it on hi
 Send button. It never sends and never arms an auto-send: a human answered, so a human sends.
 
 The reply follows Money/Splitframe — Reply Playbook (2026-09-25): one of its types, its price
-story word for word ($650 first drop, then $950/month), no links, no third number. Call times
+story word for word ($650 first drop, then $950/month), no third number, and no link except the
+Stripe payment link a yes gets (the retainer link only for "go" after the monthly offer). Call times
 appear only when the founder asked for a call; they come from his own schedule (the training
 app grid CLARVIS syncs), the first free half hour on the next weekdays, evenings first, at least
 18 h out. `--slots` overrides them ("Tue 9/29 at 7:30 PM ET; Wed 9/30 at 8 PM ET").
@@ -40,6 +41,21 @@ PREFERRED_STARTS = ([time(19, 0), time(19, 30), time(20, 0), time(18, 30), time(
                      time(17, 30), time(20, 30)]
                     + [time(h, m) for h in range(12, 17) for m in (0, 30)])
 REPLY_MIN_WORDS, REPLY_MAX_WORDS = 15, 140
+
+# The Stripe payment links (live 2026-09-26 10:33, the playbook's section 1). The only links a
+# reply may carry: the first drop's on a yes (the day-0 email), the retainer's on a "go" to the
+# monthly line, which the playbook sends with the day-3 delivery and the day-30 readout.
+FIRST_DROP_LINK = "https://buy.stripe.com/aFaeVdgqD3iM1C724MeEo00"
+RETAINER_LINK = "https://buy.stripe.com/bJedR9can06A0y3eRyeEo01"
+RETAINER_OFFER = 'Reply "go"'
+KICKOFF_LINE = "The 72 hours start when it's paid and these are back:"
+BRIEF_QUESTIONS = (
+    "Which product do you most want to sell more of this month?",
+    'Which live ad is your best right now? ("None" is an answer.)',
+    "Anything I can't say? Claims, words, competitors, prices.",
+    "Any raw video I can cut from? A Drive link is fine.",
+    "Roughly what do you spend on Meta a month, and who launches new ads?",
+)
 
 
 def _load(name: str):
@@ -74,6 +90,17 @@ def their_latest(msgs: list) -> dict:
 def our_latest(msgs: list) -> dict:
     ours = [m for m in msgs if is_ours(m)]
     return max(ours, key=lambda m: str(m.get("messageTimestamp") or ""), default={})
+
+
+def retainer_offered(msgs: list) -> bool:
+    """Did one of OUR emails in this thread make the monthly offer? Only then is a "go" a yes to
+    the retainer rather than, say, "go ahead" to the first drop."""
+    return any(RETAINER_OFFER in body_text(m) for m in msgs if is_ours(m))
+
+
+def thread_facts(msgs: list) -> str:
+    return ("The monthly offer (Reply \"go\") is in Alex's earlier email in this thread: "
+            f"{'yes' if retainer_offered(msgs) else 'no'}\n")
 
 
 def body_text(msg: dict) -> str:
@@ -196,13 +223,32 @@ no re-pitch of the first email):
 - hostile or unsubscribe: exactly "Understood, you're off my list. Sorry for the noise."
 - call (they asked for a call): offer the two times given below in words, word for word, or
   "send me a time that works". Only this type offers times.
+- yes (a yes to the first drop: "let's do it", "go ahead", "start with the X", "how do I pay"):
+  the day-0 email, no attachment. One short opening line; then this payment link alone on its
+  own line, exactly: {FIRST_DROP}
+  then exactly "The 72 hours start when it's paid and these are back:" and these five questions,
+  numbered, word for word:
+  1. Which product do you most want to sell more of this month?
+  2. Which live ad is your best right now? ("None" is an answer.)
+  3. Anything I can't say? Claims, words, competitors, prices.
+  4. Any raw video I can cut from? A Drive link is fine.
+  5. Roughly what do you spend on Meta a month, and who launches new ads?
+  Sign "Alex". If they asked how they can pay: the link takes card, Apple Pay, Klarna, Link,
+  Cash App or Amazon Pay.
+- go (ONLY when the facts say the monthly offer is in Alex's earlier email, and they answered
+  "go" to it): one short line, then this payment link alone on its own line, exactly:
+  {RETAINER}
+  then "20 new ads a month, five a week, plus the readout. Cancel any month." Sign "Alex".
+  If the monthly offer was never made, a "go" is a yes to the first drop: use the yes type.
 - other: answer what they said in two or three sentences from the brief; if you can't, say he
   will find out.
 
-Never: a discount or any third number, a calendar link or any link, a PDF or deck, a promise of
-work not in the price story, invented results or clients.
+Never: a discount or any third number; any link except the one payment link the yes or go type
+gives, exactly as written; a calendar link; ACH, bank transfer or wire (not offered); a PDF or
+deck; a promise of work not in the price story; invented results or clients.
 
 Return JSON only: {"kind": "<one type above>", "body": "..."}"""
+REPLY_VOICE = REPLY_VOICE.replace("{FIRST_DROP}", FIRST_DROP_LINK).replace("{RETAINER}", RETAINER_LINK)
 
 
 def row_facts(row: dict) -> str:
@@ -242,7 +288,12 @@ def parse_reply(text: str) -> tuple:
     return _c(obj.get("kind")).lower(), _c(obj.get("body"))
 
 
-def check_reply(kind: str, body: str, slots: list) -> list:
+LINK = re.compile(r"https?://\S+|www\.\S+|calendly", re.I)
+
+
+def check_reply(kind: str, body: str, slots: list, offered: bool = False) -> list:
+    """Everything the playbook forbids, as a list of problems (empty = fit to draft). `offered`:
+    the monthly offer is in Alex's earlier email in the thread (retainer_offered)."""
     problems = []
     words = len(body.split())
     if kind != "hostile" and words < REPLY_MIN_WORDS:
@@ -258,8 +309,25 @@ def check_reply(kind: str, body: str, slots: list) -> list:
         problems.append('the word "AI" appears')
     if "looking forward" in body.lower():
         problems.append("sign-off flourish")
-    if re.search(r"https?://|www\.|calendly", body, re.I):
-        problems.append("a link (the playbook: no links, no calendar in a reply)")
+    allowed = {"yes": {FIRST_DROP_LINK}, "go": {RETAINER_LINK} if offered else set()}.get(kind, set())
+    bad = [u for u in (x.rstrip(".,;:)!?\"'") for x in LINK.findall(body)) if u not in allowed]
+    if bad:
+        problems.append(f"a link the playbook doesn't allow in a {kind or 'this'} reply: " + ", ".join(bad))
+    if kind == "yes":
+        if FIRST_DROP_LINK not in body:
+            problems.append("the day-0 email without the first-drop payment link, exactly")
+        if KICKOFF_LINE.replace("'", "") not in body.replace("’", "'").replace("'", ""):
+            problems.append(f'missing "{KICKOFF_LINE}"')
+        missing = [q for q in BRIEF_QUESTIONS if q.replace("'", "") not in body.replace("’", "'").replace("'", "")]
+        if missing:
+            problems.append("the five brief questions are not all there word for word: " + " / ".join(missing))
+    if kind == "go":
+        if not offered:
+            problems.append('"go" with no monthly offer in the thread: that is a yes to the first drop')
+        elif RETAINER_LINK not in body:
+            problems.append("the go reply without the retainer payment link, exactly")
+    if re.search(r"\bACH\b|bank transfer|wire transfer|\bwire\b", body, re.I):
+        problems.append("offers ACH or a bank transfer (not on the payment links)")
     prices = set(re.findall(r"\$\s?([\d,]+)", body))
     if prices - {"650", "950"}:
         problems.append("a price outside the price story: $" + ", $".join(sorted(prices - {"650", "950"})))
@@ -274,7 +342,7 @@ def check_reply(kind: str, body: str, slots: list) -> list:
     return problems
 
 
-def write_reply(client, ask: str, slots: list, tries: int = 3) -> tuple:
+def write_reply(client, ask: str, slots: list, tries: int = 3, offered: bool = False) -> tuple:
     """(kind, body, problems) from the best of up to `tries` generations."""
     last = ("", "", ["no usable draft came back"])
     for _ in range(tries):
@@ -284,7 +352,7 @@ def write_reply(client, ask: str, slots: list, tries: int = 3) -> tuple:
         kind, body = parse_reply(text)
         if not body:
             continue
-        problems = check_reply(kind, body, slots)
+        problems = check_reply(kind, body, slots, offered)
         last = (kind, body, problems)
         if not problems:
             break
