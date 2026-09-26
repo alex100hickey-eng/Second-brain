@@ -14,6 +14,15 @@ is still yours to do.
 
 ## 💰 Money lanes — what only you can do
 
+**⭐ 2026-09-26 — Saturday morning, in this order (everything else below is detail):**
+1. **Whop, 30 s:** open the Claude browser pane, whop.com, sign in as basketballlacrosse, say "whop signed in". I finish the YouTube approval.
+2. **Instagram, 30 s, phone:** paste `CR-R5Q23P` into @wildestmomentsclips' bio, say "done".
+3. **Stripe, 2 min:** Payment links → New: "Splitframe first drop" one-time $650 (card + ACH); "Splitframe retainer" monthly $950. Send me the two URLs.
+4. **Mac, 10 s:** `sudo pmset -a disablesleep 1` in Terminal, keep it plugged in. Closed lid = nothing sends.
+5. **Coolify, 5 min:** second-brain app → Storage: volume `/data/polybot`; Environment: `POLYBOT_DATA_DIR=/data/polybot`, `POLYMARKET_KEY_ID`, `POLYMARKET_SECRET_KEY`, `POLYBOT_ON_SERVER=1`; Redeploy once; then say "move polybot to the server".
+6. **DMs, 20 min:** https://claude.ai/artifact/EL4hmCTn3Vt4wCTA5si636 (48 creators, copy → open → paste → send).
+7. **Decision:** "buy hunter starter" ($34 monthly) if you want Splitframe named sends past Thursday without waiting for a reply.
+
 **2026-09-26 00:20 — two minutes in Stripe before Monday: the payment links do not exist.** The reply playbook and the yes path both say "kickoff = the Stripe payment link paid", and no link exists anywhere on disk. In the Stripe dashboard (Payment links → New): (1) "Splitframe first drop", one-time, $650, card + ACH; (2) "Splitframe retainer", recurring monthly, $950. Paste the two URLs under the price story at the top of `Money/Splitframe — Reply Playbook (2026-09-25).md` (or tell me the two URLs and I paste them). Without them a "yes" on Monday has nowhere to pay.
 
 **2026-09-25 23:10 — a $34 decision for next week, yours.** Hunter has 15 verifications left until 10-24, not the 60 I planned on (the operator's own tasks used 32 today). Splitframe's named founders are set through Thursday 10-01 (Mon A/B 10, Tue 10 published, Wed–Thu 15 verified). After that, 57 discovered founders wait on verification. Hunter Starter ($34, MONTHLY, never annual) verifies all 57 in one pass. The standing rule was "buy only after a reply lands"; if you would rather not wait for a reply to keep the pipe full, say "buy hunter starter" and the funnel tab runs the pass the same day. Otherwise Friday 10-02 onward sends creators only.
