@@ -14,6 +14,8 @@ is still yours to do.
 
 ## 💰 Money lanes — what only you can do
 
+**2026-09-26 00:20 — two minutes in Stripe before Monday: the payment links do not exist.** The reply playbook and the yes path both say "kickoff = the Stripe payment link paid", and no link exists anywhere on disk. In the Stripe dashboard (Payment links → New): (1) "Splitframe first drop", one-time, $650, card + ACH; (2) "Splitframe retainer", recurring monthly, $950. Paste the two URLs under the price story at the top of `Money/Splitframe — Reply Playbook (2026-09-25).md` (or tell me the two URLs and I paste them). Without them a "yes" on Monday has nowhere to pay.
+
 **2026-09-25 23:10 — a $34 decision for next week, yours.** Hunter has 15 verifications left until 10-24, not the 60 I planned on (the operator's own tasks used 32 today). Splitframe's named founders are set through Thursday 10-01 (Mon A/B 10, Tue 10 published, Wed–Thu 15 verified). After that, 57 discovered founders wait on verification. Hunter Starter ($34, MONTHLY, never annual) verifies all 57 in one pass. The standing rule was "buy only after a reply lands"; if you would rather not wait for a reply to keep the pipe full, say "buy hunter starter" and the funnel tab runs the pass the same day. Otherwise Friday 10-02 onward sends creators only.
 
 **2026-09-25 22:08 — seed test 2 done, nothing for you.** The money session sent both seeds (your own inboxes) at about 22:03; Gmail = Primary, iCloud = Inbox. The sample link does not hurt placement; Saturday's release goes as queued.
