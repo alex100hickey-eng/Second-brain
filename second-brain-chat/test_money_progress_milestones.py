@@ -22,7 +22,7 @@ def _seed(tmp_path, monkeypatch, playbook=True):
     (site / "samples" / "a-1").mkdir(parents=True); (site / "samples" / "b-2").mkdir()
     (deliv / "someone").mkdir(parents=True); (root / "scripts").mkdir(parents=True)
     if playbook:
-        (money / "Splitframe — Reply Playbook (2026-09-25).md").write_text("# playbook")
+        (money / "Splitframe — Reply Playbook (2026-09-25).md").write_text("# playbook\nhttps://buy.stripe.com/test_abc")
     (money / "Clients" / "spec-ads" / "first-touch-qa-2026-09-28" / "INDEX.md").write_text(
         "| brand | file | verdict |\n|---|---|---|\n" + "".join(f"| b{i} | `b{i}.png` | approve |\n" for i in range(5)))
     (site / "index.html").write_text("<p>Your first drop is 15 ads for $650, delivered within 72 hours.</p>")
@@ -39,7 +39,7 @@ def _seed(tmp_path, monkeypatch, playbook=True):
 def test_milestones_are_read_from_disk(tmp_path, monkeypatch):
     _seed(tmp_path, monkeypatch)
     ms = mp.milestones([{"close_variant": "arm-A"}, {"close_variant": ""}])
-    assert len(ms) == 11 and all(m["done"] for m in ms)
+    assert len(ms) == 12 and all(m["done"] for m in ms)
     by = {m["name"]: m for m in ms}
     assert by["sample pages live on splitframestudio.com/samples"]["evidence"] == "2 pages"
     assert by["Monday statics approved in the ad layouts"]["evidence"] == "5 approved rows"
@@ -51,4 +51,4 @@ def test_a_missing_fact_reads_as_not_done(tmp_path, monkeypatch):
     by = {m["name"]: m for m in ms}
     assert by["reply playbook written"]["done"] is False
     assert by["first-touch A/B live (arm-A vs arm-B rows)"]["done"] is False
-    assert sum(1 for m in ms if not m["done"]) == 2
+    assert sum(1 for m in ms if not m["done"]) == 3

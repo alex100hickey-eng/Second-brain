@@ -610,6 +610,9 @@ def milestones(rows) -> list:
     add("A", "site and emails tell one price story", "15 ads for $650" in site, "portfolio-site/dist/index.html")
     arms = sum(1 for r in rows if (r.get("close_variant") or "").startswith("arm-"))
     add("A", "first-touch A/B live (arm-A vs arm-B rows)", arms > 0, f"{arms} rows tagged")
+    playbook = _read(os.path.join(MONEY, "Splitframe — Reply Playbook (2026-09-25).md")) or ""
+    add("A", "Stripe payment links for the $650 drop and $950 retainer (Alex's two minutes in Stripe)",
+        "buy.stripe.com" in playbook, "URLs pasted under the price story in the reply playbook")
     samples = os.path.join(SITE_DIR, "samples")
     n_s = len(os.listdir(samples)) if os.path.isdir(samples) else 0
     add("B", "sample pages live on splitframestudio.com/samples", n_s >= 1, f"{n_s} pages")
