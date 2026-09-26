@@ -20,6 +20,11 @@ is still yours to do.
 3. **Stripe, 2 min:** Payment links → New: "Splitframe first drop" one-time $650 (card + ACH); "Splitframe retainer" monthly $950. Send me the two URLs.
 4. **Mac, 10 s:** `sudo pmset -a disablesleep 1` in Terminal, keep it plugged in. Closed lid = nothing sends.
 5. **Coolify, 5 min:** second-brain app → Storage: volume `/data/polybot`; Environment: `POLYBOT_DATA_DIR=/data/polybot`, `POLYMARKET_KEY_ID`, `POLYMARKET_SECRET_KEY`, `POLYBOT_ON_SERVER=1`; Redeploy once; then say "move polybot to the server".
+   - What it's worth: only bucket_sum is close to live (21/30, about 3 days). Paper since 9/18 is +$39 in 7.6 days, all 19 closed sets won, and every leg had real depth. That's about $36/week at full caps, $10/week at the $20 first-day cap.
+   - The move itself adds about 1.3×: the Mac loop is up only 76% of the 09:00–17:00 arb window (60% of all hours), so bucket_sum would earn about $47/week, and every other gate stops losing 25–40% of its evidence time.
+   - The biggest possible module is maker_rewards (an estimated $33/day of liquidity rewards), but that's our own formula, not a payout, and it's 16+ days from its gate.
+   - hold_favorites (1 US settle, marked −$17) and leadlag (+$16 once one outlier is removed, fills 49%) aren't ready.
+   - Honest total: $10–50/week in paper dollars from bucket_sum. The upside is a verified machine that grows only from real profit. Details: design doc, "What go-live is worth".
 6. **DMs, 20 min:** https://claude.ai/artifact/EL4hmCTn3Vt4wCTA5si636 (48 creators, copy → open → paste → send).
 7. **Decision:** "buy hunter starter" ($34 monthly) if you want Splitframe named sends past Thursday without waiting for a reply.
 
