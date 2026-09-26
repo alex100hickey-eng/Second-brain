@@ -14,6 +14,12 @@ is still yours to do.
 
 ## 💰 Money lanes — what only you can do
 
+**2026-09-25 21:40 — Splitframe lane A: one merge (tab 1 unreachable from my session).**
+```
+cd ~/second-brain && git merge --no-edit reply-autodraft && python3 run_tests.py && git push
+```
+When a founder replies, the playbook answer is drafted on the thread before you're told, and the alert reads "Reply from <brand>: answer drafted, tap to send" with the one-tap link. It never sends. Suite 1086/0. Run it between money shifts, when no `claude -p` worker is running.
+
 **2026-09-25 20:45 — Whop, 30 seconds, then I try the YouTube link myself.** The app relaunch signed the browser pane out of Whop. Open the Claude browser pane in any tab, go to whop.com, sign in as basketballlacrosse, then tell me "whop signed in". The YouTube link is a Google approval window (read-only, public profile only); the pane is already signed into YouTube Studio as basketballlacrosse, so I click Approve under your "anything and everything". If the app blocks that click, it becomes your click in the clipping tab ("yes, youtube"). The Instagram code `CR-R5Q23P` in the bio is still your phone.
 
 **2026-09-25 20:37 — creator lane: 16 sample pages are committed and waiting for a push (the money session is not running).**
@@ -36,7 +42,7 @@ To undo later: `sudo pmset -a disablesleep 0`.
 
 **2026-09-25 16:00 — you said "anything and everything"; here is what that unlocked, and what is still only yours.**
 - Done by me: the sample site is pushed and live (48 private pages under splitframestudio.com/samples/); 25 queued creator drafts now carry their sample link instead of the price; the 20 round-10 creators are queued (68 first touches in the queue); all five Monday Splitframe statics are approved in the new ad layouts; the funnel, creator, polybot and clipping tabs are all running their lists again.
-- Still only yours: (1) the X DM / Discord batch, one sitting from your phone: https://claude.ai/artifact/EL4hmCTn3Vt4wCTA5si636 (39 creators, Copy → Open → paste → send, tick when done); (2) paste `CR-R5Q23P` into the Instagram bio; (3) YouTube OAuth for Whop if the clipping tab could not click it (it will say so below); (4) Coolify prep for the polybot server move; (5) keep the lid open on send days.
+- Still only yours: (1) the X DM / Discord batch, one sitting from your phone: https://claude.ai/artifact/EL4hmCTn3Vt4wCTA5si636 (48 creators, Copy → Open → paste → send, tick when done); (2) paste `CR-R5Q23P` into the Instagram bio; (3) YouTube OAuth for Whop if the clipping tab could not click it (it will say so below); (4) Coolify prep for the polybot server move; (5) keep the lid open on send days.
 
 **2026-09-25 12:45 — keep the lid open until ~17:00.** The Mac slept 09:10–12:27 and the sender stopped with it: 8 named first touches and 13 follow-ups are due and go out one every 10 minutes while the Mac is awake (all 8 first touches by ~17:00). Closed lid = nothing sends. The real fix is moving the sender to the server; until then, awake Mac in the afternoon on send days.
 
