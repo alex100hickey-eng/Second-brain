@@ -15,7 +15,7 @@ is still yours to do.
 ## 💰 Money lanes — what only you can do
 
 **⭐ 2026-09-26 — Saturday morning, in this order (everything else below is detail):**
-1. **Whop, 30 s:** open the Claude browser pane, whop.com, sign in as basketballlacrosse, say "whop signed in". I finish the YouTube approval.
+1. **Whop, 30 s:** open the Claude browser pane, whop.com, sign in as basketballlacrosse, say "whop signed in". I finish the YouTube approval. Also type **"download both"** in the clipping tab: the Crazy Taxi bounty pool was projected to run dry about today, so the second campaign (Total War WH3, everything staged) is what pays next; download turns into clips within an hour.
 2. **Instagram, 30 s, phone:** paste `CR-R5Q23P` into @wildestmomentsclips' bio, say "done".
 3. **Stripe, 2 min:** Payment links → New: "Splitframe first drop" one-time $650 (card + ACH); "Splitframe retainer" monthly $950. Send me the two URLs.
 4. **Mac, 10 s:** `sudo pmset -a disablesleep 1` in Terminal, keep it plugged in. Closed lid = nothing sends.
