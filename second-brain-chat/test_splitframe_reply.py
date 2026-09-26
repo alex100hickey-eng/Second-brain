@@ -167,7 +167,8 @@ def test_study_and_work_blocks_can_hold_a_call_class_and_gym_cannot():
 # ---------------------------------------------------------------------------
 # The Stripe payment links (2026-09-26). The day-0 email after a yes carries the first-drop link
 # verbatim and the five brief questions; the retainer link goes out only on a "go" to the monthly
-# line. Every other reply still carries no link, and nothing promises ACH (not on the links yet).
+# line. Every other reply still carries no link. US bank debit (ACH) is on the links since 10:40;
+# a wire or a manual bank transfer is not.
 # ---------------------------------------------------------------------------
 
 DAY0 = ("Great, let's do it.\n\n" + rp.FIRST_DROP_LINK + "\n\n" + rp.KICKOFF_LINE + "\n"
@@ -200,9 +201,13 @@ def test_every_other_reply_still_carries_no_link():
         assert any("a link" in p for p in rp.check_reply(kind, INTERESTED + " " + rp.FIRST_DROP_LINK, SLOTS))
 
 
-def test_nothing_promises_ach():
-    assert any("ACH" in p for p in rp.check_reply("yes", DAY0 + "\nACH works too.", SLOTS))
-    assert any("ACH" in p for p in rp.check_reply("pricing", INTERESTED + " Happy to take a bank transfer.", SLOTS))
+def test_bank_debit_through_the_link_but_never_a_wire():
+    assert rp.check_reply("yes", DAY0.replace("\n\nAlex", "\nCard or US bank debit through the same link.\n\nAlex"),
+                          SLOTS) == []
+    assert rp.check_reply("yes", DAY0.replace("\n\nAlex", "\nACH works through the link too.\n\nAlex"), SLOTS) == []
+    for bad in (" Happy to take a bank transfer.", " A wire works.", " I can send my routing number."):
+        assert any("manual bank transfer" in p for p in rp.check_reply("pricing", INTERESTED + bad, SLOTS)), bad
+    assert "card or US bank debit through the same link" in rp.REPLY_VOICE
 
 
 def test_the_monthly_offer_is_read_from_our_emails_only():

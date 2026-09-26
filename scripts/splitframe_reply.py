@@ -233,8 +233,8 @@ no re-pitch of the first email):
   3. Anything I can't say? Claims, words, competitors, prices.
   4. Any raw video I can cut from? A Drive link is fine.
   5. Roughly what do you spend on Meta a month, and who launches new ads?
-  Sign "Alex". If they asked how they can pay: the link takes card, Apple Pay, Klarna, Link,
-  Cash App or Amazon Pay.
+  Sign "Alex". If they asked how they can pay: "card or US bank debit through the same link"
+  (Apple Pay, Klarna, Link, Cash App and Amazon Pay work too).
 - go (ONLY when the facts say the monthly offer is in Alex's earlier email, and they answered
   "go" to it): one short line, then this payment link alone on its own line, exactly:
   {RETAINER}
@@ -244,8 +244,8 @@ no re-pitch of the first email):
   will find out.
 
 Never: a discount or any third number; any link except the one payment link the yes or go type
-gives, exactly as written; a calendar link; ACH, bank transfer or wire (not offered); a PDF or
-deck; a promise of work not in the price story; invented results or clients.
+gives, exactly as written; a calendar link; a wire, a manual bank transfer or account details
+(not offered: bank payment is US bank debit through the same link); a PDF or deck; a promise of work not in the price story; invented results or clients.
 
 Return JSON only: {"kind": "<one type above>", "body": "..."}"""
 REPLY_VOICE = REPLY_VOICE.replace("{FIRST_DROP}", FIRST_DROP_LINK).replace("{RETAINER}", RETAINER_LINK)
@@ -326,8 +326,10 @@ def check_reply(kind: str, body: str, slots: list, offered: bool = False) -> lis
             problems.append('"go" with no monthly offer in the thread: that is a yes to the first drop')
         elif RETAINER_LINK not in body:
             problems.append("the go reply without the retainer payment link, exactly")
-    if re.search(r"\bACH\b|bank transfer|wire transfer|\bwire\b", body, re.I):
-        problems.append("offers ACH or a bank transfer (not on the payment links)")
+    # ACH Direct Debit is on both links since 2026-09-26 10:40 ("card or US bank debit through the
+    # same link"). A wire or a manual transfer to account details is still not offered.
+    if re.search(r"bank transfer|\bwire\b|routing number|account number|\bIBAN\b", body, re.I):
+        problems.append("offers a wire or a manual bank transfer (bank payment is US bank debit through the link)")
     prices = set(re.findall(r"\$\s?([\d,]+)", body))
     if prices - {"650", "950"}:
         problems.append("a price outside the price story: $" + ", $".join(sorted(prices - {"650", "950"})))
