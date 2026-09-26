@@ -15,7 +15,7 @@ is still yours to do.
 ## 💰 Money lanes — what only you can do
 
 **⭐ 2026-09-26 — Saturday morning, in this order (everything else below is detail):**
-1. **Whop, 30 s:** open the Claude browser pane, whop.com, sign in as basketballlacrosse, say "whop signed in". I finish the YouTube approval. Also type **"download both"** in the clipping tab: the Crazy Taxi bounty pool was projected to run dry about today, so the second campaign (Total War WH3, everything staged) is what pays next; download turns into clips within an hour.
+1. **Whop, 30 s:** open the Claude browser pane, whop.com, sign in as basketballlacrosse, say "whop signed in". I finish the YouTube approval. Also type **"download both"** in the clipping tab: the Crazy Taxi bounty pool was projected to run dry about today, so the second campaign (Total War WH3, everything staged) is what pays next; download turns into clips within an hour. While signed in: complete Whop's KYC + W-9 (Settings → Payouts), because the first approved dollar lands in the Whop balance about 10 days after approval and cannot be withdrawn without them.
 2. **Instagram, 30 s, phone:** paste `CR-R5Q23P` into @wildestmomentsclips' bio, say "done".
 3. **Stripe, 2 min:** Payment links → New: "Splitframe first drop" one-time $650 (card + ACH); "Splitframe retainer" monthly $950. Send me the two URLs.
 4. **Mac, 10 s:** `sudo pmset -a disablesleep 1` in Terminal, keep it plugged in. Closed lid = nothing sends.
@@ -364,6 +364,10 @@ still reports zero Higgsfield tools, that is a new problem, not this one.
 3. ~~17 GB cleanup~~: done 09-24 night by tab 1. The dead Vyro renders are gone (ledger rows kept), and 29 GB is free.
 4. **TikTok sign-up: retry later** in the real Chrome window (the Claude pane silently rejects TikTok codes).
    `open -na "Google Chrome" --args --user-data-dir="$HOME/.money-operator-chrome" https://www.tiktok.com/signup/phone-or-email/email`
+
+**Clipping next campaigns** (full detail in `ClipBot/ready/CAMPAIGN SHORTLIST.txt`):
+Total War WH3, $27k left, 1 clipper, ready the moment you say "download both". Then Atlus Dev Sale ($24k), then [US] Double Date Island ($10k, TikTok-only).
+Getting paid: views only earn for 7 days after approval, a 10% fee applies, and the first withdrawal needs your ID + W-9 on Whop.
 
 Why speed matters: Crazy Taxi CNT is 60% used (45 clippers now, 7 yesterday), so it will likely empty around Sep 26.
 New pools pay whoever posts first.
