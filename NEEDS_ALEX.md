@@ -14,6 +14,18 @@ is still yours to do.
 
 ## 💰 Money lanes — what only you can do
 
+**2026-09-25 20:45 — Whop, 30 seconds, then I finish the YouTube link myself.** The app relaunch signed the browser pane out of Whop. Open the Claude browser pane in any tab, go to whop.com, sign in as basketballlacrosse, then tell me "whop signed in". The YouTube link is not an OAuth screen: Whop gives a code, I paste it into the @wildestmomentsclips channel description in YouTube Studio (already signed in), press Verify, and remove it. I do all of that; you only sign in. The Instagram code `CR-R5Q23P` in the bio is still your phone.
+
+**2026-09-25 20:37 — creator lane: 16 sample pages are committed and waiting for a push (the money session is not running).**
+Round 12 (long-form YouTube/podcasters, 27 from the researcher's list) has 21 with a sample page and a draft; batch 1 (5)
+is live and queued, batch 2 (16) is committed locally in the site repo through f7b5f7b and not yet pushed. When the money
+session is back it pushes and queues; if you'd rather do it yourself:
+
+    cd ~/second-brain/portfolio-site/dist && git push origin main
+
+then the money session runs `creator` for the 16 in `Money/Clients/creator-drafts-2026-09-26-r12.md` (batch 2). Six of
+the 27 have no sample (captions unusable or download failed); they are named at the top of batch 2 in that file.
+
 **2026-09-25 18:10 — optional, real supply for the creator lane:** about 100 long-form YouTubers who fit the offer hide their business email behind YouTube's "view email address" button (signed-in click + a captcha each). If you ever have 20 idle minutes on the laptop, the list to click through is `Money/Creator Lane — Long-form Supply (2026-09-25).md`; paste what you get into the same file and the creator tab drafts them. Not urgent; 27 with published emails are being drafted now.
 
 **2026-09-25 16:10 — the lid is now the #1 blocker. One command fixes it until the server move.** The Mac slept again 15:12–15:30 (lid). Every sleep stops the Splitframe sender, the polybot loop, the statics backstops and the scorecard; today that cost about 5 hours of sending. Run this once in Terminal (it asks for your Mac password, which I cannot type), keep the Mac plugged in, and the lid can stay closed:
