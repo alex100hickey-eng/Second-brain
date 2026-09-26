@@ -29,6 +29,8 @@ def _seed(tmp_path, monkeypatch, playbook=True):
     (money / "Clients" / "sample-links.json").write_text("{}")
     (money / "Creator Lane — Long-form Prospects (2026-09-25).csv").write_text("name\n")
     (root / "scripts" / "splitframe_queue.py").write_text('sub.add_parser("reply", help="x")')
+    (root / "second-brain-chat" / "polybot").mkdir(parents=True)
+    (root / "second-brain-chat" / "polybot" / "server_move.py").write_text("# move")
     monkeypatch.setattr(mp, "MONEY", str(money)); monkeypatch.setattr(mp, "SITE_DIR", str(site))
     monkeypatch.setattr(mp, "DELIVERIES", str(deliv)); monkeypatch.setattr(mp, "ROOT", str(root))
     monkeypatch.setattr(mp, "whop_linked_accounts", lambda: 1)
