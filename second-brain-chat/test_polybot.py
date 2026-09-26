@@ -4625,3 +4625,22 @@ def test_the_daily_nudge_names_a_gap_over_an_hour_and_stays_quiet_otherwise(monk
     monkeypatch.setattr(runner_mod, "uptime_nudge", lambda ledger, now=None: "loop down 2h05m in 1 gap(s) over 1h")
     r.daily_report()
     assert sent and sent[0].endswith("loop down 2h05m in 1 gap(s) over 1h")
+
+
+def test_hold_favorites_us_scans_three_times_a_day_and_never_in_the_arb_window():
+    from polybot import runner as runner_mod
+    assert runner_mod.HF_US_SLOTS == (4, 8, 20)
+    r = runner_mod.Runner(_cfg(), _ledger(), log=lambda *_: None)
+    et = ZoneInfo("America/New_York")
+    at = lambda d, h, m=0: datetime(2026, 9, d, h, m, tzinfo=et)
+    due = lambda now: r._due("hold_favorites_us", now, runner_mod.HF_US_SLOTS, quiet_hours=runner_mod.ARB_HOURS)
+    r._attempts = {}
+    r._jobs = {"hold_favorites_us": at(26, 20, 1).timestamp()}          # ran at 20:01
+    assert not due(at(27, 3, 59))
+    assert due(at(27, 4, 0))                                           # the new overnight pass
+    r._jobs["hold_favorites_us"] = at(27, 4, 1).timestamp()
+    assert not due(at(27, 7, 59)) and due(at(27, 8, 0))
+    # asleep through 08:00, awake at 10:00: never inside 09:00-16:59, caught up at 17:00
+    for h in range(9, 17):
+        assert not due(at(27, h, 30)), h
+    assert due(at(27, 17, 0))
