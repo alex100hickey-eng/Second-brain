@@ -24,6 +24,7 @@ doesn't cost the item its life.
 """
 
 import json
+import time
 from datetime import datetime, timedelta
 
 AGENT = "jarvis_outbox"
@@ -94,12 +95,21 @@ def add(kind: str, title: str, *, detail: str = "", link: str = "",
 def _rows(limit: int = 60) -> list:
     if not supabase:
         return []      # uninitialised (tests, import-time callers) is not an error
-    try:
-        res = (supabase.table("Agent Outputs").select("*").eq("agent_name", AGENT)
-               .order("id", desc=True).limit(limit).execute())
-    except Exception as e:
-        print(f"outbox: read failed ({e})")
-        return []
+    # 2026-09-26: the Mac's resolver flaps for a few seconds at a time (campus Wi-Fi, post-wake DNS),
+    # and a single failed read made a whole 10-minute sender run see an empty outbox. Retry the
+    # read a few times before giving up; a transient name failure costs seconds, not a send slot.
+    res = None
+    for attempt in range(READ_ATTEMPTS):
+        try:
+            res = (supabase.table("Agent Outputs").select("*").eq("agent_name", AGENT)
+                   .order("id", desc=True).limit(limit).execute())
+            break
+        except Exception as e:
+            if attempt + 1 < READ_ATTEMPTS:
+                time.sleep(READ_RETRY_S)
+                continue
+            print(f"outbox: read failed after {READ_ATTEMPTS} tries ({e})")
+            return []
     out = []
     for r in res.data or []:
         try:
@@ -113,6 +123,8 @@ def _rows(limit: int = 60) -> list:
 
 # How far back an open-item read may go. 1000 is PostgREST's default max rows per request, so a
 # bigger number would be silently truncated by the server anyway.
+READ_ATTEMPTS = 3          # transient DNS/network failures: retry before reporting an empty outbox
+READ_RETRY_S = 4
 SCAN_CEILING = 1000
 
 
