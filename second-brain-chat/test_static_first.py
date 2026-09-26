@@ -168,5 +168,68 @@ def test_the_0730_backstop_swaps_from_the_git_mirror_before_the_release():
     assert plist["ProgramArguments"][-1].endswith("scripts/static_first_backstop.sh")
 
 
+
+# ---------------------------------------------------------------------------
+# Which folder the 07:30 swap reads (2026-09-26).
+#
+# Folders are named for the day their first touches go out and are built days ahead. "Newest"
+# on Monday 09-28 was already Wednesday's first-touch-qa-2026-09-30, which has no Monday brand in
+# it: Monday's five arm-A statics would never have attached, and arm A would have gone out as
+# arm B's plain permission email with nothing in any log saying the A/B had collapsed.
+# ---------------------------------------------------------------------------
+
+FOLDERS = ("first-touch-qa-2026-09-24", "first-touch-qa-2026-09-28", "first-touch-qa-2026-09-29",
+           "first-touch-qa-2026-09-30", "qa-2026-09-23")
+
+
+@pytest.mark.parametrize("today, want", [
+    ("2026-09-28", "first-touch-qa-2026-09-28"),
+    ("2026-09-29", "first-touch-qa-2026-09-29"),
+    ("2026-10-01", "first-touch-qa-2026-09-30"),     # Thursday's statics ride in Wednesday's folder
+    ("2026-09-27", "first-touch-qa-2026-09-24"),
+    ("2026-09-20", ""),
+])
+def test_the_swap_reads_the_newest_folder_dated_today_or_earlier(tmp_path, today, want):
+    for d in FOLDERS:
+        (tmp_path / d).mkdir()
+    got = ofs.first_touch_dir(str(tmp_path), today)
+    assert os.path.basename(got) == want
+    assert os.path.basename(ofs.latest_qa_dir(str(tmp_path))) == "qa-2026-09-23", "the follow-up swap is unchanged"
+
+
+PY = "/Library/Frameworks/Python.framework/Versions/3.14/bin/python3"
+
+
+@pytest.mark.skipif(not os.path.exists(PY), reason="the backstop's own python is not on this machine")
+def test_the_0730_backstop_picks_the_same_folder(tmp_path):
+    """The real script, against a throwaway vault mirror and a stub offer_statics.py."""
+    import subprocess
+    home = tmp_path / "home"
+    src = tmp_path / "src"
+    for d, marker in (("first-touch-qa-2026-09-28", "MONDAY"), ("first-touch-qa-2026-09-30", "WEDNESDAY")):
+        folder = src / "Money" / "Clients" / "spec-ads" / d
+        folder.mkdir(parents=True)
+        (folder / "INDEX.md").write_text(marker, encoding="utf-8")
+    git = ["git", "--git-dir", str(home / ".second-brain-vault.git"), "--work-tree", str(src)]
+    subprocess.run(["git", "init", "-q", "--bare", str(home / ".second-brain-vault.git")], check=True)
+    subprocess.run(git + ["add", "-A"], check=True)
+    subprocess.run(git + ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "v"], check=True)
+    stub = home / "second-brain" / "scripts"
+    stub.mkdir(parents=True)
+    (stub / "offer_statics.py").write_text(
+        "import os, sys\nd = sys.argv[sys.argv.index('--dir') + 1]\n"
+        "print('ARGS', ' '.join(sys.argv[1:3]), open(os.path.join(d, 'INDEX.md')).read())\n")
+    script = os.path.join(ROOT, "scripts", "static_first_backstop.sh")
+
+    def run(today):
+        env = dict(os.environ, HOME=str(home), STATIC_FIRST_TODAY=today)
+        return subprocess.run(["/bin/zsh", script], env=env, capture_output=True, text=True, timeout=60).stdout
+    out = run("2026-09-28")
+    assert "using Money/Clients/spec-ads/first-touch-qa-2026-09-28" in out and "ARGS swap-first --apply MONDAY" in out
+    assert "WEDNESDAY" in run("2026-10-01")
+    out = run("2026-09-27")
+    assert "no first-touch-qa-* folder dated 2026-09-27 or earlier" in out and "ARGS" not in out
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q", "-p", "no:cacheprovider"]))

@@ -69,13 +69,24 @@ def _c(v) -> str:
     return (v or "").strip() if isinstance(v, str) else ""
 
 
-def latest_qa_dir(spec_dir: str = None, prefix: str = "qa-") -> str:
+def latest_qa_dir(spec_dir: str = None, prefix: str = "qa-", on_or_before: str = "") -> str:
+    """The newest QA folder. With on_or_before (YYYY-MM-DD), the newest one dated that day or
+    earlier. First-touch folders are named for the day their first touches go out and are built
+    days ahead: on Monday 2026-09-28 the newest was already Wednesday's (first-touch-qa-2026-09-30),
+    so the 07:30 swap would have attached none of Monday's statics."""
     spec_dir = spec_dir or SPEC_DIR
     try:
-        dirs = sorted(d for d in os.listdir(spec_dir) if d.startswith(prefix))
+        dirs = sorted(d for d in os.listdir(spec_dir) if d.startswith(prefix)
+                      and (not on_or_before or d[len(prefix):len(prefix) + 10] <= on_or_before))
     except OSError:
         return ""
     return os.path.join(spec_dir, dirs[-1]) if dirs else ""
+
+
+def first_touch_dir(spec_dir: str = None, today: str = "") -> str:
+    """Today's first-touch folder: the newest one dated today or earlier (Thursday's statics
+    ride in Wednesday's folder, so "exactly today" would miss them)."""
+    return latest_qa_dir(spec_dir, FIRST_TOUCH_PREFIX, today or datetime.now().date().isoformat())
 
 
 # ---------------------------------------------------------------- reading Alex's verdicts
@@ -244,7 +255,7 @@ def create_attach_draft(composio, entity: str, to: str, subject: str, body: str,
 
 def approved_first_touch(qa_dir: str = None) -> tuple:
     """Same as approved_statics, from the first-touch QA folder and its FIRST_TOUCH.md."""
-    qa_dir = qa_dir if qa_dir is not None else latest_qa_dir(prefix=FIRST_TOUCH_PREFIX)
+    qa_dir = qa_dir if qa_dir is not None else first_touch_dir()
     return approved_statics(qa_dir, "FIRST_TOUCH.md", FIRST_TOUCH_MAX_WORDS)
 
 
@@ -315,7 +326,7 @@ def cmd_swap_first(args) -> int:
         print("STATIC_FIRST is off: every first touch goes out as plain text. Switch it on in "
               "scripts/offer_statics.py once Alex approves a first-touch static.")
         return 0
-    qa = args.dir or latest_qa_dir(prefix=FIRST_TOUCH_PREFIX)
+    qa = args.dir or first_touch_dir()
     ok, skipped = approved_first_touch(qa)
     for s in skipped:
         print(f"skipped: {s}")
