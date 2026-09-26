@@ -54,6 +54,17 @@ TARGETS = {
 SUBMIT_WINDOW_S = 30 * 60
 
 
+def day_targets(today) -> dict:
+    """Weekend FIFO gives creators Saturday and Sunday (founders read Monday; streamers are live on
+    weekends), so on Sat/Sun the A target is 0 and the B target is 10. Weekdays keep 10 named
+    founders + 5 creators."""
+    t = dict(TARGETS)
+    if today.weekday() >= 5:
+        t["sf_first_touches"] = 0
+        t["creator_sends"] = 10
+    return t
+
+
 VAULT_GIT = os.path.expanduser("~/.second-brain-vault.git")
 SF_DATALESS = 0x40000000
 
@@ -534,11 +545,13 @@ def stages(sf: dict, cr: dict, cl: dict, pb: dict, money: dict) -> dict:
 
 # ------------------------------------------------------------------ scoring + output
 def score(sf, cr, cl, pb, bl, shifts, today) -> tuple:
+    t = day_targets(today)
+    wk = " (creators' day)" if t["sf_first_touches"] == 0 else ""
     checks = [
-        ("A: named first touches sent", sf["first_today"], f">= {TARGETS['sf_first_touches']}",
-         sf["first_today"] >= TARGETS["sf_first_touches"]),
+        ("A: named first touches sent", sf["first_today"], f">= {t['sf_first_touches']}{wk}",
+         sf["first_today"] >= t["sf_first_touches"]),
         ("A: follow-ups overdue", len(sf["overdue"]), "0", len(sf["overdue"]) == 0),
-        ("B: creator sends", cr["sends_today"], f">= {TARGETS['creator_sends']}", cr["sends_today"] >= TARGETS["creator_sends"]),
+        ("B: creator sends", cr["sends_today"], f">= {t['creator_sends']}", cr["sends_today"] >= t["creator_sends"]),
         ("C: posts today", cl["posts_today"], f">= {TARGETS['clip_posts_per_account'] * max(1, cl['accounts_posting'])}",
          cl["posts_today"] >= TARGETS["clip_posts_per_account"] * max(1, cl["accounts_posting"])),
         ("C: posts submitted late / unsubmitted", f"{cl['submitted_late']} / {cl['unsubmitted']}", "0 / 0 once linked",
@@ -553,6 +566,65 @@ def score(sf, cr, cl, pb, bl, shifts, today) -> tuple:
         "A: follow-ups overdue", "C: posts submitted late / unsubmitted", "D: polybot loop alive",
         "All: shift log entries today"))
     return checks, system_ok
+
+
+SITE_DIR = os.path.expanduser("~/second-brain/portfolio-site/dist")
+DELIVERIES = os.path.expanduser("~/Library/Mobile Documents/com~apple~CloudDocs/ClipBot/creator-deliveries")
+
+
+def whop_linked_accounts() -> int:
+    """Active posting accounts the clipbot ledger marks as linked to Whop (a column whose name
+    carries 'whop' or 'link'); 0 when the table has no such column."""
+    if not os.path.exists(CLIPBOT_DB):
+        return 0
+    try:
+        con = sqlite3.connect(CLIPBOT_DB)
+        cols = [r[1] for r in con.execute("PRAGMA table_info(accounts)")]
+        link = next((c for c in cols if "whop" in c.lower() or "link" in c.lower()), None)
+        if not link:
+            return 0
+        n = con.execute(f"SELECT count(*) FROM accounts WHERE status='active' AND {link} IS NOT NULL AND {link} != ''").fetchone()[0]
+        con.close()
+        return int(n)
+    except Exception:                                  # noqa: BLE001
+        return 0
+
+
+def milestones(rows) -> list:
+    """What lies between the gates: facts on disk that show a lane moving before its next gate.
+    Ledger-only, no network. Each item: lane, name, done, evidence. A gate is a number in a
+    ledger; a milestone is the thing that had to exist for the number to move."""
+    out = []
+
+    def add(lane, name, done, evidence):
+        out.append(dict(lane=lane, name=name, done=bool(done), evidence=str(evidence)))
+
+    add("A", "reply playbook written", os.path.exists(os.path.join(MONEY, "Splitframe — Reply Playbook (2026-09-25).md")),
+        "Money/Splitframe — Reply Playbook (2026-09-25).md")
+    q = _read(os.path.join(ROOT, "scripts", "splitframe_queue.py")) or ""
+    add("A", "reply command drafts the answer for Alex's tap", 'add_parser("reply"' in q, "splitframe_queue.py reply")
+    idx = _read(os.path.join(MONEY, "Clients", "spec-ads", "first-touch-qa-2026-09-28", "INDEX.md")) or ""
+    n_ok = sum(1 for ln in idx.splitlines() if ln.startswith("|") and ln.rstrip().endswith("approve |"))
+    add("A", "Monday statics approved in the ad layouts", n_ok >= 5, f"{n_ok} approved rows")
+    site = _read(os.path.join(SITE_DIR, "index.html")) or ""
+    add("A", "site and emails tell one price story", "15 ads for $650" in site, "portfolio-site/dist/index.html")
+    arms = sum(1 for r in rows if (r.get("close_variant") or "").startswith("arm-"))
+    add("A", "first-touch A/B live (arm-A vs arm-B rows)", arms > 0, f"{arms} rows tagged")
+    samples = os.path.join(SITE_DIR, "samples")
+    n_s = len(os.listdir(samples)) if os.path.isdir(samples) else 0
+    add("B", "sample pages live on splitframestudio.com/samples", n_s >= 1, f"{n_s} pages")
+    add("B", "first touches are sample-first (clip link, no price)",
+        os.path.exists(os.path.join(MONEY, "Clients", "sample-links.json")), "Money/Clients/sample-links.json")
+    n_d = len(os.listdir(DELIVERIES)) if os.path.isdir(DELIVERIES) else 0
+    add("B", "yes path proven (weekly deliveries cut)", n_d >= 1, f"{n_d} creator folders")
+    add("B", "second market opened (long-form YouTube / podcasts)",
+        os.path.exists(os.path.join(MONEY, "Creator Lane — Long-form Prospects (2026-09-25).csv")),
+        "Money/Creator Lane — Long-form Prospects (2026-09-25).csv")
+    linked = whop_linked_accounts()
+    add("C", "Whop-linked posting accounts (Instagram code + YouTube approval are Alex's)", linked > 0, f"{linked} linked")
+    add("D", "server move packaged as one command",
+        os.path.exists(os.path.join(ROOT, "second-brain-chat", "polybot", "server_move.py")), "polybot/server_move.py")
+    return out
 
 
 def history() -> list:
@@ -640,6 +712,12 @@ def main(argv) -> int:
     for name, val, tgt, ok in checks:
         L.append(f"| {name} | {val} | {tgt} | {mark(ok)} |")
     L.append("")
+    ms = milestones(rows)
+    L.append("## Between the gates")
+    L.append("_What had to exist before the next gate can move; facts on disk, not opinions._")
+    for m in ms:
+        L.append(f"- {mark(m['done'])} {m['lane']}: {m['name']} — {m['evidence']}")
+    L.append("")
     L.append("## Lane detail")
     L.append(f"- **A Splitframe:** {sf['sent_total']} first touches ever ({sf['named_sent']} to a named person), "
              f"{sf['replies']} replies, {sf['calls']} calls, {sf['closes']} closes. Today {sf['first_today']} first touches + "
@@ -696,6 +774,7 @@ def main(argv) -> int:
         lanes=[dict(id=k, name=n, stage=st[k], next_gate=gate_text[k][min(st[k], 4)]) for k, n in
                (("A", "Splitframe"), ("B", "Creators"), ("C", "Clipping"), ("D", "Polybot"))],
         checks=[dict(name=n, value=str(v), target=t, ok=bool(ok)) for n, v, t, ok in checks],
+        milestones=ms,
         detail=dict(
             A=dict(sent_total=sf["sent_total"], named_sent=sf["named_sent"], replies=sf["replies"], calls=sf["calls"],
                    closes=sf["closes"], first_today=sf["first_today"], fu_today=sf["fu_today"], sends_7d=sf["sends_7d"],

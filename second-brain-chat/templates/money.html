@@ -72,6 +72,7 @@
     .lane .gate { grid-column: 1 / -1; }
   }
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+  .dim{opacity:.62;font-size:.9em;margin-left:.4em}
 </style>
 </head>
 <body>
@@ -118,6 +119,8 @@
   </section>
 
   <section>
+    <div class="cap">Between the gates</div>
+    <ul id="milestones"></ul>
     <div class="cap">Lane detail</div>
     <ul id="detail"></ul>
   </section>
@@ -170,6 +173,7 @@
     $('blockN').textContent = b.count;
     $('blocks').innerHTML = (b.items || []).map((x) => '<li>' + esc(x) + '</li>').join('') || '<li>nothing — the system is not waiting on you</li>';
 
+    $('milestones').innerHTML = (d.milestones || []).map((m) => '<li>' + (m.done ? '✓' : '✗') + ' ' + esc(m.lane) + ': ' + esc(m.name) + ' <span class="dim">' + esc(m.evidence) + '</span></li>').join('') || '<li>no milestones recorded yet</li>';
     const A = d.detail.A, B = d.detail.B, C = d.detail.C, D = d.detail.D;
     $('detail').innerHTML = [
       'A Splitframe: ' + A.sent_total + ' first touches ever (' + A.named_sent + ' named), ' + A.replies + ' replies, ' + A.calls + ' calls, ' + A.closes + ' closes; today ' + A.first_today + ' first touches + ' + A.fu_today + ' follow-ups; ' + A.sends_7d + ' sends in 7 days; ' + A.queue_qualified + ' qualified unsent' + (A.overdue.length ? '; OVERDUE: ' + A.overdue.join(', ') : ''),
