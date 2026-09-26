@@ -179,6 +179,8 @@ GO = ("Done. Here's the monthly.\n\n" + rp.RETAINER_LINK
 
 def test_the_day0_email_carries_the_first_drop_link_verbatim():
     assert rp.FIRST_DROP_LINK == "https://buy.stripe.com/aFaeVdgqD3iM1C724MeEo00"
+    assert rp.KICKOFF_LINE == ("The 72 hours start when the payment clears (card is instant; "
+                               "bank debit takes a few days) and these are back:")
     assert rp.check_reply("yes", DAY0, SLOTS) == []
     assert any("first-drop payment link" in p for p in rp.check_reply(
         "yes", DAY0.replace(rp.FIRST_DROP_LINK, "https://buy.stripe.com/aFaeVdgqD3iM1C724MeEo0"), SLOTS))
@@ -222,4 +224,5 @@ def test_the_monthly_offer_is_read_from_our_emails_only():
 def test_the_voice_prompt_carries_both_links_and_no_placeholder():
     assert rp.FIRST_DROP_LINK in rp.REPLY_VOICE and rp.RETAINER_LINK in rp.REPLY_VOICE
     assert "{FIRST_DROP}" not in rp.REPLY_VOICE and "{RETAINER}" not in rp.REPLY_VOICE
+    assert "{KICKOFF}" not in rp.REPLY_VOICE and rp.KICKOFF_LINE in rp.REPLY_VOICE
     assert all(q in rp.REPLY_VOICE for q in rp.BRIEF_QUESTIONS)

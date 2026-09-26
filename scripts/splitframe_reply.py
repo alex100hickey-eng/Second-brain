@@ -48,7 +48,10 @@ REPLY_MIN_WORDS, REPLY_MAX_WORDS = 15, 140
 FIRST_DROP_LINK = "https://buy.stripe.com/aFaeVdgqD3iM1C724MeEo00"
 RETAINER_LINK = "https://buy.stripe.com/bJedR9can06A0y3eRyeEo01"
 RETAINER_OFFER = 'Reply "go"'
-KICKOFF_LINE = "The 72 hours start when it's paid and these are back:"
+# "Paid" means Stripe shows the charge succeeded, not that the link was opened: bank debit (ACH)
+# settles days after the click, so the clock starts when the payment clears.
+KICKOFF_LINE = ("The 72 hours start when the payment clears (card is instant; bank debit takes a "
+                "few days) and these are back:")
 BRIEF_QUESTIONS = (
     "Which product do you most want to sell more of this month?",
     'Which live ad is your best right now? ("None" is an answer.)',
@@ -226,7 +229,7 @@ no re-pitch of the first email):
 - yes (a yes to the first drop: "let's do it", "go ahead", "start with the X", "how do I pay"):
   the day-0 email, no attachment. One short opening line; then this payment link alone on its
   own line, exactly: {FIRST_DROP}
-  then exactly "The 72 hours start when it's paid and these are back:" and these five questions,
+  then exactly "{KICKOFF}" and these five questions,
   numbered, word for word:
   1. Which product do you most want to sell more of this month?
   2. Which live ad is your best right now? ("None" is an answer.)
@@ -248,7 +251,8 @@ gives, exactly as written; a calendar link; a wire, a manual bank transfer or ac
 (not offered: bank payment is US bank debit through the same link); a PDF or deck; a promise of work not in the price story; invented results or clients.
 
 Return JSON only: {"kind": "<one type above>", "body": "..."}"""
-REPLY_VOICE = REPLY_VOICE.replace("{FIRST_DROP}", FIRST_DROP_LINK).replace("{RETAINER}", RETAINER_LINK)
+REPLY_VOICE = (REPLY_VOICE.replace("{FIRST_DROP}", FIRST_DROP_LINK).replace("{RETAINER}", RETAINER_LINK)
+               .replace("{KICKOFF}", KICKOFF_LINE))
 
 
 def row_facts(row: dict) -> str:
