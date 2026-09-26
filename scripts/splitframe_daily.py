@@ -407,6 +407,66 @@ So you may NOT:
     "  brief below explicitly says the clip exists",
 )
 
+# The ad-creative follow-up templates (a static, a line from their site) mean nothing to a
+# streamer. The creator lane's first touch is sample-first: it links a clip already cut from their
+# own stream. So its follow-ups re-link that same clip and never offer to make one.
+_CREATOR_TEMPLATES = """The follow-up templates. Fill them, don't improvise around them. The first
+email linked a clip already cut from their own stream; the follow-up points back at that clip,
+it never offers to make one.
+
+Touch 2:
+  {First name or channel name},
+  The clip is still here: {the sample URL from the brief, exactly}
+  {One short line on why that moment works as a short, drawn only from the first email.}
+  {One question about their channel or their viewers.}
+  Alex Hickey
+  Splitframe Studio
+
+Touch 3 (the last one):
+  {First name or channel name},
+  Last one from me. The clip is yours to post whether we ever talk or not: {the sample URL}
+  If clips aren't a priority right now, that's a fair no. If it's timing, tell me a month and I'll
+  check back then.
+  Is it a no, or a not now?
+  Alex Hickey
+  Splitframe Studio
+
+Rules:
+- NEVER offer to cut, make or send a new clip, and never say "free": the clip already exists and
+  is linked. The $400/mo offer can be named once, plainly, if it fits; nothing else is offered.
+- No "the math". No guilt ("so I stop following up"). No "one more thing".
+- The line before the sign-off is a question they can answer about their own channel.
+- 35-80 words. It is a reply inside the original thread, so do not reintroduce himself.
+
+"""
+_t0 = CREATOR_VOICE.index("The follow-up templates (")
+_t1 = CREATOR_VOICE.index("Return STRICT JSON")
+CREATOR_VOICE = CREATOR_VOICE[:_t0] + _CREATOR_TEMPLATES + CREATOR_VOICE[_t1:]
+
+SAMPLE_URL = re.compile(r"https?://(?:www\.)?splitframestudio\.com/samples/[A-Za-z0-9_-]+/?")
+SAMPLE_LINKS = os.path.join(VAULT, "Money", "Clients", "sample-links.json")
+
+
+def creator_sample_url(row: dict, original_body: str = "", links_path: str = None) -> str:
+    """The sample clip the creator's first touch linked. The first email itself is the truth
+    (the exact URL that went out); the sample-links map by Twitch login is the fallback."""
+    m = SAMPLE_URL.search(original_body or "")
+    if m:
+        return m.group(0)
+    login = _s((row or {}).get("domain")).lower().rstrip("/").rsplit("/", 1)[-1]
+    try:
+        with open(links_path or SAMPLE_LINKS, encoding="utf-8") as f:
+            links = json.load(f)
+    except (OSError, ValueError):
+        return ""
+    return _s((links.get(login) or {}).get("url"))
+
+
+def creator_sample_note(url: str) -> str:
+    return (f"The first email in this thread linked their sample clip: {url}\n"
+            f"Re-link exactly that URL once, as the templates show. Do not offer a new clip.")
+
+
 # Category -> the voice that lane sells in. `category` is the tracker's own column.
 VOICES = {"creator": CREATOR_VOICE}
 
@@ -1280,11 +1340,15 @@ def main() -> int:
                 log(f"{brand}: touch {touch} drafted WITH the static ({info['file']}) on thread "
                     f"{original['thread_id']}")
                 continue
+        creator = _s(row.get("category")).lower() == "creator"
+        sample = creator_sample_url(row, original.get("body", "")) if creator else ""
+        extra = statics_mod.DELIVERED_NOTE if plan == "delivered" else ""
+        if sample:
+            extra = creator_sample_note(sample)
         try:
             body = write_followup(client, brand, (row.get("contact_name") or "").split(" ")[0],
                                   touch, original.get("body", ""), (today - sent_on).days,
-                                  voice_for(row),
-                                  extra=statics_mod.DELIVERED_NOTE if plan == "delivered" else "")
+                                  voice_for(row), extra=extra)
         except Exception as exc:
             log(f"{brand}: draft generation failed — {str(exc)[:160]}")
             continue
@@ -1293,6 +1357,8 @@ def main() -> int:
             rejected.append(f"{brand} (touch {touch}): empty draft")
             continue
         shape = followup_problems(body, static_sent=(plan == "delivered"))
+        if sample and sample not in body:
+            shape = shape + [f"does not re-link the sample clip ({sample})"]
         if shape:
             log(f"{brand}: touch {touch} REJECTED — {'; '.join(shape)}")
             rejected.append(f"{brand} (touch {touch}): {'; '.join(shape)}")
