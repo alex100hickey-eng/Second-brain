@@ -1166,6 +1166,23 @@ def test_a_slow_scan_pass_abandons_its_tail_instead_of_holding_the_loop():
     assert scanned == ["nyc", "chicago", "miami"]
 
 
+def test_offshore_scan_defaults_to_every_city_again():
+    """all_cities went False 2026-09-18 because the offshore taker band was then 89c median spread,
+    ~14% clearing weather_lock's 10c filter -- structurally dead. That commit named its own reversal
+    condition ("flip back to True if offshore ever matters again"), and live snapshots now measure
+    the same band at 1c median / 84% clearing (2026-09-26): the condition is met. With no explicit
+    `cities`, an offshore scan must resolve to every city again, not just the US five."""
+    from polybot import runner as runner_mod, config
+    cfg, led = _cfg(), _ledger()
+    assert cfg.all_cities is True
+    cfg.modes["bucket_sum"] = "paper"
+    r = runner_mod.Runner(cfg, led, log=lambda *_: None)
+    scanned = []
+    r._scan_one = lambda city, kind, off, *a: (scanned.append(city), 0)[1]
+    r.scan_weather(modules=["bucket_sum"], kinds=("high",), venue="offshore", day_offsets=(0,))
+    assert len(scanned) == len(config.all_city_slugs()) == 30
+
+
 def test_a_blind_venue_says_so_and_the_budget_retunes_itself():
     """scan_weather returns 0 the moment the venue is unavailable, and it logs nothing -- so a
     rate-limited bot simply stops scanning and nothing says why. That produced 12-to-16 minute

@@ -134,13 +134,14 @@ class Config:
     modes: dict = field(default_factory=lambda: {
         m: ("off" if m in ("weather_hold", "weather_model_update") else "paper") for m in MODULES})
     cities: list = field(default_factory=lambda: list(CITIES))
-    # Offshore is a read-only proxy on a different settlement rule, and under the current rules it
-    # is structurally incapable of producing a signal: its median spread inside weather_lock's
-    # 0.80-0.97 band is 89c against a 10c filter. Measured 2026-09-18 — in the 24h after the rules
-    # change it wrote 48,389 snapshots over 1,298 markets and generated ZERO signals, which was 93%
-    # of a 137 MB database and ~1,440 API calls a day for nothing. Five cities keeps the proxy
-    # alive for comparison at a sixth of the cost; flip back to True if offshore ever matters again.
-    all_cities: bool = False
+    # Offshore ran five cities instead of thirty from 2026-09-18 to 2026-09-26: its median spread
+    # inside weather_lock's 0.80-0.97 taker band was 89c against a 10c filter (24h post-change: 48,389
+    # snapshots over 1,298 markets, ZERO signals), and that comment said "flip back to True if
+    # offshore ever matters again." It matters again -- `backtest.liquidity_reality()` off live
+    # snapshots now measures the same band at 1c median spread, 84% clearing the filter (n=1268,
+    # 2026-09-26), which is the reason weather_lock's live rate (~1/day) sat far under its backtest
+    # rate: the venue wasn't being scanned, not that the opportunity wasn't there. Back to every city.
+    all_cities: bool = True
     kinds: list = field(default_factory=lambda: ["high", "low"])
     bankroll_usd: float = 200.0            # overwritten by the live balance when the US key exists
     edge_min_cents: float = 6.0            # weather_hold / hold_favorites entry edge
