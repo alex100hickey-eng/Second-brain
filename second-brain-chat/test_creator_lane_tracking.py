@@ -208,6 +208,9 @@ def watch(tmp_path, monkeypatch):
     monkeypatch.setattr(rw, "_beat", lambda note="": None)
     monkeypatch.setattr(rw, "arm_watchdog", lambda *a, **k: None)
     monkeypatch.setattr(rw, "_refresh_funnel", lambda: None)   # would write the REAL vault report
+    monkeypatch.setattr(rw, "creator_list_text", lambda: "")   # only the rows written above
+    monkeypatch.setattr(rw, "handle_human_reply",
+                        lambda *a, **k: pytest.fail("a creator reply went to the ad-studio drafter"))
     monkeypatch.setenv("COMPOSIO_API_KEY", "test")
 
     def run(sender):
@@ -227,7 +230,8 @@ def watch(tmp_path, monkeypatch):
 def test_a_reply_from_dishsoaps_own_address_stamps_dishsoap_not_zerbs(watch):
     replied, nudges = watch("Dishsoap <dishsoap@evolved.gg>")
     assert replied["Dishsoap"] and not replied["Zerbs"]
-    assert nudges and nudges[0][0] == "Dishsoap replied"
+    assert nudges and nudges[0][0] == "Dishsoap replied (creator lane)"
+    assert "Creator Lane — Reply Playbook" in nudges[0][1]
 
 
 def test_a_reply_from_the_agency_itself_stamps_everyone_on_that_domain(watch):

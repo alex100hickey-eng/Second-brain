@@ -2,8 +2,8 @@
 """Splitframe reply watcher — the one thing that must never sit unseen.
 
 Every run: read the studio inbox and spam for mail from any prospect domain or address in the
-tracker, or from anyone answering on a thread we sent into,
-and for each new one:
+tracker or in the creator lane's list (Money/Creator Lane — Prospects.md), or from anyone
+answering on a thread we sent into, and for each new one:
   - decide whether it is a HUMAN reply or an autoresponder (see auto_reply_reason)
   - human: nudge Alex's phone, stamp `replied` in `Money/prospect-tracker.csv` (backup first)
   - automatic: log it and leave `replied` empty, so the follow-up sequence stays alive
@@ -15,6 +15,7 @@ from __future__ import annotations
 import csv
 import json
 import os
+import re
 import shutil
 import signal
 import socket
@@ -417,6 +418,88 @@ def _refresh_funnel() -> None:
         log(f"funnel report not refreshed ({type(exc).__name__}: {str(exc)[:80]})")
 
 
+# ---------------------------------------------------------------------------
+# The creator lane.
+#
+# Creator first touches go out from this same studio inbox, but that lane keeps its list in
+# Money/Creator Lane — Prospects.md, and a creator often has no tracker row (sayeed, 09-25; on
+# 09-26, 64 of the list's 156 addresses). A reply from one of them matched nothing here and sat
+# unseen, and the creator tab's own reply watch stops whenever that tab does. So every address in
+# the list is watched, and every non-freemail domain in it (the talent agencies: evolved.gg,
+# mythictalent.com) as well.
+#
+# A creator's reply is never auto-drafted. `splitframe_queue.py reply` writes the ad-studio answer
+# ($650 first drop, 15 ads for a DTC brand), which is the wrong offer for a streamer. Alex gets
+# the nudge and the creator Reply Playbook instead.
+# ---------------------------------------------------------------------------
+CREATOR_LIST = os.path.join(VAULT, "Money", "Creator Lane — Prospects.md")
+CREATOR_PLAYBOOK = "Money/Creator Lane — Reply Playbook.md"
+EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}")
+
+
+def creator_list_text() -> str:
+    """The creator list, or the vault git mirror's copy when iCloud has evicted it (as with
+    tracker_rows). "" when neither can be read: the tracker's creator rows still match."""
+    try:
+        with open(CREATOR_LIST) as f:
+            return f.read()
+    except OSError:
+        pass
+    import subprocess
+    try:
+        r = subprocess.run(["git", "--git-dir", VAULT_GIT, "show",
+                            "HEAD:Money/" + os.path.basename(CREATOR_LIST)],
+                           capture_output=True, text=True, timeout=20)
+        if r.returncode == 0 and r.stdout.strip():
+            log("creator list unreadable in iCloud; matching against the vault git mirror")
+            return r.stdout
+    except Exception:                                  # noqa: BLE001
+        pass
+    log("creator list unreadable: creators are matched on their tracker rows only this run")
+    return ""
+
+
+def _creator_name(heading: str) -> str:
+    """'### zgougou13 (Omar Mallek)' -> 'zgougou13'; '### MISTERARTHER — the best fit' -> 'MISTERARTHER'."""
+    name = heading.lstrip("#").strip()
+    for cut in (" — ", " ("):
+        name = name.split(cut, 1)[0]
+    return name.strip() or heading.strip()
+
+
+def creator_rows(text: str, known: set) -> list:
+    """Tracker-shaped rows (category "creator") for every address in the creator list that the
+    tracker doesn't already hold, from every section: qualified, Long-form, watch list, the
+    rest. The name is the entry's ### heading; in a table row it is the first cell; in prose
+    outside any entry it is the address. Our own addresses are never a prospect."""
+    out, seen, name = [], {e.lower() for e in known}, ""
+    for line in text.splitlines():
+        if line.startswith("## "):
+            name = ""
+        elif line.startswith("### "):
+            name = _creator_name(line)
+        for e in EMAIL_RE.findall(line):
+            e = e.lower()
+            dom = e.split("@", 1)[1]
+            if e in seen or any(dom == d or dom.endswith("." + d) for d in NEVER_A_PROSPECT):
+                continue
+            seen.add(e)
+            label = name
+            if not label and line.lstrip().startswith("|"):
+                label = line.strip().strip("|").split("|")[0].strip()
+            out.append({"brand": label or e, "email": e, "category": "creator"})
+    return out
+
+
+def tracked_addresses(rows) -> set:
+    return {e for r in rows for e in ((r.get("email") or "").strip().lower(),
+                                      (r.get("email_generic") or "").strip().lower()) if "@" in e}
+
+
+def is_creator_row(row) -> bool:
+    return (row.get("category") or "").strip().lower() == "creator"
+
+
 QUEUE_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "splitframe_queue.py")
 AUTO_DRAFT_TIMEOUT = 180
 # Two drafts at most per run: each can take AUTO_DRAFT_TIMEOUT and the whole run has
@@ -496,6 +579,8 @@ def main() -> int:
     c = Composio(api_key=os.environ["COMPOSIO_API_KEY"])
     ent = os.environ.get("STUDIO_GMAIL_ENTITY")
     rows = tracker_rows(allow_mirror=True)
+    rows = rows + creator_rows(creator_list_text(), tracked_addresses(rows))
+    creators = {r.get("brand") for r in rows if is_creator_row(r)}
     domains = prospect_domains(rows)
     addresses = prospect_addresses(rows)
     exact = exact_addresses(rows)
@@ -551,7 +636,8 @@ def main() -> int:
             log(f"AUTO-REPLY from {brand} <{addr}>{via}: {subject} [{auto}] — follow-ups left open")
             autos += 1
         else:
-            log(f"REPLY from {brand} <{addr}>{via}: {subject}")
+            creator = any(b in creators for b in brands)
+            log(f"REPLY from {brand} <{addr}>{via}: {subject}{' [creator lane]' if creator else ''}")
             for b in brands:
                 try:
                     stamp_replied(b, when)
@@ -561,7 +647,13 @@ def main() -> int:
                     log(f"  could not stamp {b} as replied ({type(exc).__name__}): stamp it by hand")
             which = (f"\n(Sent from a domain shared by {brand}; all of them are marked replied so "
                      "nobody gets chased. Un-stamp the ones it isn't.)" if len(brands) > 1 else "")
-            if which:
+            if creator:
+                log("  creator-lane reply: no auto-draft (the drafter only writes the ad-studio "
+                    "answer); nudged with the creator Reply Playbook")
+                nudge(f"{brand} replied (creator lane)",
+                      f"{sender}: {subject}\n{preview[:180]}\nAnswer today from {CREATOR_PLAYBOOK}. "
+                      f"No draft was made.{which}")
+            elif which:
                 log("  shared-domain reply: no auto-draft (which brand it is has to be decided by hand)")
                 nudge(f"{brand} replied", f"{sender}: {subject}\n{preview[:180]}\nReply today. Call card: Money/call-card.md{which}")
             else:

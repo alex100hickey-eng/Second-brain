@@ -296,6 +296,8 @@ def watch(monkeypatch):
     monkeypatch.setattr(rw, "_refresh_funnel", lambda: None)
     monkeypatch.setattr(rw, "_beat", lambda note="": None)
     monkeypatch.setattr(rw, "arm_watchdog", lambda seconds=None: None)
+    creator_list = [""]                                  # the real list never leaks into a test
+    monkeypatch.setattr(rw, "creator_list_text", lambda: creator_list[0])
     monkeypatch.setenv("COMPOSIO_API_KEY", "test")
 
     def go(inbox, threads):
@@ -304,6 +306,7 @@ def watch(monkeypatch):
         assert rw.main() == 0
         return fake
     go.logged, go.stamped, go.nudged, go.state = logged, stamped, nudged, state
+    go.rows, go.creator_list = rows, creator_list
     return go
 
 
@@ -410,3 +413,130 @@ def test_a_reply_is_still_announced_when_the_stamp_fails(watch, monkeypatch):
     watch(inbox, {})
     assert watch.nudged == ["Moon Juice replied"], "the nudge is what matters"
     assert any("could not stamp Moon Juice" in l for l in watch.logged)
+
+
+# ---------------------------------------------------------------------------
+# The creator lane (2026-09-26).
+#
+# Creator first touches go out from the same studio inbox, but that lane keeps its list in
+# Money/Creator Lane — Prospects.md and many creators have no tracker row: 64 of the list's 156
+# addresses on 09-26. Their replies matched nothing. And a creator reply that did match went to
+# the ad-studio drafter, which answers with the $650 first drop for a DTC brand.
+# ---------------------------------------------------------------------------
+
+CREATORS = """# Creator lane — prospect list
+
+## Qualified — fits the band, coverage gap confirmed
+
+### Guzu
+- **Email:** `guzubusiness@hotmail.com` — read directly off his own Twitch About panel.
+
+### zgougou13 (Omar Mallek)
+- **Email:** `omar@evolved.gg` — his agency.
+
+## Long-form — round 13 (2026-09-26 night), YouTube creators and podcasters, batch 2
+
+### The Tilted Lawyer (host: Omar Serrato)
+- **Email:** `hello@tiltedlawyer.com`
+
+## Watch list — new in the 1–1.5k band
+
+| login | followers | views | email |
+|---|---|---|---|
+| nyhvt | 1,242 | 38,456 | nyhzumi@gmail.com |
+
+## Disqualified — do not re-check
+
+emongg (emongg@evolved.gg, not in band). Replies go to alexhickey@splitframestudio.com.
+"""
+
+
+def test_every_section_of_the_creator_list_is_read():
+    rows = rw.creator_rows(CREATORS, set())
+    got = {r["email"]: r["brand"] for r in rows}
+    assert got == {"guzubusiness@hotmail.com": "Guzu", "omar@evolved.gg": "zgougou13",
+                   "hello@tiltedlawyer.com": "The Tilted Lawyer", "nyhzumi@gmail.com": "nyhvt",
+                   "emongg@evolved.gg": "emongg@evolved.gg"}
+    assert all(r["category"] == "creator" for r in rows)
+
+
+def test_a_creator_the_tracker_already_holds_keeps_its_tracker_name():
+    rows = rw.creator_rows(CREATORS, {"GuzuBusiness@hotmail.com"})
+    assert "guzubusiness@hotmail.com" not in {r["email"] for r in rows}
+
+
+def test_an_agency_domain_is_watched_but_a_freemail_provider_never_is():
+    rows = rw.creator_rows(CREATORS, set())
+    assert rw.domain_brands(rows)["evolved.gg"] == ["zgougou13", "emongg@evolved.gg"]
+    assert not {"gmail.com", "hotmail.com", "splitframestudio.com"} & set(rw.prospect_domains(rows))
+
+
+def test_the_creator_list_falls_back_to_the_git_mirror(monkeypatch, tmp_path):
+    import subprocess, types
+    monkeypatch.setattr(rw, "CREATOR_LIST", str(tmp_path / "evicted.md"))
+    monkeypatch.setattr(rw, "log", lambda m: None)
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: types.SimpleNamespace(returncode=0, stdout=CREATORS))
+    assert rw.creator_list_text() == CREATORS
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: types.SimpleNamespace(returncode=128, stdout=""))
+    assert rw.creator_list_text() == ""
+
+
+@pytest.fixture
+def drafts(monkeypatch):
+    called = []
+    monkeypatch.setattr(rw, "handle_human_reply", lambda brand, *a, **k: called.append(brand) or "drafted")
+    return called
+
+
+def test_a_creator_with_no_tracker_row_is_seen_and_never_auto_drafted(watch, drafts):
+    watch.creator_list[0] = CREATORS
+    watch([_inbound("m1", "Guzu <guzubusiness@hotmail.com>", "T1", subject="Re: your clutch",
+                    body="yeah send the next five, what do you charge?")], {})
+    assert drafts == [], "the ad-studio drafter must never answer a creator"
+    assert watch.nudged == ["Guzu replied (creator lane)"]
+    assert any("REPLY from Guzu <guzubusiness@hotmail.com>" in l and "[creator lane]" in l
+               for l in watch.logged)
+
+
+def test_a_manager_at_a_listed_agency_is_a_reply_for_every_creator_there(watch, drafts):
+    watch.creator_list[0] = CREATORS
+    watch([_inbound("m1", "Talent <talent@evolved.gg>", "T1", body="Omar is interested, rates?")], {})
+    assert drafts == [] and watch.stamped == ["zgougou13", "emongg@evolved.gg"]
+    assert watch.nudged == ["zgougou13 / emongg@evolved.gg replied (creator lane)"]
+
+
+def test_a_long_form_reply_on_our_thread_from_a_new_address_is_caught(watch, drafts):
+    watch.creator_list[0] = CREATORS
+    fake = watch([_inbound("m1", "Omar <omar.serrato@gmail.com>", "T1", body="Sure, send it")],
+                 {"T1": [_sent("hello@tiltedlawyer.com")]})
+    assert fake.thread_calls == ["T1"] and drafts == []
+    assert watch.nudged == ["The Tilted Lawyer replied (creator lane)"]
+
+
+def test_a_tracker_creator_row_is_not_auto_drafted_either(watch, drafts):
+    watch.rows.append({"brand": "Dishsoap", "domain": "twitch.tv/dishsoap", "category": "creator",
+                       "email": "dishsoap@evolved.gg", "email_generic": "", "sent_date": "2026-09-22"})
+    watch([_inbound("m1", "Dish <dishsoap@evolved.gg>", "T1", body="send it")], {})
+    assert drafts == [] and watch.nudged == ["Dishsoap replied (creator lane)"]
+
+
+def test_a_brand_reply_still_gets_its_drafted_answer(watch, drafts):
+    watch.creator_list[0] = CREATORS
+    watch([_inbound("m1", "Amanda <amanda@moonjuice.com>", "T1", body="how much?")], {})
+    assert drafts == ["Moon Juice"] and watch.nudged == []
+
+
+def test_every_address_in_the_real_creator_list_is_watchable():
+    """The contract: nobody the creator lane lists can be invisible, Long-form rounds included."""
+    try:
+        text = open(rw.CREATOR_LIST).read()
+    except OSError:
+        pytest.skip("creator list not readable here (iCloud eviction)")
+    rows = rw.tracker_rows(allow_mirror=True)
+    rows = rows + rw.creator_rows(text, rw.tracked_addresses(rows))
+    exact, addresses = rw.exact_addresses(rows), rw.prospect_addresses(rows)
+    blind = [e.lower() for e in rw.EMAIL_RE.findall(text)
+             if e.lower().split("@", 1)[1] != "splitframestudio.com"
+             and e.lower() not in exact and e.lower() not in addresses]
+    assert not blind, f"listed but invisible to the reply watcher: {blind}"
+    assert "## Long-form — round 13" in text, "the section this test was written for"
