@@ -184,10 +184,44 @@ def rank_candidates(emails: list) -> list:
 # Lookup
 # ============================================================
 
+# The last HUNTER_RESERVE verifications of each cycle are kept for re-addressing a founder who
+# replied (decided 2026-09-25, when the operator's hunter tasks spent 32 in a day and left 43).
+# Every caller goes through verify(), so the gate lives here, on the account's LIVE balance, not on
+# a count reconstructed from the tracker. HUNTER_USE_RESERVE=1 unlocks it for that one purpose.
+HUNTER_RESERVE = 15
+
+
+def verifications_left():
+    """Verifications remaining on the account this cycle, or None if Hunter can't be read.
+    The account endpoint doesn't spend a credit."""
+    data = (_call("account") or {}).get("data") or {}
+    try:
+        return int(((data.get("requests") or {}).get("verifications") or {})["remaining"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def reserve_blocks() -> str:
+    """Why the next verification must not be spent, or "" to go ahead."""
+    if os.environ.get("HUNTER_USE_RESERVE") == "1":
+        return ""
+    left = verifications_left()
+    if left is None:
+        return "Hunter's balance can't be read, so the reserve can't be protected"
+    if left <= HUNTER_RESERVE:
+        return f"{left} verifications left, and the last {HUNTER_RESERVE} are the reserve"
+    return ""
+
+
 def verify(email: str) -> tuple:
     """(status, score). Anything we can't positively confirm is RISKY, never
     SENDABLE — the failure mode we're insuring against is a bounce. A call Hunter
-    never answered is NOT_CHECKED, which is not a verdict."""
+    never answered is NOT_CHECKED, which is not a verdict. So is one the reserve refused:
+    every caller already records nothing on NOT_CHECKED and stops."""
+    blocked = reserve_blocks()
+    if blocked:
+        print(f"contact_finder: not verifying {email}: {blocked}")
+        return NOT_CHECKED, 0
     data = (_call("email-verifier", email=email) or {}).get("data")
     if not data:
         return NOT_CHECKED, 0
@@ -209,6 +243,8 @@ def find_for_domain(domain: str) -> dict:
     miss = {"email": "", "name": "", "title": "", "status": NONE_FOUND, "score": 0}
     if not domain:
         return miss
+    if reserve_blocks():
+        return dict(miss, status=NOT_CHECKED)      # a search we couldn't verify would be wasted
     resp = _call("domain-search", domain=domain, limit=10)
     if not resp or "data" not in resp:
         return dict(miss, status=NOT_CHECKED)      # no answer is not "nobody there"

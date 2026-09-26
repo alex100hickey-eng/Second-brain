@@ -319,6 +319,20 @@ def hunter_used(rows: list, cycle_start: date) -> int:
     return n
 
 
+def _hunter_left_live(estimate: int) -> int:
+    """The tracker-based estimate, capped by the account's live balance above the reserve, so the
+    ladder never files an sf_hunter task the reserve would refuse. Unreadable: the estimate
+    (contact_finder still refuses each verification if the balance can't be read)."""
+    try:
+        import contact_finder                                 # type: ignore
+        left = contact_finder.verifications_left()
+        if left is not None:
+            return max(0, min(estimate, left - contact_finder.HUNTER_RESERVE))
+    except Exception:                                         # noqa: BLE001
+        pass
+    return estimate
+
+
 def splitframe_inputs(today: date) -> dict:
     """What the ladder needs to know about the funnel. Fail-soft: the server reads the
     git-synced vault copy, and a missing tracker must not stop the other lanes."""
@@ -340,7 +354,7 @@ def splitframe_inputs(today: date) -> dict:
             "draftable_in_band": sum(1 for t in targets if t["band"] in ("in", "unknown")),
             "hunter_targets_in_band": sum(1 for h in hunters if h["known_count"] is not None
                                           and sq.IN_BAND[0] <= h["known_count"] <= sq.IN_BAND[1]),
-            "hunter_left": max(0, HUNTER_PER_CYCLE - used),
+            "hunter_left": _hunter_left_live(max(0, HUNTER_PER_CYCLE - used)),
             "candidates_unread": len(sq.candidates_to_qualify(rows, today.isoformat(), limit=99)),
             "readdress": sq.readdress_targets(rows, queue),
         })

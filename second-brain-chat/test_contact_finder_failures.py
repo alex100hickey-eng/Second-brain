@@ -20,6 +20,13 @@ cf = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(cf)
 
 
+@pytest.fixture(autouse=True)
+def _reserve_off(monkeypatch):
+    """These tests are about what a failed or answered call MEANS; the reserve (a separate account
+    call, tested in test_hunter_reserve.py) would add a request to every fake."""
+    monkeypatch.setattr(cf, "reserve_blocks", lambda: "")
+
+
 def _fake(answers):
     """answers: {(path, key): response dict | Exception}; key is the domain or email asked about."""
     calls = []
